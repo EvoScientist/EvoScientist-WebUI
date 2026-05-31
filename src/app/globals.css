@@ -36,6 +36,12 @@
     --color-file-button: #ffffff;
     --color-file-button-hover: #e5e7eb;
 
+    /* Brand accent — single source of truth. Change this to re-theme
+       (e.g. EvoScientist blue) in one place. */
+    --brand: #2f6868;
+    --brand-hover: #275757;
+    --brand-foreground: #ffffff;
+
     /* Dark theme colors */
     --color-primary-dark: #2dd4bf;
     --color-user-message-dark: #076699;

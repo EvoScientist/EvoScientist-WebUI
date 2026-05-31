@@ -110,6 +110,19 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(({ assistant }) => {
     [handleSubmit, submitDisabled]
   );
 
+  // Pull a previous user message back into the composer to edit/resend it,
+  // placing the cursor at the end so the user can keep typing.
+  const handleEditMessage = useCallback((content: string) => {
+    setInput(content);
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (el) {
+        el.focus();
+        el.setSelectionRange(content.length, content.length);
+      }
+    });
+  }, []);
+
   // TODO: can we make this part of the hook?
   const processedMessages = useMemo(() => {
     /*
@@ -253,7 +266,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(({ assistant }) => {
         >
           {isThreadLoading ? (
             <div className="flex items-center justify-center p-8">
-              <p className="text-muted-foreground">Loading...</p>
+              <p className="text-muted-foreground">Loading…</p>
             </div>
           ) : (
             <>
@@ -278,6 +291,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(({ assistant }) => {
                     stream={stream}
                     onResumeInterrupt={resumeInterrupt}
                     graphId={assistant?.graph_id}
+                    onEditMessage={handleEditMessage}
                   />
                 );
               })}
@@ -290,7 +304,8 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(({ assistant }) => {
         <div
           className={cn(
             "mx-4 mb-6 flex flex-shrink-0 flex-col overflow-hidden rounded-xl border border-border bg-background",
-            "mx-auto w-[calc(100%-32px)] max-w-[1024px] transition-colors duration-200 ease-in-out"
+            "mx-auto w-[calc(100%-32px)] max-w-[1024px] transition-colors duration-200 ease-in-out",
+            "focus-within:ring-2 focus-within:ring-ring"
           )}
         >
           {(hasTasks || hasFiles) && (
@@ -393,7 +408,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(({ assistant }) => {
                         >
                           <FileIcon size={16} />
                           Files (State)
-                          <span className="h-4 min-w-4 rounded-full bg-[#2F6868] px-0.5 text-center text-[10px] leading-[16px] text-white">
+                          <span className="h-4 min-w-4 rounded-full bg-[var(--brand)] px-0.5 text-center text-[10px] leading-[16px] text-white">
                             {Object.keys(files).length}
                           </span>
                         </button>
@@ -439,7 +454,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(({ assistant }) => {
                         aria-expanded={metaOpen === "files"}
                       >
                         Files (State)
-                        <span className="h-4 min-w-4 rounded-full bg-[#2F6868] px-0.5 text-center text-[10px] leading-[16px] text-white">
+                        <span className="h-4 min-w-4 rounded-full bg-[var(--brand)] px-0.5 text-center text-[10px] leading-[16px] text-white">
                           {Object.keys(files).length}
                         </span>
                       </button>
@@ -509,7 +524,8 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(({ assistant }) => {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder={isLoading ? "Running..." : "Write your message..."}
+              aria-label="Message"
+              placeholder={isLoading ? "Running…" : "Write your message…"}
               className="font-inherit field-sizing-content flex-1 resize-none border-0 bg-transparent px-[18px] pb-[13px] pt-[14px] text-sm leading-7 text-primary outline-none placeholder:text-tertiary"
               rows={1}
             />

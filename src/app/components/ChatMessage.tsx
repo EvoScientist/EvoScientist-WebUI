@@ -11,6 +11,7 @@ import type {
   ReviewConfig,
 } from "@/app/types/types";
 import { Message } from "@langchain/langgraph-sdk";
+import { Brain, Check, ChevronRight, Copy, Pencil } from "lucide-react";
 import {
   extractSubAgentContent,
   extractStringFromMessageContent,
@@ -27,6 +28,7 @@ interface ChatMessageProps {
   stream?: any;
   onResumeInterrupt?: (value: any) => void;
   graphId?: string;
+  onEditMessage?: (content: string) => void;
 }
 
 export const ChatMessage = React.memo<ChatMessageProps>(
@@ -40,11 +42,19 @@ export const ChatMessage = React.memo<ChatMessageProps>(
     stream,
     onResumeInterrupt,
     graphId,
+    onEditMessage,
   }) => {
     const isUser = message.type === "human";
     const messageContent = extractStringFromMessageContent(message);
     const hasContent = messageContent && messageContent.trim() !== "";
     const hasToolCalls = toolCalls.length > 0;
+    // Extended-thinking / reasoning text (Anthropic & friends store it here).
+    const reasoning = useMemo(() => {
+      const r = (
+        message.additional_kwargs as Record<string, unknown> | undefined
+      )?.reasoning_content;
+      return typeof r === "string" && r.trim() ? r.trim() : null;
+    }, [message.additional_kwargs]);
     const subAgents = useMemo(() => {
       return toolCalls
         .filter((toolCall: ToolCall) => {
@@ -70,6 +80,15 @@ export const ChatMessage = React.memo<ChatMessageProps>(
         });
     }, [toolCalls]);
 
+    const [thinkingOpen, setThinkingOpen] = useState(false);
+    const [copied, setCopied] = useState(false);
+    const handleCopy = useCallback(() => {
+      if (!messageContent) return;
+      navigator.clipboard?.writeText(messageContent).then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      });
+    }, [messageContent]);
     const [expandedSubAgents, setExpandedSubAgents] = useState<
       Record<string, boolean>
     >({});
@@ -87,7 +106,7 @@ export const ChatMessage = React.memo<ChatMessageProps>(
     return (
       <div
         className={cn(
-          "flex w-full max-w-full overflow-x-hidden",
+          "group flex w-full max-w-full overflow-x-hidden",
           isUser && "flex-row-reverse"
         )}
       >
@@ -97,6 +116,34 @@ export const ChatMessage = React.memo<ChatMessageProps>(
             isUser ? "max-w-[70%]" : "w-full"
           )}
         >
+          {!isUser && reasoning && (
+            <div className="mt-4">
+              <button
+                type="button"
+                onClick={() => setThinkingOpen((v) => !v)}
+                aria-expanded={thinkingOpen}
+                className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground"
+              >
+                <ChevronRight
+                  className={cn(
+                    "h-3.5 w-3.5 transition-transform",
+                    thinkingOpen && "rotate-90"
+                  )}
+                  aria-hidden="true"
+                />
+                <Brain
+                  className="h-3.5 w-3.5"
+                  aria-hidden="true"
+                />
+                Thinking
+              </button>
+              {thinkingOpen && (
+                <div className="mt-2 whitespace-pre-wrap break-words border-l-2 border-border pl-3 text-sm leading-relaxed text-muted-foreground">
+                  {reasoning}
+                </div>
+              )}
+            </div>
+          )}
           {hasContent && (
             <div className={cn("relative flex items-end gap-0")}>
               <div
@@ -120,6 +167,61 @@ export const ChatMessage = React.memo<ChatMessageProps>(
                   <MarkdownContent content={messageContent} />
                 ) : null}
               </div>
+            </div>
+          )}
+          {!isUser && hasContent && (
+            <div className="mt-1">
+              <button
+                type="button"
+                onClick={handleCopy}
+                aria-label={copied ? "Copied" : "Copy message"}
+                className="inline-flex items-center rounded p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              >
+                {copied ? (
+                  <Check
+                    className="h-4 w-4"
+                    aria-hidden="true"
+                  />
+                ) : (
+                  <Copy
+                    className="h-4 w-4"
+                    aria-hidden="true"
+                  />
+                )}
+              </button>
+            </div>
+          )}
+          {isUser && hasContent && (
+            <div className="mt-1 flex justify-end gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+              <button
+                type="button"
+                onClick={handleCopy}
+                aria-label={copied ? "Copied" : "Copy message"}
+                className="inline-flex items-center rounded p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              >
+                {copied ? (
+                  <Check
+                    className="h-4 w-4"
+                    aria-hidden="true"
+                  />
+                ) : (
+                  <Copy
+                    className="h-4 w-4"
+                    aria-hidden="true"
+                  />
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => onEditMessage?.(messageContent)}
+                aria-label="Edit message"
+                className="inline-flex items-center rounded p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              >
+                <Pencil
+                  className="h-4 w-4"
+                  aria-hidden="true"
+                />
+              </button>
             </div>
           )}
           {hasToolCalls && (

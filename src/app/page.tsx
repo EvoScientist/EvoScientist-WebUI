@@ -131,7 +131,10 @@ function HomePageInner({
                 onClick={() => setSidebar("1")}
                 className="rounded-md border border-border bg-card p-3 text-foreground hover:bg-accent"
               >
-                <MessagesSquare className="mr-2 h-4 w-4" />
+                <MessagesSquare
+                  className="mr-2 h-4 w-4"
+                  aria-hidden="true"
+                />
                 Threads
                 {interruptCount > 0 && (
                   <span className="ml-2 inline-flex min-h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[10px] text-destructive-foreground">
@@ -151,7 +154,10 @@ function HomePageInner({
               size="sm"
               onClick={() => setConfigDialogOpen(true)}
             >
-              <Settings className="mr-2 h-4 w-4" />
+              <Settings
+                className="mr-2 h-4 w-4"
+                aria-hidden="true"
+              />
               Settings
             </Button>
             <Button
@@ -159,9 +165,12 @@ function HomePageInner({
               size="sm"
               onClick={() => setThreadId(null)}
               disabled={!threadId}
-              className="border-[#2F6868] bg-[#2F6868] text-white hover:bg-[#2F6868]/80"
+              className="border-[var(--brand)] bg-[var(--brand)] text-[var(--brand-foreground)] hover:bg-[var(--brand-hover)]"
             >
-              <SquarePen className="mr-2 h-4 w-4" />
+              <SquarePen
+                className="mr-2 h-4 w-4"
+                aria-hidden="true"
+              />
               New Thread
             </Button>
           </div>

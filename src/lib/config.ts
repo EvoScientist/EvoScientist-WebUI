@@ -19,6 +19,10 @@ export function getConfig(): DeploymentConfig | null {
 
   try {
     const parsed = JSON.parse(stored) as DeploymentConfig;
+    // A stored config with no usable deployment URL would make the SDK send
+    // requests to the app's own origin (404s). Treat it as unconfigured so
+    // the config dialog reappears instead.
+    if (!parsed.deploymentUrl?.trim()) return null;
     // Always pin the assistant to the EvoScientist main agent.
     return { ...parsed, assistantId: DEFAULT_ASSISTANT_ID };
   } catch {

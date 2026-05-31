@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
 import { NuqsAdapter } from "nuqs/adapters/next/app";
 import { Toaster } from "sonner";
@@ -10,6 +10,11 @@ export const metadata: Metadata = {
   title: "EvoScientist WebUI",
   description:
     "Web UI for EvoScientist — a self-evolving AI scientist built on DeepAgents/LangGraph.",
+};
+
+export const viewport: Viewport = {
+  themeColor: "#f9f9f9",
+  colorScheme: "light",
 };
 
 export default function RootLayout({
