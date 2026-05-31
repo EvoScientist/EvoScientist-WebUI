@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState, useRef, useCallback } from "react";
 import { format } from "date-fns";
-import { Loader2, MessageSquare, X } from "lucide-react";
+import { Loader2, MessageSquare, Search, SquarePen } from "lucide-react";
 import { useQueryState } from "nuqs";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -82,7 +82,7 @@ function StatusFilterItem({
 function ErrorState({ message }: { message: string }) {
   return (
     <div className="flex flex-col items-center justify-center p-8 text-center">
-      <p className="text-sm text-red-600">Failed to load threads</p>
+      <p className="text-sm text-red-600">Failed to load research</p>
       <p className="mt-1 text-xs text-muted-foreground">{message}</p>
     </div>
   );
@@ -105,7 +105,7 @@ function EmptyState() {
   return (
     <div className="flex flex-col items-center justify-center p-8 text-center">
       <MessageSquare className="mb-2 h-12 w-12 text-gray-300" />
-      <p className="text-sm text-muted-foreground">No threads found</p>
+      <p className="text-sm text-muted-foreground">No research yet</p>
     </div>
   );
 }
@@ -113,18 +113,17 @@ function EmptyState() {
 interface ThreadListProps {
   onThreadSelect: (id: string) => void;
   onMutateReady?: (mutate: () => void) => void;
-  onClose?: () => void;
   onInterruptCountChange?: (count: number) => void;
 }
 
 export function ThreadList({
   onThreadSelect,
   onMutateReady,
-  onClose,
   onInterruptCountChange,
 }: ThreadListProps) {
-  const [currentThreadId] = useQueryState("threadId");
+  const [currentThreadId, setThreadId] = useQueryState("threadId");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [search, setSearch] = useState("");
 
   const threads = useThreads({
     status: statusFilter === "all" ? undefined : statusFilter,
@@ -134,6 +133,13 @@ export function ThreadList({
   const flattened = useMemo(() => {
     return threads.data?.flat() ?? [];
   }, [threads.data]);
+
+  // Client-side filter of the loaded threads by title.
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return flattened;
+    return flattened.filter((t) => t.title.toLowerCase().includes(q));
+  }, [flattened, search]);
 
   const isLoadingMore =
     threads.size > 0 && threads.data?.[threads.size - 1] == null;
@@ -151,7 +157,7 @@ export function ThreadList({
       older: [],
     };
 
-    flattened.forEach((thread) => {
+    filtered.forEach((thread) => {
       if (thread.status === "interrupted") {
         groups.interrupted.push(thread);
         return;
@@ -172,7 +178,7 @@ export function ThreadList({
     });
 
     return groups;
-  }, [flattened]);
+  }, [filtered]);
 
   const interruptedCount = useMemo(() => {
     return flattened.filter((t) => t.status === "interrupted").length;
@@ -208,9 +214,37 @@ export function ThreadList({
 
   return (
     <div className="absolute inset-0 flex flex-col">
-      {/* Header with title, filter, and close button */}
+      <button
+        type="button"
+        onClick={() => setThreadId(null)}
+        className="flex flex-shrink-0 items-center gap-3 border-b border-border p-4 text-left text-sm font-medium transition-colors hover:bg-accent"
+      >
+        <SquarePen
+          className="size-4"
+          aria-hidden="true"
+        />
+        New Chat
+      </button>
+      <div className="flex-shrink-0 border-b border-border p-3">
+        <div className="relative">
+          <Search
+            className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+            aria-hidden="true"
+          />
+          <input
+            type="search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search research…"
+            aria-label="Search research"
+            spellCheck={false}
+            className="w-full rounded-md border border-border bg-background py-1.5 pl-8 pr-3 text-sm outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
+          />
+        </div>
+      </div>
+      {/* Header with title and status filter */}
       <div className="grid flex-shrink-0 grid-cols-[1fr_auto] items-center gap-3 border-b border-border p-4">
-        <h2 className="text-lg font-semibold tracking-tight">Threads</h2>
+        <h2 className="text-lg font-semibold tracking-tight">Research</h2>
         <div className="flex items-center gap-2">
           <Select
             value={statusFilter}
@@ -256,17 +290,6 @@ export function ThreadList({
               </SelectGroup>
             </SelectContent>
           </Select>
-          {onClose && (
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={onClose}
-              className="h-8 w-8"
-              aria-label="Close threads sidebar"
-            >
-              <X className="h-4 w-4" />
-            </Button>
-          )}
         </div>
       </div>
 
@@ -279,7 +302,18 @@ export function ThreadList({
 
         {!threads.error && !threads.isLoading && isEmpty && <EmptyState />}
 
-        {!threads.error && !isEmpty && (
+        {!threads.error &&
+          !isEmpty &&
+          search.trim() &&
+          filtered.length === 0 && (
+            <div className="flex flex-col items-center justify-center p-8 text-center">
+              <p className="text-sm text-muted-foreground">
+                No research matches your search.
+              </p>
+            </div>
+          )}
+
+        {!threads.error && !isEmpty && filtered.length > 0 && (
           <div className="box-border w-full max-w-full overflow-hidden p-2">
             {(
               Object.keys(GROUP_LABELS) as Array<keyof typeof GROUP_LABELS>

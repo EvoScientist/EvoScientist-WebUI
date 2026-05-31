@@ -4,6 +4,7 @@ import React, {
   useState,
   useRef,
   useCallback,
+  useEffect,
   useMemo,
   FormEvent,
   Fragment,
@@ -16,6 +17,7 @@ import {
   Clock,
   Circle,
   FileIcon,
+  ShieldCheck,
 } from "lucide-react";
 import { ChatMessage } from "@/app/components/ChatMessage";
 import type {
@@ -67,6 +69,8 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(({ assistant }) => {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   const [input, setInput] = useState("");
+  const [autoApprove, setAutoApprove] = useState(false);
+  const autoApprovedRef = useRef<unknown>(null);
   const { scrollRef, contentRef } = useStickToBottom();
 
   const {
@@ -122,6 +126,24 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(({ assistant }) => {
       }
     });
   }, []);
+
+  // Auto-approve: when enabled, approve any pending tool-execution interrupt
+  // for the rest of this conversation (each interrupt is handled once).
+  useEffect(() => {
+    if (!autoApprove) return;
+    const ir = interrupt;
+    const actionRequests =
+      ir?.value && ((ir.value as any)["action_requests"] as unknown[]);
+    if (!ir || !Array.isArray(actionRequests) || actionRequests.length === 0) {
+      autoApprovedRef.current = null;
+      return;
+    }
+    if (autoApprovedRef.current === ir) return;
+    autoApprovedRef.current = ir;
+    resumeInterrupt({
+      decisions: actionRequests.map(() => ({ type: "approve" })),
+    });
+  }, [autoApprove, interrupt, resumeInterrupt]);
 
   // TODO: can we make this part of the hook?
   const processedMessages = useMemo(() => {
@@ -529,7 +551,25 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(({ assistant }) => {
               className="font-inherit field-sizing-content flex-1 resize-none border-0 bg-transparent px-[18px] pb-[13px] pt-[14px] text-sm leading-7 text-primary outline-none placeholder:text-tertiary"
               rows={1}
             />
-            <div className="flex justify-between gap-2 p-3">
+            <div className="flex items-center justify-between gap-2 p-3">
+              <button
+                type="button"
+                onClick={() => setAutoApprove((v) => !v)}
+                aria-pressed={autoApprove}
+                title="Auto-approve all tool actions in this conversation"
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium transition-colors",
+                  autoApprove
+                    ? "bg-[var(--brand)] text-[var(--brand-foreground)]"
+                    : "text-muted-foreground hover:bg-accent hover:text-foreground"
+                )}
+              >
+                <ShieldCheck
+                  className="size-3.5"
+                  aria-hidden="true"
+                />
+                Auto-approve
+              </button>
               <div className="flex justify-end gap-2">
                 <Button
                   type={isLoading ? "button" : "submit"}

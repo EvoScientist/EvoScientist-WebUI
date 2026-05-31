@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
 import {
   ChevronDown,
   ChevronUp,
@@ -44,6 +44,12 @@ export const ToolCallBox = React.memo<ToolCallBoxProps>(
     const [expandedArgs, setExpandedArgs] = useState<Record<string, boolean>>(
       {}
     );
+
+    // Approval interrupts arrive after the tool box has already rendered, so
+    // auto-expand once an action request appears (or generative UI loads).
+    useEffect(() => {
+      if (actionRequest || uiComponent) setIsExpanded(true);
+    }, [actionRequest, uiComponent]);
 
     const { name, args, result, status } = useMemo(() => {
       return {

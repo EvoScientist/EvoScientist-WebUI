@@ -8,7 +8,7 @@ import { ConfigDialog } from "@/app/components/ConfigDialog";
 import { Button } from "@/components/ui/button";
 import { Assistant } from "@langchain/langgraph-sdk";
 import { ClientProvider, useClient } from "@/providers/ClientProvider";
-import { Settings, MessagesSquare, SquarePen } from "lucide-react";
+import { Settings, SquarePen, PanelLeft, PanelLeftClose } from "lucide-react";
 import {
   ResizableHandle,
   ResizablePanel,
@@ -32,7 +32,7 @@ function HomePageInner({
   handleSaveConfig,
 }: HomePageInnerProps) {
   const client = useClient();
-  const [threadId, setThreadId] = useQueryState("threadId");
+  const [, setThreadId] = useQueryState("threadId");
   const [sidebar, setSidebar] = useQueryState("sidebar");
 
   const [mutateThreads, setMutateThreads] = useState<(() => void) | null>(null);
@@ -113,7 +113,7 @@ function HomePageInner({
       />
       <div className="flex h-screen flex-col">
         <header className="flex h-16 items-center justify-between border-b border-border px-6">
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3">
             <div className="flex items-center gap-2">
               <Image
                 src="/evoscientist-logo.png"
@@ -124,31 +124,47 @@ function HomePageInner({
               />
               <h1 className="text-xl font-semibold">EvoScientist</h1>
             </div>
-            {!sidebar && (
+            <div className="flex items-center gap-0.5">
               <Button
                 variant="ghost"
-                size="sm"
-                onClick={() => setSidebar("1")}
-                className="rounded-md border border-border bg-card p-3 text-foreground hover:bg-accent"
+                size="icon"
+                onClick={() => setSidebar(sidebar ? null : "1")}
+                aria-label={sidebar ? "Hide research" : "Show research"}
+                className="relative"
               >
-                <MessagesSquare
-                  className="mr-2 h-4 w-4"
-                  aria-hidden="true"
-                />
-                Threads
+                {sidebar ? (
+                  <PanelLeftClose
+                    className="size-5"
+                    aria-hidden="true"
+                  />
+                ) : (
+                  <PanelLeft
+                    className="size-5"
+                    aria-hidden="true"
+                  />
+                )}
                 {interruptCount > 0 && (
-                  <span className="ml-2 inline-flex min-h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[10px] text-destructive-foreground">
+                  <span className="absolute right-0 top-0 inline-flex min-h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[10px] text-destructive-foreground">
                     {interruptCount}
                   </span>
                 )}
               </Button>
-            )}
+              {!sidebar && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setThreadId(null)}
+                  aria-label="New chat"
+                >
+                  <SquarePen
+                    className="size-5"
+                    aria-hidden="true"
+                  />
+                </Button>
+              )}
+            </div>
           </div>
           <div className="flex items-center gap-2">
-            <div className="text-sm text-muted-foreground">
-              <span className="font-medium">Assistant:</span>{" "}
-              {config.assistantId}
-            </div>
             <Button
               variant="outline"
               size="sm"
@@ -159,19 +175,6 @@ function HomePageInner({
                 aria-hidden="true"
               />
               Settings
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setThreadId(null)}
-              disabled={!threadId}
-              className="border-[var(--brand)] bg-[var(--brand)] text-[var(--brand-foreground)] hover:bg-[var(--brand-hover)]"
-            >
-              <SquarePen
-                className="mr-2 h-4 w-4"
-                aria-hidden="true"
-              />
-              New Thread
             </Button>
           </div>
         </header>
@@ -195,7 +198,6 @@ function HomePageInner({
                       await setThreadId(id);
                     }}
                     onMutateReady={(fn) => setMutateThreads(() => fn)}
-                    onClose={() => setSidebar(null)}
                     onInterruptCountChange={setInterruptCount}
                   />
                 </ResizablePanel>
