@@ -12,13 +12,13 @@ import {
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
-import { DEFAULT_ASSISTANT_ID, StandaloneConfig } from "@/lib/config";
+import { DEFAULT_ASSISTANT_ID, DeploymentConfig } from "@/lib/config";
 
 interface ConfigDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onSave: (config: StandaloneConfig) => void;
-  initialConfig?: StandaloneConfig;
+  onSave: (config: DeploymentConfig) => void;
+  initialConfig?: DeploymentConfig;
 }
 
 export function ConfigDialog({

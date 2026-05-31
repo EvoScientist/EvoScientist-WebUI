@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useCallback, Suspense } from "react";
 import Image from "next/image";
 import { useQueryState } from "nuqs";
-import { getConfig, saveConfig, StandaloneConfig } from "@/lib/config";
+import { getConfig, saveConfig, DeploymentConfig } from "@/lib/config";
 import { ConfigDialog } from "@/app/components/ConfigDialog";
 import { Button } from "@/components/ui/button";
 import { Assistant } from "@langchain/langgraph-sdk";
@@ -19,10 +19,10 @@ import { ChatProvider } from "@/providers/ChatProvider";
 import { ChatInterface } from "@/app/components/ChatInterface";
 
 interface HomePageInnerProps {
-  config: StandaloneConfig;
+  config: DeploymentConfig;
   configDialogOpen: boolean;
   setConfigDialogOpen: (open: boolean) => void;
-  handleSaveConfig: (config: StandaloneConfig) => void;
+  handleSaveConfig: (config: DeploymentConfig) => void;
 }
 
 function HomePageInner({
@@ -170,7 +170,7 @@ function HomePageInner({
         <div className="flex-1 overflow-hidden">
           <ResizablePanelGroup
             direction="horizontal"
-            autoSaveId="standalone-chat"
+            autoSaveId="evoscientist-chat"
           >
             {sidebar && (
               <>
@@ -214,7 +214,7 @@ function HomePageInner({
 }
 
 function HomePageContent() {
-  const [config, setConfig] = useState<StandaloneConfig | null>(null);
+  const [config, setConfig] = useState<DeploymentConfig | null>(null);
   const [configDialogOpen, setConfigDialogOpen] = useState(false);
   const [assistantId, setAssistantId] = useQueryState("assistantId");
 
@@ -239,7 +239,7 @@ function HomePageContent() {
     }
   }, [config, assistantId, setAssistantId]);
 
-  const handleSaveConfig = useCallback((newConfig: StandaloneConfig) => {
+  const handleSaveConfig = useCallback((newConfig: DeploymentConfig) => {
     saveConfig(newConfig);
     setConfig(newConfig);
   }, []);
@@ -257,7 +257,7 @@ function HomePageContent() {
         />
         <div className="flex h-screen items-center justify-center">
           <div className="text-center">
-            <h1 className="text-2xl font-bold">Welcome to Standalone Chat</h1>
+            <h1 className="text-2xl font-bold">Welcome to EvoScientist</h1>
             <p className="mt-2 text-muted-foreground">
               Configure your deployment to get started
             </p>

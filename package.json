@@ -16,7 +16,6 @@
   "dependencies": {
     "@langchain/core": "1.1.19",
     "@langchain/langgraph-sdk": "1.0.3",
-    "@radix-ui/colors": "^1.0.0",
     "@radix-ui/react-dialog": "^1.1.15",
     "@radix-ui/react-label": "^2.1.8",
     "@radix-ui/react-scroll-area": "^1.2.9",
@@ -44,8 +43,6 @@
   },
   "devDependencies": {
     "@eslint/js": "^9",
-    "@headlessui/tailwindcss": "^0.2.2",
-    "@tailwindcss/container-queries": "^0.1.1",
     "@tailwindcss/forms": "^0.5.7",
     "@tailwindcss/typography": "^0.5.9",
     "@types/node": "^20",

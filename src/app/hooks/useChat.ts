@@ -2,11 +2,7 @@
 
 import { useCallback } from "react";
 import { useStream } from "@langchain/langgraph-sdk/react";
-import {
-  type Message,
-  type Assistant,
-  type Checkpoint,
-} from "@langchain/langgraph-sdk";
+import { type Message, type Assistant } from "@langchain/langgraph-sdk";
 import { v4 as uuidv4 } from "uuid";
 import type { UseStreamThread } from "@langchain/langgraph-sdk/react";
 import type { TodoItem } from "@/app/types/types";
@@ -71,34 +67,6 @@ export function useChat({
     [stream, activeAssistant?.config, onHistoryRevalidate]
   );
 
-  const runSingleStep = useCallback(
-    (
-      messages: Message[],
-      checkpoint?: Checkpoint,
-      isRerunningSubagent?: boolean,
-      optimisticMessages?: Message[]
-    ) => {
-      if (checkpoint) {
-        stream.submit(undefined, {
-          ...(optimisticMessages
-            ? { optimisticValues: { messages: optimisticMessages } }
-            : {}),
-          config: activeAssistant?.config,
-          checkpoint: checkpoint,
-          ...(isRerunningSubagent
-            ? { interruptAfter: ["tools"] }
-            : { interruptBefore: ["tools"] }),
-        });
-      } else {
-        stream.submit(
-          { messages },
-          { config: activeAssistant?.config, interruptBefore: ["tools"] }
-        );
-      }
-    },
-    [stream, activeAssistant?.config]
-  );
-
   const setFiles = useCallback(
     async (files: Record<string, string>) => {
       if (!threadId) return;
@@ -108,29 +76,6 @@ export function useChat({
     },
     [client, threadId]
   );
-
-  const continueStream = useCallback(
-    (hasTaskToolCall?: boolean) => {
-      stream.submit(undefined, {
-        config: {
-          ...(activeAssistant?.config || {}),
-          recursion_limit: 100,
-        },
-        ...(hasTaskToolCall
-          ? { interruptAfter: ["tools"] }
-          : { interruptBefore: ["tools"] }),
-      });
-      // Update thread list when continuing stream
-      onHistoryRevalidate?.();
-    },
-    [stream, activeAssistant?.config, onHistoryRevalidate]
-  );
-
-  const markCurrentThreadAsResolved = useCallback(() => {
-    stream.submit(null, { command: { goto: "__end__", update: null } });
-    // Update thread list when marking thread as resolved
-    onHistoryRevalidate?.();
-  }, [stream, onHistoryRevalidate]);
 
   const resumeInterrupt = useCallback(
     (value: any) => {
@@ -156,12 +101,8 @@ export function useChat({
     isLoading: stream.isLoading,
     isThreadLoading: stream.isThreadLoading,
     interrupt: stream.interrupt,
-    getMessagesMetadata: stream.getMessagesMetadata,
     sendMessage,
-    runSingleStep,
-    continueStream,
     stopStream,
-    markCurrentThreadAsResolved,
     resumeInterrupt,
   };
 }

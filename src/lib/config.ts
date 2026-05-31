@@ -1,4 +1,4 @@
-export interface StandaloneConfig {
+export interface DeploymentConfig {
   deploymentUrl: string;
   assistantId: string;
   langsmithApiKey?: string;
@@ -11,14 +11,14 @@ export const DEFAULT_ASSISTANT_ID = "EvoScientist";
 
 const CONFIG_KEY = "evoscientist-config";
 
-export function getConfig(): StandaloneConfig | null {
+export function getConfig(): DeploymentConfig | null {
   if (typeof window === "undefined") return null;
 
   const stored = localStorage.getItem(CONFIG_KEY);
   if (!stored) return null;
 
   try {
-    const parsed = JSON.parse(stored) as StandaloneConfig;
+    const parsed = JSON.parse(stored) as DeploymentConfig;
     // Always pin the assistant to the EvoScientist main agent.
     return { ...parsed, assistantId: DEFAULT_ASSISTANT_ID };
   } catch {
@@ -26,7 +26,7 @@ export function getConfig(): StandaloneConfig | null {
   }
 }
 
-export function saveConfig(config: StandaloneConfig): void {
+export function saveConfig(config: DeploymentConfig): void {
   if (typeof window === "undefined") return;
   localStorage.setItem(CONFIG_KEY, JSON.stringify(config));
 }
