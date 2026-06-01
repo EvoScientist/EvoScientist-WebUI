@@ -20,6 +20,10 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { ChatMessage } from "@/app/components/ChatMessage";
+import {
+  AskUserInterrupt,
+  type AskUserQuestion,
+} from "@/app/components/AskUserInterrupt";
 import type {
   TodoItem,
   ToolCall,
@@ -88,7 +92,18 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(({ assistant }) => {
     resumeInterrupt,
   } = useChatContext();
 
-  const submitDisabled = isLoading || !assistant;
+  // While the agent waits on an *actionable* interrupt (approval or ask_user),
+  // lock the composer so the user answers via the in-message controls — a free
+  // message would cancel the pending tool call and corrupt the thread.
+  // A bare/leftover interrupt value (e.g. after Stop) must NOT lock the input.
+  const interruptValue = interrupt?.value as
+    | { type?: string; action_requests?: unknown[] }
+    | undefined;
+  const hasPendingInterrupt =
+    interruptValue?.type === "ask_user" ||
+    (Array.isArray(interruptValue?.action_requests) &&
+      interruptValue.action_requests.length > 0);
+  const submitDisabled = isLoading || !assistant || hasPendingInterrupt;
 
   const handleSubmit = useCallback(
     (e?: FormEvent) => {
@@ -144,6 +159,28 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(({ assistant }) => {
       decisions: actionRequests.map(() => ({ type: "approve" })),
     });
   }, [autoApprove, interrupt, resumeInterrupt]);
+
+  // ask_user: the agent is asking the user structured questions.
+  const askUserQuestions = useMemo<AskUserQuestion[] | null>(() => {
+    const value = interrupt?.value as
+      | { type?: string; questions?: AskUserQuestion[] }
+      | undefined;
+    if (value?.type === "ask_user" && Array.isArray(value.questions)) {
+      return value.questions;
+    }
+    return null;
+  }, [interrupt]);
+
+  const handleAskUserSubmit = useCallback(
+    (answers: string[]) => {
+      resumeInterrupt({ status: "answered", answers });
+    },
+    [resumeInterrupt]
+  );
+
+  const handleAskUserCancel = useCallback(() => {
+    resumeInterrupt({ status: "cancelled" });
+  }, [resumeInterrupt]);
 
   // TODO: can we make this part of the hook?
   const processedMessages = useMemo(() => {
@@ -314,9 +351,20 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(({ assistant }) => {
                     onResumeInterrupt={resumeInterrupt}
                     graphId={assistant?.graph_id}
                     onEditMessage={handleEditMessage}
+                    autoApprove={autoApprove}
                   />
                 );
               })}
+              {askUserQuestions && (
+                <div className="mt-4">
+                  <AskUserInterrupt
+                    questions={askUserQuestions}
+                    onSubmit={handleAskUserSubmit}
+                    onCancel={handleAskUserCancel}
+                    isLoading={isLoading}
+                  />
+                </div>
+              )}
             </>
           )}
         </div>
@@ -547,8 +595,15 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(({ assistant }) => {
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
               aria-label="Message"
-              placeholder={isLoading ? "Running…" : "Write your message…"}
-              className="font-inherit field-sizing-content flex-1 resize-none border-0 bg-transparent px-[18px] pb-[13px] pt-[14px] text-sm leading-7 text-primary outline-none placeholder:text-tertiary"
+              disabled={hasPendingInterrupt}
+              placeholder={
+                hasPendingInterrupt
+                  ? "Respond to the request above to continue…"
+                  : isLoading
+                  ? "Running…"
+                  : "Write your message…"
+              }
+              className="font-inherit field-sizing-content flex-1 resize-none border-0 bg-transparent px-[18px] pb-[13px] pt-[14px] text-sm leading-7 text-primary outline-none placeholder:text-tertiary disabled:cursor-not-allowed"
               rows={1}
             />
             <div className="flex items-center justify-between gap-2 p-3">

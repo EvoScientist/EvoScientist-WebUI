@@ -1,6 +1,12 @@
 "use client";
 
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+import React, {
+  useState,
+  useEffect,
+  useRef,
+  useMemo,
+  useCallback,
+} from "react";
 import {
   ChevronDown,
   ChevronUp,
@@ -25,6 +31,7 @@ interface ToolCallBoxProps {
   reviewConfig?: ReviewConfig;
   onResume?: (value: any) => void;
   isLoading?: boolean;
+  autoApprove?: boolean;
 }
 
 export const ToolCallBox = React.memo<ToolCallBoxProps>(
@@ -37,19 +44,30 @@ export const ToolCallBox = React.memo<ToolCallBoxProps>(
     reviewConfig,
     onResume,
     isLoading,
+    autoApprove,
   }) => {
     const [isExpanded, setIsExpanded] = useState(
-      () => !!uiComponent || !!actionRequest
+      () => !!uiComponent || (!!actionRequest && !autoApprove)
     );
     const [expandedArgs, setExpandedArgs] = useState<Record<string, boolean>>(
       {}
     );
 
-    // Approval interrupts arrive after the tool box has already rendered, so
-    // auto-expand once an action request appears (or generative UI loads).
+    // Generative UI: expand to show it.
     useEffect(() => {
-      if (actionRequest || uiComponent) setIsExpanded(true);
-    }, [actionRequest, uiComponent]);
+      if (uiComponent) setIsExpanded(true);
+    }, [uiComponent]);
+
+    // Approval lifecycle: expand when an approval appears (skip if auto-approve
+    // is on), and collapse again once it's resolved.
+    const prevActionRequestRef = useRef(actionRequest);
+    useEffect(() => {
+      const had = !!prevActionRequestRef.current;
+      const has = !!actionRequest;
+      if (has && !had && !autoApprove) setIsExpanded(true);
+      else if (!has && had) setIsExpanded(false);
+      prevActionRequestRef.current = actionRequest;
+    }, [actionRequest, autoApprove]);
 
     const { name, args, result, status } = useMemo(() => {
       return {

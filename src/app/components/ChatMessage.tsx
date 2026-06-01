@@ -29,6 +29,7 @@ interface ChatMessageProps {
   onResumeInterrupt?: (value: any) => void;
   graphId?: string;
   onEditMessage?: (content: string) => void;
+  autoApprove?: boolean;
 }
 
 export const ChatMessage = React.memo<ChatMessageProps>(
@@ -43,6 +44,7 @@ export const ChatMessage = React.memo<ChatMessageProps>(
     onResumeInterrupt,
     graphId,
     onEditMessage,
+    autoApprove,
   }) => {
     const isUser = message.type === "human";
     const messageContent = extractStringFromMessageContent(message);
@@ -244,6 +246,7 @@ export const ChatMessage = React.memo<ChatMessageProps>(
                     reviewConfig={reviewConfig}
                     onResume={onResumeInterrupt}
                     isLoading={isLoading}
+                    autoApprove={autoApprove}
                   />
                 );
               })}
