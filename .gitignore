@@ -12,6 +12,9 @@ next-env.d.ts
 /build
 /dist
 
+# npm pack output
+*.tgz
+
 # testing / coverage
 /coverage
 
