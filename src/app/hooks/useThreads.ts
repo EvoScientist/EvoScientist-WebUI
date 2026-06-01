@@ -127,6 +127,14 @@ export function useThreads(props: {
           title = `Thread ${thread.thread_id.slice(0, 8)}`;
         }
 
+        // A user-set custom title (stored in metadata via rename) always wins.
+        const customTitle = (
+          thread.metadata as Record<string, unknown> | undefined
+        )?.title;
+        if (typeof customTitle === "string" && customTitle.trim()) {
+          title = customTitle.trim();
+        }
+
         return {
           id: thread.thread_id,
           updatedAt: new Date(thread.updated_at),
@@ -142,4 +150,35 @@ export function useThreads(props: {
       revalidateOnFocus: true,
     }
   );
+}
+
+// --- Thread mutations (used by the thread list's rename / delete actions) ---
+
+function makeThreadsClient(): Client | null {
+  const config = getConfig();
+  if (!config) return null;
+  const apiKey =
+    config.langsmithApiKey || process.env.NEXT_PUBLIC_LANGSMITH_API_KEY || "";
+  return new Client({
+    apiUrl: config.deploymentUrl,
+    defaultHeaders: apiKey ? { "X-Api-Key": apiKey } : {},
+  });
+}
+
+/** Permanently delete a thread. Throws if no deployment is configured. */
+export async function deleteThread(id: string): Promise<void> {
+  const client = makeThreadsClient();
+  if (!client) throw new Error("No EvoScientist deployment configured.");
+  await client.threads.delete(id);
+}
+
+/**
+ * Rename a thread by storing a custom title in its metadata. `update` PATCHes
+ * (merges) metadata, so the `graph_id` / `assistant_id` keys the list relies on
+ * for filtering are preserved.
+ */
+export async function renameThread(id: string, title: string): Promise<void> {
+  const client = makeThreadsClient();
+  if (!client) throw new Error("No EvoScientist deployment configured.");
+  await client.threads.update(id, { metadata: { title } });
 }

@@ -4,9 +4,11 @@ import { useEffect, useMemo, useState, useRef, useCallback } from "react";
 import {
   Loader2,
   MessageSquare,
+  Pencil,
   Puzzle,
   Search,
   SquarePen,
+  Trash2,
   X,
 } from "lucide-react";
 import { useQueryState } from "nuqs";
@@ -25,7 +27,17 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import type { ThreadItem } from "@/app/hooks/useThreads";
-import { useThreads } from "@/app/hooks/useThreads";
+import { useThreads, deleteThread, renameThread } from "@/app/hooks/useThreads";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { toast } from "sonner";
 
 type StatusFilter = "all" | "idle" | "busy" | "interrupted" | "error";
 
@@ -156,6 +168,10 @@ export function ThreadList({
   const [view, setView] = useQueryState("view");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [search, setSearch] = useState("");
+  const [renameTarget, setRenameTarget] = useState<ThreadItem | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<ThreadItem | null>(null);
+  const [actionBusy, setActionBusy] = useState(false);
 
   const threads = useThreads({
     status: statusFilter === "all" ? undefined : statusFilter,
@@ -244,9 +260,68 @@ export function ThreadList({
     onInterruptCountChange?.(interruptedCount);
   }, [interruptedCount, onInterruptCountChange]);
 
+  // Synchronous re-entry lock: `actionBusy` state only blocks after a re-render,
+  // so a fast second Enter could fire a mutation twice. The ref guards instantly.
+  const actionBusyRef = useRef(false);
+
+  // After deleting a thread its row (and the trigger button) is gone, so move
+  // keyboard focus to a stable target (New Chat) instead of dropping to <body>.
+  const newChatRef = useRef<HTMLButtonElement>(null);
+  const pendingDeleteFocusRef = useRef(false);
+
+  const submitRename = async () => {
+    if (!renameTarget || actionBusyRef.current) return;
+    const title = renameValue.trim();
+    if (!title || title === renameTarget.title) {
+      setRenameTarget(null);
+      return;
+    }
+    actionBusyRef.current = true;
+    setActionBusy(true);
+    try {
+      await renameThread(renameTarget.id, title);
+      setRenameTarget(null);
+      mutateFn();
+    } catch {
+      toast.error("Couldn't rename — try again.");
+    } finally {
+      actionBusyRef.current = false;
+      setActionBusy(false);
+    }
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteTarget || actionBusyRef.current) return;
+    actionBusyRef.current = true;
+    setActionBusy(true);
+    try {
+      await deleteThread(deleteTarget.id);
+      // If the open thread was deleted, take the SAME reset path as New Chat
+      // (which also remounts the chat session) instead of only clearing URL state.
+      if (currentThreadId === deleteTarget.id) {
+        if (onNewChat) {
+          onNewChat();
+        } else {
+          setThreadId(null);
+          setView(null);
+        }
+      }
+      // Hand focus to New Chat once the dialog closes (the trigger is gone).
+      pendingDeleteFocusRef.current = true;
+      setDeleteTarget(null);
+      mutateFn();
+    } catch {
+      toast.error("Couldn't delete — try again.");
+    } finally {
+      actionBusyRef.current = false;
+      setActionBusy(false);
+    }
+  };
+
   return (
     <div className="absolute inset-0 flex flex-col">
       <button
+        ref={newChatRef}
         type="button"
         onClick={() => {
           if (onNewChat) {
@@ -418,52 +493,90 @@ export function ThreadList({
                   </h4>
                   <div className="flex flex-col gap-1">
                     {groupThreads.map((thread) => (
-                      <button
+                      <div
                         key={thread.id}
-                        type="button"
-                        onClick={() => onThreadSelect(thread.id)}
-                        className={cn(
-                          "grid w-full cursor-pointer items-center gap-3 rounded-lg px-3 py-3 text-left transition-colors duration-200",
-                          "hover:bg-accent",
-                          currentThreadId === thread.id
-                            ? "border border-primary bg-accent hover:bg-accent"
-                            : "border border-transparent bg-transparent"
-                        )}
-                        aria-current={currentThreadId === thread.id}
+                        className="group relative"
                       >
-                        <div className="min-w-0 flex-1">
-                          {/* Title + Timestamp Row */}
-                          <div className="mb-1 flex items-center justify-between">
-                            <h3 className="truncate text-sm font-semibold">
-                              {thread.title}
-                            </h3>
-                            <span className="ml-2 flex-shrink-0 text-xs tabular-nums text-muted-foreground">
-                              {formatTime(thread.updatedAt)}
-                            </span>
-                          </div>
-                          {/* Description + Status Row */}
-                          <div className="flex items-center justify-between">
-                            <p className="flex-1 truncate text-sm text-muted-foreground">
-                              {thread.description}
-                            </p>
-                            <div className="ml-2 flex-shrink-0">
-                              <span
-                                role="img"
-                                aria-label={`Status: ${
-                                  STATUS_LABELS[thread.status]
-                                }`}
-                                title={`Status: ${
-                                  STATUS_LABELS[thread.status]
-                                }`}
-                                className={cn(
-                                  "h-2 w-2 rounded-full",
-                                  getThreadColor(thread.status)
-                                )}
-                              />
+                        {/* Selectable row — a native button so Enter/Space and
+                            role come for free. Action buttons are SIBLINGS (below),
+                            never nested inside this button. */}
+                        <button
+                          type="button"
+                          onClick={() => onThreadSelect(thread.id)}
+                          className={cn(
+                            "grid w-full cursor-pointer items-center gap-3 rounded-lg px-3 py-3 text-left transition-colors duration-200",
+                            "hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                            currentThreadId === thread.id
+                              ? "border border-primary bg-accent hover:bg-accent"
+                              : "border border-transparent bg-transparent"
+                          )}
+                          aria-current={currentThreadId === thread.id}
+                        >
+                          <div className="min-w-0 flex-1">
+                            {/* Title + Timestamp Row */}
+                            <div className="mb-1 flex items-center justify-between gap-2">
+                              <h3 className="truncate text-sm font-semibold">
+                                {thread.title}
+                              </h3>
+                              <span className="ml-2 flex-shrink-0 text-xs tabular-nums text-muted-foreground">
+                                {formatTime(thread.updatedAt)}
+                              </span>
+                            </div>
+                            {/* Description + Status Row */}
+                            <div className="flex items-center justify-between">
+                              <p className="flex-1 truncate text-sm text-muted-foreground">
+                                {thread.description}
+                              </p>
+                              <div className="ml-2 flex-shrink-0">
+                                <span
+                                  role="img"
+                                  aria-label={`Status: ${
+                                    STATUS_LABELS[thread.status]
+                                  }`}
+                                  title={`Status: ${
+                                    STATUS_LABELS[thread.status]
+                                  }`}
+                                  className={cn(
+                                    "h-2 w-2 rounded-full",
+                                    getThreadColor(thread.status)
+                                  )}
+                                />
+                              </div>
                             </div>
                           </div>
+                        </button>
+                        {/* Per-thread actions — siblings of the select button (not
+                            nested); shown on touch, reveal on hover/focus on desktop. */}
+                        <div className="absolute right-1.5 top-1.5 flex items-center gap-0.5 rounded-md bg-accent/95 p-0.5 opacity-100 shadow-sm backdrop-blur-sm transition-opacity md:opacity-0 md:group-focus-within:opacity-100 md:group-hover:opacity-100">
+                          <button
+                            type="button"
+                            aria-label={`Rename "${thread.title}"`}
+                            title="Rename"
+                            onClick={() => {
+                              setRenameTarget(thread);
+                              setRenameValue(thread.title);
+                            }}
+                            className="rounded p-1 text-muted-foreground transition-colors hover:bg-background hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                          >
+                            <Pencil
+                              className="size-3.5"
+                              aria-hidden="true"
+                            />
+                          </button>
+                          <button
+                            type="button"
+                            aria-label={`Delete "${thread.title}"`}
+                            title="Delete"
+                            onClick={() => setDeleteTarget(thread)}
+                            className="rounded p-1 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive focus-visible:ring-2 focus-visible:ring-ring"
+                          >
+                            <Trash2
+                              className="size-3.5"
+                              aria-hidden="true"
+                            />
+                          </button>
                         </div>
-                      </button>
+                      </div>
                     ))}
                   </div>
                 </div>
@@ -492,6 +605,99 @@ export function ThreadList({
           </div>
         )}
       </ScrollArea>
+
+      {/* Rename dialog */}
+      <Dialog
+        open={renameTarget !== null}
+        onOpenChange={(open) => {
+          // Don't let Escape / backdrop close the dialog mid-save.
+          if (!open && !actionBusy) setRenameTarget(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Rename research</DialogTitle>
+            <DialogDescription>
+              Give this conversation a custom title.
+            </DialogDescription>
+          </DialogHeader>
+          <Input
+            autoFocus
+            value={renameValue}
+            onChange={(e) => setRenameValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                submitRename();
+              }
+            }}
+            placeholder="Enter a title…"
+            maxLength={100}
+            disabled={actionBusy}
+          />
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setRenameTarget(null)}
+              disabled={actionBusy}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={submitRename}
+              disabled={actionBusy || !renameValue.trim()}
+            >
+              {actionBusy ? "Saving…" : "Save"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete confirmation */}
+      <Dialog
+        open={deleteTarget !== null}
+        onOpenChange={(open) => {
+          // Don't let Escape / backdrop close the dialog mid-delete.
+          if (!open && !actionBusy) setDeleteTarget(null);
+        }}
+      >
+        <DialogContent
+          className="sm:max-w-md"
+          onCloseAutoFocus={(e) => {
+            // After a delete the trigger row is gone — send focus to New Chat
+            // instead of letting it fall to <body>.
+            if (pendingDeleteFocusRef.current) {
+              e.preventDefault();
+              pendingDeleteFocusRef.current = false;
+              newChatRef.current?.focus();
+            }
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle>Delete this research?</DialogTitle>
+            <DialogDescription>
+              “{deleteTarget?.title}” will be permanently deleted. This can’t be
+              undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setDeleteTarget(null)}
+              disabled={actionBusy}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={confirmDelete}
+              disabled={actionBusy}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {actionBusy ? "Deleting…" : "Delete"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
