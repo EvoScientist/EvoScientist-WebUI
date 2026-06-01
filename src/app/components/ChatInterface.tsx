@@ -121,6 +121,9 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(({ assistant }) => {
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
       if (submitDisabled) return;
+      // Don't submit while an IME is composing (e.g. pressing Enter to pick a
+      // Chinese/Japanese/Korean candidate must confirm text, not send).
+      if (e.nativeEvent.isComposing || e.keyCode === 229) return;
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         handleSubmit();

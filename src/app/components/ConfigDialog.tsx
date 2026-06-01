@@ -96,7 +96,8 @@ export function ConfigDialog({
                 if (error) setError(null);
               }}
               onKeyDown={(e) => {
-                if (e.key === "Enter") handleSave();
+                if (e.key === "Enter" && !e.nativeEvent.isComposing)
+                  handleSave();
               }}
               aria-invalid={error ? true : undefined}
               aria-describedby={error ? "deploymentUrl-error" : undefined}
