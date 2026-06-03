@@ -25,7 +25,10 @@ async function listDir(path: string): Promise<WorkspaceEntry[]> {
   return (body?.entries ?? []) as WorkspaceEntry[];
 }
 
-async function listAll(): Promise<{ entries: WorkspaceEntry[]; truncated: boolean }> {
+async function listAll(): Promise<{
+  entries: WorkspaceEntry[];
+  truncated: boolean;
+}> {
   const res = await fetch("/api/workspace?recursive=1");
   const body = await res.json().catch(() => null);
   if (!res.ok) throw new Error(body?.error || "Failed to load workspace.");
@@ -41,25 +44,86 @@ const CATEGORIES = [
     key: "docs",
     label: "Papers & docs",
     Icon: FileText,
-    exts: ["pdf", "tex", "bib", "md", "markdown", "txt", "docx", "doc", "rtf", "odt"],
+    exts: [
+      "pdf",
+      "tex",
+      "bib",
+      "md",
+      "markdown",
+      "txt",
+      "docx",
+      "doc",
+      "rtf",
+      "odt",
+    ],
   },
   {
     key: "figures",
     label: "Figures",
     Icon: ImageIcon,
-    exts: ["png", "jpg", "jpeg", "gif", "svg", "webp", "bmp", "tiff", "tif", "eps"],
+    exts: [
+      "png",
+      "jpg",
+      "jpeg",
+      "gif",
+      "svg",
+      "webp",
+      "bmp",
+      "tiff",
+      "tif",
+      "eps",
+    ],
   },
   {
     key: "data",
     label: "Data",
     Icon: Database,
-    exts: ["json", "jsonl", "csv", "tsv", "xlsx", "xls", "parquet", "pkl", "npy", "npz", "h5", "hdf5", "db", "sqlite", "yaml", "yml", "xml"],
+    exts: [
+      "json",
+      "jsonl",
+      "csv",
+      "tsv",
+      "xlsx",
+      "xls",
+      "parquet",
+      "pkl",
+      "npy",
+      "npz",
+      "h5",
+      "hdf5",
+      "db",
+      "sqlite",
+      "yaml",
+      "yml",
+      "xml",
+    ],
   },
   {
     key: "code",
     label: "Code",
     Icon: Code2,
-    exts: ["py", "ipynb", "js", "ts", "tsx", "jsx", "sh", "bash", "r", "jl", "cpp", "cc", "c", "h", "hpp", "java", "go", "rs", "m", "rb"],
+    exts: [
+      "py",
+      "ipynb",
+      "js",
+      "ts",
+      "tsx",
+      "jsx",
+      "sh",
+      "bash",
+      "r",
+      "jl",
+      "cpp",
+      "cc",
+      "c",
+      "h",
+      "hpp",
+      "java",
+      "go",
+      "rs",
+      "m",
+      "rb",
+    ],
   },
 ] as const;
 const OTHER = { key: "other", label: "Other", Icon: FileIcon } as const;
@@ -75,7 +139,9 @@ export function WorkspacePanel() {
   const [view, setView] = useState<ViewMode>("tree");
 
   // --- Tree view state (listing cache keyed by dir path; "" = root) ---
-  const [children, setChildren] = useState<Record<string, WorkspaceEntry[]>>({});
+  const [children, setChildren] = useState<Record<string, WorkspaceEntry[]>>(
+    {}
+  );
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState<Set<string>>(new Set());
   const [rootLoading, setRootLoading] = useState(false);
@@ -86,9 +152,10 @@ export function WorkspacePanel() {
   const [truncated, setTruncated] = useState(false);
 
   const [error, setError] = useState<string | null>(null);
-  const [selected, setSelected] = useState<{ path: string; size: number } | null>(
-    null
-  );
+  const [selected, setSelected] = useState<{
+    path: string;
+    size: number;
+  } | null>(null);
 
   const loadDir = useCallback(async (path: string) => {
     setLoading((prev) => new Set(prev).add(path));
@@ -232,7 +299,9 @@ export function WorkspacePanel() {
             )}
             <span className="truncate">{entry.name}</span>
           </button>
-          {entry.type === "dir" && isOpen && renderEntries(entry.path, depth + 1)}
+          {entry.type === "dir" &&
+            isOpen &&
+            renderEntries(entry.path, depth + 1)}
         </div>
       );
     });
@@ -252,7 +321,8 @@ export function WorkspacePanel() {
       <div className="space-y-3">
         {truncated && (
           <p className="px-1 text-[11px] text-muted-foreground">
-            Showing the first files only — the workspace has more than the limit.
+            Showing the first files only — the workspace has more than the
+            limit.
           </p>
         )}
         {groups.map((cat) => {
@@ -335,7 +405,9 @@ export function WorkspacePanel() {
             aria-label="Refresh workspace"
             title="Refresh"
           >
-            <RefreshCw className={cn("size-3.5", refreshing && "animate-spin")} />
+            <RefreshCw
+              className={cn("size-3.5", refreshing && "animate-spin")}
+            />
           </button>
         </div>
       </div>

@@ -39,7 +39,8 @@ export const SkillDetailDialog = React.memo<{
     fetch(`/api/skills/detail?name=${encodeURIComponent(skill.name)}`)
       .then(async (res) => {
         const d = await res.json().catch(() => null);
-        if (!res.ok) throw new Error(d?.error || `Failed to load (${res.status})`);
+        if (!res.ok)
+          throw new Error(d?.error || `Failed to load (${res.status})`);
         return d as FetchedDetail;
       })
       .then((d) => {
@@ -92,8 +93,11 @@ export const SkillDetailDialog = React.memo<{
                 </span>
               )}
               {installed && (
-                <span className="inline-flex items-center gap-1 rounded-full bg-[var(--brand)]/10 px-2 py-0.5 text-[11px] font-medium text-[var(--brand)]">
-                  <CheckCircle2 className="size-3" aria-hidden="true" />
+                <span className="bg-[var(--brand)]/10 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium text-[var(--brand)]">
+                  <CheckCircle2
+                    className="size-3"
+                    aria-hidden="true"
+                  />
                   Installed
                 </span>
               )}
@@ -112,7 +116,10 @@ export const SkillDetailDialog = React.memo<{
             <div className="mt-4 border-t border-border pt-4">
               {loading ? (
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+                  <Loader2
+                    className="size-4 animate-spin"
+                    aria-hidden="true"
+                  />
                   Loading skill contents…
                 </div>
               ) : error ? (

@@ -95,7 +95,10 @@ export function SkillsMarketplace() {
 
   // Install and update hit the same endpoint (it overwrites + re-records the
   // manifest commit); the mode only changes the busy label and success state.
-  const install = async (name: string, mode: "install" | "update" = "install") => {
+  const install = async (
+    name: string,
+    mode: "install" | "update" = "install"
+  ) => {
     setBusy((b) => ({ ...b, [name]: mode }));
     setError(null);
     try {
@@ -203,7 +206,10 @@ export function SkillsMarketplace() {
 
         {loading ? (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+            <Loader2
+              className="size-4 animate-spin"
+              aria-hidden="true"
+            />
             Loading skills…
           </div>
         ) : (
@@ -225,7 +231,9 @@ export function SkillsMarketplace() {
                       key={s.name}
                       title={s.title}
                       description={s.description}
-                      meta={`${s.fileCount} file${s.fileCount === 1 ? "" : "s"}`}
+                      meta={`${s.fileCount} file${
+                        s.fileCount === 1 ? "" : "s"
+                      }`}
                       installed={s.installed}
                       installedVersion={s.installedVersion}
                       latestVersion={s.latestVersion}
@@ -359,20 +367,24 @@ function SkillTile({
             onClick={onUpdate}
             disabled={!!busy}
             className="inline-flex items-center gap-1.5 rounded-md bg-[var(--brand)] px-2.5 py-1 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
-            title={
-              latestVersion ? `Update to v${latestVersion}` : "Update"
-            }
+            title={latestVersion ? `Update to v${latestVersion}` : "Update"}
           >
             {busy === "update" ? (
-              <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+              <Loader2
+                className="size-3.5 animate-spin"
+                aria-hidden="true"
+              />
             ) : (
-              <ArrowUpCircle className="size-3.5" aria-hidden="true" />
+              <ArrowUpCircle
+                className="size-3.5"
+                aria-hidden="true"
+              />
             )}
             {busy === "update"
               ? "Updating…"
               : latestVersion
-                ? `Update → v${latestVersion}`
-                : "Update"}
+              ? `Update → v${latestVersion}`
+              : "Update"}
           </button>
         )}
         {installed ? (
@@ -383,9 +395,15 @@ function SkillTile({
             className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:border-destructive/40 hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
           >
             {busy === "uninstall" ? (
-              <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+              <Loader2
+                className="size-3.5 animate-spin"
+                aria-hidden="true"
+              />
             ) : (
-              <Trash2 className="size-3.5" aria-hidden="true" />
+              <Trash2
+                className="size-3.5"
+                aria-hidden="true"
+              />
             )}
             {busy === "uninstall" ? "Removing…" : "Uninstall"}
           </button>
@@ -397,9 +415,15 @@ function SkillTile({
             className="inline-flex items-center gap-1.5 rounded-md bg-[var(--brand)] px-2.5 py-1 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
           >
             {busy === "install" ? (
-              <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+              <Loader2
+                className="size-3.5 animate-spin"
+                aria-hidden="true"
+              />
             ) : (
-              <Download className="size-3.5" aria-hidden="true" />
+              <Download
+                className="size-3.5"
+                aria-hidden="true"
+              />
             )}
             {busy === "install" ? "Installing…" : "Install"}
           </button>

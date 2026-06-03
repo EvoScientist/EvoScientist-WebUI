@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { join, resolve } from "path";
+import { join, resolve, sep } from "path";
 import { promises as fs } from "fs";
-import { SKILL_DIRS, recordUninstall } from "@/lib/server/skills";
+import {
+  SKILL_DIRS,
+  recordUninstall,
+  isValidSkillName,
+} from "@/lib/server/skills";
 
 // SKILL_DIRS (the global ~/.evoscientist/skills tier + legacy ~/.config
 // fallback) is the single source of truth, shared with the install route.
@@ -34,8 +38,10 @@ async function readSkills(): Promise<SkillCard[]> {
   const seen = new Set<string>();
   for (const dir of SKILL_DIRS) {
     let entries: string[] = [];
+    let realRoot: string;
     try {
       entries = await fs.readdir(dir);
+      realRoot = await fs.realpath(dir);
     } catch {
       continue; // dir doesn't exist
     }
@@ -43,9 +49,15 @@ async function readSkills(): Promise<SkillCard[]> {
       if (entry.startsWith(".")) continue;
       const skillDir = join(dir, entry);
       try {
-        const stat = await fs.stat(skillDir);
+        // Canonicalize so a symlinked skill dir / SKILL.md can't read outside
+        // the tier (consistent with getSkillDetail's guard).
+        const realDir = await fs.realpath(skillDir);
+        if (realDir !== realRoot && !realDir.startsWith(realRoot + sep)) {
+          continue;
+        }
+        const stat = await fs.stat(realDir);
         if (!stat.isDirectory()) continue;
-        const md = await fs.readFile(join(skillDir, "SKILL.md"), "utf-8");
+        const md = await fs.readFile(join(realDir, "SKILL.md"), "utf-8");
         const { name, description } = parseFrontmatter(md);
         // Identity is the DIRECTORY name (what install/uninstall/dedup key on);
         // the frontmatter name is display-only.
@@ -81,14 +93,20 @@ export async function GET() {
 // only delete inside the known skill dirs.
 export async function DELETE(req: NextRequest) {
   const name = req.nextUrl.searchParams.get("name");
-  if (!name || /[\\/]|\.\./.test(name)) {
+  // Strict name check (blocks dotfiles like `.installed.yaml`, traversal, odd
+  // chars) — must match install-side validation, not the old slash/`..`-only one.
+  if (!name || !isValidSkillName(name)) {
     return NextResponse.json({ error: "Invalid skill name" }, { status: 400 });
   }
   for (const dir of SKILL_DIRS) {
     const target = resolve(join(dir, name));
-    if (!target.startsWith(resolve(dir) + "/")) continue;
+    if (target !== resolve(dir) && !target.startsWith(resolve(dir) + sep)) {
+      continue;
+    }
     try {
-      await fs.stat(target);
+      // Only ever remove an actual skill directory, never a stray file.
+      const stat = await fs.stat(target);
+      if (!stat.isDirectory()) continue;
     } catch {
       continue; // not here
     }

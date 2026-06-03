@@ -95,10 +95,7 @@ export async function GET(request: NextRequest) {
 
     const stat = await fs.stat(dir);
     if (!stat.isDirectory()) {
-      return NextResponse.json(
-        { error: "Not a directory." },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Not a directory." }, { status: 400 });
     }
 
     // "By type" view: flat list of every file under the workspace.
@@ -169,9 +166,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json(
       {
         error:
-          error instanceof Error
-            ? error.message
-            : "Failed to list workspace.",
+          error instanceof Error ? error.message : "Failed to list workspace.",
       },
       { status: 400 }
     );

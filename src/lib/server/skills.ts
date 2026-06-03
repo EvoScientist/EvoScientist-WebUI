@@ -191,7 +191,8 @@ async function resolveRef(): Promise<string> {
     );
     if (res.ok) {
       const data = (await res.json()) as { sha?: string };
-      if (typeof data.sha === "string" && SHA_RE.test(data.sha)) return data.sha;
+      if (typeof data.sha === "string" && SHA_RE.test(data.sha))
+        return data.sha;
     }
   } catch {
     // fall back to the branch name below
@@ -299,7 +300,10 @@ async function writeManifest(m: Manifest): Promise<void> {
   await fs.rename(tmp, path);
 }
 
-async function recordInstall(name: string, commit: string | null): Promise<void> {
+async function recordInstall(
+  name: string,
+  commit: string | null
+): Promise<void> {
   const manifest = await readManifest();
   const source = manifestSource(name);
   manifest[name] = commit ? { source, commit } : { source };
@@ -459,14 +463,14 @@ export async function getSkillDetail(name: string): Promise<SkillDetail> {
 }
 
 /** Download every file of `skills/<name>/` into the install dir, atomically. */
-export async function installSkill(
-  name: string
-): Promise<{ files: number }> {
+export async function installSkill(name: string): Promise<{ files: number }> {
   if (!isValidSkillName(name)) throw new Error("Invalid skill name.");
 
   const { ref, tree } = await getRepoSnapshot();
   const prefix = `${SKILLS_PREFIX}${name}/`;
-  const blobs = tree.filter((t) => t.type === "blob" && t.path.startsWith(prefix));
+  const blobs = tree.filter(
+    (t) => t.type === "blob" && t.path.startsWith(prefix)
+  );
   if (blobs.length === 0) {
     throw new Error(`Skill "${name}" was not found in the catalog.`);
   }

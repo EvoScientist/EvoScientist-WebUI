@@ -18,7 +18,9 @@ function contentDisposition(fileName: string, asAttachment: boolean): string {
     /['()*]/g,
     (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase()
   );
-  return `${asAttachment ? "attachment" : "inline"}; filename="${ascii}"; filename*=UTF-8''${encoded}`;
+  return `${
+    asAttachment ? "attachment" : "inline"
+  }; filename="${ascii}"; filename*=UTF-8''${encoded}`;
 }
 
 export const runtime = "nodejs";
@@ -77,10 +79,7 @@ export async function GET(request: NextRequest) {
 
     const stat = await fs.stat(target);
     if (!stat.isFile()) {
-      return NextResponse.json(
-        { error: "Not a file." },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Not a file." }, { status: 400 });
     }
 
     const ext = extname(target).slice(1).toLowerCase();
@@ -111,8 +110,7 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     return NextResponse.json(
       {
-        error:
-          error instanceof Error ? error.message : "Failed to read file.",
+        error: error instanceof Error ? error.message : "Failed to read file.",
       },
       { status: 400 }
     );

@@ -44,15 +44,7 @@ const LANGUAGE_MAP: Record<string, string> = {
   r: "r",
 };
 
-const IMAGE_EXTS = new Set([
-  "png",
-  "jpg",
-  "jpeg",
-  "gif",
-  "webp",
-  "svg",
-  "bmp",
-]);
+const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp"]);
 // Extensions we render as text. Anything not here and not an image/pdf is
 // treated as a binary download.
 const TEXT_EXTS = new Set([
