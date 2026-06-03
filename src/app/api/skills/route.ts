@@ -1,17 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
-import { homedir } from "os";
 import { join, resolve } from "path";
 import { promises as fs } from "fs";
+import { SKILL_DIRS, recordUninstall } from "@/lib/server/skills";
 
-// EvoScientist installs user skills here (confirmed fixed location). We also
-// check the ~/.evoscientist/skills global tier as a fallback.
-const SKILL_DIRS = [
-  join(homedir(), ".config", "evoscientist", "skills"),
-  join(homedir(), ".evoscientist", "skills"),
-];
+// SKILL_DIRS (the global ~/.evoscientist/skills tier + legacy ~/.config
+// fallback) is the single source of truth, shared with the install route.
 
 interface SkillCard {
+  /** Directory name — the install/uninstall identity (matches the catalog). */
   name: string;
+  /** Frontmatter name for display; falls back to the directory name. */
+  title: string;
   description: string;
   dir: string;
 }
@@ -48,11 +47,13 @@ async function readSkills(): Promise<SkillCard[]> {
         if (!stat.isDirectory()) continue;
         const md = await fs.readFile(join(skillDir, "SKILL.md"), "utf-8");
         const { name, description } = parseFrontmatter(md);
-        const skillName = name || entry;
-        if (seen.has(skillName)) continue;
-        seen.add(skillName);
+        // Identity is the DIRECTORY name (what install/uninstall/dedup key on);
+        // the frontmatter name is display-only.
+        if (seen.has(entry)) continue;
+        seen.add(entry);
         skills.push({
-          name: skillName,
+          name: entry,
+          title: name || entry,
           description: description || "",
           dir: skillDir,
         });
@@ -92,6 +93,9 @@ export async function DELETE(req: NextRequest) {
       continue; // not here
     }
     await fs.rm(target, { recursive: true, force: true });
+    // Keep EvoScientist's manifest in sync — drop the entry so onboard/CLI no
+    // longer list it. Best-effort: don't fail the uninstall on a manifest error.
+    await recordUninstall(name).catch(() => {});
     return NextResponse.json({ ok: true });
   }
   return NextResponse.json({ error: "Skill not found" }, { status: 404 });
