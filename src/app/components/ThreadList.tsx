@@ -173,6 +173,7 @@ export function ThreadList({
   const [renameValue, setRenameValue] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<ThreadItem | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
+  const isResearchView = view !== "skills" && view !== "memory";
 
   const threads = useThreads({
     status: statusFilter === "all" ? undefined : statusFilter,
@@ -333,7 +334,7 @@ export function ThreadList({
           }
           onClose?.();
         }}
-        className="flex flex-shrink-0 items-center gap-3 border-b border-border p-4 text-left text-sm font-medium transition-colors hover:bg-accent"
+        className="flex flex-shrink-0 items-center gap-3 border-b border-border p-4 text-left text-sm font-medium transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
       >
         <SquarePen
           className="size-4"
@@ -348,7 +349,7 @@ export function ThreadList({
           onClose?.();
         }}
         className={cn(
-          "flex flex-shrink-0 items-center gap-3 border-b border-border p-4 text-left text-sm font-medium transition-colors hover:bg-accent",
+          "flex flex-shrink-0 items-center gap-3 border-b border-border p-4 text-left text-sm font-medium transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
           view === "skills" && "bg-accent"
         )}
       >
@@ -365,7 +366,7 @@ export function ThreadList({
           onClose?.();
         }}
         className={cn(
-          "flex flex-shrink-0 items-center gap-3 border-b border-border p-4 text-left text-sm font-medium transition-colors hover:bg-accent",
+          "flex flex-shrink-0 items-center gap-3 border-b border-border p-4 text-left text-sm font-medium transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
           view === "memory" && "bg-accent"
         )}
       >
@@ -375,7 +376,7 @@ export function ThreadList({
         />
         Memory
       </button>
-      {view !== "skills" && view !== "memory" && (
+      {isResearchView && (
         <div className="flex-shrink-0 border-b border-border p-3">
           <div className="relative">
             <Search
@@ -409,220 +410,241 @@ export function ThreadList({
           </div>
         </div>
       )}
-      {/* Header with title and status filter */}
-      <div className="grid flex-shrink-0 grid-cols-[1fr_auto] items-center gap-3 border-b border-border p-4">
-        <h2 className="text-lg font-semibold tracking-tight">Research</h2>
-        <div className="flex items-center gap-2">
-          <Select
-            value={statusFilter}
-            onValueChange={(v) => setStatusFilter(v as StatusFilter)}
-          >
-            <SelectTrigger className="w-fit">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent align="end">
-              <SelectItem value="all">All</SelectItem>
-              <SelectSeparator />
-              <SelectGroup>
-                <SelectLabel>Active</SelectLabel>
-                <SelectItem value="idle">
-                  <StatusFilterItem
-                    status="idle"
-                    label="Idle"
-                  />
-                </SelectItem>
-                <SelectItem value="busy">
-                  <StatusFilterItem
-                    status="busy"
-                    label="Busy"
-                  />
-                </SelectItem>
-              </SelectGroup>
-              <SelectSeparator />
-              <SelectGroup>
-                <SelectLabel>Attention</SelectLabel>
-                <SelectItem value="interrupted">
-                  <StatusFilterItem
-                    status="interrupted"
-                    label="Interrupted"
-                    badge={interruptedCount}
-                  />
-                </SelectItem>
-                <SelectItem value="error">
-                  <StatusFilterItem
-                    status="error"
-                    label="Error"
-                  />
-                </SelectItem>
-              </SelectGroup>
-            </SelectContent>
-          </Select>
-          {onClose && (
-            <button
-              type="button"
-              aria-label="Close research"
-              onClick={onClose}
-              className="rounded-md p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+      {isResearchView ? (
+        <div className="grid flex-shrink-0 grid-cols-[1fr_auto] items-center gap-3 border-b border-border p-4">
+          <h2 className="text-lg font-semibold tracking-tight">Research</h2>
+          <div className="flex items-center gap-2">
+            <Select
+              value={statusFilter}
+              onValueChange={(v) => setStatusFilter(v as StatusFilter)}
             >
-              <X
-                className="size-4"
-                aria-hidden="true"
-              />
-            </button>
-          )}
-        </div>
-      </div>
-
-      <ScrollArea className="h-0 flex-1">
-        {threads.error && <ErrorState message={threads.error.message} />}
-
-        {!threads.error && !threads.data && threads.isLoading && (
-          <LoadingState />
-        )}
-
-        {!threads.error && !threads.isLoading && isEmpty && <EmptyState />}
-
-        {!threads.error &&
-          !isEmpty &&
-          search.trim() &&
-          filtered.length === 0 && (
-            <div className="flex flex-col items-center justify-center p-8 text-center">
-              <p className="text-sm text-muted-foreground">
-                No research matches your search.
-              </p>
-            </div>
-          )}
-
-        {!threads.error && !isEmpty && filtered.length > 0 && (
-          <div className="box-border w-full max-w-full overflow-hidden p-2">
-            {(
-              Object.keys(GROUP_LABELS) as Array<keyof typeof GROUP_LABELS>
-            ).map((group) => {
-              const groupThreads = grouped[group];
-              if (groupThreads.length === 0) return null;
-
-              return (
-                <div
-                  key={group}
-                  className="mb-4"
-                >
-                  <h4 className="m-0 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                    {GROUP_LABELS[group]}
-                  </h4>
-                  <div className="flex flex-col gap-1">
-                    {groupThreads.map((thread) => (
-                      <div
-                        key={thread.id}
-                        className="group relative"
-                      >
-                        {/* Selectable row — a native button so Enter/Space and
-                            role come for free. Action buttons are SIBLINGS (below),
-                            never nested inside this button. */}
-                        <button
-                          type="button"
-                          onClick={() => onThreadSelect(thread.id)}
-                          className={cn(
-                            "grid w-full cursor-pointer items-center gap-3 rounded-lg px-3 py-3 text-left transition-colors duration-200",
-                            "hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                            currentThreadId === thread.id
-                              ? "border border-primary bg-accent hover:bg-accent"
-                              : "border border-transparent bg-transparent"
-                          )}
-                          aria-current={currentThreadId === thread.id}
-                        >
-                          <div className="min-w-0 flex-1">
-                            {/* Title + Timestamp Row */}
-                            <div className="mb-1 flex items-center justify-between gap-2">
-                              <h3 className="truncate text-sm font-semibold">
-                                {thread.title}
-                              </h3>
-                              <span className="ml-2 flex-shrink-0 text-xs tabular-nums text-muted-foreground">
-                                {formatTime(thread.updatedAt)}
-                              </span>
-                            </div>
-                            {/* Description + Status Row */}
-                            <div className="flex items-center justify-between">
-                              <p className="flex-1 truncate text-sm text-muted-foreground">
-                                {thread.description}
-                              </p>
-                              <div className="ml-2 flex-shrink-0">
-                                <span
-                                  role="img"
-                                  aria-label={`Status: ${
-                                    STATUS_LABELS[thread.status]
-                                  }`}
-                                  title={`Status: ${
-                                    STATUS_LABELS[thread.status]
-                                  }`}
-                                  className={cn(
-                                    "h-2 w-2 rounded-full",
-                                    getThreadColor(thread.status)
-                                  )}
-                                />
-                              </div>
-                            </div>
-                          </div>
-                        </button>
-                        {/* Per-thread actions — siblings of the select button (not
-                            nested); shown on touch, reveal on hover/focus on desktop. */}
-                        <div className="absolute right-1.5 top-1.5 flex items-center gap-0.5 rounded-md bg-accent/95 p-0.5 opacity-100 shadow-sm backdrop-blur-sm transition-opacity md:opacity-0 md:group-focus-within:opacity-100 md:group-hover:opacity-100">
-                          <button
-                            type="button"
-                            aria-label={`Rename "${thread.title}"`}
-                            title="Rename"
-                            onClick={() => {
-                              setRenameTarget(thread);
-                              setRenameValue(thread.title);
-                            }}
-                            className="rounded p-1 text-muted-foreground transition-colors hover:bg-background hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-                          >
-                            <Pencil
-                              className="size-3.5"
-                              aria-hidden="true"
-                            />
-                          </button>
-                          <button
-                            type="button"
-                            aria-label={`Delete "${thread.title}"`}
-                            title="Delete"
-                            onClick={() => setDeleteTarget(thread)}
-                            className="rounded p-1 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive focus-visible:ring-2 focus-visible:ring-ring"
-                          >
-                            <Trash2
-                              className="size-3.5"
-                              aria-hidden="true"
-                            />
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              );
-            })}
-
-            {!isReachingEnd && (
-              <div className="flex justify-center py-4">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => threads.setSize(threads.size + 1)}
-                  disabled={isLoadingMore}
-                >
-                  {isLoadingMore ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Loading…
-                    </>
-                  ) : (
-                    "Load More"
-                  )}
-                </Button>
-              </div>
+              <SelectTrigger className="w-fit">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent align="end">
+                <SelectItem value="all">All</SelectItem>
+                <SelectSeparator />
+                <SelectGroup>
+                  <SelectLabel>Active</SelectLabel>
+                  <SelectItem value="idle">
+                    <StatusFilterItem
+                      status="idle"
+                      label="Idle"
+                    />
+                  </SelectItem>
+                  <SelectItem value="busy">
+                    <StatusFilterItem
+                      status="busy"
+                      label="Busy"
+                    />
+                  </SelectItem>
+                </SelectGroup>
+                <SelectSeparator />
+                <SelectGroup>
+                  <SelectLabel>Attention</SelectLabel>
+                  <SelectItem value="interrupted">
+                    <StatusFilterItem
+                      status="interrupted"
+                      label="Interrupted"
+                      badge={interruptedCount}
+                    />
+                  </SelectItem>
+                  <SelectItem value="error">
+                    <StatusFilterItem
+                      status="error"
+                      label="Error"
+                    />
+                  </SelectItem>
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            {onClose && (
+              <button
+                type="button"
+                aria-label="Close research"
+                onClick={onClose}
+                className="rounded-md p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <X
+                  className="size-4"
+                  aria-hidden="true"
+                />
+              </button>
             )}
           </div>
-        )}
-      </ScrollArea>
+        </div>
+      ) : onClose ? (
+        <button
+          type="button"
+          aria-label="Close navigation"
+          onClick={onClose}
+          className="mx-3 mt-3 inline-flex items-center justify-center gap-2 rounded-md border border-border px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <X
+            className="size-4"
+            aria-hidden="true"
+          />
+          Close Navigation
+        </button>
+      ) : null}
+
+      {isResearchView ? (
+        <ScrollArea className="h-0 flex-1">
+          {threads.error && <ErrorState message={threads.error.message} />}
+
+          {!threads.error && !threads.data && threads.isLoading && (
+            <LoadingState />
+          )}
+
+          {!threads.error && !threads.isLoading && isEmpty && <EmptyState />}
+
+          {!threads.error &&
+            !isEmpty &&
+            search.trim() &&
+            filtered.length === 0 && (
+              <div className="flex flex-col items-center justify-center p-8 text-center">
+                <p className="text-sm text-muted-foreground">
+                  No research matches your search.
+                </p>
+              </div>
+            )}
+
+          {!threads.error && !isEmpty && filtered.length > 0 && (
+            <div className="box-border w-full max-w-full overflow-hidden p-2">
+              {(
+                Object.keys(GROUP_LABELS) as Array<keyof typeof GROUP_LABELS>
+              ).map((group) => {
+                const groupThreads = grouped[group];
+                if (groupThreads.length === 0) return null;
+
+                return (
+                  <div
+                    key={group}
+                    className="mb-4"
+                  >
+                    <h4 className="m-0 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                      {GROUP_LABELS[group]}
+                    </h4>
+                    <div className="flex flex-col gap-1">
+                      {groupThreads.map((thread) => (
+                        <div
+                          key={thread.id}
+                          className="group relative"
+                        >
+                          {/* Selectable row — a native button so Enter/Space and
+                            role come for free. Action buttons are SIBLINGS (below),
+                            never nested inside this button. */}
+                          <button
+                            type="button"
+                            onClick={() => onThreadSelect(thread.id)}
+                            className={cn(
+                              "grid w-full cursor-pointer items-center gap-3 rounded-lg px-3 py-3 text-left transition-colors duration-200",
+                              "hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                              currentThreadId === thread.id
+                                ? "border border-primary bg-accent hover:bg-accent"
+                                : "border border-transparent bg-transparent"
+                            )}
+                            aria-current={currentThreadId === thread.id}
+                          >
+                            <div className="min-w-0 flex-1">
+                              {/* Title + Timestamp Row */}
+                              <div className="mb-1 flex items-center justify-between gap-2">
+                                <h3 className="truncate text-sm font-semibold">
+                                  {thread.title}
+                                </h3>
+                                <span className="ml-2 flex-shrink-0 text-xs tabular-nums text-muted-foreground">
+                                  {formatTime(thread.updatedAt)}
+                                </span>
+                              </div>
+                              {/* Description + Status Row */}
+                              <div className="flex items-center justify-between">
+                                <p className="flex-1 truncate text-sm text-muted-foreground">
+                                  {thread.description}
+                                </p>
+                                <div className="ml-2 flex-shrink-0">
+                                  <span
+                                    role="img"
+                                    aria-label={`Status: ${
+                                      STATUS_LABELS[thread.status]
+                                    }`}
+                                    title={`Status: ${
+                                      STATUS_LABELS[thread.status]
+                                    }`}
+                                    className={cn(
+                                      "h-2 w-2 rounded-full",
+                                      getThreadColor(thread.status)
+                                    )}
+                                  />
+                                </div>
+                              </div>
+                            </div>
+                          </button>
+                          {/* Per-thread actions — siblings of the select button (not
+                            nested); shown on touch, reveal on hover/focus on desktop. */}
+                          <div className="absolute right-1.5 top-1.5 flex items-center gap-0.5 rounded-md bg-accent/95 p-0.5 opacity-100 shadow-sm backdrop-blur-sm transition-opacity md:opacity-0 md:group-focus-within:opacity-100 md:group-hover:opacity-100">
+                            <button
+                              type="button"
+                              aria-label={`Rename "${thread.title}"`}
+                              title="Rename"
+                              onClick={() => {
+                                setRenameTarget(thread);
+                                setRenameValue(thread.title);
+                              }}
+                              className="rounded p-1 text-muted-foreground transition-colors hover:bg-background hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                            >
+                              <Pencil
+                                className="size-3.5"
+                                aria-hidden="true"
+                              />
+                            </button>
+                            <button
+                              type="button"
+                              aria-label={`Delete "${thread.title}"`}
+                              title="Delete"
+                              onClick={() => setDeleteTarget(thread)}
+                              className="rounded p-1 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive focus-visible:ring-2 focus-visible:ring-ring"
+                            >
+                              <Trash2
+                                className="size-3.5"
+                                aria-hidden="true"
+                              />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+
+              {!isReachingEnd && (
+                <div className="flex justify-center py-4">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => threads.setSize(threads.size + 1)}
+                    disabled={isLoadingMore}
+                  >
+                    {isLoadingMore ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Loading…
+                      </>
+                    ) : (
+                      "Load More"
+                    )}
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
+        </ScrollArea>
+      ) : (
+        <div className="flex min-h-0 flex-1 items-start p-4 text-sm text-muted-foreground">
+          Use the navigation above to switch views, or start a new chat to
+          return to research history.
+        </div>
+      )}
 
       {/* Rename dialog */}
       <Dialog

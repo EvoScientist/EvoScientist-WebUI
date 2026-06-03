@@ -116,6 +116,13 @@ function HomePageInner({
   }, []);
 
   const closeSidebar = useCallback(() => setSidebar(null), [setSidebar]);
+  const sidebarToggleLabel = view
+    ? sidebar
+      ? "Hide navigation"
+      : "Show navigation"
+    : sidebar
+    ? "Hide research"
+    : "Show research";
   const startNewChat = useCallback(() => {
     setThreadId(null);
     setView(null);
@@ -160,7 +167,7 @@ function HomePageInner({
                 variant="ghost"
                 size="icon"
                 onClick={() => setSidebar(sidebar ? null : "1")}
-                aria-label={sidebar ? "Hide research" : "Show research"}
+                aria-label={sidebarToggleLabel}
                 className="relative size-8 sm:size-9"
               >
                 {sidebar ? (
@@ -225,7 +232,7 @@ function HomePageInner({
                 onClick={closeSidebar}
               />
               <aside
-                aria-label="Research navigation"
+                aria-label={view ? "Navigation" : "Research navigation"}
                 className="relative z-10 h-full w-[min(20rem,calc(100vw-3rem))] bg-background shadow-xl"
               >
                 <ThreadList

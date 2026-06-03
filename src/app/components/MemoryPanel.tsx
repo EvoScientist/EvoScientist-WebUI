@@ -138,6 +138,8 @@ export function MemoryPanel() {
   const [newName, setNewName] = useState("");
   const [newBusy, setNewBusy] = useState(false);
   const [newError, setNewError] = useState<string | null>(null);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteBusy, setDeleteBusy] = useState(false);
 
   const didAutoSelect = useRef(false);
   // Monotonic id so a slow file fetch can't overwrite a newer selection.
@@ -252,13 +254,10 @@ export function MemoryPanel() {
     }
   };
 
-  const remove = async () => {
+  const confirmDelete = async () => {
     if (!selected) return;
-    if (
-      !window.confirm(`Delete "${fileNameOf(selected)}"? This can't be undone.`)
-    )
-      return;
     const reqId = reqRef.current; // detect a file switch during the await
+    setDeleteBusy(true);
     try {
       const res = await fetch(
         `/api/memory?path=${encodeURIComponent(selected)}`,
@@ -274,11 +273,14 @@ export function MemoryPanel() {
         setFile(null);
         setEditing(false);
       }
+      setDeleteOpen(false);
       load();
     } catch (e) {
       if (reqId === reqRef.current) {
         setFileError(e instanceof Error ? e.message : "Failed to delete.");
       }
+    } finally {
+      setDeleteBusy(false);
     }
   };
 
@@ -359,7 +361,9 @@ export function MemoryPanel() {
               setNewError(null);
               setNewOpen(true);
             }}
-            className="inline-flex items-center gap-1.5 rounded-md bg-[var(--brand-solid)] px-2.5 py-1.5 text-xs font-medium text-[var(--brand-foreground)] transition-opacity hover:opacity-90"
+            aria-label="New memory file"
+            title="New memory file"
+            className="inline-flex items-center gap-1.5 rounded-md bg-[var(--brand-solid)] px-2.5 py-1.5 text-xs font-medium text-[var(--brand-foreground)] transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring"
           >
             <Plus
               className="size-3.5"
@@ -429,7 +433,7 @@ export function MemoryPanel() {
                               if (confirmDiscard()) openFile(entry.path);
                             }}
                             className={cn(
-                              "flex items-start gap-2 rounded-md px-2 py-2 text-left transition-colors",
+                              "flex items-start gap-2 rounded-md px-2 py-2 text-left transition-colors focus-visible:ring-2 focus-visible:ring-ring",
                               active ? "bg-accent" : "hover:bg-accent/60"
                             )}
                             aria-current={active}
@@ -489,7 +493,7 @@ export function MemoryPanel() {
                       setEditing(false);
                     }}
                     aria-label="Back to list"
-                    className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground md:hidden"
+                    className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring md:hidden"
                   >
                     <ArrowLeft
                       className="size-4"
@@ -517,7 +521,16 @@ export function MemoryPanel() {
                           className="h-8 px-2"
                           onClick={copy}
                           disabled={!file}
-                          title="Copy"
+                          aria-label={
+                            copied
+                              ? "Copied memory content"
+                              : "Copy memory content"
+                          }
+                          title={
+                            copied
+                              ? "Copied memory content"
+                              : "Copy memory content"
+                          }
                         >
                           {copied ? (
                             <Check className="size-4" />
@@ -531,6 +544,7 @@ export function MemoryPanel() {
                           className="h-8 px-2"
                           onClick={startEdit}
                           disabled={!file}
+                          aria-label="Edit memory file"
                         >
                           <Pencil className="mr-1 size-4" />
                           Edit
@@ -539,8 +553,10 @@ export function MemoryPanel() {
                           variant="ghost"
                           size="sm"
                           className="h-8 px-2 text-muted-foreground hover:text-destructive"
-                          onClick={remove}
-                          title="Delete"
+                          onClick={() => setDeleteOpen(true)}
+                          disabled={!file}
+                          aria-label="Delete memory file"
+                          title="Delete memory file"
                         >
                           <Trash2 className="size-4" />
                         </Button>
@@ -555,6 +571,7 @@ export function MemoryPanel() {
                             if (confirmDiscard()) setEditing(false);
                           }}
                           disabled={saving}
+                          aria-label="Cancel editing"
                         >
                           <Eye className="mr-1 size-4" />
                           Cancel
@@ -563,7 +580,8 @@ export function MemoryPanel() {
                           size="sm"
                           className="h-8 px-3"
                           onClick={save}
-                          disabled={saving}
+                          disabled={saving || !dirty}
+                          aria-label="Save memory file"
                         >
                           {saving ? (
                             <Loader2 className="mr-1 size-4 animate-spin" />
@@ -596,7 +614,8 @@ export function MemoryPanel() {
                       value={draft}
                       onChange={(e) => setDraft(e.target.value)}
                       spellCheck={false}
-                      className="bg-surface h-full w-full resize-none p-4 font-mono text-sm leading-relaxed text-foreground outline-none"
+                      aria-label="Memory file content"
+                      className="h-full w-full resize-none bg-background p-4 font-mono text-sm leading-relaxed text-foreground outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                       placeholder="Write memory…"
                     />
                   ) : file ? (
@@ -649,7 +668,9 @@ export function MemoryPanel() {
             </DialogDescription>
           </DialogHeader>
           <Input
-            autoFocus
+            name="memory-file-path"
+            autoComplete="off"
+            spellCheck={false}
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
             onKeyDown={(e) => {
@@ -658,10 +679,20 @@ export function MemoryPanel() {
                 createNew();
               }
             }}
-            placeholder="e.g. research-notes.md"
+            placeholder="notes/research-idea.md…"
             disabled={newBusy}
+            aria-invalid={newError ? true : undefined}
+            aria-describedby={newError ? "new-memory-error" : undefined}
           />
-          {newError && <p className="text-sm text-destructive">{newError}</p>}
+          {newError && (
+            <p
+              id="new-memory-error"
+              role="alert"
+              className="text-sm text-destructive"
+            >
+              {newError}
+            </p>
+          )}
           <DialogFooter>
             <Button
               variant="outline"
@@ -675,6 +706,45 @@ export function MemoryPanel() {
               disabled={newBusy || !newName.trim()}
             >
               {newBusy ? "Creating…" : "Create"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={deleteOpen}
+        onOpenChange={(open) => {
+          if (!deleteBusy) setDeleteOpen(open);
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Delete memory file?</DialogTitle>
+            <DialogDescription>
+              {selected ? (
+                <>
+                  <code>{selected}</code> will be permanently deleted. This
+                  can&apos;t be undone.
+                </>
+              ) : (
+                "This memory file will be permanently deleted."
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setDeleteOpen(false)}
+              disabled={deleteBusy}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={confirmDelete}
+              disabled={deleteBusy || !selected}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {deleteBusy ? "Deleting…" : "Delete"}
             </Button>
           </DialogFooter>
         </DialogContent>
