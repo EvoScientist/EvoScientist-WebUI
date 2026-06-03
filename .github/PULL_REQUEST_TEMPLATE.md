@@ -20,9 +20,8 @@
 ## Checklist
 
 - [ ] Self-tested, no obvious regressions
-- [ ] Updated `CLAUDE.md` for any significant architecture / decision changes
 - [ ] Requested at least one teammate for **peer review**
 
 ---
 
-> Merging ≠ shipping: releases are handled solely by Xi Zhang (EvoScientist pulls the UI via `@latest`).
+> Merging ≠ shipping: releases are handled solely by the maintainer (EvoScientist pulls the UI via `@latest`).
