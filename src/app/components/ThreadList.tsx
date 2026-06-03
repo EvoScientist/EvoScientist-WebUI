@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, useRef, useCallback } from "react";
 import {
+  BrainCircuit,
   Loader2,
   MessageSquare,
   Pencil,
@@ -357,7 +358,24 @@ export function ThreadList({
         />
         Research Skills
       </button>
-      {view !== "skills" && (
+      <button
+        type="button"
+        onClick={() => {
+          setView("memory");
+          onClose?.();
+        }}
+        className={cn(
+          "flex flex-shrink-0 items-center gap-3 border-b border-border p-4 text-left text-sm font-medium transition-colors hover:bg-accent",
+          view === "memory" && "bg-accent"
+        )}
+      >
+        <BrainCircuit
+          className="size-4"
+          aria-hidden="true"
+        />
+        Memory
+      </button>
+      {view !== "skills" && view !== "memory" && (
         <div className="flex-shrink-0 border-b border-border p-3">
           <div className="relative">
             <Search

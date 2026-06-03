@@ -366,7 +366,7 @@ function SkillTile({
             type="button"
             onClick={onUpdate}
             disabled={!!busy}
-            className="inline-flex items-center gap-1.5 rounded-md bg-[var(--brand)] px-2.5 py-1 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-md bg-[var(--brand-solid)] px-2.5 py-1 text-xs font-medium text-[var(--brand-foreground)] transition-opacity hover:opacity-90 disabled:opacity-50"
             title={latestVersion ? `Update to v${latestVersion}` : "Update"}
           >
             {busy === "update" ? (
@@ -412,7 +412,7 @@ function SkillTile({
             type="button"
             onClick={onInstall}
             disabled={!!busy}
-            className="inline-flex items-center gap-1.5 rounded-md bg-[var(--brand)] px-2.5 py-1 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-md bg-[var(--brand-solid)] px-2.5 py-1 text-xs font-medium text-[var(--brand-foreground)] transition-opacity hover:opacity-90 disabled:opacity-50"
           >
             {busy === "install" ? (
               <Loader2

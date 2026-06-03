@@ -147,21 +147,21 @@ export const TasksFilesSidebar = React.memo<{
         return (
           <CheckCircle
             size={12}
-            className="text-success/80"
+            className="text-[var(--color-success)]"
           />
         );
       case "in_progress":
         return (
           <Clock
             size={12}
-            className="text-warning/80"
+            className="text-[var(--color-warning)]"
           />
         );
       default:
         return (
           <Circle
             size={10}
-            className="text-tertiary/70"
+            className="text-[var(--color-text-tertiary)]"
           />
         );
     }

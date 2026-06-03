@@ -92,7 +92,7 @@ export function AskUserInterrupt({
                       className={cn(
                         "rounded-md border px-3 py-2 text-left text-sm transition-colors",
                         selected
-                          ? "border-[var(--brand)] bg-[var(--brand)] text-[var(--brand-foreground)]"
+                          ? "border-[var(--brand-solid)] bg-[var(--brand-solid)] text-[var(--brand-foreground)]"
                           : "border-border bg-background hover:bg-accent"
                       )}
                     >
@@ -158,7 +158,7 @@ export function AskUserInterrupt({
           size="sm"
           onClick={() => onSubmit(answers)}
           disabled={!canSubmit || isLoading}
-          className="bg-[var(--brand)] text-[var(--brand-foreground)] hover:bg-[var(--brand-hover)]"
+          className="bg-[var(--brand-solid)] text-[var(--brand-foreground)] hover:opacity-90"
         >
           {isLoading ? "Submitting…" : "Submit"}
         </Button>

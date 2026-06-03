@@ -9,7 +9,7 @@
  */
 export function BetaBadge() {
   return (
-    <span className="hidden rounded-lg border border-teal-300/50 bg-teal-100/60 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-teal-800 shadow-sm backdrop-blur-sm dark:border-teal-700/40 dark:bg-teal-900/30 dark:text-teal-300 min-[420px]:inline-flex">
+    <span className="border-[var(--brand)]/30 bg-[var(--brand)]/10 hidden rounded-lg border px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-[var(--brand)] shadow-sm backdrop-blur-sm min-[420px]:inline-flex">
       BETA
     </span>
   );

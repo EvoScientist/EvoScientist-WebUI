@@ -10,47 +10,56 @@
 
   :root {
     /* App-specific color variables */
-    --color-primary: #1c3c3c;
-    --color-user-message: #076699;
-    --color-user-message-bg: #e8f4f8;
-    --color-avatar-bg: #e8ebeb;
-    --color-secondary: #1c3c3c;
-    --color-success: #10b981;
-    --color-warning: #f59e0b;
-    --color-error: #ef4444;
-    --color-background: #f9f9f9;
-    --color-subagent-hover: #bbc4c4;
-    --color-surface: #f9fafb;
-    --color-border: #e5e7eb;
-    --color-border-light: #f3f4f6;
-    --color-text-primary: #111827;
-    --color-text-secondary: #6b7280;
-    --color-text-tertiary: #9ca3af;
+    /* App-specific colors — warm "paper" palette in the Claude Code desktop
+       style. Light mode: ivory background, true-white cards, warm charcoal text. */
+    --color-primary: #33302a;
+    --color-user-message: #0e5c6e;
+    --color-user-message-bg: #e6f2f5;
+    --color-avatar-bg: #efe4db;
+    --color-secondary: #6b6557;
+    --color-success: #3f7a52;
+    --color-warning: #946618;
+    --color-error: #c0392b;
+    --color-background: #faf8f3;
+    --color-subagent-hover: #efe7da;
+    --color-surface: #ffffff;
+    --color-border: #e6dfd2;
+    --color-border-light: #f0ebe1;
+    --color-text-primary: #33302a;
+    --color-text-secondary: #6b6557;
+    --color-text-tertiary: #736e60;
     --color-file-button: #ffffff;
-    --color-file-button-hover: #e5e7eb;
+    --color-file-button-hover: #f0ebe1;
 
-    /* Brand accent — single source of truth. Change this to re-theme
-       (e.g. EvoScientist blue) in one place. */
-    --brand: #2f6868;
-    --brand-hover: #275757;
+    /* Brand accent — single source of truth = EvoScientist cyan (#00BCD4,
+       deepened to #00788f so white text passes WCAG AA on the warm paper bg).
+       The warm "paper" base stays; cyan carries the EvoScientist identity. */
+    --brand: #066679;
+    --brand-hover: #054e5b;
+    /* Solid filled-button background. Same as --brand in light; in dark it's a
+       deeper, calmer cyan so buttons don't glow (see .dark). White text on both. */
+    --brand-solid: #066679;
     --brand-foreground: #ffffff;
 
-    /* Dark theme colors */
-    --color-primary-dark: #2dd4bf;
-    --color-user-message-dark: #076699;
-    --color-avatar-bg-dark: #bcb2fd;
-    --color-secondary-dark: #2dd4bf;
-    --color-success-dark: #34d399;
-    --color-warning-dark: #fbbf24;
-    --color-error-dark: #f87171;
-    --color-background-dark: #0f0f0f;
-    --color-subagent-hover-dark: #d0c9fe;
-    --color-surface-dark: #1a1a1a;
-    --color-border-dark: #2d2d2d;
-    --color-border-light-dark: #232323;
-    --color-text-primary-dark: #f3f4f6;
-    --color-text-secondary-dark: #9ca3af;
-    --color-text-tertiary-dark: #6b7280;
+    /* deep-agents-ui base tokens. Its tailwind.config.mjs maps semantic classes
+       (text-primary, text-tertiary, text-success, text-warning, bg-secondary,
+       border-primary, the global scrollbar) to these LangSmith-style vars, but
+       the base never defined them, so those classes rendered colorless. Alias
+       them to our palette. Declared once: the var() refs resolve per-mode at the
+       use site because the referenced color tokens are overridden in .dark. */
+    --text-primary: var(--color-text-primary);
+    --text-secondary: var(--color-text-secondary);
+    --text-tertiary: var(--color-text-tertiary);
+    --text-quaternary: var(--color-text-tertiary);
+    --text-success: var(--color-success);
+    --text-warning: var(--color-warning);
+    --text-error: var(--color-error);
+    --border-primary: var(--color-border);
+    --border-secondary: var(--color-border-light);
+    --bg-primary: var(--color-background);
+    --bg-secondary: hsl(var(--secondary));
+    --scrollbar-thumb: var(--color-border);
+    --scrollbar-thumb-hover: var(--color-text-tertiary);
 
     /* Spacing variables */
     --spacing-xs: 0.25rem;
@@ -108,31 +117,31 @@
 
     /* Tailwind/Radix UI component variables */
     --radius: 0.5rem;
-    --background: 0 0% 98%;
-    --foreground: 220 13% 13%;
+    --background: 43 41% 97%;
+    --foreground: 40 10% 18%;
     --card: 0 0% 100%;
-    --card-foreground: 220 13% 13%;
+    --card-foreground: 40 10% 18%;
     --popover: 0 0% 100%;
-    --popover-foreground: 220 13% 13%;
-    --primary: 180 35% 17%;
+    --popover-foreground: 40 10% 18%;
+    --primary: 190 90% 25%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 220 13% 91%;
-    --secondary-foreground: 220 13% 13%;
-    --muted: 220 13% 95%;
-    --muted-foreground: 220 9% 46%;
-    --accent: 220 13% 95%;
-    --accent-foreground: 220 13% 13%;
-    --destructive: 0 84% 60%;
+    --secondary: 40 33% 91%;
+    --secondary-foreground: 40 10% 18%;
+    --muted: 40 37% 92%;
+    --muted-foreground: 42 10% 38%;
+    --accent: 192 33% 91%;
+    --accent-foreground: 40 8% 22%;
+    --destructive: 6 63% 46%;
     --destructive-foreground: 0 0% 100%;
-    --border: 220 13% 91%;
-    --input: 220 13% 91%;
-    --ring: 180 35% 17%;
-    --sidebar: 220 13% 95%;
-    --chart-1: 12 76% 61%;
-    --chart-2: 173 58% 39%;
-    --chart-3: 197 37% 24%;
-    --chart-4: 43 74% 66%;
-    --chart-5: 27 87% 67%;
+    --border: 39 29% 86%;
+    --input: 39 25% 80%;
+    --ring: 190 90% 25%;
+    --sidebar: 39 39% 93%;
+    --chart-1: 190 85% 28%;
+    --chart-2: 173 40% 40%;
+    --chart-3: 37 65% 54%;
+    --chart-4: 212 27% 49%;
+    --chart-5: 330 26% 48%;
   }
 
   /* Dark theme — applied via the `.dark` class on <html> (set by ThemeProvider
@@ -140,53 +149,60 @@
      `dark:` utilities off the same class, so CSS variables and utilities switch
      together. The default theme follows the system preference. */
   .dark {
-    /* App-specific color variables */
-    --color-primary: #1c3c3c;
-    --color-user-message: #065a8a;
-    --color-user-message-bg: #2d2d2d;
-    --color-avatar-bg: #1c3c3c;
-    --color-secondary: #bbc4c4;
-    --color-success: #34d399;
-    --color-warning: #fbbf24;
-    --color-error: #f87171;
-    --color-background: #202020;
-    --color-subagent-hover: #1e3f3f;
-    --color-surface: #2a2a2a;
-    --color-border: #404040;
-    --color-border-light: #353535;
-    --color-text-primary: #f3f4f6;
-    --color-text-secondary: #9ca3af;
-    --color-text-tertiary: #6b7280;
-    --color-file-button: #2a2a2a;
-    --color-file-button-hover: #353535;
+    /* App-specific colors — warm charcoal dark mode (the same paper identity,
+       lifted): near-black warm background, book-cloth terracotta accent. */
+    --color-primary: #ece7dc;
+    --color-user-message: #a9dce6;
+    --color-user-message-bg: #16343b;
+    --color-avatar-bg: #3a2e27;
+    --color-secondary: #ada694;
+    --color-success: #5dbe85;
+    --color-warning: #e0a94a;
+    --color-error: #e0796b;
+    --color-background: #23211d;
+    --color-subagent-hover: #3a2e27;
+    --color-surface: #2c2a25;
+    --color-border: #3a372f;
+    --color-border-light: #332f2a;
+    --color-text-primary: #ece7dc;
+    --color-text-secondary: #ada694;
+    --color-text-tertiary: #908d83;
+    --color-file-button: #2c2a25;
+    --color-file-button-hover: #332f2a;
+    --brand: #3b9cb0;
+    --brand-hover: #46a9bd;
+    /* Deep, saturated cyan fill: colorful (S~90%) but low-lightness so it
+       doesn't glow on the dark card; white text passes AA (4.82:1). */
+    --brand-solid: #087d91;
+    --brand-foreground: #ffffff;
 
     /* Tailwind/Radix UI component variables for dark mode */
     --radius: 0.5rem;
-    --background: 0 0% 13%;
-    --foreground: 220 13% 95%;
-    --card: 0 0% 18%;
-    --card-foreground: 220 13% 95%;
-    --popover: 0 0% 18%;
-    --popover-foreground: 220 13% 95%;
-    --primary: 174 72% 56%;
-    --primary-foreground: 0 0% 13%;
-    --secondary: 0 0% 25%;
-    --secondary-foreground: 220 13% 95%;
-    --muted: 0 0% 22%;
-    --muted-foreground: 220 9% 70%;
-    --accent: 0 0% 22%;
-    --accent-foreground: 220 13% 95%;
-    --destructive: 0 63% 71%;
-    --destructive-foreground: 0 0% 13%;
-    --border: 0 0% 28%;
-    --input: 0 0% 28%;
-    --ring: 174 72% 56%;
-    --sidebar: 0 0% 18%;
-    --chart-1: 220 70% 50%;
-    --chart-2: 160 60% 45%;
-    --chart-3: 30 80% 55%;
-    --chart-4: 280 65% 60%;
-    --chart-5: 340 75% 55%;
+    --background: 40 9% 13%;
+    --foreground: 41 30% 89%;
+    --card: 43 9% 16%;
+    --card-foreground: 41 30% 89%;
+    --popover: 43 9% 16%;
+    --popover-foreground: 41 30% 89%;
+    --primary: 189 90% 30%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 33 10% 18%;
+    --secondary-foreground: 41 30% 89%;
+    --muted: 38 10% 16%;
+    --muted-foreground: 43 13% 63%;
+    --accent: 196 14% 20%;
+    --accent-foreground: 41 30% 89%;
+    --destructive: 7 65% 65%;
+    --destructive-foreground: 30 13% 12%;
+    --border: 44 10% 21%;
+    --input: 44 10% 21%;
+    --ring: 190 50% 46%;
+    --sidebar: 36 9% 11%;
+    --chart-1: 190 52% 50%;
+    --chart-2: 173 39% 54%;
+    --chart-3: 40 68% 62%;
+    --chart-4: 215 37% 63%;
+    --chart-5: 332 39% 64%;
   }
 }
 
@@ -264,7 +280,7 @@ p {
 }
 
 a {
-  color: var(--color-primary);
+  color: var(--brand);
   text-decoration: none;
   transition: opacity 200ms ease;
 
@@ -384,12 +400,12 @@ button {
 }
 
 .scrollbar-pretty::-webkit-scrollbar-thumb {
-  background-color: #d1d5db;
+  background-color: hsl(var(--border));
   border-radius: 9999px;
 }
 
 .scrollbar-pretty::-webkit-scrollbar-thumb:hover {
-  background-color: #9ca3af;
+  background-color: hsl(var(--muted-foreground) / 0.6);
 }
 
 /* Global diff highlighting styles */

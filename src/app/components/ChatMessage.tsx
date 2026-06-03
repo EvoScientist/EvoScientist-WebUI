@@ -341,7 +341,7 @@ export const ChatMessage = React.memo<ChatMessageProps>(
                   {isSubAgentExpanded(subAgent.id) && (
                     <div className="w-full max-w-full">
                       <div className="bg-surface border-border-light rounded-md border p-4">
-                        <h4 className="text-primary/70 mb-2 text-xs font-semibold uppercase tracking-wider">
+                        <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-[var(--color-text-secondary)]">
                           Input
                         </h4>
                         <div className="mb-4">
@@ -351,7 +351,7 @@ export const ChatMessage = React.memo<ChatMessageProps>(
                         </div>
                         {(subAgentSteps?.[subAgent.id]?.length ?? 0) > 0 && (
                           <>
-                            <h4 className="text-primary/70 mb-2 text-xs font-semibold uppercase tracking-wider">
+                            <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-[var(--color-text-secondary)]">
                               Steps
                             </h4>
                             <div className="mb-4">
@@ -364,7 +364,7 @@ export const ChatMessage = React.memo<ChatMessageProps>(
                         )}
                         {subAgent.output && (
                           <>
-                            <h4 className="text-primary/70 mb-2 text-xs font-semibold uppercase tracking-wider">
+                            <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-[var(--color-text-secondary)]">
                               Output
                             </h4>
                             <MarkdownContent

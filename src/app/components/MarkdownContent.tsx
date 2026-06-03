@@ -95,7 +95,7 @@ export const MarkdownContent = React.memo<MarkdownContentProps>(
             },
             blockquote({ children }: { children?: React.ReactNode }) {
               return (
-                <blockquote className="text-primary/50 my-4 border-l-4 border-border pl-4 italic">
+                <blockquote className="my-4 border-l-4 border-border pl-4 italic text-[var(--color-text-tertiary)]">
                   {children}
                 </blockquote>
               );

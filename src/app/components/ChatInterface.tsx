@@ -77,21 +77,21 @@ const getStatusIcon = (status: TodoItem["status"], className?: string) => {
       return (
         <CheckCircle
           size={16}
-          className={cn("text-success/80", className)}
+          className={cn("text-[var(--color-success)]", className)}
         />
       );
     case "in_progress":
       return (
         <Clock
           size={16}
-          className={cn("text-warning/80", className)}
+          className={cn("text-[var(--color-warning)]", className)}
         />
       );
     default:
       return (
         <Circle
           size={16}
-          className={cn("text-tertiary/70", className)}
+          className={cn("text-[var(--color-text-tertiary)]", className)}
         />
       );
   }
@@ -595,7 +595,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(({ assistant }) => {
                         key={prompt}
                         type="button"
                         onClick={() => handleSuggestedPrompt(prompt)}
-                        className="hover:border-primary/40 max-w-full rounded-full border border-border bg-card px-3 py-2 text-sm text-foreground shadow-sm transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+                        className="max-w-full rounded-full border border-border bg-card px-3 py-2 text-sm text-foreground shadow-sm transition-colors hover:border-[var(--color-border)] hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
                       >
                         {prompt}
                       </button>
@@ -688,7 +688,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(({ assistant }) => {
                                 <CheckCircle
                                   key="icon"
                                   size={16}
-                                  className="text-success/80"
+                                  className="text-[var(--color-success)]"
                                 />,
                                 <span
                                   key="label"
@@ -725,7 +725,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(({ assistant }) => {
                               <Circle
                                 key="icon"
                                 size={16}
-                                className="text-tertiary/70"
+                                className="text-[var(--color-text-tertiary)]"
                               />,
                               <span
                                 key="label"
@@ -755,7 +755,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(({ assistant }) => {
                         >
                           <FileIcon size={16} />
                           Files (State)
-                          <span className="h-4 min-w-4 rounded-full bg-[var(--brand)] px-0.5 text-center text-[10px] leading-[16px] text-white">
+                          <span className="h-4 min-w-4 rounded-full bg-[var(--brand-solid)] px-0.5 text-center text-[10px] leading-[16px] text-[var(--brand-foreground)]">
                             {Object.keys(files).length}
                           </span>
                         </button>
@@ -822,7 +822,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(({ assistant }) => {
                         aria-expanded={metaOpen === "files"}
                       >
                         Files (State)
-                        <span className="h-4 min-w-4 rounded-full bg-[var(--brand)] px-0.5 text-center text-[10px] leading-[16px] text-white">
+                        <span className="h-4 min-w-4 rounded-full bg-[var(--brand-solid)] px-0.5 text-center text-[10px] leading-[16px] text-[var(--brand-foreground)]">
                           {Object.keys(files).length}
                         </span>
                       </button>
