@@ -101,14 +101,24 @@ function getMetadataVersion(fm: string): string | undefined {
   return v ? v[1].replace(/^["']|["']$/g, "").trim() : undefined;
 }
 
-function parseFrontmatter(md: string): {
+/** Split a SKILL.md into its frontmatter block and the body. The closing `---`
+ *  must be its own full line (CRLF-tolerant); returns frontmatter=null when
+ *  there's no delimited block (so a body that merely opens with a `---` rule
+ *  isn't mistaken for frontmatter). */
+function splitFrontmatter(md: string): {
+  frontmatter: string | null;
+  body: string;
+} {
+  const m = md.match(/^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/);
+  if (!m) return { frontmatter: null, body: md.trim() };
+  return { frontmatter: m[1], body: md.slice(m[0].length).trim() };
+}
+
+function parseFields(fm: string): {
   name?: string;
   description?: string;
   version?: string;
 } {
-  const match = md.match(/^---\s*\n([\s\S]*?)\n---/);
-  if (!match) return {};
-  const fm = match[1];
   // name/description are top-level keys; version is nested under metadata.
   const top = (key: string) => {
     const m = fm.match(new RegExp(`^${key}\\s*:\\s*(.+?)\\s*$`, "m"));
@@ -119,6 +129,15 @@ function parseFrontmatter(md: string): {
     description: top("description"),
     version: getMetadataVersion(fm),
   };
+}
+
+function parseFrontmatter(md: string): {
+  name?: string;
+  description?: string;
+  version?: string;
+} {
+  const { frontmatter } = splitFrontmatter(md);
+  return frontmatter ? parseFields(frontmatter) : {};
 }
 
 /** Compare dotted versions ("1.2.3"). Returns 1 if a>b, -1 if a<b, 0 if equal
@@ -376,6 +395,67 @@ export async function getCatalog(force = false): Promise<CatalogSkill[]> {
   );
 
   return skills.sort((a, b) => a.title.localeCompare(b.title));
+}
+
+export interface SkillDetail {
+  name: string;
+  title: string;
+  description: string;
+  version?: string;
+  /** SKILL.md content with the frontmatter block stripped. */
+  body: string;
+  installed: boolean;
+}
+
+/** Full SKILL.md for one skill — the locally-installed copy if present (what the
+ *  agent actually uses), else the upstream version at the pinned ref. */
+export async function getSkillDetail(name: string): Promise<SkillDetail> {
+  if (!isValidSkillName(name)) throw new Error("Invalid skill name.");
+
+  let md: string | undefined;
+  let installed = false;
+  for (const dir of SKILL_DIRS) {
+    try {
+      // Canonicalize and confirm the SKILL.md stays inside the tier — a
+      // symlinked skill dir / file must not read arbitrary files off disk.
+      const real = await fs.realpath(join(dir, name, "SKILL.md"));
+      const root = await fs.realpath(dir);
+      if (real !== root && !real.startsWith(root + sep)) continue;
+      md = await fs.readFile(real, "utf-8");
+      installed = true;
+      break;
+    } catch {
+      // not in this tier, or a broken/escaping symlink
+    }
+  }
+  if (md === undefined) {
+    const { ref, tree } = await getRepoSnapshot();
+    const skillMd = tree.find(
+      (t) => t.type === "blob" && t.path === `${SKILLS_PREFIX}${name}/SKILL.md`
+    );
+    if (!skillMd) throw new Error(`Skill "${name}" was not found.`);
+    const res = await fetch(rawUrl(ref, skillMd.path), {
+      headers: GITHUB_HEADERS,
+    });
+    if (!res.ok) throw new Error(`Failed to load skill (${res.status}).`);
+    md = await res.text();
+  }
+
+  // Strip the frontmatter block only when it's a genuine, positively-parsed
+  // block — never eat body content that merely opens with a `---` rule.
+  const { frontmatter, body: rawBody } = splitFrontmatter(md);
+  const fm = frontmatter ? parseFields(frontmatter) : {};
+  const isRealFrontmatter =
+    frontmatter !== null &&
+    (fm.name != null || fm.description != null || fm.version != null);
+  return {
+    name,
+    title: fm.name || name,
+    description: fm.description || "",
+    version: fm.version,
+    body: isRealFrontmatter ? rawBody : md.trim(),
+    installed,
+  };
 }
 
 /** Download every file of `skills/<name>/` into the install dir, atomically. */

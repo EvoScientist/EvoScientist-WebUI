@@ -9,6 +9,10 @@ import {
   Download,
   ArrowUpCircle,
 } from "lucide-react";
+import {
+  SkillDetailDialog,
+  type SkillDetailTarget,
+} from "@/app/components/SkillDetailDialog";
 
 interface SkillCard {
   name: string;
@@ -38,6 +42,8 @@ export function SkillsMarketplace() {
   const [busy, setBusy] = useState<
     Record<string, "install" | "uninstall" | "update">
   >({});
+  // Skill whose detail dialog is open (null = closed).
+  const [detail, setDetail] = useState<SkillDetailTarget | null>(null);
 
   const load = useCallback(async (refresh = false) => {
     setLoading(true);
@@ -225,6 +231,18 @@ export function SkillsMarketplace() {
                       latestVersion={s.latestVersion}
                       updateAvailable={s.updateAvailable}
                       busy={busy[s.name]}
+                      onOpen={() =>
+                        setDetail({
+                          name: s.name,
+                          title: s.title,
+                          description: s.description,
+                          version: s.installed
+                            ? s.installedVersion
+                            : s.latestVersion,
+                          fileCount: s.fileCount,
+                          installed: s.installed,
+                        })
+                      }
                       onInstall={() => install(s.name)}
                       onUpdate={() => install(s.name, "update")}
                       onUninstall={() => uninstall(s.name, true)}
@@ -247,6 +265,14 @@ export function SkillsMarketplace() {
                       description={s.description}
                       installed
                       busy={busy[s.name]}
+                      onOpen={() =>
+                        setDetail({
+                          name: s.name,
+                          title: s.title,
+                          description: s.description,
+                          installed: true,
+                        })
+                      }
                       onUninstall={() => uninstall(s.name, false)}
                     />
                   ))}
@@ -256,6 +282,11 @@ export function SkillsMarketplace() {
           </div>
         )}
       </div>
+
+      <SkillDetailDialog
+        skill={detail}
+        onClose={() => setDetail(null)}
+      />
     </div>
   );
 }
@@ -269,6 +300,7 @@ function SkillTile({
   latestVersion,
   updateAvailable,
   busy,
+  onOpen,
   onInstall,
   onUpdate,
   onUninstall,
@@ -281,6 +313,7 @@ function SkillTile({
   latestVersion?: string;
   updateAvailable?: boolean;
   busy?: "install" | "uninstall" | "update";
+  onOpen?: () => void;
   onInstall?: () => void;
   onUpdate?: () => void;
   onUninstall?: () => void;
@@ -290,7 +323,12 @@ function SkillTile({
     : latestVersion && `v${latestVersion}`;
   return (
     <div className="flex flex-col rounded-lg border border-border bg-card p-4">
-      <div className="flex items-start gap-3">
+      <button
+        type="button"
+        onClick={onOpen}
+        className="-m-1 flex items-start gap-3 rounded-md p-1 text-left transition-colors hover:bg-muted/50"
+        title="View details"
+      >
         <Puzzle
           className="mt-0.5 size-5 shrink-0 text-[var(--brand)]"
           aria-hidden="true"
@@ -313,7 +351,7 @@ function SkillTile({
             {description || "No description."}
           </p>
         </div>
-      </div>
+      </button>
       <div className="mt-3 flex items-center justify-end gap-2">
         {installed && updateAvailable && (
           <button
