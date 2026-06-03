@@ -142,17 +142,20 @@ function HomePageInner({
         initialConfig={config}
       />
       <div className="flex h-screen flex-col">
-        <header className="flex h-16 items-center justify-between border-b border-border px-6">
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2">
+        <header className="flex h-16 items-center justify-between gap-2 border-b border-border px-3 sm:px-6">
+          <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+            <div className="flex min-w-0 items-center gap-2">
               <Image
                 src="/evoscientist-logo.png"
                 alt="EvoScientist"
                 width={28}
                 height={28}
+                className="size-6 shrink-0 min-[360px]:size-7"
                 priority
               />
-              <h1 className="text-xl font-semibold">EvoScientist</h1>
+              <h1 className="truncate text-base font-semibold min-[360px]:text-lg sm:text-xl">
+                EvoScientist
+              </h1>
               <BetaBadge />
             </div>
             <div className="flex items-center gap-0.5">
@@ -161,7 +164,7 @@ function HomePageInner({
                 size="icon"
                 onClick={() => setSidebar(sidebar ? null : "1")}
                 aria-label={sidebar ? "Hide research" : "Show research"}
-                className="relative"
+                className="relative size-8 sm:size-9"
               >
                 {sidebar ? (
                   <PanelLeftClose
@@ -186,6 +189,7 @@ function HomePageInner({
                   size="icon"
                   onClick={startNewChat}
                   aria-label="New chat"
+                  className="size-8 sm:size-9"
                 >
                   <SquarePen
                     className="size-5"
@@ -195,18 +199,21 @@ function HomePageInner({
               )}
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-1 sm:gap-2">
             <ThemeToggle />
             <Button
               variant="outline"
               size="sm"
               onClick={() => setConfigDialogOpen(true)}
+              aria-label="Settings"
+              title="Settings"
+              className="h-8 px-2 sm:h-8 sm:px-3"
             >
               <Settings
-                className="mr-2 h-4 w-4"
+                className="h-4 w-4 sm:mr-2"
                 aria-hidden="true"
               />
-              Settings
+              <span className="hidden sm:inline">Settings</span>
             </Button>
           </div>
         </header>

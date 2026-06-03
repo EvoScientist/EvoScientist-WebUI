@@ -403,7 +403,7 @@ export function ThreadList({
               <SelectValue />
             </SelectTrigger>
             <SelectContent align="end">
-              <SelectItem value="all">All statuses</SelectItem>
+              <SelectItem value="all">All</SelectItem>
               <SelectSeparator />
               <SelectGroup>
                 <SelectLabel>Active</SelectLabel>

@@ -60,9 +60,9 @@ interface ChatInterfaceProps {
 }
 
 const SUGGESTED_PROMPTS = [
-  "Find papers for a research topic",
-  "Plan an experiment pipeline",
-  "Brainstorm research directions",
+  "Survey recent papers on a topic",
+  "Design an experiment plan",
+  "Analyze workspace files",
 ];
 
 interface UploadedWorkspaceFile {
@@ -583,11 +583,11 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(({ assistant }) => {
               {processedMessages.length === 0 && !isLoading && !threadId && (
                 <div className="flex min-h-[50vh] flex-col items-center justify-center px-4 text-center">
                   <h2 className="text-pretty text-xl font-semibold">
-                    Start a Research Conversation
+                    Start Research
                   </h2>
                   <p className="mt-2 max-w-lg text-sm text-muted-foreground">
-                    Ask EvoScientist to explore literature, shape an experiment,
-                    or develop a research direction.
+                    Ask EvoScientist to review literature, inspect workspace
+                    files, or plan the next experiment.
                   </p>
                   <div className="mt-5 flex max-w-2xl flex-wrap justify-center gap-2">
                     {SUGGESTED_PROMPTS.map((prompt) => (
@@ -595,7 +595,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(({ assistant }) => {
                         key={prompt}
                         type="button"
                         onClick={() => handleSuggestedPrompt(prompt)}
-                        className="rounded-full border border-border bg-background px-3 py-2 text-sm text-foreground transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+                        className="hover:border-primary/40 max-w-full rounded-full border border-border bg-card px-3 py-2 text-sm text-foreground shadow-sm transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
                       >
                         {prompt}
                       </button>
@@ -648,8 +648,8 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(({ assistant }) => {
       <div className="flex-shrink-0 bg-background">
         <div
           className={cn(
-            "mx-4 mb-6 flex flex-shrink-0 flex-col overflow-hidden rounded-xl border border-border bg-background",
-            "mx-auto w-[calc(100%-32px)] max-w-[1024px] transition-colors duration-200 ease-in-out",
+            "mb-3 flex flex-shrink-0 flex-col overflow-hidden rounded-xl border border-border bg-background sm:mb-6",
+            "mx-auto w-[calc(100%-24px)] max-w-[1024px] transition-colors duration-200 ease-in-out sm:w-[calc(100%-32px)]",
             "focus-within:ring-2 focus-within:ring-ring"
           )}
         >
@@ -770,11 +770,15 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(({ assistant }) => {
                             prev === "workspace" ? null : "workspace"
                           )
                         }
-                        className="flex flex-shrink-0 cursor-pointer items-center gap-2 px-[18px] py-3 text-left text-sm"
+                        className="flex flex-shrink-0 cursor-pointer items-center gap-2 px-3 py-3 text-left text-sm sm:px-[18px]"
                         aria-expanded={metaOpen === "workspace"}
+                        aria-label="Open workspace"
                       >
-                        <FolderOpen size={16} />
-                        Workspace
+                        <FolderOpen
+                          size={16}
+                          aria-hidden="true"
+                        />
+                        <span>Workspace</span>
                       </button>
                     );
 
@@ -982,12 +986,12 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(({ assistant }) => {
                   ? "Respond to the request above to continue…"
                   : isLoading
                   ? "Researching…"
-                  : "Ask your research buddy anything…"
+                  : "Ask EvoScientist anything…"
               }
-              className="font-inherit field-sizing-content flex-1 resize-none border-0 bg-transparent px-[18px] pb-[13px] pt-[14px] text-sm leading-7 text-primary outline-none placeholder:text-tertiary disabled:cursor-not-allowed"
+              className="font-inherit field-sizing-content flex-1 resize-none border-0 bg-transparent px-4 pb-3 pt-[14px] text-sm leading-7 text-primary outline-none placeholder:text-tertiary disabled:cursor-not-allowed sm:px-[18px]"
               rows={1}
             />
-            <div className="flex items-center justify-between gap-2 p-3">
+            <div className="flex items-center justify-between gap-2 p-2.5 sm:p-3">
               <div className="flex items-center gap-1">
                 <input
                   ref={uploadInputRef}
@@ -1030,7 +1034,9 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(({ assistant }) => {
                     className="size-3.5"
                     aria-hidden="true"
                   />
-                  {autoApprove ? "Auto-approve On" : "Auto-approve"}
+                  <span className="hidden min-[360px]:inline">
+                    {autoApprove ? "Auto-approve On" : "Auto-approve"}
+                  </span>
                 </button>
               </div>
               <div className="flex justify-end gap-2">
@@ -1042,16 +1048,17 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(({ assistant }) => {
                     !isLoading &&
                     (submitDisabled || isUploadingFiles || !input.trim())
                   }
+                  aria-label={isLoading ? "Stop generating" : "Send message"}
                 >
                   {isLoading ? (
                     <>
                       <Square size={14} />
-                      <span>Stop</span>
+                      <span className="hidden sm:inline">Stop</span>
                     </>
                   ) : (
                     <>
                       <ArrowUp size={18} />
-                      <span>Send</span>
+                      <span className="hidden sm:inline">Send</span>
                     </>
                   )}
                 </Button>
