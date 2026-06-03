@@ -164,11 +164,13 @@ export function SkillsMarketplace() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-[1024px] px-6 py-8">
-        <header className="mb-6 flex items-start justify-between gap-4">
+      <div className="mx-auto max-w-[960px] px-4 py-5 sm:px-5 sm:py-6">
+        <header className="mb-4 flex items-start justify-between gap-3">
           <div>
-            <h2 className="text-2xl font-semibold">Research Skills</h2>
-            <p className="mt-1 text-sm text-muted-foreground">
+            <h2 className="text-xl font-semibold sm:text-2xl">
+              Research Skills
+            </h2>
+            <p className="mt-1 text-sm leading-6 text-muted-foreground">
               Install official skills from the{" "}
               <a
                 href="https://github.com/EvoScientist/EvoSkills"
@@ -213,9 +215,9 @@ export function SkillsMarketplace() {
             Loading skills…
           </div>
         ) : (
-          <div className="space-y-8">
+          <div className="space-y-6">
             <section>
-              <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-tertiary">
+              <h3 className="mb-2.5 text-xs font-semibold uppercase tracking-wider text-tertiary">
                 Official catalog
               </h3>
               {catalogError ? (
@@ -225,7 +227,7 @@ export function SkillsMarketplace() {
                   No skills found in the catalog.
                 </p>
               ) : (
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
                   {catalog.map((s) => (
                     <SkillTile
                       key={s.name}
@@ -262,10 +264,10 @@ export function SkillsMarketplace() {
 
             {other.length > 0 && (
               <section>
-                <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-tertiary">
+                <h3 className="mb-2.5 text-xs font-semibold uppercase tracking-wider text-tertiary">
                   Other installed skills
                 </h3>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
                   {other.map((s) => (
                     <SkillTile
                       key={s.name}
@@ -330,11 +332,11 @@ function SkillTile({
     ? installedVersion && `v${installedVersion}`
     : latestVersion && `v${latestVersion}`;
   return (
-    <div className="flex flex-col rounded-lg border border-border bg-card p-4">
+    <div className="flex flex-col rounded-lg border border-border bg-card p-3">
       <button
         type="button"
         onClick={onOpen}
-        className="-m-1 flex items-start gap-3 rounded-md p-1 text-left transition-colors hover:bg-muted/50"
+        className="-m-1 flex items-start gap-2.5 rounded-md p-1 text-left transition-colors hover:bg-muted/50"
         title="View details"
       >
         <Puzzle
@@ -343,7 +345,9 @@ function SkillTile({
         />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-            <h3 className="break-words font-medium">{title}</h3>
+            <h3 className="break-words text-lg font-medium leading-tight">
+              {title}
+            </h3>
             {versionLabel && (
               <span className="shrink-0 font-mono text-xs text-muted-foreground">
                 {versionLabel}
@@ -355,12 +359,12 @@ function SkillTile({
               </span>
             )}
           </div>
-          <p className="mt-1 line-clamp-3 text-sm text-muted-foreground">
+          <p className="mt-1 line-clamp-2 text-sm leading-6 text-muted-foreground">
             {description || "No description."}
           </p>
         </div>
       </button>
-      <div className="mt-3 flex items-center justify-end gap-2">
+      <div className="mt-2.5 flex items-center justify-end gap-2">
         {installed && updateAvailable && (
           <button
             type="button"

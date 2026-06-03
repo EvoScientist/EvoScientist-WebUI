@@ -146,7 +146,7 @@ function HomePageInner({
         initialConfig={config}
       />
       <div className="flex h-screen flex-col">
-        <header className="flex h-16 items-center justify-between gap-2 border-b border-border px-3 sm:px-6">
+        <header className="flex h-14 items-center justify-between gap-2 border-b border-border px-2.5 sm:px-4">
           <div className="flex min-w-0 items-center gap-2 sm:gap-3">
             <div className="flex min-w-0 items-center gap-2">
               <Image
@@ -154,10 +154,10 @@ function HomePageInner({
                 alt="EvoScientist"
                 width={28}
                 height={28}
-                className="size-6 shrink-0 min-[360px]:size-7"
+                className="size-6 shrink-0"
                 priority
               />
-              <h1 className="truncate text-base font-semibold min-[360px]:text-lg sm:text-xl">
+              <h1 className="truncate text-base font-semibold sm:text-lg">
                 EvoScientist
               </h1>
               <BetaBadge />
@@ -168,7 +168,7 @@ function HomePageInner({
                 size="icon"
                 onClick={() => setSidebar(sidebar ? null : "1")}
                 aria-label={sidebarToggleLabel}
-                className="relative size-8 sm:size-9"
+                className="relative size-8"
               >
                 {sidebar ? (
                   <PanelLeftClose
@@ -193,7 +193,7 @@ function HomePageInner({
                   size="icon"
                   onClick={startNewChat}
                   aria-label="New chat"
-                  className="size-8 sm:size-9"
+                  className="size-8"
                 >
                   <SquarePen
                     className="size-5"
@@ -211,7 +211,7 @@ function HomePageInner({
               onClick={() => setConfigDialogOpen(true)}
               aria-label="Settings"
               title="Settings"
-              className="h-8 px-2 sm:h-8 sm:px-3"
+              className="h-8 px-2 sm:px-2.5"
             >
               <Settings
                 className="h-4 w-4 sm:mr-2"
@@ -233,7 +233,7 @@ function HomePageInner({
               />
               <aside
                 aria-label={view ? "Navigation" : "Research navigation"}
-                className="relative z-10 h-full w-[min(20rem,calc(100vw-3rem))] bg-background shadow-xl"
+                className="relative z-10 h-full w-[min(19rem,calc(100vw-2.25rem))] bg-background shadow-xl"
               >
                 <ThreadList
                   onClose={closeSidebar}
@@ -257,9 +257,9 @@ function HomePageInner({
                 <ResizablePanel
                   id="thread-history"
                   order={1}
-                  defaultSize={25}
-                  minSize={20}
-                  className="relative min-w-[280px]"
+                  defaultSize={23}
+                  minSize={18}
+                  className="relative min-w-[260px]"
                 >
                   <ThreadList
                     onNewChat={startNewChat}

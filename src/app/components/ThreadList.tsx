@@ -333,7 +333,7 @@ export function ThreadList({
           }
           onClose?.();
         }}
-        className="flex flex-shrink-0 items-center gap-3 border-b border-border p-4 text-left text-sm font-medium transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+        className="flex flex-shrink-0 items-center gap-2.5 border-b border-border px-3 py-3 text-left text-sm font-medium transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
       >
         <SquarePen
           className="size-4"
@@ -353,7 +353,7 @@ export function ThreadList({
           onClose?.();
         }}
         className={cn(
-          "flex flex-shrink-0 items-center gap-3 border-b border-border p-4 text-left text-sm font-medium transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+          "flex flex-shrink-0 items-center gap-2.5 border-b border-border px-3 py-3 text-left text-sm font-medium transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
           view === "skills" && "bg-accent"
         )}
       >
@@ -375,7 +375,7 @@ export function ThreadList({
           onClose?.();
         }}
         className={cn(
-          "flex flex-shrink-0 items-center gap-3 border-b border-border p-4 text-left text-sm font-medium transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+          "flex flex-shrink-0 items-center gap-2.5 border-b border-border px-3 py-3 text-left text-sm font-medium transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
           view === "memory" && "bg-accent"
         )}
       >
@@ -385,7 +385,7 @@ export function ThreadList({
         />
         Memory
       </button>
-      <div className="flex-shrink-0 border-b border-border p-3">
+      <div className="flex-shrink-0 border-b border-border p-2.5">
         <div className="relative">
           <Search
             className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
@@ -417,8 +417,8 @@ export function ThreadList({
           )}
         </div>
       </div>
-      <div className="grid flex-shrink-0 grid-cols-[1fr_auto] items-center gap-3 border-b border-border p-4">
-        <h2 className="text-lg font-semibold tracking-tight">Research</h2>
+      <div className="grid flex-shrink-0 grid-cols-[1fr_auto] items-center gap-2 border-b border-border px-3 py-2.5">
+        <h2 className="text-base font-semibold tracking-tight">Research</h2>
         <div className="flex items-center gap-2">
           <Select
             value={statusFilter}
@@ -501,7 +501,7 @@ export function ThreadList({
           )}
 
         {!threads.error && !isEmpty && filtered.length > 0 && (
-          <div className="box-border w-full max-w-full overflow-hidden p-2">
+          <div className="box-border w-full max-w-full overflow-hidden p-1.5">
             {(
               Object.keys(GROUP_LABELS) as Array<keyof typeof GROUP_LABELS>
             ).map((group) => {
@@ -511,9 +511,9 @@ export function ThreadList({
               return (
                 <div
                   key={group}
-                  className="mb-4"
+                  className="mb-3"
                 >
-                  <h4 className="m-0 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  <h4 className="m-0 px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                     {GROUP_LABELS[group]}
                   </h4>
                   <div className="flex flex-col gap-1">
@@ -529,7 +529,7 @@ export function ThreadList({
                           type="button"
                           onClick={() => onThreadSelect(thread.id)}
                           className={cn(
-                            "grid w-full cursor-pointer items-center gap-3 rounded-lg px-3 py-3 text-left transition-colors duration-200",
+                            "grid w-full cursor-pointer items-center gap-2 rounded-md py-2 pl-2.5 pr-14 text-left transition-colors duration-200 md:pr-2.5 md:group-focus-within:pr-14 md:group-hover:pr-14",
                             "hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                             currentThreadId === thread.id
                               ? "border border-primary bg-accent hover:bg-accent"
@@ -539,7 +539,7 @@ export function ThreadList({
                         >
                           <div className="min-w-0 flex-1">
                             {/* Title + Timestamp Row */}
-                            <div className="mb-1 flex items-center justify-between gap-2">
+                            <div className="mb-0.5 flex items-center justify-between gap-2">
                               <h3 className="truncate text-sm font-semibold">
                                 {thread.title}
                               </h3>
@@ -549,7 +549,7 @@ export function ThreadList({
                             </div>
                             {/* Description + Status Row */}
                             <div className="flex items-center justify-between">
-                              <p className="flex-1 truncate text-sm text-muted-foreground">
+                              <p className="flex-1 truncate text-[13px] text-muted-foreground">
                                 {thread.description}
                               </p>
                               <div className="ml-2 flex-shrink-0">

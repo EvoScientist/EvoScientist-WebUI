@@ -338,16 +338,16 @@ export function MemoryPanel() {
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      <header className="flex flex-shrink-0 items-start justify-between gap-4 border-b border-border px-4 py-4 sm:px-6">
+      <header className="flex flex-shrink-0 items-start justify-between gap-3 border-b border-border px-4 py-3 sm:px-5">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <BrainCircuit
               className="size-5 text-[var(--brand)]"
               aria-hidden="true"
             />
-            <h2 className="text-xl font-semibold sm:text-2xl">Memory</h2>
+            <h2 className="text-xl font-semibold">Memory</h2>
           </div>
-          <p className="mt-1 text-sm text-muted-foreground">
+          <p className="mt-1 max-w-3xl text-sm leading-6 text-muted-foreground">
             EvoScientist&apos;s long-term memory — what it knows about you, your
             research taste, and lessons from past work. View or edit it
             directly.
@@ -407,18 +407,18 @@ export function MemoryPanel() {
           {/* File list */}
           <aside
             className={cn(
-              "w-full flex-col border-r border-border md:flex md:w-72 md:flex-shrink-0",
+              "w-full flex-col border-r border-border md:flex md:w-64 md:flex-shrink-0",
               selected ? "hidden md:flex" : "flex"
             )}
           >
             <ScrollArea className="h-0 flex-1">
-              <div className="p-2">
+              <div className="p-1.5">
                 {groups.map((group) => (
                   <div
                     key={group.name}
-                    className="mb-3"
+                    className="mb-2.5"
                   >
-                    <h4 className="px-2 py-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                    <h4 className="px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                       {group.name}
                     </h4>
                     <div className="flex flex-col">
@@ -433,7 +433,7 @@ export function MemoryPanel() {
                               if (confirmDiscard()) openFile(entry.path);
                             }}
                             className={cn(
-                              "flex items-start gap-2 rounded-md px-2 py-2 text-left transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+                              "flex items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors focus-visible:ring-2 focus-visible:ring-ring",
                               active ? "bg-accent" : "hover:bg-accent/60"
                             )}
                             aria-current={active}
@@ -483,7 +483,7 @@ export function MemoryPanel() {
               </div>
             ) : (
               <>
-                <div className="flex flex-shrink-0 flex-wrap items-center gap-2 border-b border-border px-3 py-2.5 sm:px-4">
+                <div className="flex flex-shrink-0 flex-wrap items-center gap-2 border-b border-border px-3 py-2 sm:px-4">
                   <button
                     type="button"
                     onClick={() => {
@@ -620,7 +620,7 @@ export function MemoryPanel() {
                     />
                   ) : file ? (
                     <ScrollArea className="h-full">
-                      <div className="mx-auto max-w-[820px] px-4 py-6 sm:px-8">
+                      <div className="mx-auto max-w-[780px] px-4 py-4 sm:px-6">
                         {file.content.trim().length === 0 ? (
                           <p className="text-sm text-muted-foreground">
                             This file is empty.

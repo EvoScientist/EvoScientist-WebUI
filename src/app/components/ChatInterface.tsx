@@ -571,7 +571,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(({ assistant }) => {
         ref={scrollRef}
       >
         <div
-          className="mx-auto w-full max-w-[1024px] px-6 pb-6 pt-4"
+          className="mx-auto w-full max-w-[960px] px-4 pb-4 pt-3 sm:px-5"
           ref={contentRef}
         >
           {isThreadLoading ? (
@@ -581,21 +581,21 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(({ assistant }) => {
           ) : (
             <>
               {processedMessages.length === 0 && !isLoading && !threadId && (
-                <div className="flex min-h-[50vh] flex-col items-center justify-center px-4 text-center">
-                  <h2 className="text-pretty text-xl font-semibold">
+                <div className="flex min-h-[42vh] flex-col items-center justify-center px-3 text-center">
+                  <h2 className="text-pretty text-lg font-semibold sm:text-xl">
                     Start Research
                   </h2>
                   <p className="mt-2 max-w-lg text-sm text-muted-foreground">
                     Ask EvoScientist to review literature, inspect workspace
                     files, or plan the next experiment.
                   </p>
-                  <div className="mt-5 flex max-w-2xl flex-wrap justify-center gap-2">
+                  <div className="mt-4 flex max-w-2xl flex-wrap justify-center gap-2">
                     {SUGGESTED_PROMPTS.map((prompt) => (
                       <button
                         key={prompt}
                         type="button"
                         onClick={() => handleSuggestedPrompt(prompt)}
-                        className="max-w-full rounded-full border border-border bg-card px-3 py-2 text-sm text-foreground shadow-sm transition-colors hover:border-[var(--color-border)] hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+                        className="max-w-full rounded-full border border-border bg-card px-2.5 py-1.5 text-xs text-foreground shadow-sm transition-colors hover:border-[var(--color-border)] hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring sm:text-sm"
                       >
                         {prompt}
                       </button>
@@ -648,15 +648,15 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(({ assistant }) => {
       <div className="flex-shrink-0 bg-background">
         <div
           className={cn(
-            "mb-3 flex flex-shrink-0 flex-col overflow-hidden rounded-xl border border-border bg-background sm:mb-6",
-            "mx-auto w-[calc(100%-24px)] max-w-[1024px] transition-colors duration-200 ease-in-out sm:w-[calc(100%-32px)]",
+            "mb-2 flex flex-shrink-0 flex-col overflow-hidden rounded-lg border border-border bg-background sm:mb-4",
+            "mx-auto w-[calc(100%-16px)] max-w-[960px] transition-colors duration-200 ease-in-out sm:w-[calc(100%-24px)]",
             "focus-within:ring-2 focus-within:ring-ring"
           )}
         >
           {/* Always rendered: the Workspace tab is available even with no tasks
               or state files yet. */}
           {
-            <div className="flex max-h-72 flex-col overflow-y-auto border-b border-border bg-sidebar empty:hidden">
+            <div className="flex max-h-60 flex-col overflow-y-auto border-b border-border bg-sidebar empty:hidden sm:max-h-72">
               {!metaOpen && (
                 <>
                   {(() => {
@@ -679,7 +679,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(({ assistant }) => {
                               prev === "tasks" ? null : "tasks"
                             )
                           }
-                          className="grid w-full cursor-pointer grid-cols-[auto_auto_1fr] items-center gap-3 px-[18px] py-3 text-left"
+                          className="grid w-full cursor-pointer grid-cols-[auto_auto_1fr] items-center gap-2.5 px-3 py-2.5 text-left sm:px-4"
                           aria-expanded={metaOpen === "tasks"}
                         >
                           {(() => {
@@ -750,7 +750,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(({ assistant }) => {
                               prev === "files" ? null : "files"
                             )
                           }
-                          className="flex flex-shrink-0 cursor-pointer items-center gap-2 px-[18px] py-3 text-left text-sm"
+                          className="flex flex-shrink-0 cursor-pointer items-center gap-2 px-3 py-2.5 text-left text-sm sm:px-4"
                           aria-expanded={metaOpen === "files"}
                         >
                           <FileIcon size={16} />
@@ -770,7 +770,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(({ assistant }) => {
                             prev === "workspace" ? null : "workspace"
                           )
                         }
-                        className="flex flex-shrink-0 cursor-pointer items-center gap-2 px-3 py-3 text-left text-sm sm:px-[18px]"
+                        className="flex flex-shrink-0 cursor-pointer items-center gap-2 px-3 py-2.5 text-left text-sm sm:px-4"
                         aria-expanded={metaOpen === "workspace"}
                         aria-label="Open workspace"
                       >
@@ -799,7 +799,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(({ assistant }) => {
                     {hasTasks && (
                       <button
                         type="button"
-                        className="py-3 pr-4 first:pl-[18px] aria-expanded:font-semibold"
+                        className="py-2.5 pr-4 first:pl-3 aria-expanded:font-semibold sm:first:pl-4"
                         onClick={() =>
                           setMetaOpen((prev) =>
                             prev === "tasks" ? null : "tasks"
@@ -813,7 +813,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(({ assistant }) => {
                     {hasFiles && (
                       <button
                         type="button"
-                        className="inline-flex items-center gap-2 py-3 pr-4 first:pl-[18px] aria-expanded:font-semibold"
+                        className="inline-flex items-center gap-2 py-2.5 pr-4 first:pl-3 aria-expanded:font-semibold sm:first:pl-4"
                         onClick={() =>
                           setMetaOpen((prev) =>
                             prev === "files" ? null : "files"
@@ -829,7 +829,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(({ assistant }) => {
                     )}
                     <button
                       type="button"
-                      className="inline-flex items-center gap-2 py-3 pr-4 first:pl-[18px] aria-expanded:font-semibold"
+                      className="inline-flex items-center gap-2 py-2.5 pr-4 first:pl-3 aria-expanded:font-semibold sm:first:pl-4"
                       onClick={() =>
                         setMetaOpen((prev) =>
                           prev === "workspace" ? null : "workspace"
@@ -847,7 +847,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(({ assistant }) => {
                   </div>
                   <div
                     ref={tasksContainerRef}
-                    className="px-[18px]"
+                    className="px-3 sm:px-4"
                   >
                     {metaOpen === "tasks" &&
                       Object.entries(groupedTodos)
@@ -988,10 +988,10 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(({ assistant }) => {
                   ? "Researching…"
                   : "Ask EvoScientist anything…"
               }
-              className="font-inherit field-sizing-content flex-1 resize-none border-0 bg-transparent px-4 pb-3 pt-[14px] text-sm leading-7 text-primary outline-none placeholder:text-tertiary disabled:cursor-not-allowed sm:px-[18px]"
+              className="font-inherit field-sizing-content flex-1 resize-none border-0 bg-transparent px-3.5 pb-2.5 pt-3 text-sm leading-6 text-primary outline-none placeholder:text-tertiary disabled:cursor-not-allowed sm:px-4"
               rows={1}
             />
-            <div className="flex items-center justify-between gap-2 p-2.5 sm:p-3">
+            <div className="flex items-center justify-between gap-2 p-2 sm:p-2.5">
               <div className="flex items-center gap-1">
                 <input
                   ref={uploadInputRef}
