@@ -21,6 +21,7 @@ import { ToolCall, ActionRequest, ReviewConfig } from "@/app/types/types";
 import { cn } from "@/lib/utils";
 import { LoadExternalComponent } from "@langchain/langgraph-sdk/react-ui";
 import { ToolApprovalInterrupt } from "@/app/components/ToolApprovalInterrupt";
+import { formatToolLabel } from "@/lib/toolLabel";
 
 interface ToolCallBoxProps {
   toolCall: ToolCall;
@@ -70,9 +71,19 @@ export const ToolCallBox = React.memo<ToolCallBoxProps>(
     }, [actionRequest, autoApprove]);
 
     const { name, args, result, status } = useMemo(() => {
+      // Streaming can deliver args as a (possibly partial) JSON string, not an
+      // object — treat it as `unknown` and only expose a real object to the
+      // args view, so Object.keys/entries never run on a string.
+      const rawArgs: unknown = toolCall.args;
       return {
-        name: toolCall.name || "Unknown Tool",
-        args: toolCall.args || {},
+        // Targeted label overrides only (read_file/write_file/edit_file on
+        // /memories → "Reading memory"/"Updating memory", think_tool →
+        // "Reflection"); every other tool keeps its raw name.
+        name: formatToolLabel(toolCall.name, rawArgs),
+        args:
+          rawArgs && typeof rawArgs === "object"
+            ? (rawArgs as Record<string, unknown>)
+            : {},
         result: toolCall.result,
         status: toolCall.status || "completed",
       };
