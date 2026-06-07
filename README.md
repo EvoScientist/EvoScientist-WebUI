@@ -30,11 +30,37 @@ Open <http://localhost:4716>. In the configuration dialog, enter your **Deployme
 > You need two things running: the EvoScientist backend (`EvoSci deploy`, port 6174)
 > and this UI (`npm run dev`, port 4716).
 
+### Network access (LAN)
+
+To allow other devices on your local network to access the WebUI, bind to `0.0.0.0`:
+
+```bash
+# Command-line flag
+npm run dev -- --host 0.0.0.0
+
+# Environment variable
+HOSTNAME=0.0.0.0 npm run dev
+
+# Or create .env.local with:
+# HOSTNAME=0.0.0.0
+# PORT=4716
+```
+
 ## Production build
 
 ```bash
 npm run build        # outputs the optimized app
 npm start            # serves it on http://localhost:4716
+```
+
+For network access in production, use the launcher:
+
+```bash
+# Allow LAN access
+evoscientist-webui --host 0.0.0.0
+
+# Or set environment variables
+HOSTNAME=0.0.0.0 PORT=4716 npm start
 ```
 
 ## Configuration
@@ -51,11 +77,13 @@ npm start            # serves it on http://localhost:4716
 | Command                | Description                             |
 | ---------------------- | --------------------------------------- |
 | `npm run dev`          | Start the dev server on port 4716       |
+| `npm run dev -- --host 0.0.0.0` | Allow LAN access                 |
 | `npm run build`        | Production build                        |
 | `npm start`            | Serve the production build on port 4716 |
 | `npm run lint`         | Lint with ESLint                        |
 | `npm run format`       | Format with Prettier                    |
 | `npm run format:check` | Check formatting (used in CI)           |
+| `evoscientist-webui`   | Production launcher (supports `--port`, `--host`) |
 
 ## Tech stack
 

@@ -20,7 +20,7 @@ if (["-h", "--help", "help"].includes(args[0])) {
   console.log(`
 ${pkg.name} v${pkg.version}
 
-Usage: evoscientist-webui [--port <port>]
+Usage: evoscientist-webui [--port <port>] [--host <host>]
 
 Starts the EvoScientist Web UI and opens it in your browser.
 Then enter your EvoScientist deployment URL (default http://127.0.0.1:6174)
@@ -28,6 +28,7 @@ from \`EvoSci deploy\` to connect.
 
 Options:
   --port <port>   Port to run on (default 4716)
+  --host <host>   Host to bind to (default 127.0.0.1; use 0.0.0.0 for LAN access)
   -v, --version   Show version
   -h, --help      Show this help
 `);
@@ -43,7 +44,16 @@ if (portIdx !== -1 && args[portIdx + 1]) {
   port = parseInt(process.env.PORT, 10);
 }
 
-const url = `http://localhost:${port}`;
+// Resolve host: --host flag > HOSTNAME env > default.
+let host = "127.0.0.1";
+const hostIdx = args.indexOf("--host");
+if (hostIdx !== -1 && args[hostIdx + 1]) {
+  host = args[hostIdx + 1];
+} else if (process.env.HOSTNAME) {
+  host = process.env.HOSTNAME;
+}
+
+const url = `http://${host === "127.0.0.1" || host === "localhost" ? "localhost" : host}:${port}`;
 console.log(`  ⏳ Starting EvoScientist Web UI on ${url} …`);
 
 const child = spawn(process.execPath, [serverEntry], {
@@ -51,7 +61,7 @@ const child = spawn(process.execPath, [serverEntry], {
   env: {
     ...process.env,
     PORT: String(port),
-    HOSTNAME: process.env.HOSTNAME || "127.0.0.1",
+    HOSTNAME: host,
     NODE_ENV: "production",
   },
 });

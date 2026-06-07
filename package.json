@@ -36,9 +36,9 @@
     "access": "public"
   },
   "scripts": {
-    "dev": "next dev --turbopack --port 4716",
+    "dev": "next dev --turbopack --port 4716 --host 127.0.0.1",
     "build": "next build && node scripts/assemble-standalone.mjs",
-    "start": "next start --port 4716",
+    "start": "next start --port 4716 --host 127.0.0.1",
     "start:dist": "node dist/server.js",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
