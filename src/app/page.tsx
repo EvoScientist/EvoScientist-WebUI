@@ -21,6 +21,7 @@ import { SkillsMarketplace } from "@/app/components/SkillsMarketplace";
 import { MemoryPanel } from "@/app/components/MemoryPanel";
 import { ThemeToggle } from "@/app/components/ThemeToggle";
 import { BetaBadge } from "@/app/components/BetaBadge";
+import { HealthIndicator } from "@/app/components/HealthIndicator";
 
 interface HomePageInnerProps {
   config: DeploymentConfig;
@@ -204,6 +205,7 @@ function HomePageInner({
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-1 sm:gap-2">
+            <HealthIndicator deploymentUrl={config.deploymentUrl} />
             <ThemeToggle />
             <Button
               variant="outline"
