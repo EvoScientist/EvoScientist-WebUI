@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import {
   ArrowLeft,
   BrainCircuit,
@@ -120,6 +127,33 @@ function formatTime(ms: number): string {
   }
 }
 
+const MEMORY_LIST_MIN_WIDTH = 200;
+const MEMORY_LIST_DEFAULT_WIDTH = 256; // matches the old fixed `md:w-64`
+const MEMORY_LIST_WIDTH_KEY = "evoscientist-memory-list-width";
+
+/** Clamp the list width to [min, container − 360] so the viewer always has room.
+ *  Falls back to a fixed cap when the container isn't measured yet. */
+function clampListWidth(w: number, container: HTMLElement | null): number {
+  const max = container
+    ? Math.max(MEMORY_LIST_MIN_WIDTH + 80, container.clientWidth - 360)
+    : 640;
+  return Math.min(Math.max(w, MEMORY_LIST_MIN_WIDTH), max);
+}
+
+/** True on md+ viewports (matches Tailwind's `md:` breakpoint = 768px). Starts
+ *  false (SSR-safe) and corrects on mount. */
+function useIsDesktop(): boolean {
+  const [isDesktop, setIsDesktop] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 768px)");
+    const update = () => setIsDesktop(mq.matches);
+    update();
+    mq.addEventListener("change", update);
+    return () => mq.removeEventListener("change", update);
+  }, []);
+  return isDesktop;
+}
+
 export function MemoryPanel() {
   const [listing, setListing] = useState<MemoryListing | null>(null);
   const [loading, setLoading] = useState(true);
@@ -145,6 +179,82 @@ export function MemoryPanel() {
   const didAutoSelect = useRef(false);
   // Monotonic id so a slow file fetch can't overwrite a newer selection.
   const reqRef = useRef(0);
+
+  // --- Resizable file-list / viewer split (desktop only) -------------------
+  const isDesktop = useIsDesktop();
+  const splitContainerRef = useRef<HTMLDivElement>(null);
+  const dragCleanupRef = useRef<(() => void) | null>(null);
+  const roRef = useRef<ResizeObserver | null>(null);
+  const [listWidth, setListWidth] = useState<number>(() => {
+    if (typeof window === "undefined") return MEMORY_LIST_DEFAULT_WIDTH;
+    const saved = Number(window.localStorage.getItem(MEMORY_LIST_WIDTH_KEY));
+    return Number.isFinite(saved) && saved >= MEMORY_LIST_MIN_WIDTH
+      ? saved
+      : MEMORY_LIST_DEFAULT_WIDTH;
+  });
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(MEMORY_LIST_WIDTH_KEY, String(listWidth));
+    } catch {
+      // localStorage unavailable (e.g. private mode) — width just won't persist.
+    }
+  }, [listWidth]);
+  // Callback ref for the split container: attach a ResizeObserver the moment it
+  // mounts (the list renders only after data loads, so a plain effect could run
+  // before the node exists). The observer fires once on observe — clamping a
+  // persisted width too wide for the current window — and again on every resize.
+  // Desktop-only (the width isn't applied on mobile); disconnects on unmount.
+  const setSplitContainer = useCallback((node: HTMLDivElement | null) => {
+    splitContainerRef.current = node;
+    roRef.current?.disconnect();
+    roRef.current = null;
+    if (node && typeof ResizeObserver !== "undefined") {
+      const ro = new ResizeObserver(() => {
+        if (window.matchMedia("(min-width: 768px)").matches) {
+          setListWidth((w) => clampListWidth(w, node));
+        }
+      });
+      ro.observe(node);
+      roRef.current = ro;
+    }
+  }, []);
+  // Tear down an in-progress drag if the component unmounts mid-drag.
+  useEffect(() => () => dragCleanupRef.current?.(), []);
+  const onDividerPointerDown = useCallback(
+    (e: ReactPointerEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      dragCleanupRef.current?.(); // defensive: end any stray prior drag
+      const startX = e.clientX;
+      const startW = listWidth;
+      const controller = new AbortController();
+      const cleanup = () => {
+        controller.abort(); // removes every listener added with this signal
+        document.body.style.removeProperty("cursor");
+        document.body.style.removeProperty("user-select");
+        dragCleanupRef.current = null;
+      };
+      const move = (ev: PointerEvent) => {
+        setListWidth(
+          clampListWidth(
+            startW + (ev.clientX - startX),
+            splitContainerRef.current
+          )
+        );
+      };
+      const opts = { signal: controller.signal };
+      // Track on window so the drag continues even if the pointer leaves the thin
+      // handle; pointercancel / blur also end it so the global cursor + selection
+      // lock and the listeners never get stuck.
+      window.addEventListener("pointermove", move, opts);
+      window.addEventListener("pointerup", cleanup, opts);
+      window.addEventListener("pointercancel", cleanup, opts);
+      window.addEventListener("blur", cleanup, opts);
+      document.body.style.cursor = "col-resize";
+      document.body.style.userSelect = "none";
+      dragCleanupRef.current = cleanup;
+    },
+    [listWidth]
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -401,13 +511,17 @@ export function MemoryPanel() {
       ) : listing && listing.entries.length === 0 ? (
         <EmptyAll dir={listing.dir} />
       ) : (
-        <div className="flex min-h-0 flex-1">
+        <div
+          ref={setSplitContainer}
+          className="flex min-h-0 flex-1"
+        >
           {/* File list */}
           <aside
             className={cn(
-              "w-full flex-col border-r border-border md:flex md:w-64 md:flex-shrink-0",
+              "w-full flex-col md:flex md:flex-shrink-0",
               selected ? "hidden md:flex" : "flex"
             )}
+            style={isDesktop ? { width: listWidth } : undefined}
           >
             <ScrollArea className="h-0 flex-1">
               <div className="p-1.5">
@@ -465,6 +579,15 @@ export function MemoryPanel() {
               </div>
             </ScrollArea>
           </aside>
+
+          {/* Draggable divider between list and viewer (desktop only). */}
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize file list"
+            onPointerDown={onDividerPointerDown}
+            className="relative hidden w-px shrink-0 cursor-col-resize bg-border transition-colors after:absolute after:inset-y-0 after:left-1/2 after:w-2 after:-translate-x-1/2 hover:bg-[var(--brand)] md:block"
+          />
 
           {/* Viewer / editor */}
           <section

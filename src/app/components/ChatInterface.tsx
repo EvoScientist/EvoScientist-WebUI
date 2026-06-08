@@ -465,8 +465,19 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(({ assistant }) => {
     });
     visibleMessages.forEach((message: Message) => {
       if (message.type === "ai") {
-        const toolCallsWithStatus = getMessageToolCalls(message).map(
-          (toolCall, toolCallIndex) => {
+        const toolCallsWithStatus = getMessageToolCalls(message)
+          // The auxiliary tool-selector's internal `ToolSelectionResponse` call
+          // has no result and isn't HITL-gated. Surface it only as a transient
+          // spinner WHILE the run is actively selecting; hide it once the run
+          // pauses on an interrupt or settles. Otherwise the execute approval's
+          // "interrupted" icon leaks onto it (it never gets a result to clear)
+          // and it lingers instead of disappearing.
+          .filter(
+            (toolCall) =>
+              toolCall.name !== "ToolSelectionResponse" ||
+              (isLoading && !interrupt)
+          )
+          .map((toolCall, toolCallIndex) => {
             const name = toolCall.name || "unknown";
             return {
               id:
@@ -474,10 +485,12 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(({ assistant }) => {
                 `${message.id ?? "ai-message"}-tool-${toolCallIndex}-${name}`,
               name,
               args: toolCall.args,
+              // The selector call only survives the filter above while the run is
+              // actively selecting (!interrupt), so this resolves to a spinner for
+              // it without a special case.
               status: interrupt ? "interrupted" : ("pending" as const),
             } as ToolCall;
-          }
-        );
+          });
         messageMap.set(message.id!, {
           message,
           toolCalls: toolCallsWithStatus,
@@ -516,7 +529,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(({ assistant }) => {
         showAvatar: data.message.type !== prevMessage?.type,
       };
     });
-  }, [messages, interrupt, stream]);
+  }, [messages, interrupt, isLoading, stream]);
 
   const groupedTodos = {
     in_progress: todos.filter((t) => t.status === "in_progress"),
