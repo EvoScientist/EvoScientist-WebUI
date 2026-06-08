@@ -175,10 +175,12 @@ export function MemoryPanel() {
   const [newError, setNewError] = useState<string | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteBusy, setDeleteBusy] = useState(false);
+  const [discardOpen, setDiscardOpen] = useState(false);
 
   const didAutoSelect = useRef(false);
   // Monotonic id so a slow file fetch can't overwrite a newer selection.
   const reqRef = useRef(0);
+  const pendingDiscardActionRef = useRef<(() => void) | null>(null);
 
   // --- Resizable file-list / viewer split (desktop only) -------------------
   const isDesktop = useIsDesktop();
@@ -438,8 +440,22 @@ export function MemoryPanel() {
 
   // Unsaved-edit guard: confirm before navigating away from dirty edits.
   const dirty = editing && file != null && draft !== file.content;
-  const confirmDiscard = () =>
-    !dirty || window.confirm("Discard your unsaved changes?");
+  const runOrConfirmDiscard = (action: () => void) => {
+    if (!dirty) {
+      action();
+      return;
+    }
+    pendingDiscardActionRef.current = action;
+    setDiscardOpen(true);
+  };
+
+  const confirmDiscardChanges = () => {
+    const action = pendingDiscardActionRef.current;
+    pendingDiscardActionRef.current = null;
+    setDiscardOpen(false);
+    setEditing(false);
+    action?.();
+  };
 
   const ext = selected ? extOf(fileNameOf(selected)) : "";
   const isMarkdown = ext === "md" || ext === "markdown";
@@ -542,7 +558,7 @@ export function MemoryPanel() {
                             key={entry.path}
                             type="button"
                             onClick={() => {
-                              if (confirmDiscard()) openFile(entry.path);
+                              runOrConfirmDiscard(() => openFile(entry.path));
                             }}
                             className={cn(
                               "flex items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors focus-visible:ring-2 focus-visible:ring-ring",
@@ -608,10 +624,11 @@ export function MemoryPanel() {
                   <button
                     type="button"
                     onClick={() => {
-                      if (!confirmDiscard()) return;
-                      setSelected(null);
-                      setFile(null);
-                      setEditing(false);
+                      runOrConfirmDiscard(() => {
+                        setSelected(null);
+                        setFile(null);
+                        setEditing(false);
+                      });
                     }}
                     aria-label="Back to list"
                     className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring md:hidden"
@@ -689,7 +706,7 @@ export function MemoryPanel() {
                           size="sm"
                           className="h-8 px-2"
                           onClick={() => {
-                            if (confirmDiscard()) setEditing(false);
+                            runOrConfirmDiscard(() => setEditing(false));
                           }}
                           disabled={saving}
                           aria-label="Cancel editing"
@@ -866,6 +883,43 @@ export function MemoryPanel() {
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
               {deleteBusy ? "Deleting…" : "Delete"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={discardOpen}
+        onOpenChange={(open) => {
+          if (!open) {
+            pendingDiscardActionRef.current = null;
+            setDiscardOpen(false);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Discard unsaved changes?</DialogTitle>
+            <DialogDescription>
+              Your edits to “{selected ? fileNameOf(selected) : "this file"}”
+              have not been saved.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                pendingDiscardActionRef.current = null;
+                setDiscardOpen(false);
+              }}
+            >
+              Keep Editing
+            </Button>
+            <Button
+              onClick={confirmDiscardChanges}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Discard
             </Button>
           </DialogFooter>
         </DialogContent>

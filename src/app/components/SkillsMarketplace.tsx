@@ -13,6 +13,15 @@ import {
   SkillDetailDialog,
   type SkillDetailTarget,
 } from "@/app/components/SkillDetailDialog";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 interface SkillCard {
   name: string;
@@ -44,6 +53,11 @@ export function SkillsMarketplace() {
   >({});
   // Skill whose detail dialog is open (null = closed).
   const [detail, setDetail] = useState<SkillDetailTarget | null>(null);
+  const [uninstallTarget, setUninstallTarget] = useState<{
+    name: string;
+    title: string;
+    isCatalog: boolean;
+  } | null>(null);
 
   const load = useCallback(async (refresh = false) => {
     setLoading(true);
@@ -133,7 +147,6 @@ export function SkillsMarketplace() {
   };
 
   const uninstall = async (name: string, isCatalog: boolean) => {
-    if (!window.confirm(`Uninstall the "${name}" skill?`)) return;
     setBusy((b) => ({ ...b, [name]: "uninstall" }));
     setError(null);
     try {
@@ -160,6 +173,13 @@ export function SkillsMarketplace() {
         return next;
       });
     }
+  };
+
+  const confirmUninstall = async () => {
+    if (!uninstallTarget) return;
+    const target = uninstallTarget;
+    setUninstallTarget(null);
+    await uninstall(target.name, target.isCatalog);
   };
 
   return (
@@ -207,7 +227,10 @@ export function SkillsMarketplace() {
         )}
 
         {loading ? (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <div
+            className="flex items-center gap-2 text-sm text-muted-foreground"
+            aria-live="polite"
+          >
             <Loader2
               className="size-4 animate-spin"
               aria-hidden="true"
@@ -255,7 +278,13 @@ export function SkillsMarketplace() {
                       }
                       onInstall={() => install(s.name)}
                       onUpdate={() => install(s.name, "update")}
-                      onUninstall={() => uninstall(s.name, true)}
+                      onUninstall={() =>
+                        setUninstallTarget({
+                          name: s.name,
+                          title: s.title,
+                          isCatalog: true,
+                        })
+                      }
                     />
                   ))}
                 </div>
@@ -283,7 +312,13 @@ export function SkillsMarketplace() {
                           installed: true,
                         })
                       }
-                      onUninstall={() => uninstall(s.name, false)}
+                      onUninstall={() =>
+                        setUninstallTarget({
+                          name: s.name,
+                          title: s.title,
+                          isCatalog: false,
+                        })
+                      }
                     />
                   ))}
                 </div>
@@ -297,6 +332,36 @@ export function SkillsMarketplace() {
         skill={detail}
         onClose={() => setDetail(null)}
       />
+      <Dialog
+        open={uninstallTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setUninstallTarget(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Uninstall skill?</DialogTitle>
+            <DialogDescription>
+              “{uninstallTarget?.title ?? uninstallTarget?.name}” will be
+              removed from this Web UI. You can install it again later.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setUninstallTarget(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={confirmUninstall}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Uninstall
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -336,7 +401,7 @@ function SkillTile({
       <button
         type="button"
         onClick={onOpen}
-        className="-m-1 flex items-start gap-2.5 rounded-md p-1 text-left transition-colors hover:bg-muted/50"
+        className="-m-1 flex items-start gap-2.5 rounded-md p-1 text-left transition-colors hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring"
         title="View details"
       >
         <Puzzle
@@ -370,7 +435,7 @@ function SkillTile({
             type="button"
             onClick={onUpdate}
             disabled={!!busy}
-            className="inline-flex items-center gap-1.5 rounded-md bg-[var(--brand-solid)] px-2.5 py-1 text-xs font-medium text-[var(--brand-foreground)] transition-opacity hover:opacity-90 disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-md bg-[var(--brand-solid)] px-2.5 py-1 text-xs font-medium text-[var(--brand-foreground)] transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
             title={latestVersion ? `Update to v${latestVersion}` : "Update"}
           >
             {busy === "update" ? (
@@ -396,7 +461,7 @@ function SkillTile({
             type="button"
             onClick={onUninstall}
             disabled={!!busy}
-            className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:border-destructive/40 hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:border-destructive/40 hover:bg-destructive/10 hover:text-destructive focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
           >
             {busy === "uninstall" ? (
               <Loader2
@@ -416,7 +481,7 @@ function SkillTile({
             type="button"
             onClick={onInstall}
             disabled={!!busy}
-            className="inline-flex items-center gap-1.5 rounded-md bg-[var(--brand-solid)] px-2.5 py-1 text-xs font-medium text-[var(--brand-foreground)] transition-opacity hover:opacity-90 disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-md bg-[var(--brand-solid)] px-2.5 py-1 text-xs font-medium text-[var(--brand-foreground)] transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
           >
             {busy === "install" ? (
               <Loader2

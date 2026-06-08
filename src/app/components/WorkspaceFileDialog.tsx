@@ -10,7 +10,14 @@ import {
   Trash2,
   Eye,
 } from "lucide-react";
-import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
@@ -106,6 +113,10 @@ export const WorkspaceFileDialog = React.memo<{
   const [saving, setSaving] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [discardAction, setDiscardAction] = useState<
+    "close" | "cancel-edit" | null
+  >(null);
 
   // Suppress state updates after unmount — closing the inspector panel mid
   // save/delete unmounts this dialog while a request is still in flight.
@@ -165,11 +176,17 @@ export const WorkspaceFileDialog = React.memo<{
   const language = LANGUAGE_MAP[ext] || "text";
 
   const dirty = editing && content !== null && draft !== content;
-  const confirmDiscard = () =>
-    !dirty || window.confirm("Discard your unsaved changes?");
+  const runOrConfirmDiscard = (action: "close" | "cancel-edit") => {
+    if (!dirty) {
+      if (action === "close") onClose();
+      else setEditing(false);
+      return;
+    }
+    setDiscardAction(action);
+  };
 
   const requestClose = () => {
-    if (confirmDiscard()) onClose();
+    runOrConfirmDiscard("close");
   };
 
   const startEdit = () => {
@@ -203,13 +220,6 @@ export const WorkspaceFileDialog = React.memo<{
   };
 
   const remove = async () => {
-    if (
-      !window.confirm(
-        `Delete "${name}"? This permanently removes it from the workspace and can't be undone.`
-      )
-    ) {
-      return;
-    }
     setDeleting(true);
     setActionError(null);
     try {
@@ -222,6 +232,9 @@ export const WorkspaceFileDialog = React.memo<{
       onClose();
     } catch (e) {
       if (mountedRef.current) {
+        // Close the confirm dialog so the error (rendered in the main dialog)
+        // isn't hidden behind the confirm overlay.
+        setDeleteOpen(false);
         setActionError(e instanceof Error ? e.message : "Failed to delete.");
       }
     } finally {
@@ -229,226 +242,298 @@ export const WorkspaceFileDialog = React.memo<{
     }
   };
 
+  const confirmDiscardChanges = () => {
+    const action = discardAction;
+    setDiscardAction(null);
+    if (action === "close") onClose();
+    if (action === "cancel-edit") setEditing(false);
+  };
+
   return (
-    <Dialog
-      open={true}
-      onOpenChange={(open) => {
-        if (!open) requestClose();
-      }}
-    >
-      <DialogContent
-        aria-describedby={undefined}
-        className="flex h-[80vh] max-h-[80vh] min-w-[60vw] flex-col p-6"
+    <>
+      <Dialog
+        open={true}
+        onOpenChange={(open) => {
+          if (!open) requestClose();
+        }}
       >
-        <DialogTitle className="sr-only">{path}</DialogTitle>
-        <div className="mb-4 flex items-center justify-between gap-3 border-b border-border pb-4">
-          <div className="flex min-w-0 items-center gap-2">
-            <FileText className="h-5 w-5 shrink-0 text-[var(--color-text-tertiary)]" />
-            <span className="overflow-hidden text-ellipsis whitespace-nowrap text-base font-medium text-primary">
-              {path}
-            </span>
-          </div>
-          <div className="flex shrink-0 items-center gap-1">
-            {editing ? (
-              <>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-8 px-2"
-                  onClick={() => {
-                    if (confirmDiscard()) setEditing(false);
-                  }}
-                  disabled={saving}
-                >
-                  <Eye
-                    size={16}
-                    className="mr-1"
-                  />
-                  Cancel
-                </Button>
-                <Button
-                  size="sm"
-                  className="h-8 bg-[var(--brand-solid)] px-3 text-[var(--brand-foreground)] hover:opacity-90"
-                  onClick={save}
-                  disabled={saving || !dirty}
-                >
-                  {saving ? (
-                    <Loader2
-                      size={16}
-                      className="mr-1 animate-spin"
-                    />
-                  ) : (
-                    <Save
-                      size={16}
-                      className="mr-1"
-                    />
-                  )}
-                  {saving ? "Saving…" : "Save"}
-                </Button>
-              </>
-            ) : (
-              <>
-                {editable && (
+        <DialogContent
+          aria-describedby={undefined}
+          className="flex h-[80vh] max-h-[80vh] min-w-[60vw] flex-col p-6"
+        >
+          <DialogTitle className="sr-only">{path}</DialogTitle>
+          <div className="mb-4 flex items-center justify-between gap-3 border-b border-border pb-4">
+            <div className="flex min-w-0 items-center gap-2">
+              <FileText className="h-5 w-5 shrink-0 text-[var(--color-text-tertiary)]" />
+              <span className="overflow-hidden text-ellipsis whitespace-nowrap text-base font-medium text-primary">
+                {path}
+              </span>
+            </div>
+            <div className="flex shrink-0 items-center gap-1">
+              {editing ? (
+                <>
                   <Button
                     variant="ghost"
                     size="sm"
                     className="h-8 px-2"
-                    onClick={startEdit}
-                    disabled={loading || content === null}
-                    aria-label="Edit file"
+                    onClick={() => {
+                      runOrConfirmDiscard("cancel-edit");
+                    }}
+                    disabled={saving}
                   >
-                    <Pencil
+                    <Eye
                       size={16}
                       className="mr-1"
                     />
-                    Edit
+                    Cancel
                   </Button>
-                )}
+                  <Button
+                    size="sm"
+                    className="h-8 bg-[var(--brand-solid)] px-3 text-[var(--brand-foreground)] hover:opacity-90"
+                    onClick={save}
+                    disabled={saving || !dirty}
+                  >
+                    {saving ? (
+                      <Loader2
+                        size={16}
+                        className="mr-1 animate-spin"
+                      />
+                    ) : (
+                      <Save
+                        size={16}
+                        className="mr-1"
+                      />
+                    )}
+                    {saving ? "Saving…" : "Save"}
+                  </Button>
+                </>
+              ) : (
+                <>
+                  {editable && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 px-2"
+                      onClick={startEdit}
+                      disabled={loading || content === null}
+                      aria-label="Edit file"
+                    >
+                      <Pencil
+                        size={16}
+                        className="mr-1"
+                      />
+                      Edit
+                    </Button>
+                  )}
+                  <a
+                    href={workspaceFileUrl(path, true)}
+                    download={name}
+                  >
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 px-2"
+                      asChild
+                    >
+                      <span>
+                        <Download
+                          size={16}
+                          className="mr-1"
+                        />
+                        Download
+                      </span>
+                    </Button>
+                  </a>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 px-2 text-muted-foreground hover:text-destructive"
+                    onClick={() => setDeleteOpen(true)}
+                    disabled={deleting}
+                    aria-label="Delete file"
+                    title="Delete file"
+                  >
+                    {deleting ? (
+                      <Loader2
+                        size={16}
+                        className="animate-spin"
+                      />
+                    ) : (
+                      <Trash2 size={16} />
+                    )}
+                  </Button>
+                </>
+              )}
+            </div>
+          </div>
+
+          {actionError && (
+            <p
+              role="alert"
+              className="mb-2 text-sm text-destructive"
+            >
+              {actionError}
+            </p>
+          )}
+
+          <div className="min-h-0 flex-1 overflow-hidden">
+            {editing ? (
+              <textarea
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                spellCheck={false}
+                aria-label="File content"
+                className="h-full w-full resize-none rounded-md border border-border bg-background p-4 font-mono text-sm leading-relaxed text-foreground outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                placeholder="File is empty…"
+              />
+            ) : kind === "image" ? (
+              <ScrollArea className="bg-surface h-full rounded-md">
+                <div className="flex items-center justify-center p-4">
+                  <img
+                    src={workspaceFileUrl(path)}
+                    alt={name}
+                    className="max-h-full max-w-full object-contain"
+                  />
+                </div>
+              </ScrollArea>
+            ) : kind === "pdf" ? (
+              <iframe
+                src={workspaceFileUrl(path)}
+                title={name}
+                className="h-full w-full rounded-md border border-border"
+              />
+            ) : kind === "binary" || tooBigForText ? (
+              <div className="flex h-full flex-col items-center justify-center gap-3 p-12 text-center">
+                <p className="text-sm text-muted-foreground">
+                  {tooBigForText
+                    ? "This file is too large to preview inline."
+                    : "This file type can't be previewed."}
+                </p>
                 <a
                   href={workspaceFileUrl(path, true)}
                   download={name}
                 >
                   <Button
-                    variant="ghost"
+                    variant="outline"
                     size="sm"
-                    className="h-8 px-2"
-                    asChild
                   >
-                    <span>
-                      <Download
-                        size={16}
-                        className="mr-1"
-                      />
-                      Download
-                    </span>
+                    <Download
+                      size={16}
+                      className="mr-1"
+                    />
+                    Download file
                   </Button>
                 </a>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-8 px-2 text-muted-foreground hover:text-destructive"
-                  onClick={remove}
-                  disabled={deleting}
-                  aria-label="Delete file"
-                  title="Delete file"
-                >
-                  {deleting ? (
-                    <Loader2
-                      size={16}
-                      className="animate-spin"
-                    />
+              </div>
+            ) : loading ? (
+              <div className="flex h-full items-center justify-center">
+                <Loader2 className="size-5 animate-spin text-muted-foreground" />
+              </div>
+            ) : error ? (
+              <div className="flex h-full items-center justify-center p-12">
+                <p className="text-sm text-destructive">{error}</p>
+              </div>
+            ) : (
+              <ScrollArea className="bg-surface h-full rounded-md">
+                <div className="p-4">
+                  {content && content.length > 0 ? (
+                    isMarkdown ? (
+                      <div className="rounded-md p-6">
+                        <MarkdownContent content={content} />
+                      </div>
+                    ) : (
+                      <SyntaxHighlighter
+                        language={language}
+                        style={oneDark}
+                        customStyle={{
+                          margin: 0,
+                          borderRadius: "0.5rem",
+                          fontSize: "0.875rem",
+                        }}
+                        showLineNumbers
+                        wrapLines={true}
+                        lineProps={{ style: { whiteSpace: "pre-wrap" } }}
+                      >
+                        {content}
+                      </SyntaxHighlighter>
+                    )
                   ) : (
-                    <Trash2 size={16} />
+                    <div className="flex items-center justify-center p-12">
+                      <p className="text-sm text-muted-foreground">
+                        File is empty
+                      </p>
+                    </div>
                   )}
-                </Button>
-              </>
+                </div>
+              </ScrollArea>
             )}
           </div>
-        </div>
+        </DialogContent>
+      </Dialog>
 
-        {actionError && (
-          <p
-            role="alert"
-            className="mb-2 text-sm text-destructive"
-          >
-            {actionError}
-          </p>
-        )}
+      <Dialog
+        open={discardAction !== null}
+        onOpenChange={(open) => {
+          if (!open) setDiscardAction(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Discard unsaved changes?</DialogTitle>
+            <DialogDescription>
+              Your edits to “{name}” have not been saved.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setDiscardAction(null)}
+            >
+              Keep Editing
+            </Button>
+            <Button
+              onClick={confirmDiscardChanges}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Discard
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
-        <div className="min-h-0 flex-1 overflow-hidden">
-          {editing ? (
-            <textarea
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              spellCheck={false}
-              aria-label="File content"
-              className="h-full w-full resize-none rounded-md border border-border bg-background p-4 font-mono text-sm leading-relaxed text-foreground outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-              placeholder="File is empty…"
-            />
-          ) : kind === "image" ? (
-            <ScrollArea className="bg-surface h-full rounded-md">
-              <div className="flex items-center justify-center p-4">
-                <img
-                  src={workspaceFileUrl(path)}
-                  alt={name}
-                  className="max-h-full max-w-full object-contain"
-                />
-              </div>
-            </ScrollArea>
-          ) : kind === "pdf" ? (
-            <iframe
-              src={workspaceFileUrl(path)}
-              title={name}
-              className="h-full w-full rounded-md border border-border"
-            />
-          ) : kind === "binary" || tooBigForText ? (
-            <div className="flex h-full flex-col items-center justify-center gap-3 p-12 text-center">
-              <p className="text-sm text-muted-foreground">
-                {tooBigForText
-                  ? "This file is too large to preview inline."
-                  : "This file type can't be previewed."}
-              </p>
-              <a
-                href={workspaceFileUrl(path, true)}
-                download={name}
-              >
-                <Button
-                  variant="outline"
-                  size="sm"
-                >
-                  <Download
-                    size={16}
-                    className="mr-1"
-                  />
-                  Download file
-                </Button>
-              </a>
-            </div>
-          ) : loading ? (
-            <div className="flex h-full items-center justify-center">
-              <Loader2 className="size-5 animate-spin text-muted-foreground" />
-            </div>
-          ) : error ? (
-            <div className="flex h-full items-center justify-center p-12">
-              <p className="text-sm text-destructive">{error}</p>
-            </div>
-          ) : (
-            <ScrollArea className="bg-surface h-full rounded-md">
-              <div className="p-4">
-                {content && content.length > 0 ? (
-                  isMarkdown ? (
-                    <div className="rounded-md p-6">
-                      <MarkdownContent content={content} />
-                    </div>
-                  ) : (
-                    <SyntaxHighlighter
-                      language={language}
-                      style={oneDark}
-                      customStyle={{
-                        margin: 0,
-                        borderRadius: "0.5rem",
-                        fontSize: "0.875rem",
-                      }}
-                      showLineNumbers
-                      wrapLines={true}
-                      lineProps={{ style: { whiteSpace: "pre-wrap" } }}
-                    >
-                      {content}
-                    </SyntaxHighlighter>
-                  )
-                ) : (
-                  <div className="flex items-center justify-center p-12">
-                    <p className="text-sm text-muted-foreground">
-                      File is empty
-                    </p>
-                  </div>
-                )}
-              </div>
-            </ScrollArea>
-          )}
-        </div>
-      </DialogContent>
-    </Dialog>
+      <Dialog
+        open={deleteOpen}
+        onOpenChange={(open) => {
+          if (!deleting) setDeleteOpen(open);
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Delete file?</DialogTitle>
+            <DialogDescription>
+              “{name}” will be permanently removed from the workspace. This
+              can&apos;t be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setDeleteOpen(false)}
+              disabled={deleting}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={remove}
+              disabled={deleting}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {deleting ? "Deleting…" : "Delete"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 });
 

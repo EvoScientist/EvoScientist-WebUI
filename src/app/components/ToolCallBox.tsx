@@ -173,7 +173,7 @@ export const ToolCallBox = React.memo<ToolCallBoxProps>(
     return (
       <div
         className={cn(
-          "w-full overflow-hidden rounded-lg border-none shadow-none outline-none transition-colors duration-200 hover:bg-accent",
+          "w-full overflow-hidden rounded-lg border-none shadow-none outline-none transition-colors duration-200 focus-within:ring-2 focus-within:ring-ring hover:bg-accent",
           isExpanded && hasContent && "bg-accent"
         )}
       >
@@ -182,7 +182,7 @@ export const ToolCallBox = React.memo<ToolCallBoxProps>(
           size="sm"
           onClick={toggleExpanded}
           className={cn(
-            "flex w-full items-center justify-between gap-2 border-none px-2 py-2 text-left shadow-none outline-none focus-visible:ring-0 focus-visible:ring-offset-0 disabled:cursor-default"
+            "flex w-full items-center justify-between gap-2 border-none px-2 py-2 text-left shadow-none outline-none disabled:cursor-default"
           )}
           disabled={!hasContent}
         >
@@ -251,8 +251,9 @@ export const ToolCallBox = React.memo<ToolCallBoxProps>(
                           className="rounded-sm border border-border"
                         >
                           <button
+                            type="button"
                             onClick={() => toggleArgExpanded(key)}
-                            className="flex w-full items-center justify-between bg-muted/30 p-2 text-left text-xs font-medium transition-colors hover:bg-muted/50"
+                            className="flex w-full items-center justify-between bg-muted/30 p-2 text-left text-xs font-medium transition-colors hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                           >
                             <span className="font-mono">{key}</span>
                             {expandedArgs[key] ? (

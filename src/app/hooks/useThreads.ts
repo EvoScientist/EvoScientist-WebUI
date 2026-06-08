@@ -120,7 +120,7 @@ export function useThreads(props: {
             const humanText = textOf(firstHumanMessage?.content).trim();
             if (humanText) {
               title =
-                humanText.slice(0, 50) + (humanText.length > 50 ? "..." : "");
+                humanText.slice(0, 50) + (humanText.length > 50 ? "…" : "");
             }
             // Preview = the first AI message that actually has text. Agentic
             // threads often open with tool-call-only AI messages (empty
@@ -140,8 +140,7 @@ export function useThreads(props: {
             // "Untitled Thread".
             if (title === "Untitled Thread" && description) {
               title =
-                description.slice(0, 50) +
-                (description.length > 50 ? "..." : "");
+                description.slice(0, 50) + (description.length > 50 ? "…" : "");
             }
           }
         } catch {

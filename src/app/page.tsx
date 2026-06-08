@@ -125,7 +125,29 @@ function HomePageInner({
     return () => mediaQuery.removeEventListener("change", updateLayout);
   }, []);
 
+  useEffect(() => {
+    if (isDesktopLayout === false && sidebar && inspector) {
+      setInspector(null);
+    }
+  }, [inspector, isDesktopLayout, setInspector, sidebar]);
+
   const closeSidebar = useCallback(() => setSidebar(null), [setSidebar]);
+  const toggleSidebar = useCallback(() => {
+    if (sidebar) {
+      setSidebar(null);
+      return;
+    }
+    if (isDesktopLayout === false) setInspector(null);
+    setSidebar("1");
+  }, [isDesktopLayout, setInspector, setSidebar, sidebar]);
+  const toggleInspector = useCallback(() => {
+    if (inspector) {
+      setInspector(null);
+      return;
+    }
+    if (isDesktopLayout === false) setSidebar(null);
+    setInspector("1");
+  }, [inspector, isDesktopLayout, setInspector, setSidebar]);
   const sidebarToggleLabel = view
     ? sidebar
       ? "Hide navigation"
@@ -183,7 +205,7 @@ function HomePageInner({
               <Button
                 variant="ghost"
                 size="icon"
-                onClick={() => setSidebar(sidebar ? null : "1")}
+                onClick={toggleSidebar}
                 aria-label={sidebarToggleLabel}
                 className="relative size-8"
               >
@@ -226,7 +248,7 @@ function HomePageInner({
             <Button
               variant="ghost"
               size="icon"
-              onClick={() => setInspector(inspector ? null : "1")}
+              onClick={toggleInspector}
               aria-label={inspector ? "Hide workspace" : "Show workspace"}
               title={inspector ? "Hide workspace" : "Show workspace"}
               className="size-8"

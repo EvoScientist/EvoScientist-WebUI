@@ -92,6 +92,14 @@ function formatTime(date: Date, now = new Date()): string {
   }).format(date);
 }
 
+function formatFullTime(date: Date): string {
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+    hourCycle: "h23",
+  }).format(date);
+}
+
 function StatusFilterItem({
   status,
   label,
@@ -173,6 +181,7 @@ export function ThreadList({
   const [renameValue, setRenameValue] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<ThreadItem | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
+  const [now, setNow] = useState(() => new Date());
 
   const threads = useThreads({
     status: statusFilter === "all" ? undefined : statusFilter,
@@ -190,6 +199,18 @@ export function ThreadList({
     return flattened.filter((t) => t.title.toLowerCase().includes(q));
   }, [flattened, search]);
 
+  useEffect(() => {
+    const tick = () => setNow(new Date());
+    const interval = window.setInterval(tick, 60_000);
+    window.addEventListener("focus", tick);
+    document.addEventListener("visibilitychange", tick);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("focus", tick);
+      document.removeEventListener("visibilitychange", tick);
+    };
+  }, []);
+
   const isLoadingMore =
     threads.size > 0 && threads.data?.[threads.size - 1] == null;
   const isEmpty = threads.data?.at(0)?.length === 0;
@@ -197,7 +218,6 @@ export function ThreadList({
 
   // Group threads by time and status
   const grouped = useMemo(() => {
-    const now = new Date();
     const groups: Record<keyof typeof GROUP_LABELS, ThreadItem[]> = {
       interrupted: [],
       today: [],
@@ -227,7 +247,7 @@ export function ThreadList({
     });
 
     return groups;
-  }, [filtered]);
+  }, [filtered, now]);
 
   const interruptedCount = useMemo(() => {
     return flattened.filter((t) => t.status === "interrupted").length;
@@ -484,7 +504,9 @@ export function ThreadList({
         {threads.error && <ErrorState message={threads.error.message} />}
 
         {!threads.error && !threads.data && threads.isLoading && (
-          <LoadingState />
+          <div aria-live="polite">
+            <LoadingState />
+          </div>
         )}
 
         {!threads.error && !threads.isLoading && isEmpty && <EmptyState />}
@@ -544,7 +566,12 @@ export function ThreadList({
                                 {thread.title}
                               </h3>
                               <span className="ml-2 flex-shrink-0 text-xs tabular-nums text-muted-foreground">
-                                {formatTime(thread.updatedAt)}
+                                <time
+                                  dateTime={thread.updatedAt.toISOString()}
+                                  title={formatFullTime(thread.updatedAt)}
+                                >
+                                  {formatTime(thread.updatedAt, now)}
+                                </time>
                               </span>
                             </div>
                             {/* Description + Status Row */}
