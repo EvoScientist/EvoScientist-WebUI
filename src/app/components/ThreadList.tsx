@@ -6,6 +6,8 @@ import {
   Loader2,
   MessageSquare,
   Pencil,
+  Pin,
+  PinOff,
   Puzzle,
   Search,
   SquarePen,
@@ -28,7 +30,12 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import type { ThreadItem } from "@/app/hooks/useThreads";
-import { useThreads, deleteThread, renameThread } from "@/app/hooks/useThreads";
+import {
+  useThreads,
+  deleteThread,
+  renameThread,
+  pinThread,
+} from "@/app/hooks/useThreads";
 import {
   Dialog,
   DialogContent,
@@ -182,6 +189,7 @@ export function ThreadList({
   const [deleteTarget, setDeleteTarget] = useState<ThreadItem | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
   const [now, setNow] = useState(() => new Date());
+  const [pinBusyIds, setPinBusyIds] = useState<Set<string>>(() => new Set());
 
   const threads = useThreads({
     status: statusFilter === "all" ? undefined : statusFilter,
@@ -216,6 +224,11 @@ export function ThreadList({
   const isEmpty = threads.data?.at(0)?.length === 0;
   const isReachingEnd = isEmpty || (threads.data?.at(-1)?.length ?? 0) < 20;
 
+  // Pinned threads float to a dedicated "Research" section at the top, sorted
+  // newest-first (same order as the time groups below). `filtered` already
+  // arrives sorted by updated_at desc from the backend.
+  const pinned = useMemo(() => filtered.filter((t) => t.pinned), [filtered]);
+
   // Group threads by time and status
   const grouped = useMemo(() => {
     const groups: Record<keyof typeof GROUP_LABELS, ThreadItem[]> = {
@@ -227,6 +240,9 @@ export function ThreadList({
     };
 
     filtered.forEach((thread) => {
+      // Pinned threads live in the "Research" section only, not the time groups.
+      if (thread.pinned) return;
+
       if (thread.status === "interrupted") {
         groups.interrupted.push(thread);
         return;
@@ -284,6 +300,7 @@ export function ThreadList({
   // Synchronous re-entry lock: `actionBusy` state only blocks after a re-render,
   // so a fast second Enter could fire a mutation twice. The ref guards instantly.
   const actionBusyRef = useRef(false);
+  const pinBusyIdsRef = useRef<Set<string>>(new Set());
 
   // After deleting a thread its row (and the trigger button) is gone, so move
   // keyboard focus to a stable target (New Chat) instead of dropping to <body>.
@@ -337,6 +354,162 @@ export function ThreadList({
       actionBusyRef.current = false;
       setActionBusy(false);
     }
+  };
+
+  const togglePin = async (thread: ThreadItem) => {
+    if (pinBusyIdsRef.current.has(thread.id)) return;
+    pinBusyIdsRef.current.add(thread.id);
+    setPinBusyIds((current) => {
+      const next = new Set(current);
+      next.add(thread.id);
+      return next;
+    });
+    try {
+      await pinThread(thread.id, !thread.pinned);
+      mutateFn();
+    } catch {
+      toast.error(
+        thread.pinned
+          ? "Couldn't unpin — try again."
+          : "Couldn't pin — try again."
+      );
+    } finally {
+      pinBusyIdsRef.current.delete(thread.id);
+      setPinBusyIds((current) => {
+        const next = new Set(current);
+        next.delete(thread.id);
+        return next;
+      });
+    }
+  };
+
+  // A single thread row (select button + per-thread actions). Used by both the
+  // pinned "Research" section and the time-grouped "Recents" sections; the only
+  // difference is the Pin ↔ Unpin action, driven by `thread.pinned`.
+  const renderThreadCard = (thread: ThreadItem) => {
+    const pinBusy = pinBusyIds.has(thread.id);
+
+    return (
+      <div
+        key={thread.id}
+        className="group relative"
+      >
+        {/* Selectable row — a native button so Enter/Space and role come for
+          free. Action buttons are SIBLINGS (below), never nested inside. */}
+        <button
+          type="button"
+          onClick={() => onThreadSelect(thread.id)}
+          className={cn(
+            "grid w-full cursor-pointer items-center gap-2 rounded-md py-2 pl-2.5 pr-20 text-left transition-colors duration-200 md:pr-2.5 md:group-focus-within:pr-20 md:group-hover:pr-20",
+            "hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            currentThreadId === thread.id
+              ? "border border-primary bg-accent hover:bg-accent"
+              : "border border-transparent bg-transparent"
+          )}
+          aria-current={currentThreadId === thread.id}
+        >
+          <div className="min-w-0 flex-1">
+            {/* Title + Timestamp Row */}
+            <div className="mb-0.5 flex items-center justify-between gap-2">
+              <h3 className="flex min-w-0 items-center gap-1.5 text-sm font-semibold">
+                {thread.pinned && (
+                  <Pin
+                    className="size-3 flex-shrink-0 text-[var(--brand)]"
+                    aria-hidden="true"
+                  />
+                )}
+                <span className="truncate">{thread.title}</span>
+              </h3>
+              <span className="ml-2 flex-shrink-0 text-xs tabular-nums text-muted-foreground">
+                <time
+                  dateTime={thread.updatedAt.toISOString()}
+                  title={formatFullTime(thread.updatedAt)}
+                >
+                  {formatTime(thread.updatedAt, now)}
+                </time>
+              </span>
+            </div>
+            {/* Description + Status Row */}
+            <div className="flex items-center justify-between">
+              <p className="flex-1 truncate text-[13px] text-muted-foreground">
+                {thread.description}
+              </p>
+              <div className="ml-2 flex-shrink-0">
+                <span
+                  role="img"
+                  aria-label={`Status: ${STATUS_LABELS[thread.status]}`}
+                  title={`Status: ${STATUS_LABELS[thread.status]}`}
+                  className={cn(
+                    "h-2 w-2 rounded-full",
+                    getThreadColor(thread.status)
+                  )}
+                />
+              </div>
+            </div>
+          </div>
+        </button>
+        {/* Per-thread actions — siblings of the select button (not nested);
+          shown on touch, reveal on hover/focus on desktop. */}
+        <div className="absolute right-1.5 top-1.5 flex items-center gap-0.5 rounded-md bg-accent/95 p-0.5 opacity-100 shadow-sm backdrop-blur-sm transition-opacity md:opacity-0 md:group-focus-within:opacity-100 md:group-hover:opacity-100">
+          <button
+            type="button"
+            aria-label={
+              thread.pinned
+                ? `Unpin "${thread.title}"`
+                : `Pin "${thread.title}"`
+            }
+            title={thread.pinned ? "Unpin" : "Pin"}
+            onClick={() => togglePin(thread)}
+            disabled={pinBusy}
+            className={cn(
+              "rounded p-1 transition-colors hover:bg-background focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
+              thread.pinned
+                ? "text-[var(--brand)] hover:text-[var(--brand)]"
+                : "text-muted-foreground hover:text-foreground"
+            )}
+          >
+            {thread.pinned ? (
+              <PinOff
+                className="size-3.5"
+                aria-hidden="true"
+              />
+            ) : (
+              <Pin
+                className="size-3.5"
+                aria-hidden="true"
+              />
+            )}
+          </button>
+          <button
+            type="button"
+            aria-label={`Rename "${thread.title}"`}
+            title="Rename"
+            onClick={() => {
+              setRenameTarget(thread);
+              setRenameValue(thread.title);
+            }}
+            className="rounded p-1 text-muted-foreground transition-colors hover:bg-background hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <Pencil
+              className="size-3.5"
+              aria-hidden="true"
+            />
+          </button>
+          <button
+            type="button"
+            aria-label={`Delete "${thread.title}"`}
+            title="Delete"
+            onClick={() => setDeleteTarget(thread)}
+            className="rounded p-1 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <Trash2
+              className="size-3.5"
+              aria-hidden="true"
+            />
+          </button>
+        </div>
+      </div>
+    );
   };
 
   return (
@@ -438,7 +611,7 @@ export function ThreadList({
         </div>
       </div>
       <div className="grid flex-shrink-0 grid-cols-[1fr_auto] items-center gap-2 border-b border-border px-3 py-2.5">
-        <h2 className="text-base font-semibold tracking-tight">Research</h2>
+        <h2 className="text-base font-semibold tracking-tight">Recents</h2>
         <div className="flex items-center gap-2">
           <Select
             value={statusFilter}
@@ -524,6 +697,18 @@ export function ThreadList({
 
         {!threads.error && !isEmpty && filtered.length > 0 && (
           <div className="box-border w-full max-w-full overflow-hidden p-1.5">
+            {/* Pinned threads — shown only when at least one thread is pinned. */}
+            {pinned.length > 0 && (
+              <div className="mb-3">
+                <h4 className="m-0 px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  Research
+                </h4>
+                <div className="flex flex-col gap-1">
+                  {pinned.map((thread) => renderThreadCard(thread))}
+                </div>
+              </div>
+            )}
+
             {(
               Object.keys(GROUP_LABELS) as Array<keyof typeof GROUP_LABELS>
             ).map((group) => {
@@ -539,97 +724,7 @@ export function ThreadList({
                     {GROUP_LABELS[group]}
                   </h4>
                   <div className="flex flex-col gap-1">
-                    {groupThreads.map((thread) => (
-                      <div
-                        key={thread.id}
-                        className="group relative"
-                      >
-                        {/* Selectable row — a native button so Enter/Space and
-                            role come for free. Action buttons are SIBLINGS (below),
-                            never nested inside this button. */}
-                        <button
-                          type="button"
-                          onClick={() => onThreadSelect(thread.id)}
-                          className={cn(
-                            "grid w-full cursor-pointer items-center gap-2 rounded-md py-2 pl-2.5 pr-14 text-left transition-colors duration-200 md:pr-2.5 md:group-focus-within:pr-14 md:group-hover:pr-14",
-                            "hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                            currentThreadId === thread.id
-                              ? "border border-primary bg-accent hover:bg-accent"
-                              : "border border-transparent bg-transparent"
-                          )}
-                          aria-current={currentThreadId === thread.id}
-                        >
-                          <div className="min-w-0 flex-1">
-                            {/* Title + Timestamp Row */}
-                            <div className="mb-0.5 flex items-center justify-between gap-2">
-                              <h3 className="truncate text-sm font-semibold">
-                                {thread.title}
-                              </h3>
-                              <span className="ml-2 flex-shrink-0 text-xs tabular-nums text-muted-foreground">
-                                <time
-                                  dateTime={thread.updatedAt.toISOString()}
-                                  title={formatFullTime(thread.updatedAt)}
-                                >
-                                  {formatTime(thread.updatedAt, now)}
-                                </time>
-                              </span>
-                            </div>
-                            {/* Description + Status Row */}
-                            <div className="flex items-center justify-between">
-                              <p className="flex-1 truncate text-[13px] text-muted-foreground">
-                                {thread.description}
-                              </p>
-                              <div className="ml-2 flex-shrink-0">
-                                <span
-                                  role="img"
-                                  aria-label={`Status: ${
-                                    STATUS_LABELS[thread.status]
-                                  }`}
-                                  title={`Status: ${
-                                    STATUS_LABELS[thread.status]
-                                  }`}
-                                  className={cn(
-                                    "h-2 w-2 rounded-full",
-                                    getThreadColor(thread.status)
-                                  )}
-                                />
-                              </div>
-                            </div>
-                          </div>
-                        </button>
-                        {/* Per-thread actions — siblings of the select button (not
-                            nested); shown on touch, reveal on hover/focus on desktop. */}
-                        <div className="absolute right-1.5 top-1.5 flex items-center gap-0.5 rounded-md bg-accent/95 p-0.5 opacity-100 shadow-sm backdrop-blur-sm transition-opacity md:opacity-0 md:group-focus-within:opacity-100 md:group-hover:opacity-100">
-                          <button
-                            type="button"
-                            aria-label={`Rename "${thread.title}"`}
-                            title="Rename"
-                            onClick={() => {
-                              setRenameTarget(thread);
-                              setRenameValue(thread.title);
-                            }}
-                            className="rounded p-1 text-muted-foreground transition-colors hover:bg-background hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-                          >
-                            <Pencil
-                              className="size-3.5"
-                              aria-hidden="true"
-                            />
-                          </button>
-                          <button
-                            type="button"
-                            aria-label={`Delete "${thread.title}"`}
-                            title="Delete"
-                            onClick={() => setDeleteTarget(thread)}
-                            className="rounded p-1 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive focus-visible:ring-2 focus-visible:ring-ring"
-                          >
-                            <Trash2
-                              className="size-3.5"
-                              aria-hidden="true"
-                            />
-                          </button>
-                        </div>
-                      </div>
-                    ))}
+                    {groupThreads.map((thread) => renderThreadCard(thread))}
                   </div>
                 </div>
               );

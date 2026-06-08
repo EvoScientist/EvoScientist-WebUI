@@ -40,6 +40,11 @@ import { extractStringFromMessageContent } from "@/app/utils/utils";
 import { useChatContext } from "@/providers/ChatProvider";
 import { cn } from "@/lib/utils";
 import { formatModel } from "@/lib/model";
+import {
+  getThreadAutoApprove,
+  setThreadAutoApprove,
+  migrateNewThreadAutoApprove,
+} from "@/lib/autoApprove";
 import { lastTextOf, type SubAgentStep } from "@/lib/subAgentActivity";
 import { useStickToBottom } from "use-stick-to-bottom";
 import { FilesPopover } from "@/app/components/TasksFilesSidebar";
@@ -161,12 +166,18 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(({ assistant }) => {
   const [input, setInput] = useState("");
   const [pendingFiles, setPendingFiles] = useState<UploadedWorkspaceFile[]>([]);
   const [isUploadingFiles, setIsUploadingFiles] = useState(false);
-  const [autoApprove, setAutoApprove] = useState(false);
+  const [threadId] = useQueryState("threadId");
+  // Auto-approve is per-thread and persisted (see lib/autoApprove): it follows
+  // the conversation across view switches (Skills/Memory unmount this), thread
+  // switches, and reloads. Seed from storage for whatever thread is active on
+  // mount so returning from another view restores the right setting.
+  const [autoApprove, setAutoApproveState] = useState(() =>
+    getThreadAutoApprove(threadId)
+  );
   const [autoApproveDialogOpen, setAutoApproveDialogOpen] = useState(false);
   const autoApprovedRef = useRef<unknown>(null);
-  const [threadId] = useQueryState("threadId");
   const previousThreadIdRef = useRef(threadId);
-  const preserveAutoApproveForNewThreadRef = useRef(false);
+  const migrateAutoApproveForCreatedThreadRef = useRef(false);
   const { scrollRef, contentRef, scrollToBottom } = useStickToBottom();
 
   const {
@@ -269,27 +280,45 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(({ assistant }) => {
     (Array.isArray(interruptValue?.action_requests) &&
       interruptValue.action_requests.length > 0);
   const submitDisabled = isLoading || !assistant || hasPendingInterrupt;
+  const enableAutoApprove = useCallback(() => {
+    setAutoApproveState(true);
+    setThreadAutoApprove(threadId, true);
+    setAutoApproveDialogOpen(false);
+  }, [threadId]);
+
   const turnOffAutoApprove = useCallback(() => {
-    setAutoApprove(false);
+    setAutoApproveState(false);
+    setThreadAutoApprove(threadId, false);
     setAutoApproveDialogOpen(false);
     autoApprovedRef.current = null;
-  }, []);
+  }, [threadId]);
 
+  // Follow the thread: when the active thread changes, load THAT thread's saved
+  // auto-approve instead of resetting. The null→real-id transition is the new
+  // chat getting created on its first message — carry its sentinel setting over.
   useEffect(() => {
     const previousThreadId = previousThreadIdRef.current;
     if (previousThreadId === threadId) return;
 
-    const preserveForNewThread =
+    if (
       previousThreadId === null &&
       threadId !== null &&
-      preserveAutoApproveForNewThreadRef.current;
+      migrateAutoApproveForCreatedThreadRef.current
+    ) {
+      migrateNewThreadAutoApprove(threadId);
+    } else if (previousThreadId === null && threadId !== null) {
+      // The user selected an existing research from New Chat before sending.
+      // Do not leak the pending-new-chat auto-approve sentinel onto that thread.
+      setThreadAutoApprove(null, false);
+    }
 
-    if (!preserveForNewThread) turnOffAutoApprove();
-
+    setAutoApproveState(getThreadAutoApprove(threadId));
+    autoApprovedRef.current = null;
+    setAutoApproveDialogOpen(false);
     setPendingFiles([]);
-    preserveAutoApproveForNewThreadRef.current = false;
+    migrateAutoApproveForCreatedThreadRef.current = false;
     previousThreadIdRef.current = threadId;
-  }, [threadId, turnOffAutoApprove]);
+  }, [threadId]);
 
   const handleFilesSelected = useCallback(
     async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -343,9 +372,8 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(({ assistant }) => {
       const messageText = input.trim();
       if (!messageText || isLoading || isUploadingFiles || submitDisabled)
         return;
-      if (!threadId && autoApprove) {
-        preserveAutoApproveForNewThreadRef.current = true;
-      }
+      migrateAutoApproveForCreatedThreadRef.current =
+        threadId === null && autoApprove;
       const workspaceFiles =
         pendingFiles.length > 0
           ? `\n\nWorkspace files uploaded for this request:\n${pendingFiles
@@ -357,8 +385,8 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(({ assistant }) => {
       setPendingFiles([]);
     },
     [
-      autoApprove,
       input,
+      autoApprove,
       isLoading,
       isUploadingFiles,
       pendingFiles,
@@ -606,8 +634,9 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(({ assistant }) => {
               aria-hidden="true"
             />
             <p>
-              Auto-approve turns off automatically when you switch research or
-              start a new chat.
+              Auto-approve stays on for this research only — it follows this
+              conversation across views and reloads, and other research keeps
+              its own setting. Turn it off here anytime.
             </p>
           </div>
           <DialogFooter>
@@ -618,10 +647,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(({ assistant }) => {
               Cancel
             </Button>
             <Button
-              onClick={() => {
-                setAutoApprove(true);
-                setAutoApproveDialogOpen(false);
-              }}
+              onClick={enableAutoApprove}
               className="bg-amber-600 text-white hover:bg-amber-700"
             >
               Enable Auto-approve

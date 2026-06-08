@@ -10,6 +10,7 @@ export interface ThreadItem {
   title: string;
   description: string;
   assistantId?: string;
+  pinned: boolean;
 }
 
 const DEFAULT_PAGE_SIZE = 20;
@@ -156,6 +157,12 @@ export function useThreads(props: {
           title = customTitle.trim();
         }
 
+        // Pinned state is stored in thread metadata (like the custom title),
+        // so it persists across reloads/devices via the backend store.
+        const pinned =
+          (thread.metadata as Record<string, unknown> | undefined)?.pinned ===
+          true;
+
         return {
           id: thread.thread_id,
           updatedAt: new Date(thread.updated_at),
@@ -163,6 +170,7 @@ export function useThreads(props: {
           title,
           description,
           assistantId,
+          pinned,
         };
       });
     },
@@ -193,13 +201,36 @@ export async function deleteThread(id: string): Promise<void> {
   await client.threads.delete(id);
 }
 
+async function updateThreadMetadata(
+  client: Client,
+  id: string,
+  patch: Record<string, unknown>
+): Promise<void> {
+  const thread = await client.threads.get(id);
+  const metadata = {
+    ...((thread.metadata as Record<string, unknown> | undefined) ?? {}),
+    ...patch,
+  };
+  await client.threads.update(id, { metadata });
+}
+
 /**
- * Rename a thread by storing a custom title in its metadata. `update` PATCHes
- * (merges) metadata, so the `graph_id` / `assistant_id` keys the list relies on
- * for filtering are preserved.
+ * Rename a thread by storing a custom title in its metadata. The LangGraph
+ * thread PATCH replaces metadata, so read + merge first to preserve graph_id /
+ * assistant_id filter keys.
  */
 export async function renameThread(id: string, title: string): Promise<void> {
   const client = makeThreadsClient();
   if (!client) throw new Error("No EvoScientist deployment configured.");
-  await client.threads.update(id, { metadata: { title } });
+  await updateThreadMetadata(client, id, { title });
+}
+
+/**
+ * Pin or unpin a thread by storing a `pinned` flag in its metadata. Preserve
+ * the rest of the metadata for the same reason as `renameThread`.
+ */
+export async function pinThread(id: string, pinned: boolean): Promise<void> {
+  const client = makeThreadsClient();
+  if (!client) throw new Error("No EvoScientist deployment configured.");
+  await updateThreadMetadata(client, id, { pinned });
 }

@@ -30,6 +30,7 @@ import { ThemeToggle } from "@/app/components/ThemeToggle";
 import { BetaBadge } from "@/app/components/BetaBadge";
 import { HealthIndicator } from "@/app/components/HealthIndicator";
 import { InspectorPanel } from "@/app/components/InspectorPanel";
+import { setThreadAutoApprove } from "@/lib/autoApprove";
 
 interface HomePageInnerProps {
   config: DeploymentConfig;
@@ -156,12 +157,14 @@ function HomePageInner({
     ? "Hide research"
     : "Show research";
   const startNewChat = useCallback(() => {
+    setThreadAutoApprove(null, false);
     setThreadId(null);
     setView(null);
     setChatSessionRevision((revision) => revision + 1);
   }, [setThreadId, setView]);
   const selectThread = useCallback(
     async (id: string) => {
+      setThreadAutoApprove(null, false);
       setView(null);
       await setThreadId(id);
       setChatSessionRevision((revision) => revision + 1);
@@ -243,7 +246,12 @@ function HomePageInner({
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-1 sm:gap-2">
-            <HealthIndicator deploymentUrl={config.deploymentUrl} />
+            <HealthIndicator
+              deploymentUrl={config.deploymentUrl}
+              onReconnect={(url) =>
+                handleSaveConfig({ ...config, deploymentUrl: url })
+              }
+            />
             <ThemeToggle />
             <Button
               variant="ghost"
