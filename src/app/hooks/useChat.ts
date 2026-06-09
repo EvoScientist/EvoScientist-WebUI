@@ -22,6 +22,9 @@ export type StateType = {
     subject?: string;
     page_content?: string;
   };
+  // Background async sub-agents (writing-agent / data-analysis-agent) this
+  // conversation launched, keyed by task_id. Shape = deepagents' AsyncTask.
+  async_tasks?: Record<string, unknown>;
   ui?: any;
 };
 
@@ -345,6 +348,7 @@ export function useChat({
     todos: stream.values.todos ?? [],
     files: stream.values.files ?? {},
     email: stream.values.email,
+    asyncTasks: stream.values.async_tasks ?? {},
     ui: stream.values.ui,
     setFiles,
     messages,

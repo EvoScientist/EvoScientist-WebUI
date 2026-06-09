@@ -36,6 +36,7 @@ import {
   renameThread,
   pinThread,
 } from "@/app/hooks/useThreads";
+import { useMemoryActivity } from "@/app/hooks/useMemoryActivity";
 import {
   Dialog,
   DialogContent,
@@ -182,6 +183,9 @@ export function ThreadList({
 }: ThreadListProps) {
   const [currentThreadId, setThreadId] = useQueryState("threadId");
   const [view, setView] = useQueryState("view");
+  // Badge the Memory nav when long-term memory changed since last viewed.
+  const { unseenCount: memoryUnseen, markSeen: markMemorySeen } =
+    useMemoryActivity();
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [search, setSearch] = useState("");
   const [renameTarget, setRenameTarget] = useState<ThreadItem | null>(null);
@@ -564,6 +568,7 @@ export function ThreadList({
             onClose?.();
             return;
           }
+          markMemorySeen();
           setView("memory");
           onClose?.();
         }}
@@ -576,7 +581,18 @@ export function ThreadList({
           className="size-4"
           aria-hidden="true"
         />
-        Memory
+        EvoMemory
+        {view !== "memory" && memoryUnseen > 0 && (
+          <span
+            className="ml-auto inline-flex min-w-4 items-center justify-center rounded-full bg-[var(--brand-solid)] px-1 text-[10px] font-bold leading-none text-[var(--brand-foreground)]"
+            title={`${memoryUnseen} memory file${
+              memoryUnseen === 1 ? "" : "s"
+            } updated since you last looked`}
+            aria-label={`${memoryUnseen} memory updates`}
+          >
+            {memoryUnseen}
+          </span>
+        )}
       </button>
       <div className="flex-shrink-0 border-b border-border p-2.5">
         <div className="relative">

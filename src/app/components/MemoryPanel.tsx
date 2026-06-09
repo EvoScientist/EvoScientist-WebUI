@@ -38,6 +38,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { copyText } from "@/lib/clipboard";
+import { isRecent, relativeTime, setMemorySeenAt } from "@/lib/memoryActivity";
 
 interface MemoryEntry {
   path: string;
@@ -265,7 +266,15 @@ export function MemoryPanel() {
       const res = await fetch("/api/memory");
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to load memory.");
-      setListing(data as MemoryListing);
+      const listing = data as MemoryListing;
+      setListing(listing);
+      // Opening the panel = the user has now seen the current memory, so clear
+      // the nav badge (covers URL-direct navigation, not just the nav click).
+      const latest = listing.entries.reduce(
+        (max, e) => (e.mtime > max ? e.mtime : max),
+        0
+      );
+      if (latest > 0) setMemorySeenAt(latest);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load memory.");
     } finally {
@@ -276,6 +285,13 @@ export function MemoryPanel() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Tick for relative "updated Xm ago" labels.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(id);
+  }, []);
 
   // Group + sort the file list for the sidebar.
   const groups = useMemo(() => {
@@ -469,12 +485,16 @@ export function MemoryPanel() {
               className="size-5 text-[var(--brand)]"
               aria-hidden="true"
             />
-            <h2 className="text-xl font-semibold">Memory</h2>
+            <h2 className="text-xl font-semibold">EvoMemory</h2>
           </div>
           <p className="mt-1 max-w-3xl text-sm leading-6 text-muted-foreground">
-            EvoScientist&apos;s long-term memory — what it knows about you, your
-            research taste, and lessons from past work. View or edit it
-            directly.
+            EvoScientist&apos;s{" "}
+            <span className="font-medium text-[var(--brand)]">
+              self-evolving memory system
+            </span>{" "}
+            — it continuously learns and refines what it knows about you, your
+            research taste, and lessons from past experiments, updating itself
+            after every turn. View or edit it directly.
           </p>
         </div>
         <div className="flex flex-shrink-0 items-center gap-1.5">
@@ -553,6 +573,8 @@ export function MemoryPanel() {
                       {group.files.map((entry) => {
                         const sub = subPathOf(entry.path);
                         const active = entry.path === selected;
+                        const recent = isRecent(entry.mtime, now);
+                        const ago = relativeTime(entry.mtime, now);
                         return (
                           <button
                             key={entry.path}
@@ -566,12 +588,25 @@ export function MemoryPanel() {
                             )}
                             aria-current={active}
                           >
-                            <FileText
-                              className="mt-0.5 size-4 shrink-0 text-muted-foreground"
-                              aria-hidden="true"
-                            />
+                            {recent ? (
+                              <span
+                                className="mt-1.5 size-2 shrink-0 rounded-full bg-[var(--brand)]"
+                                title="Recently updated"
+                                aria-label="Recently updated"
+                              />
+                            ) : (
+                              <FileText
+                                className="mt-0.5 size-4 shrink-0 text-muted-foreground"
+                                aria-hidden="true"
+                              />
+                            )}
                             <span className="min-w-0 flex-1">
-                              <span className="block truncate text-sm font-medium">
+                              <span
+                                className={cn(
+                                  "block truncate text-sm font-medium",
+                                  recent && "text-[var(--brand)]"
+                                )}
+                              >
                                 {fileNameOf(entry.path)}
                               </span>
                               <span className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -579,6 +614,11 @@ export function MemoryPanel() {
                                 <span className="shrink-0 tabular-nums">
                                   {formatBytes(entry.size)}
                                 </span>
+                                {ago && (
+                                  <span className="shrink-0 tabular-nums">
+                                    · {ago}
+                                  </span>
+                                )}
                               </span>
                             </span>
                           </button>

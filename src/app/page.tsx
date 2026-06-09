@@ -50,6 +50,7 @@ function HomePageInner({
   const [sidebar, setSidebar] = useQueryState("sidebar");
   const [view, setView] = useQueryState("view");
   const [inspector, setInspector] = useQueryState("inspector");
+  const [, setInspectorTab] = useQueryState("inspectorTab");
 
   const [mutateThreads, setMutateThreads] = useState<(() => void) | null>(null);
   const [interruptCount, setInterruptCount] = useState(0);
@@ -133,22 +134,40 @@ function HomePageInner({
   }, [inspector, isDesktopLayout, setInspector, sidebar]);
 
   const closeSidebar = useCallback(() => setSidebar(null), [setSidebar]);
+  const closeInspector = useCallback(() => {
+    setInspector(null);
+    setInspectorTab(null);
+  }, [setInspector, setInspectorTab]);
   const toggleSidebar = useCallback(() => {
     if (sidebar) {
       setSidebar(null);
       return;
     }
-    if (isDesktopLayout === false) setInspector(null);
+    if (isDesktopLayout === false) closeInspector();
     setSidebar("1");
-  }, [isDesktopLayout, setInspector, setSidebar, sidebar]);
+  }, [closeInspector, isDesktopLayout, setSidebar, sidebar]);
   const toggleInspector = useCallback(() => {
     if (inspector) {
-      setInspector(null);
+      closeInspector();
       return;
     }
     if (isDesktopLayout === false) setSidebar(null);
+    setInspectorTab(null);
     setInspector("1");
-  }, [inspector, isDesktopLayout, setInspector, setSidebar]);
+  }, [
+    closeInspector,
+    inspector,
+    isDesktopLayout,
+    setInspector,
+    setInspectorTab,
+    setSidebar,
+  ]);
+  // Open the inspector straight on its Agents tab (composer pulse → board).
+  const showAgentsInspector = useCallback(() => {
+    setInspectorTab("agents");
+    if (isDesktopLayout === false) setSidebar(null);
+    setInspector("1");
+  }, [isDesktopLayout, setInspector, setSidebar, setInspectorTab]);
   const sidebarToggleLabel = view
     ? sidebar
       ? "Hide navigation"
@@ -257,8 +276,8 @@ function HomePageInner({
               variant="ghost"
               size="icon"
               onClick={toggleInspector}
-              aria-label={inspector ? "Hide workspace" : "Show workspace"}
-              title={inspector ? "Hide workspace" : "Show workspace"}
+              aria-label={inspector ? "Hide inspector" : "Show workspace"}
+              title={inspector ? "Hide inspector" : "Show workspace"}
               className="size-8"
             >
               {inspector ? (
@@ -319,15 +338,15 @@ function HomePageInner({
             <div className="absolute inset-0 z-40 flex justify-end md:hidden">
               <button
                 type="button"
-                aria-label="Close workspace"
+                aria-label="Close inspector"
                 className="absolute inset-0 bg-black/40"
-                onClick={() => setInspector(null)}
+                onClick={closeInspector}
               />
               <aside
-                aria-label="Workspace"
+                aria-label="Inspector"
                 className="relative z-10 h-full w-[min(22rem,calc(100vw-2.25rem))] bg-background shadow-xl"
               >
-                <InspectorPanel onClose={() => setInspector(null)} />
+                <InspectorPanel onClose={closeInspector} />
               </aside>
             </div>
           )}
@@ -370,7 +389,10 @@ function HomePageInner({
                   activeAssistant={assistant}
                   onHistoryRevalidate={() => mutateThreads?.()}
                 >
-                  <ChatInterface assistant={assistant} />
+                  <ChatInterface
+                    assistant={assistant}
+                    onShowAgents={showAgentsInspector}
+                  />
                 </ChatProvider>
               )}
             </ResizablePanel>
@@ -385,7 +407,7 @@ function HomePageInner({
                   minSize={20}
                   className="relative min-w-[300px]"
                 >
-                  <InspectorPanel onClose={() => setInspector(null)} />
+                  <InspectorPanel onClose={closeInspector} />
                 </ResizablePanel>
               </>
             )}
