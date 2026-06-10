@@ -12,6 +12,7 @@ import {
   extractSubAgentSteps,
   type SubAgentStep,
 } from "@/lib/subAgentActivity";
+import { parseSummarizationEvent } from "@/lib/summarization";
 
 export type StateType = {
   messages: Message[];
@@ -25,6 +26,10 @@ export type StateType = {
   // Background async sub-agents (writing-agent / data-analysis-agent) this
   // conversation launched, keyed by task_id. Shape = deepagents' AsyncTask.
   async_tasks?: Record<string, unknown>;
+  // Private state field set by the deepagents SummarizationMiddleware when the
+  // conversation is compacted. langgraph dev exposes it over the SDK; the UI
+  // surfaces it as a collapsible "Conversation compacted" block.
+  _summarization_event?: unknown;
   ui?: any;
 };
 
@@ -349,6 +354,9 @@ export function useChat({
     files: stream.values.files ?? {},
     email: stream.values.email,
     asyncTasks: stream.values.async_tasks ?? {},
+    summarizationEvent: parseSummarizationEvent(
+      stream.values._summarization_event
+    ),
     ui: stream.values.ui,
     setFiles,
     messages,
