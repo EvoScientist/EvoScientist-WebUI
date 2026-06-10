@@ -3,13 +3,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowUp,
+  BellRing,
   Bot,
   ChevronDown,
   ChevronRight,
+  CornerUpLeft,
   Loader2,
   RefreshCw,
 } from "lucide-react";
 import { useQueryState } from "nuqs";
+import { toast } from "sonner";
 import { useClient } from "@/providers/ClientProvider";
 import { cn } from "@/lib/utils";
 import { extractStringFromMessageContent } from "@/app/utils/utils";
@@ -17,11 +20,16 @@ import {
   type EnrichedAsyncTask,
   ASYNC_STATUS_META,
   agentLabel,
+  asyncTaskReportKey,
   countRunning,
   formatElapsed,
+  isTerminalStatus,
+  type MainChatReporter,
   normalizeAsyncStatus,
 } from "@/lib/asyncAgents";
 import { useAsyncAgents } from "@/app/hooks/useAsyncAgents";
+import { useAutoNotify } from "@/app/hooks/useAutoNotify";
+import { initializeThreadAutoNotifyReports } from "@/lib/autoNotify";
 import {
   messagesToSubAgentSteps,
   type SubAgentStep,
@@ -85,7 +93,14 @@ function elapsedOf(task: EnrichedAsyncTask, now: number): string {
  * thread). Polling is in {@link useAsyncAgents} and stops when this is unmounted
  * (i.e. the Agents tab is closed).
  */
-export function AgentsPanel() {
+interface AgentsPanelProps {
+  // Submit a message on the main thread (loops an async result back to the main
+  // agent). Returns false if the main chat is mid-run. Null when the chat view
+  // isn't mounted (Skills/Memory) — the "Notify main chat" button then disables.
+  onReportToMainChat?: MainChatReporter | null;
+}
+
+export function AgentsPanel({ onReportToMainChat }: AgentsPanelProps) {
   const client = useClient();
   const [threadId] = useQueryState("threadId");
   const { tasks, loaded, error, refresh } = useAsyncAgents(threadId);
@@ -93,6 +108,13 @@ export function AgentsPanel() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [details, setDetails] = useState<Record<string, TaskDetail>>({});
   const terminalDetailSignaturesRef = useRef(new Map<string, string>());
+  // Which tasks have been reported to the main chat this session (so the button
+  // flips to "Reported" and we don't double-poke the main agent).
+  const [reported, setReported] = useState<Record<string, boolean>>({});
+  // Per-thread "auto-report finished agents to the main chat" toggle. The actual
+  // auto-injection runs in ChatInterface (always mounted on the chat view); here
+  // we just own the switch. Shared reactively via useAutoNotify.
+  const [autoNotify, setAutoNotify] = useAutoNotify(threadId);
   // Hidden power-user feature: a tiny composer per expanded task that sends a
   // message straight to that sub-agent's own thread. Note this is a SIDE channel
   // — the reply lands in the sub-agent's thread (shown here), the main agent
@@ -144,6 +166,46 @@ export function AgentsPanel() {
         setChatBusy((b) => ({ ...b, [task.task_id]: false }));
       }
     }
+  };
+
+  // Loop a finished task's result back to the MAIN agent: inject the exact
+  // "[Async tasks update]" signal block as a user turn on the main thread (via
+  // the registered notify hook). The main agent recognizes it and calls
+  // check_async_task(task_id) to fetch the real result — zero backend change.
+  const reportToMain = (task: EnrichedAsyncTask) => {
+    if (!onReportToMainChat || !threadId) {
+      toast.error("Open the conversation to notify the main agent.");
+      return;
+    }
+    const result = onReportToMainChat(task, threadId);
+    if (result === "sent") {
+      setReported((r) => ({ ...r, [asyncTaskReportKey(task)]: true }));
+      toast.success("Reported to the main chat.");
+      return;
+    }
+    if (result === "duplicate") {
+      setReported((r) => ({ ...r, [asyncTaskReportKey(task)]: true }));
+      toast.info("This result is already in the main chat.");
+      return;
+    }
+    toast.error(
+      result === "wrong-thread"
+        ? "The active conversation changed — reopen this task and try again."
+        : "Main chat is busy — try again when it's idle."
+    );
+  };
+
+  const toggleAutoNotify = () => {
+    if (!threadId) return;
+    if (!autoNotify) {
+      initializeThreadAutoNotifyReports(
+        threadId,
+        tasks
+          .filter((task) => isTerminalStatus(task.liveStatus))
+          .map(asyncTaskReportKey)
+      );
+    }
+    setAutoNotify(!autoNotify);
   };
 
   // Fetch the expanded task's own thread for its steps; re-fetch whenever the
@@ -222,18 +284,47 @@ export function AgentsPanel() {
             ? `${tasks.length} total`
             : "Background agents"}
         </p>
-        <button
-          type="button"
-          onClick={refresh}
-          aria-label="Refresh agents"
-          title="Refresh"
-          className="rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          <RefreshCw
-            className="size-3.5"
-            aria-hidden="true"
-          />
-        </button>
+        <div className="flex items-center gap-1">
+          {/* Auto-report toggle: when on, finished agents loop back to the main
+              chat automatically (no need to click "Notify main chat" each time). */}
+          <button
+            type="button"
+            onClick={toggleAutoNotify}
+            aria-pressed={autoNotify}
+            aria-label={`Auto-report ${autoNotify ? "on" : "off"}`}
+            title={
+              autoNotify
+                ? "Auto-report on: finished agents are sent to the main chat automatically"
+                : "Auto-report off: use each agent's “Notify main chat” button"
+            }
+            className={cn(
+              "inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              autoNotify
+                ? "bg-accent text-[var(--brand)]"
+                : "text-muted-foreground hover:bg-accent hover:text-foreground"
+            )}
+          >
+            <BellRing
+              className="size-3.5"
+              aria-hidden="true"
+            />
+            <span className="hidden min-[340px]:inline">
+              Auto-report {autoNotify ? "On" : "Off"}
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={refresh}
+            aria-label="Refresh agents"
+            title="Refresh"
+            className="rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <RefreshCw
+              className="size-3.5"
+              aria-hidden="true"
+            />
+          </button>
+        </div>
       </div>
 
       {error && (
@@ -348,6 +439,48 @@ export function AgentsPanel() {
                           />
                         )}
                       </div>
+
+                      {/* Loop this finished task's result back to the MAIN agent.
+                          When auto-report is on it's sent automatically, so the
+                          manual button is replaced by a note (avoids a double
+                          inject — auto and manual track dedup separately). */}
+                      {isTerminalStatus(task.liveStatus) && (
+                        <div className="mt-1 border-t border-border pt-2">
+                          {autoNotify ? (
+                            <p className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                              <BellRing
+                                className="size-3.5 text-[var(--brand)]"
+                                aria-hidden="true"
+                              />
+                              Auto-report on · future completions notify the
+                              main chat
+                            </p>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => reportToMain(task)}
+                              disabled={
+                                !onReportToMainChat ||
+                                !!reported[asyncTaskReportKey(task)]
+                              }
+                              title={
+                                onReportToMainChat
+                                  ? "Send this result back to the main agent"
+                                  : "Open the conversation to notify the main agent"
+                              }
+                              className="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-[11px] font-medium text-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              <CornerUpLeft
+                                className="size-3.5 text-[var(--brand)]"
+                                aria-hidden="true"
+                              />
+                              {reported[asyncTaskReportKey(task)]
+                                ? "Reported to main chat"
+                                : "Notify main chat"}
+                            </button>
+                          )}
+                        </div>
+                      )}
 
                       {(() => {
                         const running =

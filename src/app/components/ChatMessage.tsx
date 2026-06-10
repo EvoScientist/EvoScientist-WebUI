@@ -19,7 +19,8 @@ import type {
 } from "@/app/types/types";
 import { Message } from "@langchain/langgraph-sdk";
 import type { SubAgentStep } from "@/lib/subAgentActivity";
-import { Brain, Check, ChevronRight, Copy, Pencil } from "lucide-react";
+import { isAsyncUpdateMessage } from "@/lib/asyncAgents";
+import { Bell, Brain, Check, ChevronRight, Copy, Pencil } from "lucide-react";
 import {
   extractSubAgentContent,
   extractStringFromMessageContent,
@@ -213,6 +214,24 @@ export const ChatMessage = React.memo<ChatMessageProps>(
         [id]: !(prev[id] ?? false),
       }));
     }, []);
+
+    // A "[Async tasks update]" signal we injected (from the Agents board's
+    // "Notify main chat") is a background-completion notice, not something the
+    // user typed — render it as a low-key centered system pill, not a user
+    // bubble. The main agent's response (check_async_task etc.) renders normally.
+    if (isUser && isAsyncUpdateMessage(messageContent)) {
+      return (
+        <div className="flex w-full justify-center py-1.5">
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/40 px-3 py-1 text-xs text-muted-foreground">
+            <Bell
+              className="size-3 text-[var(--brand)]"
+              aria-hidden="true"
+            />
+            Background agent reported back
+          </span>
+        </div>
+      );
+    }
 
     return (
       <div

@@ -55,6 +55,116 @@ export function agentLabel(name: string): string {
   return AGENT_LABELS[name] ?? name;
 }
 
+// ---------------------------------------------------------------------------
+// "Report to main chat" — loop a finished async task back to the main agent.
+// ---------------------------------------------------------------------------
+// The EvoScientist main agent recognizes a synthetic "[Async tasks update]"
+// USER message as a background-completion SIGNAL (not a new request) and responds
+// by calling check_async_task(task_id) to fetch the real result from the
+// sub-agent's own thread. This mirrors the backend's format_batch_message
+// (cli/async_notifier.py): the message carries NO result, only the signal —
+// the agent fetches the result itself. So the WebUI can loop a result back with
+// zero backend change: submit this exact block as a user turn on the MAIN thread.
+
+/** Prefix the main agent's ASYNC_NOTIFICATIONS prompt section keys on. */
+export const ASYNC_UPDATE_MARKER = "[Async tasks update]";
+
+export interface AsyncTaskReportTarget {
+  agent_name: string;
+  task_id: string;
+  run_id?: string;
+  liveStatus?: string;
+  status: string;
+}
+
+export type MainChatReportResult =
+  | "sent"
+  | "busy"
+  | "duplicate"
+  | "wrong-thread";
+
+export type MainChatReporter = (
+  task: AsyncTaskReportTarget,
+  expectedThreadId: string
+) => MainChatReportResult;
+
+interface ParsedAsyncUpdate {
+  taskId: string;
+  runId?: string;
+}
+
+export function asyncTaskReportKey(task: {
+  task_id: string;
+  run_id?: string;
+}): string {
+  return `${task.task_id}:${task.run_id || "legacy"}`;
+}
+
+export function parseAsyncUpdateMessage(
+  text: string
+): ParsedAsyncUpdate | null {
+  const lines = text.trim().split(/\r?\n/);
+  if (lines[0] !== ASYNC_UPDATE_MARKER || !lines[1]) return null;
+  try {
+    const payload = JSON.parse(lines[1]) as {
+      task_id?: unknown;
+      run_id?: unknown;
+    };
+    if (typeof payload.task_id !== "string" || !payload.task_id) return null;
+    return {
+      taskId: payload.task_id,
+      runId:
+        typeof payload.run_id === "string" && payload.run_id
+          ? payload.run_id
+          : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** True if a (human) message is one of our injected async-completion signals —
+ *  used to render it as a system pill instead of a user bubble. */
+export function isAsyncUpdateMessage(text: string): boolean {
+  return parseAsyncUpdateMessage(text) !== null;
+}
+
+export function asyncUpdateMessageKey(text: string): string | null {
+  const parsed = parseAsyncUpdateMessage(text);
+  if (!parsed) return null;
+  return `${parsed.taskId}:${parsed.runId || "legacy"}`;
+}
+
+export function asyncUpdateMatchesTask(
+  text: string,
+  task: { task_id: string; run_id?: string }
+): boolean {
+  const parsed = parseAsyncUpdateMessage(text);
+  if (!parsed || parsed.taskId !== task.task_id) return false;
+  return !parsed.runId || parsed.runId === task.run_id;
+}
+
+/** Build the "[Async tasks update]" signal block for one finished task,
+ *  mirroring the backend's single-task format_batch_message output and adding
+ *  `run_id` for client-side deduplication. `task_id` must match the key the main
+ *  agent tracks in its `async_tasks` state (that's how check_async_task resolves
+ *  it). */
+export function formatAsyncUpdateMessage(task: AsyncTaskReportTarget): string {
+  const status = task.liveStatus || task.status || "success";
+  const line = JSON.stringify({
+    agent: task.agent_name,
+    kind: "agent",
+    ...(task.run_id ? { run_id: task.run_id } : {}),
+    status,
+    task_id: task.task_id,
+  });
+  return [
+    ASYNC_UPDATE_MARKER,
+    line,
+    "(Signal only — fetch full result via check_async_task (sub-agents) if relevant to the current step, else acknowledge & continue.)",
+  ].join("\n");
+}
+
 // Theme dot + label + pulse per status. CSS vars referenced via arbitrary-value
 // classes (the base's semantic bg tokens are dead in this fork — see CLAUDE.md).
 // NOTE: never put a bracketed class literal in a comment (Tailwind scans those).

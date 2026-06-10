@@ -31,6 +31,7 @@ import { BetaBadge } from "@/app/components/BetaBadge";
 import { HealthIndicator } from "@/app/components/HealthIndicator";
 import { InspectorPanel } from "@/app/components/InspectorPanel";
 import { setThreadAutoApprove } from "@/lib/autoApprove";
+import type { MainChatReporter } from "@/lib/asyncAgents";
 
 interface HomePageInnerProps {
   config: DeploymentConfig;
@@ -57,6 +58,12 @@ function HomePageInner({
   const [assistant, setAssistant] = useState<Assistant | null>(null);
   const [isDesktopLayout, setIsDesktopLayout] = useState<boolean | null>(null);
   const [chatSessionRevision, setChatSessionRevision] = useState(0);
+  // "Submit a message on the main thread" — registered by ChatInterface (only
+  // while it's mounted, i.e. on the chat view), used by the Agents board to loop
+  // an async result back to the main agent. Null when not on the chat view.
+  const [notifyMainChat, setNotifyMainChat] = useState<MainChatReporter | null>(
+    null
+  );
 
   const fetchAssistant = useCallback(async () => {
     const isUUID =
@@ -346,7 +353,10 @@ function HomePageInner({
                 aria-label="Inspector"
                 className="relative z-10 h-full w-[min(22rem,calc(100vw-2.25rem))] bg-background shadow-xl"
               >
-                <InspectorPanel onClose={closeInspector} />
+                <InspectorPanel
+                  onClose={closeInspector}
+                  onReportToMainChat={notifyMainChat}
+                />
               </aside>
             </div>
           )}
@@ -392,6 +402,7 @@ function HomePageInner({
                   <ChatInterface
                     assistant={assistant}
                     onShowAgents={showAgentsInspector}
+                    onNotifyReady={(fn) => setNotifyMainChat(() => fn)}
                   />
                 </ChatProvider>
               )}
@@ -407,7 +418,10 @@ function HomePageInner({
                   minSize={20}
                   className="relative min-w-[300px]"
                 >
-                  <InspectorPanel onClose={closeInspector} />
+                  <InspectorPanel
+                    onClose={closeInspector}
+                    onReportToMainChat={notifyMainChat}
+                  />
                 </ResizablePanel>
               </>
             )}

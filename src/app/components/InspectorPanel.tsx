@@ -6,9 +6,13 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { WorkspacePanel } from "@/app/components/WorkspacePanel";
 import { AgentsPanel } from "@/app/components/AgentsPanel";
+import type { MainChatReporter } from "@/lib/asyncAgents";
 
 interface InspectorPanelProps {
   onClose: () => void;
+  // Loop a finished async agent's result back to the main chat (Agents tab).
+  // Null when the chat view isn't mounted (e.g. viewing Skills/Memory).
+  onReportToMainChat?: MainChatReporter | null;
 }
 
 type InspectorTab = "workspace" | "agents";
@@ -21,7 +25,10 @@ type InspectorTab = "workspace" | "agents";
  * The active tab is mirrored to the `inspectorTab` URL param so the composer's
  * "agents running" indicator can deep-link straight to the Agents tab.
  */
-export function InspectorPanel({ onClose }: InspectorPanelProps) {
+export function InspectorPanel({
+  onClose,
+  onReportToMainChat,
+}: InspectorPanelProps) {
   const [tabParam, setTab] = useQueryState("inspectorTab");
   const tab: InspectorTab = tabParam === "agents" ? "agents" : "workspace";
 
@@ -86,7 +93,7 @@ export function InspectorPanel({ onClose }: InspectorPanelProps) {
       </div>
       {tab === "agents" ? (
         <div className="min-h-0 flex-1 overflow-hidden p-3">
-          <AgentsPanel />
+          <AgentsPanel onReportToMainChat={onReportToMainChat} />
         </div>
       ) : (
         <div className="min-h-0 flex-1 overflow-y-auto p-3">

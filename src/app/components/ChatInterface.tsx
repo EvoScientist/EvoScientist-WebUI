@@ -45,8 +45,24 @@ import {
   setThreadAutoApprove,
   migrateNewThreadAutoApprove,
 } from "@/lib/autoApprove";
-import { countRunning } from "@/lib/asyncAgents";
+import {
+  agentLabel,
+  asyncTaskReportKey,
+  asyncUpdateMatchesTask,
+  asyncUpdateMessageKey,
+  countRunning,
+  formatAsyncUpdateMessage,
+  isTerminalStatus,
+  type MainChatReporter,
+} from "@/lib/asyncAgents";
 import { useAsyncAgents } from "@/app/hooks/useAsyncAgents";
+import { useAutoNotify } from "@/app/hooks/useAutoNotify";
+import {
+  getThreadAutoNotifyReportedKeys,
+  initializeThreadAutoNotifyReports,
+  isThreadAutoNotifyInitialized,
+  markThreadAutoNotifyReported,
+} from "@/lib/autoNotify";
 import { lastTextOf, type SubAgentStep } from "@/lib/subAgentActivity";
 import { useStickToBottom } from "use-stick-to-bottom";
 import { FilesPopover } from "@/app/components/TasksFilesSidebar";
@@ -66,6 +82,10 @@ interface ChatInterfaceProps {
   assistant: Assistant | null;
   // Open the right inspector on its Agents tab (composer "agents running" pulse).
   onShowAgents?: () => void;
+  // Register a "submit a message on THIS (main) thread" function up to page so
+  // the Agents board can loop an async result back to the main agent. Returns
+  // false if the main chat is mid-run (can't take a turn). Cleared on unmount.
+  onNotifyReady?: (notify: MainChatReporter | null) => void;
 }
 
 const SUGGESTED_PROMPTS = [
@@ -160,7 +180,7 @@ const getStatusIcon = (status: TodoItem["status"], className?: string) => {
 };
 
 export const ChatInterface = React.memo<ChatInterfaceProps>(
-  ({ assistant, onShowAgents }) => {
+  ({ assistant, onShowAgents, onNotifyReady }) => {
     const [metaOpen, setMetaOpen] = useState<
       "tasks" | "files" | "workspace" | null
     >(null);
@@ -218,6 +238,85 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       [liveAgentTasks]
     );
 
+    // Auto-report: when on for this thread, a sub-agent that FINISHES while we're
+    // watching is looped back to the main agent automatically (same signal as the
+    // manual "Notify main chat" button — rendered as a system pill). We baseline
+    // tasks already terminal at mount / when the toggle is switched on so we never
+    // replay old completions, and only inject while the main chat is idle (one at
+    // a time; isLoading gates the rest until the agent finishes the turn).
+    const [autoNotify] = useAutoNotify(threadId);
+    // Latch covering the gap between submitting an auto-report and `isLoading`
+    // flipping true — without it a poll in that window could fire a SECOND report
+    // and collide on the main thread. Cleared once the run is confirmed running.
+    const autoFireInFlightRef = useRef(false);
+
+    useEffect(() => {
+      autoFireInFlightRef.current = false;
+    }, [threadId]);
+
+    // Once a run is actually in flight (isLoading true — from a user message, the
+    // agent's own turn, or our auto-report), release the latch: the isLoading gate
+    // now governs, and the next queued report fires when the thread next goes idle.
+    useEffect(() => {
+      if (isLoading) autoFireInFlightRef.current = false;
+    }, [isLoading]);
+
+    useEffect(() => {
+      if (!liveAgentTasks || liveAgentTasks.length === 0) return;
+      if (!threadId || !autoNotify) return;
+      // One-time migration/baseline: existing terminal tasks predate the setting
+      // and must not replay when this feature first appears or is restored.
+      if (!isThreadAutoNotifyInitialized(threadId)) {
+        initializeThreadAutoNotifyReports(
+          threadId,
+          liveAgentTasks
+            .filter((task) => isTerminalStatus(task.liveStatus))
+            .map(asyncTaskReportKey)
+        );
+        return;
+      }
+      // Don't fire when: off; the thread is busy (the agent's own turn takes the
+      // slot); a report we just sent hasn't started yet; or the USER is composing
+      // a query (draft text) — their message has priority, so we hold the queue
+      // until the composer is clear. Pending completions stay unreported (= the
+      // queue) and drain one per idle window.
+      if (isLoading || autoFireInFlightRef.current || input.trim()) return;
+      const reportedKeys = getThreadAutoNotifyReportedKeys(threadId);
+      for (const t of liveAgentTasks) {
+        if (!isTerminalStatus(t.liveStatus)) continue;
+        const key = asyncTaskReportKey(t);
+        if (reportedKeys.has(key)) continue;
+        if (
+          messages.some(
+            (message) =>
+              message.type === "human" &&
+              asyncUpdateMatchesTask(
+                extractStringFromMessageContent(message),
+                t
+              )
+          )
+        ) {
+          markThreadAutoNotifyReported(threadId, key);
+          continue;
+        }
+        autoFireInFlightRef.current = true;
+        markThreadAutoNotifyReported(threadId, key);
+        sendMessage(formatAsyncUpdateMessage(t));
+        toast.success(
+          `Auto-reported ${agentLabel(t.agent_name)} to the main chat.`
+        );
+        break; // one per idle window; the rest fire once this turn settles
+      }
+    }, [
+      liveAgentTasks,
+      autoNotify,
+      isLoading,
+      input,
+      messages,
+      sendMessage,
+      threadId,
+    ]);
+
     // Re-engage stick-to-bottom whenever a new run starts (sending a message or
     // resuming an interrupt → isLoading flips true). Without this, if the user had
     // drifted even slightly off the bottom after the previous answer, a short new
@@ -225,6 +324,47 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     useEffect(() => {
       if (isLoading) void scrollToBottom();
     }, [isLoading, scrollToBottom]);
+
+    // Register a "notify the main agent" hook up to page (Agents board → "Notify
+    // main chat" loops an async result back here). A ref keeps the latest
+    // sendMessage/isLoading so the once-registered closure always reads current
+    // values. Returns false if a run is in flight (the agent can't take a turn).
+    const notifyStateRef = useRef({
+      sendMessage,
+      isLoading,
+      messages,
+      threadId,
+    });
+    notifyStateRef.current = { sendMessage, isLoading, messages, threadId };
+    const onNotifyReadyRef = useRef(onNotifyReady);
+    onNotifyReadyRef.current = onNotifyReady;
+    useEffect(() => {
+      const notify: MainChatReporter = (task, expectedThreadId) => {
+        const current = notifyStateRef.current;
+        if (current.threadId !== expectedThreadId) return "wrong-thread";
+        if (current.isLoading) return "busy";
+        if (
+          current.messages.some(
+            (message) =>
+              message.type === "human" &&
+              asyncUpdateMatchesTask(
+                extractStringFromMessageContent(message),
+                task
+              )
+          )
+        ) {
+          return "duplicate";
+        }
+        markThreadAutoNotifyReported(
+          expectedThreadId,
+          asyncTaskReportKey(task)
+        );
+        current.sendMessage(formatAsyncUpdateMessage(task));
+        return "sent";
+      };
+      onNotifyReadyRef.current?.(notify);
+      return () => onNotifyReadyRef.current?.(null);
+    }, []);
 
     // The model behind the latest assistant reply (read from message metadata).
     // Token/context usage is intentionally NOT shown — the backend doesn't persist
@@ -515,10 +655,19 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       // Keep them OUT of the main flow — they render under each sub-agent block's
       // "Steps" instead. (streamMetadata is live-only; once complete these messages
       // aren't in thread state anyway.)
+      const seenAsyncUpdates = new Set<string>();
       const visibleMessages = messages.filter((message: Message) => {
         const meta = stream.getMessagesMetadata(message)?.streamMetadata;
         const ns = meta?.["langgraph_checkpoint_ns"];
-        return !(typeof ns === "string" && ns.includes("|"));
+        if (typeof ns === "string" && ns.includes("|")) return false;
+        if (message.type !== "human") return true;
+        const key = asyncUpdateMessageKey(
+          extractStringFromMessageContent(message)
+        );
+        if (!key) return true;
+        if (seenAsyncUpdates.has(key)) return false;
+        seenAsyncUpdates.add(key);
+        return true;
       });
       visibleMessages.forEach((message: Message) => {
         if (message.type === "ai") {
