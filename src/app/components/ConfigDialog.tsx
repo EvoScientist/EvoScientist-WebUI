@@ -84,9 +84,10 @@ export function ConfigDialog({
         <DialogHeader>
           <DialogTitle>Configuration</DialogTitle>
           <DialogDescription>
-            Enter the URL of your EvoScientist deployment (from{" "}
-            <code>EvoSci deploy</code>). This is saved in your browser&apos;s
-            local storage.
+            The URL of your EvoScientist deployment. By default this is your
+            local deployment (detected automatically) — or a public URL from{" "}
+            <code>EvoSci deploy</code>. Saved in your browser&apos;s local
+            storage.
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4 py-4">

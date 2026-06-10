@@ -27,7 +27,6 @@ import { ChatInterface } from "@/app/components/ChatInterface";
 import { SkillsMarketplace } from "@/app/components/SkillsMarketplace";
 import { MemoryPanel } from "@/app/components/MemoryPanel";
 import { ThemeToggle } from "@/app/components/ThemeToggle";
-import { BetaBadge } from "@/app/components/BetaBadge";
 import { HealthIndicator } from "@/app/components/HealthIndicator";
 import { InspectorPanel } from "@/app/components/InspectorPanel";
 import { setThreadAutoApprove } from "@/lib/autoApprove";
@@ -222,12 +221,9 @@ function HomePageInner({
                   titles the panel). When collapsed, keep just the logo + the
                   toggle / new-chat icons for a compact header. */}
               {sidebar && (
-                <>
-                  <h1 className="truncate text-base font-semibold sm:text-lg">
-                    EvoScientist
-                  </h1>
-                  <BetaBadge />
-                </>
+                <h1 className="truncate text-base font-semibold sm:text-lg">
+                  EvoScientist
+                </h1>
               )}
             </div>
             <div className="flex items-center gap-0.5">
