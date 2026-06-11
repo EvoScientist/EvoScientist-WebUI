@@ -32,6 +32,7 @@
   "engines": {
     "node": ">=20"
   },
+  "packageManager": "npm@11.16.0",
   "publishConfig": {
     "access": "public"
   },
