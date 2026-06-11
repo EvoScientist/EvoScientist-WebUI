@@ -1,80 +1,23 @@
 "use client";
 
-import React, { useCallback, useState } from "react";
+import React from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
-import { Check, Copy } from "lucide-react";
-import { toast } from "sonner";
+import rehypeRaw from "rehype-raw";
+import rehypeSanitize from "rehype-sanitize";
 import { cn } from "@/lib/utils";
-import { copyText } from "@/lib/clipboard";
+import { CodeBlock } from "./CodeBlock";
+import { MermaidDiagram } from "./MermaidDiagram";
 
 interface MarkdownContentProps {
   content: string;
   className?: string;
+  /** When true, defer expensive renders (e.g. mermaid) until streaming ends. */
+  isStreaming?: boolean;
 }
-
-interface CodeBlockProps {
-  language: string;
-  value: string;
-}
-
-const CodeBlock = React.memo<CodeBlockProps>(({ language, value }) => {
-  const [copied, setCopied] = useState(false);
-  const handleCopy = useCallback(async () => {
-    if (await copyText(value)) {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } else {
-      toast.error("Couldn't copy to clipboard.");
-    }
-  }, [value]);
-
-  return (
-    <div className="group relative max-w-full">
-      <button
-        type="button"
-        onClick={handleCopy}
-        aria-label={copied ? "Copied" : "Copy code"}
-        className="absolute right-2 top-2 z-10 rounded-md border border-border bg-surface/80 p-1.5 text-[var(--color-text-tertiary)] opacity-0 backdrop-blur-sm transition-opacity hover:text-[var(--color-text-primary)] focus-visible:opacity-100 group-hover:opacity-100"
-      >
-        {copied ? (
-          <Check className="h-3.5 w-3.5" />
-        ) : (
-          <Copy className="h-3.5 w-3.5" />
-        )}
-      </button>
-      <SyntaxHighlighter
-        style={oneDark}
-        language={language}
-        PreTag="div"
-        className="max-w-full rounded-md text-sm"
-        wrapLines={true}
-        wrapLongLines={true}
-        lineProps={{
-          style: {
-            wordBreak: "break-all",
-            whiteSpace: "pre-wrap",
-            overflowWrap: "break-word",
-          },
-        }}
-        customStyle={{
-          margin: 0,
-          maxWidth: "100%",
-          overflowX: "auto",
-          fontSize: "0.875rem",
-        }}
-      >
-        {value}
-      </SyntaxHighlighter>
-    </div>
-  );
-});
-CodeBlock.displayName = "CodeBlock";
 
 export const MarkdownContent = React.memo<MarkdownContentProps>(
-  ({ content, className = "" }) => {
+  ({ content, className = "", isStreaming = false }) => {
     return (
       <div
         className={cn(
@@ -84,6 +27,7 @@ export const MarkdownContent = React.memo<MarkdownContentProps>(
       >
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
+          rehypePlugins={[rehypeRaw, rehypeSanitize]}
           components={{
             code({
               inline,
@@ -96,11 +40,12 @@ export const MarkdownContent = React.memo<MarkdownContentProps>(
               children?: React.ReactNode;
             }) {
               const match = /language-(\w+)/.exec(className || "");
+              const code = String(children).replace(/\n$/, "");
+              if (!inline && match?.[1] === "mermaid") {
+                return <MermaidDiagram code={code} isStreaming={isStreaming} />;
+              }
               return !inline && match ? (
-                <CodeBlock
-                  language={match[1]}
-                  value={String(children).replace(/\n$/, "")}
-                />
+                <CodeBlock language={match[1]} value={code} />
               ) : (
                 <code
                   className="bg-surface rounded-sm px-1 py-0.5 font-mono text-[0.9em]"
@@ -144,16 +89,36 @@ export const MarkdownContent = React.memo<MarkdownContentProps>(
             },
             ul({ children }: { children?: React.ReactNode }) {
               return (
-                <ul className="my-4 pl-6 [&>li:last-child]:mb-0 [&>li]:mb-1">
+                <ul className="my-4 list-disc pl-6 [&>li:last-child]:mb-0 [&>li]:mb-1">
                   {children}
                 </ul>
               );
             },
             ol({ children }: { children?: React.ReactNode }) {
               return (
-                <ol className="my-4 pl-6 [&>li:last-child]:mb-0 [&>li]:mb-1">
+                <ol className="my-4 list-decimal pl-6 [&>li:last-child]:mb-0 [&>li]:mb-1">
                   {children}
                 </ol>
+              );
+            },
+            details({ children, ...props }: React.HTMLAttributes<HTMLElement>) {
+              return (
+                <details
+                  {...props}
+                  className="my-4 rounded-md border border-border bg-surface/50 px-3 py-2 [&[open]>summary]:mb-2"
+                >
+                  {children}
+                </details>
+              );
+            },
+            summary({ children, ...props }: React.HTMLAttributes<HTMLElement>) {
+              return (
+                <summary
+                  {...props}
+                  className="cursor-pointer select-none font-medium text-[var(--color-text-primary)] hover:text-[var(--color-text-secondary)]"
+                >
+                  {children}
+                </summary>
               );
             },
             table({ children }: { children?: React.ReactNode }) {
