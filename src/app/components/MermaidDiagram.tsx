@@ -2,6 +2,11 @@
 
 import React, { useEffect, useId, useState } from "react";
 import { CodeBlock } from "./CodeBlock";
+import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 interface MermaidDiagramProps {
   code: string;
@@ -88,12 +93,39 @@ export const MermaidDiagram = React.memo<MermaidDiagramProps>(
     if (!svg) {
       return <CodeBlock language="mermaid" value={code} />;
     }
-    return (
-      <div
-        className="my-4 max-w-full overflow-x-auto rounded-md bg-surface p-4"
-        dangerouslySetInnerHTML={{ __html: svg }}
-      />
-    );
+    return <MermaidPreview svg={svg} />;
   }
 );
 MermaidDiagram.displayName = "MermaidDiagram";
+
+const MermaidPreview = React.memo<{ svg: string }>(({ svg }) => {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <div
+        role="button"
+        tabIndex={0}
+        aria-label="Open diagram in full view"
+        onClick={() => setOpen(true)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            setOpen(true);
+          }
+        }}
+        className="my-4 max-w-full cursor-zoom-in overflow-x-auto rounded-md bg-surface p-4 transition-shadow hover:ring-2 hover:ring-primary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+        dangerouslySetInnerHTML={{ __html: svg }}
+      />
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-h-[90vh] max-w-[90vw] overflow-auto p-6 sm:max-w-[90vw]">
+          <DialogTitle className="sr-only">Mermaid diagram</DialogTitle>
+          <div
+            className="[&_svg]:h-auto [&_svg]:max-w-none"
+            dangerouslySetInnerHTML={{ __html: svg }}
+          />
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+});
+MermaidPreview.displayName = "MermaidPreview";
