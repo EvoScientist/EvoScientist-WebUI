@@ -10,6 +10,18 @@ import {
 
 const DEFAULT_INTERVAL_MS = 3_000;
 
+/** The SDK throws HTTPError with a numeric `status` on non-2xx responses.
+ *  404 on runs.get means the task's thread/run no longer exists — the backend
+ *  restores only main-graph threads across restarts, so sub-agent threads
+ *  vanish while the conversation's async_tasks entries survive. */
+function isNotFoundError(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    (err as { status?: unknown }).status === 404
+  );
+}
+
 interface UseAsyncAgentsResult {
   tasks: EnrichedAsyncTask[];
   loaded: boolean;
@@ -41,6 +53,15 @@ export function useAsyncAgents(
   // Monotonic id so a slow poll can't overwrite a newer one (e.g. thread switch).
   const reqRef = useRef(0);
   const mountedRef = useRef(true);
+  // Runs that already 404'd. A 404 is permanent for a given thread/run (run
+  // registries are wiped on backend restart and never rebuilt), so remember
+  // them and skip re-polling — no point hitting the backend with a 404 per
+  // expired task every refresh cycle. Reset on thread/backend switch so a
+  // different deployment gets probed fresh.
+  const expiredRunsRef = useRef(new Set<string>());
+  useEffect(() => {
+    expiredRunsRef.current.clear();
+  }, [client, threadId]);
 
   const refresh = useCallback(async () => {
     if (!enabled || !threadId) {
@@ -60,6 +81,15 @@ export function useAsyncAgents(
           if (!t.run_id) {
             return { ...t, liveStatus: t.status, startedAt: t.created_at };
           }
+          const runKey = `${t.thread_id}:${t.run_id}`;
+          if (expiredRunsRef.current.has(runKey)) {
+            return {
+              ...t,
+              liveStatus: "expired",
+              startedAt: t.created_at,
+              endedAt: t.last_updated_at ?? t.created_at,
+            };
+          }
           try {
             const run = (await client.runs.get(t.thread_id, t.run_id)) as {
               status?: string;
@@ -75,8 +105,22 @@ export function useAsyncAgents(
                 ? run.updated_at ?? t.last_updated_at
                 : undefined,
             };
-          } catch {
-            // Run may have been GC'd — fall back to the cached state status.
+          } catch (err) {
+            if (isNotFoundError(err)) {
+              // The run is provably gone. The cached state status would say
+              // "running" forever (it only refreshes when the main agent calls
+              // check_async_task) — surface "expired" instead: gray dot, no
+              // ticking timer, excluded from auto-report.
+              expiredRunsRef.current.add(runKey);
+              return {
+                ...t,
+                liveStatus: "expired",
+                startedAt: t.created_at,
+                endedAt: t.last_updated_at ?? t.created_at,
+              };
+            }
+            // Transient failure (network blip, backend briefly down) — fall
+            // back to the cached state status.
             return { ...t, liveStatus: t.status, startedAt: t.created_at };
           }
         })

@@ -24,9 +24,13 @@ export type AsyncAgentStatus =
   | "success"
   | "error"
   | "cancelled"
+  | "expired"
   | "unknown";
 
-/** Collapse the various SDK run statuses into the 5 we render. */
+/** Collapse the various SDK run statuses into the 6 we render. "expired" is
+ *  never sent by the backend — useAsyncAgents synthesizes it when the task's
+ *  thread/run no longer exists (sub-agent threads aren't restored across
+ *  backend restarts; only main-graph threads are). */
 export function normalizeAsyncStatus(s: string | undefined): AsyncAgentStatus {
   switch (s) {
     case "running":
@@ -41,6 +45,8 @@ export function normalizeAsyncStatus(s: string | undefined): AsyncAgentStatus {
     case "cancelled":
     case "interrupted":
       return "cancelled";
+    case "expired":
+      return "expired";
     default:
       return "unknown";
   }
@@ -180,6 +186,7 @@ export const ASYNC_STATUS_META: Record<
     label: "Cancelled",
     pulse: false,
   },
+  expired: { dot: "bg-muted-foreground", label: "Expired", pulse: false },
   unknown: { dot: "bg-muted-foreground", label: "Unknown", pulse: false },
 };
 
@@ -219,6 +226,9 @@ export interface EnrichedAsyncTask extends AsyncTaskItem {
   endedAt?: string;
 }
 
+/** "expired" is deliberately NOT terminal: the sub-agent's thread is gone, so
+ *  reporting it to the main agent would only make check_async_task fail — the
+ *  auto-report loop and the "Notify main chat" button both key off this. */
 export function isTerminalStatus(s: string | undefined): boolean {
   const n = normalizeAsyncStatus(s);
   return n === "success" || n === "error" || n === "cancelled";

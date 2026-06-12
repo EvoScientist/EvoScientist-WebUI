@@ -81,7 +81,11 @@ function StatusDot({ status }: { status: string }) {
 }
 
 function elapsedOf(task: EnrichedAsyncTask, now: number): string {
-  const running = normalizeAsyncStatus(task.liveStatus) === "running";
+  const status = normalizeAsyncStatus(task.liveStatus);
+  // Expired tasks have no reliable end time (their run is gone) — show none
+  // rather than a ticking or made-up duration.
+  if (status === "expired") return "";
+  const running = status === "running";
   const end = running ? now : task.endedAt ? Date.parse(task.endedAt) : now;
   return formatElapsed(task.startedAt ?? task.created_at, end);
 }
@@ -149,17 +153,40 @@ export function AgentsPanel({ onReportToMainChat }: AgentsPanelProps) {
         input: { messages: [{ type: "human", content: text }] },
       })) as { messages?: unknown[] } | null;
       if (!mountedRef.current) return;
+      const messages = Array.isArray(values?.messages) ? values.messages : [];
+      if (messages.length === 0) {
+        // The run came back without a transcript (server-side error path) —
+        // keep the existing steps and the draft instead of overwriting the
+        // detail with an empty "Steps (0)" (which would stick: terminal tasks
+        // are signature-deduped and never re-fetched).
+        setChatError((e) => ({
+          ...e,
+          [task.task_id]:
+            "The agent didn't return a reply — it may have hit an error.",
+        }));
+        return;
+      }
       setChatInput((i) => ({ ...i, [task.task_id]: "" }));
-      const { prompt, steps } = buildDetail(values?.messages ?? []);
+      const { prompt, steps } = buildDetail(messages);
       setDetails((prev) => ({
         ...prev,
         [task.task_id]: { loading: false, error: null, prompt, steps },
       }));
-    } catch {
+    } catch (err) {
       if (!mountedRef.current) return;
+      // The SDK raises run errors as plain Errors ("<error>: <message>") and
+      // transport problems as HTTPError (numeric status) / TypeError (fetch) —
+      // tell the user which side failed.
+      const transport =
+        err instanceof TypeError ||
+        (typeof err === "object" &&
+          err !== null &&
+          typeof (err as { status?: unknown }).status === "number");
       setChatError((e) => ({
         ...e,
-        [task.task_id]: "Couldn't reach this agent — try again.",
+        [task.task_id]: transport
+          ? "Couldn't reach this agent — try again."
+          : "The agent hit an error processing this follow-up.",
       }));
     } finally {
       if (mountedRef.current) {
@@ -214,6 +241,9 @@ export function AgentsPanel({ onReportToMainChat }: AgentsPanelProps) {
     if (!expandedId) return;
     const task = tasks.find((t) => t.task_id === expandedId);
     if (!task) return;
+    // Expired = the task's thread is gone; getState would just 404 on every
+    // poll. The expanded card renders an explanatory note instead.
+    if (normalizeAsyncStatus(task.liveStatus) === "expired") return;
     const running = normalizeAsyncStatus(task.liveStatus) === "running";
     const terminalSignature = [
       task.run_id,
@@ -359,8 +389,10 @@ export function AgentsPanel({ onReportToMainChat }: AgentsPanelProps) {
 
       <div className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto">
         {tasks.map((task) => {
-          const meta = ASYNC_STATUS_META[normalizeAsyncStatus(task.liveStatus)];
+          const status = normalizeAsyncStatus(task.liveStatus);
+          const meta = ASYNC_STATUS_META[status];
           const expanded = expandedId === task.task_id;
+          const expired = status === "expired";
           const detail = details[task.task_id];
           return (
             <div
@@ -397,7 +429,17 @@ export function AgentsPanel({ onReportToMainChat }: AgentsPanelProps) {
                 </span>
               </button>
 
-              {expanded && (
+              {expanded && expired && (
+                <div className="border-t border-border px-2.5 py-2 text-xs">
+                  <p className="text-muted-foreground">
+                    This task ran before a backend restart and its records are
+                    gone, so its steps and result can no longer be loaded. Any
+                    files it produced are still in the workspace.
+                  </p>
+                </div>
+              )}
+
+              {expanded && !expired && (
                 <div className="border-t border-border px-2.5 py-2 text-xs">
                   {detail?.loading && (
                     <div className="flex items-center gap-2 text-muted-foreground">
