@@ -102,6 +102,23 @@ interface UploadedWorkspaceFile {
   size: number;
 }
 
+function parseToolArgs(rawArgs: unknown): Record<string, unknown> {
+  if (rawArgs && typeof rawArgs === "object") {
+    return rawArgs as Record<string, unknown>;
+  }
+  if (typeof rawArgs !== "string") {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(rawArgs);
+    return parsed && typeof parsed === "object"
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
 function getMessageToolCalls(message: Message): Array<{
   id?: string;
   name: string;
@@ -147,10 +164,7 @@ function getMessageToolCalls(message: Message): Array<{
     return {
       id: toolCall.id,
       name: toolCall.function?.name || toolCall.name || toolCall.type || "",
-      args:
-        rawArgs && typeof rawArgs === "object"
-          ? (rawArgs as Record<string, unknown>)
-          : {},
+      args: parseToolArgs(rawArgs),
     };
   });
 }
@@ -641,6 +655,18 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       resumeInterrupt({ status: "cancelled" });
     }, [resumeInterrupt]);
 
+    // Ordered list of pending tool-approval requests from the interrupt. We hand
+    // ChatMessage the ORDER (not a name-keyed map) so two calls to the same tool
+    // in one turn (e.g. two `execute`) each bind to their OWN request/args instead
+    // of both collapsing onto the last one. `Array.isArray` guards a malformed
+    // payload — a non-array `action_requests` here would otherwise throw and blank
+    // the whole page.
+    const actionRequests: ActionRequest[] = useMemo(() => {
+      const raw =
+        interrupt?.value && (interrupt.value as any)["action_requests"];
+      return Array.isArray(raw) ? (raw as ActionRequest[]) : [];
+    }, [interrupt]);
+
     // TODO: can we make this part of the hook?
     const processedMessages = useMemo(() => {
       /*
@@ -679,6 +705,19 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         seenAsyncUpdates.add(key);
         return true;
       });
+      const completedToolCallIds = new Set<string>();
+      for (const message of visibleMessages) {
+        if (message.type !== "tool") continue;
+        const toolCallId = message.tool_call_id;
+        if (toolCallId) completedToolCallIds.add(toolCallId);
+      }
+      const pendingActionCounts = new Map<string, number>();
+      for (const ar of actionRequests) {
+        pendingActionCounts.set(
+          ar.name,
+          (pendingActionCounts.get(ar.name) ?? 0) + 1
+        );
+      }
       visibleMessages.forEach((message: Message) => {
         if (message.type === "ai") {
           const toolCallsWithStatus = getMessageToolCalls(message)
@@ -695,16 +734,25 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
             )
             .map((toolCall, toolCallIndex) => {
               const name = toolCall.name || "unknown";
+              const id =
+                toolCall.id ||
+                `${message.id ?? "ai-message"}-tool-${toolCallIndex}-${name}`;
+              const pendingCount = pendingActionCounts.get(name) ?? 0;
+              const hasPendingAction =
+                pendingCount > 0 && !completedToolCallIds.has(id);
+              if (hasPendingAction) {
+                pendingActionCounts.set(name, pendingCount - 1);
+              }
               return {
-                id:
-                  toolCall.id ||
-                  `${message.id ?? "ai-message"}-tool-${toolCallIndex}-${name}`,
+                id,
                 name,
                 args: toolCall.args,
                 // The selector call only survives the filter above while the run is
                 // actively selecting (!interrupt), so this resolves to a spinner for
                 // it without a special case.
-                status: interrupt ? "interrupted" : ("pending" as const),
+                status: hasPendingAction
+                  ? "interrupted"
+                  : ("pending" as const),
               } as ToolCall;
             });
           messageMap.set(message.id!, {
@@ -746,7 +794,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
           showAvatar: data.message.type !== prevMessage?.type,
         };
       });
-    }, [messages, interrupt, isLoading, stream]);
+    }, [messages, actionRequests, interrupt, isLoading, stream]);
 
     // Where to anchor the "Conversation compacted" block. The event's
     // cutoffIndex points into the raw `messages` array (messages[0:cutoff] were
@@ -776,17 +824,6 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     const hasTasks = todos.length > 0;
     const hasFiles = Object.keys(files).length > 0;
 
-    // Ordered list of pending tool-approval requests from the interrupt. We hand
-    // ChatMessage the ORDER (not a name-keyed map) so two calls to the same tool
-    // in one turn (e.g. two `execute`) each bind to their OWN request/args instead
-    // of both collapsing onto the last one. `Array.isArray` guards a malformed
-    // payload — a non-array `action_requests` here would otherwise throw and blank
-    // the whole page.
-    const actionRequests: ActionRequest[] = useMemo(() => {
-      const raw =
-        interrupt?.value && (interrupt.value as any)["action_requests"];
-      return Array.isArray(raw) ? (raw as ActionRequest[]) : [];
-    }, [interrupt]);
     const [submittedActionRequestKeys, setSubmittedActionRequestKeys] =
       useState<Set<string>>(() => new Set());
     useEffect(() => {
