@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useStream } from "@langchain/langgraph-sdk/react";
 import { type Message, type Assistant } from "@langchain/langgraph-sdk";
 import { v4 as uuidv4 } from "uuid";
@@ -101,6 +101,30 @@ function interruptValueKey(i: unknown): string | null {
   }
 }
 
+function hasActionableInterrupt(i: unknown): boolean {
+  if (!i || typeof i !== "object") return false;
+  const value = (i as { value?: unknown }).value;
+  if (!value || typeof value !== "object") return false;
+  const v = value as { type?: unknown; action_requests?: unknown };
+  return (
+    v.type === "ask_user" ||
+    (Array.isArray(v.action_requests) && v.action_requests.length > 0)
+  );
+}
+
+function latestTaskInterrupt(
+  tasks: Array<{ interrupts?: unknown[] }> | undefined
+): unknown {
+  if (!Array.isArray(tasks)) return undefined;
+  for (let i = tasks.length - 1; i >= 0; i--) {
+    const interrupts = tasks[i]?.interrupts;
+    if (Array.isArray(interrupts) && interrupts.length > 0) {
+      return interrupts[interrupts.length - 1];
+    }
+  }
+  return undefined;
+}
+
 export function useChat({
   activeAssistant,
   onHistoryRevalidate,
@@ -177,10 +201,19 @@ export function useChat({
   const [fetchedMessages, setFetchedMessages] = useState<Message[] | null>(
     null
   );
+  const [fetchedThreadId, setFetchedThreadId] = useState<string | null>(null);
+  const recoveryRunRef = useRef(0);
   useEffect(() => {
     if (!threadId) {
       setFetchedInterrupt(undefined);
       setFetchedMessages(null);
+      setFetchedThreadId(null);
+      setResolvedInterruptKey(null);
+      return;
+    }
+    if (stream.isLoading) {
+      recoveryRunRef.current += 1;
+      setFetchedInterrupt(undefined);
       setResolvedInterruptKey(null);
       return;
     }
@@ -190,6 +223,7 @@ export function useChat({
     // plus its approval interrupt. Either way we backfill from thread state
     // (the same data a thread-switch re-fetch would pull in).
     const baseline = stream.messages.length;
+    const recoveryRunId = ++recoveryRunRef.current;
     let cancelled = false;
     let tries = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -202,28 +236,31 @@ export function useChat({
           next?: unknown[];
           values?: { messages?: Message[] };
         };
-        if (cancelled) return;
+        if (cancelled || recoveryRunRef.current !== recoveryRunId) return;
         const msgs = state.values?.messages;
-        const interrupts = state.tasks?.at(-1)?.interrupts;
-        const pending: unknown =
-          Array.isArray(interrupts) && interrupts.length > 0
-            ? interrupts[interrupts.length - 1]
-            : undefined;
+        const pending = latestTaskInterrupt(state.tasks);
         const stillPending = Array.isArray(state.next) && state.next.length > 0;
-        // Backfill whenever the server is ahead of what the stream delivered.
-        if (Array.isArray(msgs) && msgs.length > baseline) {
-          setFetchedMessages(msgs);
-        }
         const safePending = normalizePendingInterrupt(pending);
-        if (safePending) {
-          // Tool-approval interrupt reached — surface it (+ messages) and stop.
-          // There IS a live pending interrupt, so drop any stale suppression.
+        if (safePending && hasActionableInterrupt(safePending)) {
+          // Tool-approval interrupt reached — surface it and its matching message
+          // snapshot together. Mixing live messages with fetched interrupts is the
+          // race that hides approval cards for repeated execute calls.
           setFetchedInterrupt(
             safePending as unknown as typeof stream.interrupt
           );
           setResolvedInterruptKey(null);
-          if (Array.isArray(msgs)) setFetchedMessages(msgs);
+          if (Array.isArray(msgs)) {
+            setFetchedThreadId(threadId);
+            setFetchedMessages(msgs);
+          }
           return;
+        }
+        // Backfill only after the live stream is idle. During active streaming the
+        // live message list owns rendering; this recovery loop is for dropped tail
+        // state after the stream has settled.
+        if (Array.isArray(msgs) && msgs.length > baseline) {
+          setFetchedThreadId(threadId);
+          setFetchedMessages(msgs);
         }
         if (!stillPending) {
           // The server has no pending task/interrupt anymore. Record the stale
@@ -231,7 +268,10 @@ export function useChat({
           // (composer unlocks after approving) — a new interrupt still shows.
           setFetchedInterrupt(undefined);
           setResolvedInterruptKey(interruptValueKey(stream.interrupt));
-          if (Array.isArray(msgs)) setFetchedMessages(msgs);
+          if (Array.isArray(msgs)) {
+            setFetchedThreadId(threadId);
+            setFetchedMessages(msgs);
+          }
           return;
         }
         // Keep polling only while the run is still working server-side; a
@@ -240,7 +280,13 @@ export function useChat({
           timer = setTimeout(attempt, 1000);
         }
       } catch {
-        if (!cancelled && tries < MAX_TRIES) timer = setTimeout(attempt, 1000);
+        if (
+          !cancelled &&
+          recoveryRunRef.current === recoveryRunId &&
+          tries < MAX_TRIES
+        ) {
+          timer = setTimeout(attempt, 1000);
+        }
       }
     };
     void attempt();
@@ -262,7 +308,9 @@ export function useChat({
     (resolvedInterruptKey === null ||
       interruptValueKey(liveInterrupt) !== resolvedInterruptKey)
       ? liveInterrupt
-      : fetchedInterrupt ?? undefined;
+      : fetchedThreadId === threadId
+      ? fetchedInterrupt ?? undefined
+      : undefined;
   // Prefer the backfilled snapshot when it is "ahead" of the live stream — i.e.
   // the stream ended early and dropped the tail. "Ahead" means either MORE
   // messages, or (once settled) the SAME number of messages but MORE total text:
@@ -272,7 +320,9 @@ export function useChat({
   // refresh). The equal-count/more-text rule is gated on `!isLoading` so a
   // mid-stream poll snapshot never flickers over the actively updating stream.
   const messages = (() => {
-    if (!fetchedMessages) return stream.messages;
+    if (!fetchedMessages || fetchedThreadId !== threadId)
+      return stream.messages;
+    if (fetchedInterrupt) return fetchedMessages;
     if (fetchedMessages.length > stream.messages.length) return fetchedMessages;
     if (
       !stream.isLoading &&
@@ -292,7 +342,9 @@ export function useChat({
       // just-added optimistic user message — making it flicker/vanish.
       setFetchedInterrupt(undefined);
       setFetchedMessages(null);
+      setFetchedThreadId(null);
       setResolvedInterruptKey(null);
+      recoveryRunRef.current += 1;
       const newMessage: Message = { id: uuidv4(), type: "human", content };
       stream.submit(
         { messages: [newMessage] },
@@ -330,7 +382,9 @@ export function useChat({
       // approval card or shadow the resumed run's messages.
       setFetchedInterrupt(undefined);
       setFetchedMessages(null);
+      setFetchedThreadId(null);
       setResolvedInterruptKey(null);
+      recoveryRunRef.current += 1;
       stream.submit(null, {
         command: { resume: value },
         streamSubgraphs: true,

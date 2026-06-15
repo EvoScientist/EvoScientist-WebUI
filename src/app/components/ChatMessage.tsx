@@ -129,6 +129,7 @@ export const ChatMessage = React.memo<ChatMessageProps>(
       });
       const cursor = new Map<string, number>();
       for (const tc of toolCalls) {
+        if (tc.status !== "interrupted") continue;
         const list = queues.get(tc.name);
         if (!list) continue;
         const i = cursor.get(tc.name) ?? 0;
