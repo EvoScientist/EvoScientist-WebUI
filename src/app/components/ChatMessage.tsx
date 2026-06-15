@@ -33,6 +33,8 @@ interface ChatMessageProps {
   message: Message;
   toolCalls: ToolCall[];
   isLoading?: boolean;
+  /** True only for the message currently being streamed (last assistant turn). */
+  isStreaming?: boolean;
   /** Pending tool-approval requests for this turn, in interrupt order. */
   actionRequests?: ActionRequest[];
   submittedActionRequestKeys?: Set<string>;
@@ -53,6 +55,7 @@ export const ChatMessage = React.memo<ChatMessageProps>(
     message,
     toolCalls,
     isLoading,
+    isStreaming,
     actionRequests,
     submittedActionRequestKeys,
     onActionRequestSubmitted,
@@ -295,7 +298,10 @@ export const ChatMessage = React.memo<ChatMessageProps>(
                     {messageContent}
                   </p>
                 ) : hasContent ? (
-                  <MarkdownContent content={messageContent} />
+                  <MarkdownContent
+                    content={messageContent}
+                    isStreaming={isStreaming}
+                  />
                 ) : null}
               </div>
             </div>

@@ -942,6 +942,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                     (u: any) => u.metadata?.message_id === data.message.id
                   );
                   const isLastMessage = index === processedMessages.length - 1;
+                  const isAssistant = data.message.type !== "human";
                   const showCompactionBefore =
                     compactionAnchorId === data.message.id;
                   return (
@@ -956,6 +957,9 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                         message={data.message}
                         toolCalls={data.toolCalls}
                         isLoading={isLoading}
+                        isStreaming={
+                          isLoading && isLastMessage && isAssistant
+                        }
                         actionRequests={
                           isLastMessage ? actionRequests : undefined
                         }
