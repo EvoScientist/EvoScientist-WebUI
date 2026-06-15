@@ -686,6 +686,19 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       // aren't in thread state anyway.)
       const seenAsyncUpdates = new Set<string>();
       const visibleMessages = messages.filter((message: Message) => {
+        // Humans are always user-typed (or our injected async-update pills) —
+        // never sub-agent noise. Run their checks first so a stale subgraph
+        // namespace on a previous-run human (left over in stream metadata)
+        // can't silently drop the original prompt.
+        if (message.type === "human") {
+          const key = asyncUpdateMessageKey(
+            extractStringFromMessageContent(message)
+          );
+          if (!key) return true;
+          if (seenAsyncUpdates.has(key)) return false;
+          seenAsyncUpdates.add(key);
+          return true;
+        }
         const meta = stream.getMessagesMetadata(message)?.streamMetadata;
         const ns = meta?.["langgraph_checkpoint_ns"];
         if (typeof ns === "string" && ns.includes("|")) return false;
@@ -696,13 +709,6 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         // never persisted in `messages`. Drop it here; the stable summary is
         // surfaced from `_summarization_event` as a collapsible block instead.
         if (isSummarizationMessage(message)) return false;
-        if (message.type !== "human") return true;
-        const key = asyncUpdateMessageKey(
-          extractStringFromMessageContent(message)
-        );
-        if (!key) return true;
-        if (seenAsyncUpdates.has(key)) return false;
-        seenAsyncUpdates.add(key);
         return true;
       });
       const completedToolCallIds = new Set<string>();

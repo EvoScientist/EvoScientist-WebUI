@@ -231,13 +231,24 @@ export function useChat({
     const attempt = async () => {
       tries += 1;
       try {
-        const state = (await client.threads.getState(threadId)) as {
-          tasks?: Array<{ interrupts?: unknown[] }>;
-          next?: unknown[];
-          values?: { messages?: Message[] };
-        };
+        // `getState` returns the GRAPH CHECKPOINT state — which the backend
+        // windows/compacts for memory, so its `values.messages` is only the
+        // recent slice. `threads.get` returns the persisted THREAD RECORD with
+        // the full message history. We need both: state for run status
+        // (`next` / `tasks` / `interrupts`), record for the messages the UI
+        // displays. Done in parallel to keep the round trip tight.
+        const [state, threadRecord] = await Promise.all([
+          client.threads.getState(threadId) as Promise<{
+            tasks?: Array<{ interrupts?: unknown[] }>;
+            next?: unknown[];
+            values?: { messages?: Message[] };
+          }>,
+          client.threads.get(threadId) as Promise<{
+            values?: { messages?: Message[] };
+          }>,
+        ]);
         if (cancelled || recoveryRunRef.current !== recoveryRunId) return;
-        const msgs = state.values?.messages;
+        const msgs = threadRecord.values?.messages;
         const pending = latestTaskInterrupt(state.tasks);
         const stillPending = Array.isArray(state.next) && state.next.length > 0;
         const safePending = normalizePendingInterrupt(pending);
@@ -319,13 +330,21 @@ export function useChat({
   // the blank live version (the bug where the answer only appears after a manual
   // refresh). The equal-count/more-text rule is gated on `!isLoading` so a
   // mid-stream poll snapshot never flickers over the actively updating stream.
+  //
+  // Once the run has settled AND we have a snapshot, ALWAYS prefer the snapshot.
+  // `stream.messages` can carry subgraph noise (streamSubgraphs: true) plus
+  // stale per-message metadata from earlier runs, inflating its length above the
+  // persisted main-thread state. A pure `>` compare against that bloated count
+  // would keep us on the stream — which makes the downstream subgraph-namespace
+  // filter (ChatInterface.processedMessages) drop legitimate main-thread
+  // history that's only tagged subgraph in stale stream metadata.
   const messages = (() => {
     if (!fetchedMessages || fetchedThreadId !== threadId)
       return stream.messages;
     if (fetchedInterrupt) return fetchedMessages;
+    if (!stream.isLoading) return fetchedMessages;
     if (fetchedMessages.length > stream.messages.length) return fetchedMessages;
     if (
-      !stream.isLoading &&
       fetchedMessages.length === stream.messages.length &&
       totalTextLength(fetchedMessages) > totalTextLength(stream.messages)
     ) {
