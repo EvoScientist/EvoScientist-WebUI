@@ -3,11 +3,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronRight, ChevronUp, Loader2 } from "lucide-react";
 import type { Message } from "@langchain/langgraph-sdk";
-import type {
-  ActionRequest,
-  ReviewConfig,
-  ToolCall,
-} from "@/app/types/types";
+import type { ActionRequest, ReviewConfig, ToolCall } from "@/app/types/types";
 import type { SubAgentStep } from "@/lib/subAgentActivity";
 import { ChatMessage } from "./ChatMessage";
 import { CompactionSummary } from "./CompactionSummary";
@@ -141,7 +137,7 @@ export const ActionGroup = React.memo<ActionGroupProps>(function ActionGroup({
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
         className={cn(
-          "group flex w-full items-center gap-2 rounded-md border border-border bg-surface/50 px-3 py-2 text-left text-sm text-muted-foreground transition-colors hover:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          "bg-surface/50 hover:bg-surface group flex w-full items-center gap-2 rounded-md border border-border px-3 py-2 text-left text-sm text-muted-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         )}
       >
         <ChevronRight
@@ -169,8 +165,7 @@ export const ActionGroup = React.memo<ActionGroupProps>(function ActionGroup({
             const messageUi = ui?.filter(
               (u: any) => u.metadata?.message_id === item.message.id
             );
-            const showCompactionBefore =
-              compactionAnchorId === item.message.id;
+            const showCompactionBefore = compactionAnchorId === item.message.id;
             return (
               <React.Fragment key={item.message.id}>
                 {showCompactionBefore && summarizationEvent && (
@@ -208,7 +203,7 @@ export const ActionGroup = React.memo<ActionGroupProps>(function ActionGroup({
             <button
               type="button"
               onClick={() => setOpen(false)}
-              className="flex w-full items-center justify-center gap-1.5 rounded-md py-1.5 text-xs text-muted-foreground transition-colors hover:bg-surface hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="hover:bg-surface flex w-full items-center justify-center gap-1.5 rounded-md py-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               aria-label={`Collapse ${count} action${count === 1 ? "" : "s"}`}
             >
               <ChevronUp
