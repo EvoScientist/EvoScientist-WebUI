@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { DEFAULT_ASSISTANT_ID, DeploymentConfig } from "@/lib/config";
+import { useCollapseAgentActions } from "@/lib/uiSettings";
 
 interface ConfigDialogProps {
   open: boolean;
@@ -32,6 +33,10 @@ export function ConfigDialog({
   );
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  // UI preference: persisted independently of deployment config. The hook
+  // owns the localStorage round-trip; we read once and write on toggle.
+  const { value: collapseAgentActions, setValue: setCollapseAgentActions } =
+    useCollapseAgentActions();
 
   useEffect(() => {
     if (!open) return;
@@ -125,6 +130,25 @@ export function ConfigDialog({
                 {error}
               </p>
             )}
+          </div>
+          <div className="flex items-start gap-2">
+            <input
+              id="collapseAgentActions"
+              type="checkbox"
+              checked={collapseAgentActions}
+              onChange={(e) => setCollapseAgentActions(e.target.checked)}
+              className="mt-1 size-4 rounded border-border accent-[var(--brand)]"
+            />
+            <Label
+              htmlFor="collapseAgentActions"
+              className="text-sm font-normal leading-snug"
+            >
+              Collapse completed agent actions
+              <span className="block text-xs text-muted-foreground">
+                Folds the agent&apos;s tool-call sequence after a turn finishes
+                — only auto-collapses if you&apos;re scrolled to the bottom.
+              </span>
+            </Label>
           </div>
         </div>
         <DialogFooter>

@@ -25,8 +25,13 @@ import {
   X,
 } from "lucide-react";
 import { ChatMessage } from "@/app/components/ChatMessage";
+import {
+  ActionGroup,
+  type GroupedActionItem,
+} from "@/app/components/ActionGroup";
 import { CompactionSummary } from "@/app/components/CompactionSummary";
 import { isSummarizationMessage } from "@/lib/summarization";
+import { useCollapseAgentActions } from "@/lib/uiSettings";
 import {
   AskUserInterrupt,
   type AskUserQuestion,
@@ -221,7 +226,8 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     const autoApprovedRef = useRef<unknown>(null);
     const previousThreadIdRef = useRef(threadId);
     const migrateAutoApproveForCreatedThreadRef = useRef(false);
-    const { scrollRef, contentRef, scrollToBottom } = useStickToBottom();
+    const { scrollRef, contentRef, scrollToBottom, isAtBottom } =
+      useStickToBottom();
 
     const {
       stream,
@@ -800,6 +806,59 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       });
     }, [messages, actionRequests, interrupt, isLoading, stream]);
 
+    // UI preference: auto-collapse completed agent-action groups. The user can
+    // turn this off in ConfigDialog; default is on.
+    const { value: collapseAgentActions } = useCollapseAgentActions();
+
+    // Detect whether an AI message has any actual rendered text content (as
+    // opposed to being pure tool-call carriage). Tool-only AI messages are what
+    // the ActionGroup wraps; AI messages with text (the assistant's "answer")
+    // stay outside the fold so the user always sees it without expanding.
+    const aiHasTextContent = (message: Message): boolean => {
+      const content = (message as { content?: unknown }).content;
+      if (typeof content === "string") return content.trim().length > 0;
+      if (Array.isArray(content)) {
+        for (const part of content) {
+          const t = (part as { text?: unknown })?.text;
+          if (typeof t === "string" && t.trim().length > 0) return true;
+        }
+      }
+      return false;
+    };
+
+    // Group consecutive tool-only AI entries into a single foldable action
+    // block. Anything else (human messages, AI messages with text) is rendered
+    // as before. Reuses the same ProcessedMessage shape — the ActionGroup is
+    // pure presentation, no data transformation beyond grouping.
+    type RenderedItem =
+      | { kind: "message"; data: (typeof processedMessages)[number] }
+      | { kind: "action-group"; items: GroupedActionItem[] };
+    const renderedItems = useMemo<RenderedItem[]>(() => {
+      const out: RenderedItem[] = [];
+      for (const entry of processedMessages) {
+        const isToolOnly =
+          entry.message.type === "ai" &&
+          entry.toolCalls.length > 0 &&
+          !aiHasTextContent(entry.message);
+        if (isToolOnly) {
+          const last = out[out.length - 1];
+          if (last?.kind === "action-group") {
+            last.items.push(entry);
+          } else {
+            out.push({ kind: "action-group", items: [entry] });
+          }
+        } else {
+          out.push({ kind: "message", data: entry });
+        }
+      }
+      return out;
+    }, [processedMessages]);
+
+    const lastMessageId =
+      processedMessages.length > 0
+        ? processedMessages[processedMessages.length - 1].message.id
+        : undefined;
+
     // Where to anchor the "Conversation compacted" block. The event's
     // cutoffIndex points into the raw `messages` array (messages[0:cutoff] were
     // summarized); we render the block right before the first message AFTER the
@@ -941,11 +1000,46 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                     </div>
                   </div>
                 )}
-                {processedMessages.map((data, index) => {
+                {renderedItems.map((item, index) => {
+                  if (item.kind === "action-group") {
+                    // A group is "streaming" when its last item is the last
+                    // overall AND the run is in flight — drives the spinner +
+                    // auto-collapse-on-settle behavior inside ActionGroup.
+                    const groupLastId =
+                      item.items[item.items.length - 1].message.id;
+                    const isLastGroup = index === renderedItems.length - 1;
+                    const groupIsStreaming =
+                      isLoading && isLastGroup && groupLastId === lastMessageId;
+                    return (
+                      <ActionGroup
+                        key={`action-group-${item.items[0].message.id}`}
+                        items={item.items}
+                        isStreaming={groupIsStreaming}
+                        defaultCollapsed={collapseAgentActions}
+                        isAtBottom={isAtBottom}
+                        lastMessageId={lastMessageId}
+                        isLoading={isLoading}
+                        actionRequests={actionRequests}
+                        submittedActionRequestKeys={submittedActionRequestKeys}
+                        onActionRequestSubmitted={markActionRequestSubmitted}
+                        reviewConfigsMap={reviewConfigsMap}
+                        stream={stream}
+                        onResumeInterrupt={resumeInterrupt}
+                        graphId={assistant?.graph_id}
+                        onEditMessage={handleEditMessage}
+                        autoApprove={autoApprove}
+                        subAgentSteps={subAgentSteps}
+                        ui={ui}
+                        compactionAnchorId={compactionAnchorId}
+                        summarizationEvent={summarizationEvent ?? null}
+                      />
+                    );
+                  }
+                  const data = item.data;
                   const messageUi = ui?.filter(
                     (u: any) => u.metadata?.message_id === data.message.id
                   );
-                  const isLastMessage = index === processedMessages.length - 1;
+                  const isLastMessage = index === renderedItems.length - 1;
                   const isAssistant = data.message.type !== "human";
                   const showCompactionBefore =
                     compactionAnchorId === data.message.id;
