@@ -137,7 +137,7 @@ export const ActionGroup = React.memo<ActionGroupProps>(function ActionGroup({
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
         className={cn(
-          "bg-surface/50 hover:bg-surface group flex w-full items-center gap-2 rounded-md border border-border px-3 py-2 text-left text-sm text-muted-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          "group flex w-full items-center gap-2 rounded-md border border-border bg-[var(--color-surface)] px-3 py-2 text-left text-sm text-muted-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         )}
       >
         <ChevronRight
@@ -203,7 +203,7 @@ export const ActionGroup = React.memo<ActionGroupProps>(function ActionGroup({
             <button
               type="button"
               onClick={() => setOpen(false)}
-              className="hover:bg-surface flex w-full items-center justify-center gap-1.5 rounded-md py-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="flex w-full items-center justify-center gap-1.5 rounded-md py-1.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               aria-label={`Collapse ${count} action${count === 1 ? "" : "s"}`}
             >
               <ChevronUp
