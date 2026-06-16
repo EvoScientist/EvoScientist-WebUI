@@ -408,6 +408,23 @@ button {
   background-color: hsl(var(--muted-foreground) / 0.6);
 }
 
+/* KaTeX can produce very wide display equations; keep chat layouts bounded on
+   narrow screens while preserving horizontal scroll for the formula itself. */
+.katex {
+  color: inherit;
+}
+
+.katex-display {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.25rem 0;
+}
+
+.katex-display > .katex {
+  max-width: 100%;
+}
+
 /* Global diff highlighting styles */
 .word-added {
   background-color: rgba(46, 160, 67, 0.4);

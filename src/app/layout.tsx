@@ -3,6 +3,7 @@ import { Inter } from "next/font/google";
 import { NuqsAdapter } from "nuqs/adapters/next/app";
 import { ThemeProvider, ThemedToaster } from "@/providers/ThemeProvider";
 import { THEME_STORAGE_KEY } from "@/lib/theme";
+import "katex/dist/katex.min.css";
 import "./globals.css";
 
 const inter = Inter({ subsets: ["latin"] });

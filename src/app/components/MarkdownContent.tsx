@@ -3,8 +3,10 @@
 import React from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
 import rehypeRaw from "rehype-raw";
-import rehypeSanitize from "rehype-sanitize";
+import rehypeKatex from "rehype-katex";
+import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import { cn } from "@/lib/utils";
 import { CodeBlock } from "./CodeBlock";
 import { MermaidDiagram } from "./MermaidDiagram";
@@ -16,6 +18,17 @@ interface MarkdownContentProps {
   isStreaming?: boolean;
 }
 
+const sanitizeSchema = {
+  ...defaultSchema,
+  attributes: {
+    ...defaultSchema.attributes,
+    code: [
+      ...(defaultSchema.attributes?.code || []),
+      ["className", "math-inline", "math-display"],
+    ],
+  },
+};
+
 export const MarkdownContent = React.memo<MarkdownContentProps>(
   ({ content, className = "", isStreaming = false }) => {
     return (
@@ -26,8 +39,12 @@ export const MarkdownContent = React.memo<MarkdownContentProps>(
         )}
       >
         <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-          rehypePlugins={[rehypeRaw, rehypeSanitize]}
+          remarkPlugins={[remarkGfm, remarkMath]}
+          rehypePlugins={[
+            rehypeRaw,
+            [rehypeSanitize, sanitizeSchema],
+            [rehypeKatex, { throwOnError: false, strict: false }],
+          ]}
           components={{
             code({
               inline,
