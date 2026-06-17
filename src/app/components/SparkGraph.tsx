@@ -95,32 +95,31 @@ export function SparkGraph({
     };
   }, [reactId, source]);
 
-  // Attach click handlers post-render. Mermaid renders each node as a `<g>`
-  // with id `flowchart-<our-id>-<counter>`; we recover our id by stripping the
-  // prefix and the trailing counter. Listeners are added directly to the SVG
-  // elements (no global handlers, no Mermaid `click` directive) so the cleanup
-  // stays scoped to this component.
+  // Click handling via event delegation on the container — which React owns
+  // and never replaces — so we keep working clicks across re-renders.
+  //
+  // Direct per-node listeners would die the first time a parent re-render
+  // makes React re-apply `dangerouslySetInnerHTML`: Mermaid's SVG round-trips
+  // through innerHTML in a way that doesn't byte-equal what React last set,
+  // so React replaces the SVG subtree, removing the per-node listeners. With
+  // delegation, only the container's listener matters and it survives every
+  // SVG re-application. Mermaid's `<g>` id format is
+  // `spark-<reactid>-flowchart-<our-id>-<counter>`, so the non-anchored regex
+  // finds the trailing `flowchart-…-<counter>` and a non-greedy capture
+  // pulls out our original node id.
   useEffect(() => {
     const container = containerRef.current;
     if (!container || !svg) return;
-    const nodeEls = container.querySelectorAll<SVGGElement>("g.node");
-    const cleanups: Array<() => void> = [];
-    nodeEls.forEach((el) => {
-      const match = el.id.match(/^flowchart-(.+)-\d+$/);
+    const handleClick = (e: Event) => {
+      const target = e.target as Element | null;
+      const nodeEl = target?.closest?.("g.node") as SVGGElement | null;
+      if (!nodeEl) return;
+      const match = nodeEl.id.match(/flowchart-(.+?)-\d+$/);
       if (!match) return;
-      const ourId = match[1];
-      const onClick = (e: Event) => {
-        e.stopPropagation();
-        onSelectNode(ourId);
-      };
-      el.style.cursor = "pointer";
-      el.addEventListener("click", onClick);
-      cleanups.push(() => {
-        el.style.cursor = "";
-        el.removeEventListener("click", onClick);
-      });
-    });
-    return () => cleanups.forEach((c) => c());
+      onSelectNode(match[1]);
+    };
+    container.addEventListener("click", handleClick);
+    return () => container.removeEventListener("click", handleClick);
   }, [svg, onSelectNode]);
 
   // Highlight the selected node by toggling a class — color comes from the
@@ -130,7 +129,7 @@ export function SparkGraph({
     if (!container) return;
     const nodeEls = container.querySelectorAll<SVGGElement>("g.node");
     nodeEls.forEach((el) => {
-      const match = el.id.match(/^flowchart-(.+)-\d+$/);
+      const match = el.id.match(/flowchart-(.+?)-\d+$/);
       if (!match) return;
       el.classList.toggle("spark-node-selected", match[1] === selectedNodeId);
     });
@@ -154,6 +153,9 @@ export function SparkGraph({
       className={cn(
         "h-full w-full overflow-auto p-4",
         "[&_svg]:h-auto [&_svg]:max-w-full",
+        // Hand cursor on every Mermaid node — survives SVG re-applications
+        // (inline styles would be wiped along with the listeners).
+        "[&_g.node]:cursor-pointer",
         "[&_g.spark-node-selected_rect]:!stroke-[var(--brand)]",
         "[&_g.spark-node-selected_rect]:!stroke-[3px]",
         "[&_g.spark-node-selected_polygon]:!stroke-[var(--brand)]",
