@@ -8,6 +8,43 @@ import { copyText } from "@/lib/clipboard";
 import { cn } from "@/lib/utils";
 import type { SparkNode } from "@/lib/sparkTypes";
 
+// Per SCHEMA.md, references[] may contain plain URLs OR academic ids
+// (e.g. "arXiv:2212.04356", "doi:10.NNNN/..."). Resolve the known short
+// forms to canonical URLs so the link renders correctly. Anything we don't
+// recognise is left as plain text rather than a broken `<a href>`.
+function resolveReference(ref: string): { href: string | null; label: string } {
+  const trimmed = ref.trim();
+  // Plain URL (http or https) — pass through.
+  if (/^https?:\/\//i.test(trimmed)) return { href: trimmed, label: trimmed };
+  // arXiv id, e.g. "arXiv:2212.04356" or "arxiv:2212.04356v2".
+  const arxivMatch = trimmed.match(/^arxiv:\s*(\d{4}\.\d{4,5}(?:v\d+)?)$/i);
+  if (arxivMatch) {
+    return {
+      href: `https://arxiv.org/abs/${arxivMatch[1]}`,
+      label: trimmed,
+    };
+  }
+  // DOI, e.g. "doi:10.1000/xyz" or bare "10.1000/xyz".
+  const doiMatch = trimmed.match(/^(?:doi:\s*)?(10\.\d{4,}\/\S+)$/i);
+  if (doiMatch) {
+    return {
+      href: `https://doi.org/${doiMatch[1]}`,
+      label: trimmed,
+    };
+  }
+  return { href: null, label: trimmed };
+}
+
+// LangGraph thread ids are UUIDs (any RFC 4122 version). The skill is
+// supposed to emit one of these, but bad data leaks through (e.g. internal
+// checkpoint ids). Validate before letting the user click Open thread so
+// they don't hit a 422 from the backend.
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function looksLikeThreadId(id: string): boolean {
+  return UUID_RE.test(id.trim());
+}
+
 interface SparkNodeDetailProps {
   node: SparkNode;
   onClose: () => void;
@@ -25,6 +62,7 @@ export function SparkNodeDetail({ node, onClose }: SparkNodeDetailProps) {
   const [, setThreadId] = useQueryState("threadId");
   const [, setView] = useQueryState("view");
   const [copied, setCopied] = useState(false);
+  const threadIdLooksValid = looksLikeThreadId(node.thread_id);
 
   // Reset the "copied" affordance whenever the selected node changes — so
   // switching nodes after a copy doesn't leave a stale check icon.
@@ -96,21 +134,28 @@ export function SparkNodeDetail({ node, onClose }: SparkNodeDetailProps) {
               References
             </h4>
             <ul className="space-y-1">
-              {node.references.map((ref) => (
-                <li
-                  key={ref}
-                  className="break-all"
-                >
-                  <a
-                    href={ref}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-primary hover:underline"
+              {node.references.map((ref) => {
+                const resolved = resolveReference(ref);
+                return (
+                  <li
+                    key={ref}
+                    className="break-all"
                   >
-                    {ref}
-                  </a>
-                </li>
-              ))}
+                    {resolved.href ? (
+                      <a
+                        href={resolved.href}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-primary hover:underline"
+                      >
+                        {resolved.label}
+                      </a>
+                    ) : (
+                      <span className="text-foreground">{resolved.label}</span>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           </section>
         )}
@@ -150,6 +195,12 @@ export function SparkNodeDetail({ node, onClose }: SparkNodeDetailProps) {
       <footer className="flex-shrink-0 border-t border-border px-4 py-3">
         <Button
           onClick={openThread}
+          disabled={!threadIdLooksValid}
+          title={
+            threadIdLooksValid
+              ? undefined
+              : "This node's thread id is not a LangGraph UUID — the skill recorded a different identifier and the backend can't open it."
+          }
           className="w-full justify-center gap-2"
         >
           Open thread
