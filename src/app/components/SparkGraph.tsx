@@ -2,50 +2,14 @@
 
 import { useEffect, useId, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
+import { useTheme } from "@/providers/ThemeProvider";
+import { renderMermaid, type MermaidTheme } from "@/lib/mermaidRenderer";
 import type { SparkGraph } from "@/lib/sparkTypes";
 
 interface SparkGraphProps {
   graph: SparkGraph;
   selectedNodeId: string | null;
   onSelectNode: (nodeId: string) => void;
-}
-
-// Same singleton-serialization pattern as MermaidDiagram — mermaid is a
-// singleton with shared internal DOM state, so concurrent render() calls
-// clobber each other. Cache the import + initialize() too.
-type MermaidModule = typeof import("mermaid").default;
-let mermaidLoader: Promise<MermaidModule> | null = null;
-let renderChain: Promise<unknown> = Promise.resolve();
-
-function loadMermaid(): Promise<MermaidModule> {
-  if (!mermaidLoader) {
-    mermaidLoader = import("mermaid").then((mod) => {
-      mod.default.initialize({
-        startOnLoad: false,
-        theme: "dark",
-        // Strict mode forbids raw HTML in node labels — safer for content
-        // sourced from the agent-emitted graph.json.
-        securityLevel: "strict",
-      });
-      return mod.default;
-    });
-  }
-  return mermaidLoader;
-}
-
-async function renderMermaid(
-  id: string,
-  source: string
-): Promise<string | null> {
-  const next = renderChain.then(async () => {
-    const mermaid = await loadMermaid();
-    const parsed = await mermaid.parse(source, { suppressErrors: true });
-    if (!parsed) return null;
-    const { svg } = await mermaid.render(id, source);
-    return svg;
-  });
-  renderChain = next.catch(() => undefined);
-  return next;
 }
 
 // Escape characters Mermaid treats as label delimiters. Belt-and-suspenders
@@ -75,15 +39,19 @@ export function SparkGraph({
   onSelectNode,
 }: SparkGraphProps) {
   const reactId = useId().replace(/:/g, "");
+  const { resolvedTheme } = useTheme();
+  const mermaidTheme: MermaidTheme =
+    resolvedTheme === "dark" ? "dark" : "default";
   const [svg, setSvg] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   // Re-render on any graph mutation. The source text is the dep so identical
-  // graphs from different objects don't trigger redundant work.
+  // graphs from different objects don't trigger redundant work. The theme is
+  // a dep too so light/dark switches re-render the SVG with the new palette.
   const source = toMermaidSource(graph);
   useEffect(() => {
     let cancelled = false;
-    renderMermaid(`spark-${reactId}`, source)
+    renderMermaid(`spark-${reactId}`, source, mermaidTheme)
       .then((result) => {
         if (!cancelled) setSvg(result);
       })
@@ -93,7 +61,7 @@ export function SparkGraph({
     return () => {
       cancelled = true;
     };
-  }, [reactId, source]);
+  }, [reactId, source, mermaidTheme]);
 
   // Click handling via event delegation on the container — which React owns
   // and never replaces — so we keep working clicks across re-renders.
