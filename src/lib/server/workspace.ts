@@ -230,7 +230,26 @@ export function isCrossOrigin(request: NextRequest): boolean {
     return true; // explicit cross-site request
   }
   const origin = request.headers.get("origin");
-  return !!origin && origin !== request.nextUrl.origin;
+  if (!origin) return false;
+  if (origin === request.nextUrl.origin) return false;
+  // In dev the server may bind to 127.0.0.1 but be reached via a LAN IP (or
+  // any other hostname routing to the same machine). `nextUrl.origin` reflects
+  // what the server thinks it is; the browser-sent `Origin` matches what the
+  // client actually connected to, which is also reflected in the `Host`
+  // header. Treat them as same-origin when those agree — the request reached
+  // this exact server via that hostname, so it isn't a spoofed cross-site
+  // call. Disabled in production to keep the strict guard.
+  if (process.env.NODE_ENV !== "production") {
+    const hostHeader = request.headers.get("host");
+    if (hostHeader) {
+      try {
+        if (new URL(origin).host === hostHeader) return false;
+      } catch {
+        // Malformed origin — fall through to the cross-origin verdict.
+      }
+    }
+  }
+  return true;
 }
 
 // ---------------------------------------------------------------------------
