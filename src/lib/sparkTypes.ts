@@ -13,6 +13,14 @@ export const SPARK_MEMORY_PREFIX = "idea_spark_tree/";
 /** Filename within each tree dir that holds the canonical state. */
 export const SPARK_GRAPH_JSON = "graph.json";
 
+/**
+ * Sentinel the skill writes while it holds exclusive write access. Absent /
+ * removed when the skill is idle. Not dot-prefixed because the memory API
+ * hides anything starting with "." from listings and reads (`isHiddenEntry`
+ * in `src/lib/server/memory.ts`), which would make a `.lock` invisible.
+ */
+export const SPARK_GRAPH_LOCK = "graph.lock";
+
 export interface SparkNode {
   /** Stable across skill runs once assigned. */
   id: string;
@@ -121,14 +129,56 @@ export function restoreCascade(graph: SparkGraph, nodeId: string): SparkGraph {
   };
 }
 
+/** Returned when a write is blocked by the skill's lock file. */
+export class SparkGraphLockedError extends Error {
+  constructor(graphId: string) {
+    super(
+      `The skill is currently updating "${graphId}". Try again in a moment.`
+    );
+    this.name = "SparkGraphLockedError";
+  }
+}
+
+interface MemoryEntry {
+  path: string;
+}
+interface MemoryListing {
+  exists: boolean;
+  entries: MemoryEntry[];
+}
+
+/**
+ * True if the skill currently holds the lock on this graph. A single GET
+ * against the memory listing — no polling. We deliberately re-check at write
+ * time only (see `writeSparkGraph`), per the "no state tracing by webui"
+ * design rule.
+ */
+export async function isGraphLocked(graphId: string): Promise<boolean> {
+  const lockRelPath = `${SPARK_MEMORY_PREFIX}${graphId}/${SPARK_GRAPH_LOCK}`;
+  const res = await fetch("/api/memory");
+  if (!res.ok) return false;
+  const listing = (await res.json()) as MemoryListing;
+  if (!listing.exists) return false;
+  return listing.entries.some((e) => e.path === lockRelPath);
+}
+
 /**
  * Write a graph back to the memory store via the existing /api/memory route.
  * Pretty-printed for human-friendly diffs when the user inspects the file.
  * On failure we extract the API's `{ error }` body so the surfaced message is
  * the actual reason (e.g. "Cross-origin memory access is not allowed.") rather
  * than a bare status code.
+ *
+ * Throws `SparkGraphLockedError` if the skill currently holds `graph.lock` on
+ * this graph — the caller decides how to surface it (toast, button state).
+ * The check is a best-effort guard against clobbering the skill mid-write; a
+ * small race window remains between the check and the PUT, acknowledged by
+ * the Phase 2 design.
  */
 export async function writeSparkGraph(graph: SparkGraph): Promise<void> {
+  if (await isGraphLocked(graph.id)) {
+    throw new SparkGraphLockedError(graph.id);
+  }
   const path = `${SPARK_MEMORY_PREFIX}${graph.id}/${SPARK_GRAPH_JSON}`;
   const res = await fetch("/api/memory", {
     method: "PUT",

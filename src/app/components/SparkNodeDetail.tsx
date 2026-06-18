@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils";
 import {
   rejectCascade,
   restoreCascade,
+  SparkGraphLockedError,
   writeSparkGraph,
   type SparkGraph,
   type SparkNode,
@@ -113,11 +114,17 @@ export function SparkNodeDetail({
       await writeSparkGraph(next);
       onGraphUpdated();
     } catch (err) {
-      toast.error(
-        err instanceof Error
-          ? `Couldn't save: ${err.message}`
-          : "Couldn't save the change — try again."
-      );
+      // Locked-by-skill is the expected race, not a "save failed" — surface
+      // the message as-is so the user sees a hint, not a "Couldn't save:" prefix.
+      if (err instanceof SparkGraphLockedError) {
+        toast.error(err.message);
+      } else {
+        toast.error(
+          err instanceof Error
+            ? `Couldn't save: ${err.message}`
+            : "Couldn't save the change — try again."
+        );
+      }
     } finally {
       setRejectBusy(false);
     }
