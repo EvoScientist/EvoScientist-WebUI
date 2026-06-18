@@ -27,6 +27,7 @@ export function SparkPanel() {
     graph,
     loading: graphLoading,
     error: graphError,
+    refresh: refreshGraph,
   } = useSparkGraph(selectedGraphId);
 
   // Auto-select the newest graph when the list resolves and nothing's chosen.
@@ -147,11 +148,13 @@ export function SparkPanel() {
             />
           )}
         </main>
-        {selectedNode && (
+        {selectedNode && graph && (
           <div className="w-[360px] flex-shrink-0">
             <SparkNodeDetail
               node={selectedNode}
+              graph={graph}
               onClose={() => setSelectedNodeId(null)}
+              onGraphUpdated={refreshGraph}
             />
           </div>
         )}

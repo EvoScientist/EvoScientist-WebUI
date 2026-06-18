@@ -1,12 +1,19 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ArrowRight, Check, Copy, X } from "lucide-react";
+import { ArrowRight, Check, Copy, Loader2, RotateCcw, X } from "lucide-react";
 import { useQueryState } from "nuqs";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { copyText } from "@/lib/clipboard";
 import { cn } from "@/lib/utils";
-import type { SparkNode } from "@/lib/sparkTypes";
+import {
+  rejectCascade,
+  restoreCascade,
+  writeSparkGraph,
+  type SparkGraph,
+  type SparkNode,
+} from "@/lib/sparkTypes";
 
 // Per SCHEMA.md, references[] may contain plain URLs OR academic ids
 // (e.g. "arXiv:2212.04356", "doi:10.NNNN/..."). Resolve the known short
@@ -47,7 +54,10 @@ function looksLikeThreadId(id: string): boolean {
 
 interface SparkNodeDetailProps {
   node: SparkNode;
+  graph: SparkGraph;
   onClose: () => void;
+  /** Fired after a successful Reject/Restore — parent re-fetches graph.json. */
+  onGraphUpdated: () => void;
 }
 
 /**
@@ -58,11 +68,18 @@ interface SparkNodeDetailProps {
  * node, using the existing `?threadId=` query param (clearing `view` so the
  * chat UI re-mounts).
  */
-export function SparkNodeDetail({ node, onClose }: SparkNodeDetailProps) {
+export function SparkNodeDetail({
+  node,
+  graph,
+  onClose,
+  onGraphUpdated,
+}: SparkNodeDetailProps) {
   const [, setThreadId] = useQueryState("threadId");
   const [, setView] = useQueryState("view");
   const [copied, setCopied] = useState(false);
+  const [rejectBusy, setRejectBusy] = useState(false);
   const threadIdLooksValid = looksLikeThreadId(node.thread_id);
+  const isRejected = node.rejected === true;
 
   // Reset the "copied" affordance whenever the selected node changes — so
   // switching nodes after a copy doesn't leave a stale check icon.
@@ -78,6 +95,31 @@ export function SparkNodeDetail({ node, onClose }: SparkNodeDetailProps) {
     if (ok) {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
+    }
+  };
+
+  // Reject or restore this node and its subtree, write the new graph.json back
+  // through the existing memory API, then ask the parent to re-fetch so the
+  // change shows up immediately. Errors surface via toast — the optimistic
+  // approach would be cleaner but we'd need to teach useSparkGraph to accept
+  // patches, and Phase 2 doesn't need that yet.
+  const toggleRejection = async () => {
+    if (rejectBusy) return;
+    setRejectBusy(true);
+    try {
+      const next = isRejected
+        ? restoreCascade(graph, node.id)
+        : rejectCascade(graph, node.id);
+      await writeSparkGraph(next);
+      onGraphUpdated();
+    } catch (err) {
+      toast.error(
+        err instanceof Error
+          ? `Couldn't save: ${err.message}`
+          : "Couldn't save the change — try again."
+      );
+    } finally {
+      setRejectBusy(false);
     }
   };
 
@@ -192,7 +234,7 @@ export function SparkNodeDetail({ node, onClose }: SparkNodeDetailProps) {
           </div>
         </section>
       </div>
-      <footer className="flex-shrink-0 border-t border-border px-4 py-3">
+      <footer className="flex flex-shrink-0 flex-col gap-2 border-t border-border px-4 py-3">
         <Button
           onClick={openThread}
           disabled={!threadIdLooksValid}
@@ -208,6 +250,35 @@ export function SparkNodeDetail({ node, onClose }: SparkNodeDetailProps) {
             className="size-4"
             aria-hidden="true"
           />
+        </Button>
+        <Button
+          variant={isRejected ? "secondary" : "outline"}
+          onClick={toggleRejection}
+          disabled={rejectBusy}
+          title={
+            isRejected
+              ? "Restore this idea and its descendants."
+              : "Reject this idea and its descendants — the agent will deprioritise this branch on the next run."
+          }
+          className="w-full justify-center gap-2"
+        >
+          {rejectBusy ? (
+            <Loader2
+              className="size-4 animate-spin"
+              aria-hidden="true"
+            />
+          ) : isRejected ? (
+            <RotateCcw
+              className="size-4"
+              aria-hidden="true"
+            />
+          ) : (
+            <X
+              className="size-4"
+              aria-hidden="true"
+            />
+          )}
+          {isRejected ? "Restore" : "Reject"}
         </Button>
       </footer>
     </aside>
