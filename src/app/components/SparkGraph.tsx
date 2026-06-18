@@ -30,13 +30,20 @@ function mermaidLabel(raw: string): string {
 // Synthesize the Mermaid source ourselves from the canonical JSON rather than
 // reading graph.md — keeps us free of the markdown format and lets us emit
 // stable per-node ids the click wiring can target.
+//
+// Edges are only emitted when BOTH endpoints are in the node set. Callers can
+// pass a filtered view (e.g. only the non-rejected nodes) without leaving
+// dangling edges that would render as ghost nodes.
 function toMermaidSource(graph: SparkGraph): string {
+  const presentIds = new Set(graph.nodes.map((n) => n.id));
   const lines: string[] = ["graph LR"];
   for (const n of graph.nodes) {
     lines.push(`  ${n.id}["${mermaidLabel(n.title)}"]`);
   }
   for (const n of graph.nodes) {
-    if (n.parent_id) lines.push(`  ${n.parent_id} --> ${n.id}`);
+    if (n.parent_id && presentIds.has(n.parent_id)) {
+      lines.push(`  ${n.parent_id} --> ${n.id}`);
+    }
   }
   return lines.join("\n");
 }

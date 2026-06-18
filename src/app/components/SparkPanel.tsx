@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Loader2, RotateCw, Sparkles } from "lucide-react";
+import { ChevronRight, Loader2, RotateCw, Sparkles } from "lucide-react";
 import { useSparkGraphs } from "@/app/hooks/useSparkGraphs";
 import { useSparkGraph } from "@/app/hooks/useSparkGraph";
 import { SparkGraph } from "@/app/components/SparkGraph";
 import { SparkNodeDetail } from "@/app/components/SparkNodeDetail";
+import { partitionGraphByRejection } from "@/lib/sparkTypes";
 import { cn } from "@/lib/utils";
 
 /**
@@ -51,6 +52,15 @@ export function SparkPanel() {
     if (!graph || !selectedNodeId) return null;
     return graph.nodes.find((n) => n.id === selectedNodeId) ?? null;
   }, [graph, selectedNodeId]);
+
+  // Active graph (renderable) + each rejected subtree split out. Memoised on
+  // `graph` so toggling rejection (which produces a fresh graph reference via
+  // refresh) recomputes, but mouse-move / selection updates don't.
+  const partition = useMemo(
+    () => (graph ? partitionGraphByRejection(graph) : null),
+    [graph]
+  );
+  const [rejectedOpen, setRejectedOpen] = useState(false);
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
@@ -140,12 +150,64 @@ export function SparkPanel() {
               {graphError}
             </div>
           )}
-          {graph && !graphLoading && !graphError && (
-            <SparkGraph
-              graph={graph}
-              selectedNodeId={selectedNodeId}
-              onSelectNode={setSelectedNodeId}
-            />
+          {graph && partition && !graphLoading && !graphError && (
+            <>
+              {/* Active region — fills the available height. If every node has
+                  been rejected, the active graph would be empty; show a
+                  placeholder so the user has a hint they can expand the
+                  rejected section to find their data. */}
+              <div className="min-h-0 flex-1">
+                {partition.active.nodes.length > 0 ? (
+                  <SparkGraph
+                    graph={partition.active}
+                    selectedNodeId={selectedNodeId}
+                    onSelectNode={setSelectedNodeId}
+                  />
+                ) : (
+                  <div className="flex h-full items-center justify-center px-6 text-center text-sm text-muted-foreground">
+                    Every node in this graph has been rejected. Expand the
+                    Rejected section below to see them.
+                  </div>
+                )}
+              </div>
+              {/* Rejected region — only when there's at least one rejected
+                  node. ALL rejected nodes render in one shared SparkGraph;
+                  Mermaid handles disconnected components as multiple clusters
+                  within the same diagram, so unrelated rejections share one
+                  pan/zoom surface instead of fragmenting into separate cards.
+                  Clicking a node in here still opens the same right-side
+                  detail panel so Restore is one click away. */}
+              {partition.rejected && (
+                <section className="bg-surface/30 flex flex-shrink-0 flex-col border-t border-border">
+                  <button
+                    type="button"
+                    aria-expanded={rejectedOpen}
+                    onClick={() => setRejectedOpen((v) => !v)}
+                    className="flex items-center gap-2 px-4 py-2 text-left text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                  >
+                    <ChevronRight
+                      aria-hidden="true"
+                      className={cn(
+                        "size-3.5 shrink-0 transition-transform",
+                        rejectedOpen && "rotate-90"
+                      )}
+                    />
+                    <span>Rejected ({partition.rejected.nodes.length})</span>
+                  </button>
+                  {rejectedOpen && (
+                    <div className="p-3">
+                      <div className="h-[35vh] min-h-[220px] overflow-hidden rounded-md border border-border bg-background">
+                        <SparkGraph
+                          graph={partition.rejected}
+                          selectedNodeId={selectedNodeId}
+                          onSelectNode={setSelectedNodeId}
+                        />
+                      </div>
+                    </div>
+                  )}
+                </section>
+              )}
+            </>
           )}
         </main>
         {selectedNode && graph && (

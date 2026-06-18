@@ -96,6 +96,41 @@ export function subtreeNodeIds(
 }
 
 /**
+ * Split a graph into two views: the active set (non-rejected nodes) and the
+ * combined rejected set (every node with `rejected === true`).
+ *
+ * The rejected view collects ALL rejected nodes into a single SparkGraph
+ * rather than one-per-subtree. Mermaid renders disconnected components
+ * naturally — two unrelated rejected subtrees show up as two clusters within
+ * the same diagram, sharing a single pan/zoom surface. The synthesised id
+ * (`<orig>#rejected`) keeps the rejected view's transform cache distinct
+ * from the active view's. The synthesised id is display/cache-only; writes
+ * flow through the original graph object held by SparkPanel.
+ *
+ * `rejected` is `null` when there is nothing to render.
+ */
+export function partitionGraphByRejection(graph: SparkGraph): {
+  active: SparkGraph;
+  rejected: SparkGraph | null;
+} {
+  const isNodeRejected = (n: SparkNode) => n.rejected === true;
+  const active: SparkGraph = {
+    ...graph,
+    nodes: graph.nodes.filter((n) => !isNodeRejected(n)),
+  };
+  const rejectedNodes = graph.nodes.filter(isNodeRejected);
+  const rejected: SparkGraph | null =
+    rejectedNodes.length > 0
+      ? {
+          ...graph,
+          id: `${graph.id}#rejected`,
+          nodes: rejectedNodes,
+        }
+      : null;
+  return { active, rejected };
+}
+
+/**
  * Reject `nodeId` and every descendant. Returns a new graph with the cascade
  * applied and `updated_at` advanced. Pure — does not write anywhere.
  */
