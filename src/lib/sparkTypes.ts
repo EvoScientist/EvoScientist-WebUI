@@ -69,8 +69,8 @@ export interface SparkGraphSummary {
 
 /**
  * Return the set of node ids reachable from `rootId` (inclusive), following
- * `parent_id` links downward. Used by both reject (mark all) and restore
- * (unmark all) so the cascade is consistent both directions.
+ * `parent_id` links downward. Used by reject (mark all in subtree) and
+ * restore (subtree half of the restore cascade).
  */
 export function subtreeNodeIds(
   nodes: SparkNode[],
@@ -91,6 +91,26 @@ export function subtreeNodeIds(
       out.add(childId);
       stack.push(childId);
     }
+  }
+  return out;
+}
+
+/**
+ * Return the set of node ids on the path from `startId` up to the root,
+ * inclusive. Used by restore's UPWARD cascade — if a node is OK to keep,
+ * everything it stems from must also be OK to keep.
+ */
+export function ancestorNodeIds(
+  nodes: SparkNode[],
+  startId: string
+): Set<string> {
+  const parentOf = new Map<string, string | null>();
+  for (const n of nodes) parentOf.set(n.id, n.parent_id);
+  const out = new Set<string>([startId]);
+  let cursor: string | null = parentOf.get(startId) ?? null;
+  while (cursor !== null && !out.has(cursor)) {
+    out.add(cursor);
+    cursor = parentOf.get(cursor) ?? null;
   }
   return out;
 }
@@ -146,12 +166,19 @@ export function rejectCascade(graph: SparkGraph, nodeId: string): SparkGraph {
 }
 
 /**
- * Restore `nodeId` and every descendant. Removes the `rejected` field rather
- * than setting it to `false`, so the persisted JSON stays minimal for the
- * common (all-accepted) case.
+ * Restore `nodeId` along both the path UP to the root (its ancestors) and the
+ * subtree rooted at `nodeId` (its descendants). The combined "valid spine"
+ * captures the rule "if this idea is OK, then what it stems from is OK and
+ * what stems from it is OK." Siblings of the restored chain are untouched —
+ * they stay in whatever state the user left them.
+ *
+ * Removes the `rejected` field rather than setting it to `false`, so the
+ * persisted JSON stays minimal for the common (all-accepted) case.
  */
 export function restoreCascade(graph: SparkGraph, nodeId: string): SparkGraph {
-  const targets = subtreeNodeIds(graph.nodes, nodeId);
+  const ancestors = ancestorNodeIds(graph.nodes, nodeId);
+  const subtree = subtreeNodeIds(graph.nodes, nodeId);
+  const targets = new Set<string>([...ancestors, ...subtree]);
   return {
     ...graph,
     updated_at: new Date().toISOString(),
