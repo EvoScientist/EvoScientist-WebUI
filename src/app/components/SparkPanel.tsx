@@ -113,7 +113,7 @@ export function SparkPanel() {
                     )}
                     title={g.id}
                   >
-                    {graph && graph.id === g.id ? graph.name : g.id}
+                    {g.id}
                   </button>
                 </li>
               ))}
