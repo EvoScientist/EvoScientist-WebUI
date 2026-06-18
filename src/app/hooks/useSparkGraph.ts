@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   SPARK_GRAPH_JSON,
   SPARK_MEMORY_PREFIX,
@@ -25,10 +25,14 @@ export function useSparkGraph(graphId: string | null): {
   graph: SparkGraph | null;
   loading: boolean;
   error: string | null;
+  /** Bump to re-fetch — e.g. after a mutation persists. */
+  refresh: () => void;
 } {
   const [graph, setGraph] = useState<SparkGraph | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [revision, setRevision] = useState(0);
+  const refresh = useCallback(() => setRevision((v) => v + 1), []);
 
   useEffect(() => {
     if (!graphId) {
@@ -81,7 +85,7 @@ export function useSparkGraph(graphId: string | null): {
     return () => {
       cancelled = true;
     };
-  }, [graphId]);
+  }, [graphId, revision]);
 
-  return { graph, loading, error };
+  return { graph, loading, error, refresh };
 }
