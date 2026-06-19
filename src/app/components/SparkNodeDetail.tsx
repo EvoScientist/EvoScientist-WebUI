@@ -150,16 +150,37 @@ export function SparkNodeDetail({
   //   - `idea_spark_graph_id` / `idea_spark_parent_node_id`: the Phase 3
   //     breadcrumb the skill (and a future chat-side breadcrumb) reads to
   //     know which graph and which node this conversation is exploring.
+  //   - `idea_spark_node_snapshot`: a point-in-time copy of the node's
+  //     human-readable fields (title / description / next_action /
+  //     references). The agent reads it on the first turn instead of
+  //     re-deriving the same context from graph.json, cutting recovery cost
+  //     from ~12 turns down to one. Snapshot only — if the graph changes
+  //     later the skill should re-fetch graph.json via
+  //     `idea_spark_parent_node_id`.
   // No composer prefill in v1 — the user types their own opening message.
   const startNewChat = async () => {
     if (newChatBusy) return;
     setNewChatBusy(true);
     try {
+      // Build the snapshot from the fields actually present on the node — the
+      // schema's optional fields can legitimately be absent and we don't want
+      // to ship empty strings or empty arrays that look like real data.
+      const snapshot: Record<string, unknown> = { title: node.title };
+      if (node.description) snapshot.description = node.description;
+      if (node.next_action) snapshot.next_action = node.next_action;
+      if (node.references && node.references.length > 0) {
+        snapshot.references = node.references;
+      }
       const newThread = await client.threads.create({
         metadata: {
           graph_id: DEFAULT_ASSISTANT_ID,
+          // `title` is picked up by useThreads.ts's sidebar-title pipeline
+          // (it takes precedence over the derived-from-first-message default),
+          // so the thread shows up labelled by the idea instead of "Untitled".
+          title: node.title,
           idea_spark_graph_id: graph.id,
           idea_spark_parent_node_id: node.id,
+          idea_spark_node_snapshot: snapshot,
         },
       });
       void setThreadId(newThread.thread_id);
