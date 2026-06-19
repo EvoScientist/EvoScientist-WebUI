@@ -1,11 +1,21 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ArrowRight, Check, Copy, Loader2, RotateCcw, X } from "lucide-react";
+import {
+  ArrowRight,
+  Check,
+  Copy,
+  Loader2,
+  MessageSquarePlus,
+  RotateCcw,
+  X,
+} from "lucide-react";
 import { useQueryState } from "nuqs";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { copyText } from "@/lib/clipboard";
+import { DEFAULT_ASSISTANT_ID } from "@/lib/config";
+import { useClient } from "@/providers/ClientProvider";
 import { cn } from "@/lib/utils";
 import {
   rejectCascade,
@@ -78,8 +88,10 @@ export function SparkNodeDetail({
 }: SparkNodeDetailProps) {
   const [, setThreadId] = useQueryState("threadId");
   const [, setView] = useQueryState("view");
+  const client = useClient();
   const [copied, setCopied] = useState(false);
   const [rejectBusy, setRejectBusy] = useState(false);
+  const [newChatBusy, setNewChatBusy] = useState(false);
   const threadIdLooksValid = looksLikeThreadId(node.thread_id);
   const isRejected = node.rejected === true;
 
@@ -128,6 +140,38 @@ export function SparkNodeDetail({
       }
     } finally {
       setRejectBusy(false);
+    }
+  };
+
+  // Create a fresh LangGraph thread anchored back to this node, then jump
+  // into it. Metadata carries:
+  //   - `graph_id`: the assistant/graph filter the thread list searches on —
+  //     without it the new thread wouldn't show up in the sidebar.
+  //   - `idea_spark_graph_id` / `idea_spark_parent_node_id`: the Phase 3
+  //     breadcrumb the skill (and a future chat-side breadcrumb) reads to
+  //     know which graph and which node this conversation is exploring.
+  // No composer prefill in v1 — the user types their own opening message.
+  const startNewChat = async () => {
+    if (newChatBusy) return;
+    setNewChatBusy(true);
+    try {
+      const newThread = await client.threads.create({
+        metadata: {
+          graph_id: DEFAULT_ASSISTANT_ID,
+          idea_spark_graph_id: graph.id,
+          idea_spark_parent_node_id: node.id,
+        },
+      });
+      void setThreadId(newThread.thread_id);
+      void setView(null);
+    } catch (err) {
+      toast.error(
+        err instanceof Error
+          ? `Couldn't start a new chat: ${err.message}`
+          : "Couldn't start a new chat — try again."
+      );
+    } finally {
+      setNewChatBusy(false);
     }
   };
 
@@ -264,6 +308,26 @@ export function SparkNodeDetail({
             className="size-4"
             aria-hidden="true"
           />
+        </Button>
+        <Button
+          variant="outline"
+          onClick={startNewChat}
+          disabled={newChatBusy}
+          title="Create a new chat anchored to this idea. The skill can extend the graph from this node on its next run."
+          className="w-full justify-center gap-2"
+        >
+          {newChatBusy ? (
+            <Loader2
+              className="size-4 animate-spin"
+              aria-hidden="true"
+            />
+          ) : (
+            <MessageSquarePlus
+              className="size-4"
+              aria-hidden="true"
+            />
+          )}
+          New chat from this idea
         </Button>
         <Button
           variant={isRejected ? "secondary" : "outline"}
