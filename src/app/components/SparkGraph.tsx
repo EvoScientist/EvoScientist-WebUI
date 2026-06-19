@@ -12,7 +12,11 @@ import { RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/providers/ThemeProvider";
 import { renderMermaid, type MermaidTheme } from "@/lib/mermaidRenderer";
-import type { SparkGraph } from "@/lib/sparkTypes";
+import {
+  THREAD_COLOR_ALPHA,
+  threadIdToColor,
+  type SparkGraph,
+} from "@/lib/sparkTypes";
 
 interface SparkGraphProps {
   graph: SparkGraph;
@@ -43,6 +47,23 @@ function toMermaidSource(graph: SparkGraph): string {
   for (const n of graph.nodes) {
     if (n.parent_id && presentIds.has(n.parent_id)) {
       lines.push(`  ${n.parent_id} --> ${n.id}`);
+    }
+  }
+  // Per-node fill keyed by thread id — visual cue for which chat contributed
+  // each node. Skipped when every node shares the same thread (only one chat
+  // contributed) — the palette is for *distinguishing* contributors, and a
+  // single-thread graph reads more cleanly in Mermaid's default scheme.
+  //
+  // Only `fill` is overridden — Mermaid's default `stroke` survives, so each
+  // node still gets the framing border of the current theme rather than
+  // dissolving into the colored fill.
+  const distinctThreads = new Set(graph.nodes.map((n) => n.thread_id));
+  if (distinctThreads.size > 1) {
+    for (const n of graph.nodes) {
+      const fill = threadIdToColor(n.thread_id);
+      lines.push(
+        `  style ${n.id} fill:${fill},fill-opacity:${THREAD_COLOR_ALPHA}`
+      );
     }
   }
   return lines.join("\n");

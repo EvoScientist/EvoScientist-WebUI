@@ -11,6 +11,7 @@ import {
   rejectCascade,
   restoreCascade,
   SparkGraphLockedError,
+  threadIdToColorRgba,
   writeSparkGraph,
   type SparkGraph,
   type SparkNode,
@@ -213,6 +214,12 @@ export function SparkNodeDetail({
             Originating thread
           </h4>
           <div className="flex items-center gap-1.5">
+            <span
+              aria-hidden="true"
+              title="Thread provenance colour"
+              className="size-3 shrink-0 rounded-full border border-border"
+              style={{ backgroundColor: threadIdToColorRgba(node.thread_id) }}
+            />
             <code className="bg-surface min-w-0 flex-1 truncate rounded-sm px-1.5 py-1 font-mono text-xs text-muted-foreground">
               {node.thread_id}
             </code>

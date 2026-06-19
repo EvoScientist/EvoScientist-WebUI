@@ -21,6 +21,71 @@ export const SPARK_GRAPH_JSON = "graph.json";
  */
 export const SPARK_GRAPH_LOCK = "graph.lock";
 
+/**
+ * Palette for per-thread node colouring. Deterministic — the same `thread_id`
+ * always maps to the same colour, both for the Mermaid node fill in
+ * `SparkGraph` and for the swatch in `SparkNodeDetail`, so the user can
+ * eyeball provenance without checking ids.
+ *
+ * Generated in OKLCH at constant L=0.75, C=0.07, hue stepped 45° around the
+ * wheel and converted to sRGB hex. The constant lightness/chroma means each
+ * colour feels equally "important" (no aggressive yellows or washed-out
+ * blues), with text contrast that stays readable against Mermaid's default
+ * label colours in both light and dark themes. Muted enough that the fills
+ * don't clash with the brand-blue selection ring.
+ *
+ * With more than 8 distinct threads on one graph two threads collide —
+ * acceptable for the Phase 3 MVP.
+ */
+const THREAD_COLOR_PALETTE = [
+  "#d49cac", // dusty rose
+  "#d4a089", // peach
+  "#bfad7b", // khaki
+  "#9bb88c", // sage
+  "#7bbdaf", // teal
+  "#7db8d0", // sky
+  "#9cacdb", // lavender
+  "#bfa1cd", // lilac
+] as const;
+
+/**
+ * Alpha applied to thread-colour fills (Mermaid via `fill-opacity`, swatch via
+ * `rgba()`). The translucency lets the canvas show through, matching the
+ * airy "opaque-but-not-flat" feel of Mermaid's default node fills.
+ */
+export const THREAD_COLOR_ALPHA = 0.5;
+
+/**
+ * Deterministic hex colour for a node's originating thread. Pure function of
+ * `thread_id` — no per-graph state, so two graphs that share a thread show
+ * the same colour. Uses djb2-style hashing for cheap, well-spread bucketing.
+ *
+ * Caller is responsible for applying `THREAD_COLOR_ALPHA` if it wants the
+ * translucent look: Mermaid uses `fill-opacity` as a sibling style property,
+ * the swatch in `SparkNodeDetail` uses `threadIdToColorRgba` so its border
+ * keeps the same alpha treatment via the inline style.
+ */
+export function threadIdToColor(threadId: string): string {
+  let hash = 5381;
+  for (let i = 0; i < threadId.length; i += 1) {
+    hash = (hash * 33) ^ threadId.charCodeAt(i);
+  }
+  return THREAD_COLOR_PALETTE[Math.abs(hash) % THREAD_COLOR_PALETTE.length];
+}
+
+/**
+ * Same colour as `threadIdToColor` but pre-multiplied with the translucent
+ * alpha and emitted as an `rgba()` string. Convenient for places that go
+ * through CSS `background-color` rather than the SVG `fill-opacity` pair.
+ */
+export function threadIdToColorRgba(threadId: string): string {
+  const hex = threadIdToColor(threadId);
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r}, ${g}, ${b}, ${THREAD_COLOR_ALPHA})`;
+}
+
 export interface SparkNode {
   /** Stable across skill runs once assigned. */
   id: string;
