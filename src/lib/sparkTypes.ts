@@ -56,6 +56,13 @@ const THREAD_COLOR_PALETTE = [
 export const THREAD_COLOR_ALPHA = 0.5;
 
 /**
+ * localStorage key prefix used to hand a composer prefill from `SparkNodeDetail`
+ * to `ChatInterface`. Keyed by the destination `thread_id` so multiple in-flight
+ * actions can't trample each other. Consumed once and cleared on pickup.
+ */
+export const SPARK_PREFILL_STORAGE_PREFIX = "spark-prefill:";
+
+/**
  * Deterministic hex colour for a node's originating thread. Pure function of
  * `thread_id` — no per-graph state, so two graphs that share a thread show
  * the same colour. Uses djb2-style hashing for cheap, well-spread bucketing.
@@ -118,6 +125,38 @@ export interface SparkGraph {
   created_at: string;
   updated_at: string;
   nodes: SparkNode[];
+}
+
+/**
+ * Build the chat-composer prefill that triggers `idea-elaborate` on `node`.
+ * Verbatim from `.backend-ref/notes/idea-elaborate-webui-contract.md` — the
+ * skill keys on this exact shape, and the generic agent falls back to it as
+ * load-bearing context when the skill isn't installed. The `References` line
+ * is omitted when the node has none (the contract treats that as "omit",
+ * not "empty").
+ *
+ * Stage-5 (paper draft) is opt-in: the user adds one of the contract's
+ * keywords ("draft a paper", "manuscript", …) before submitting. The default
+ * prefill does NOT include them — see the inline hint in `SparkNodeDetail`.
+ */
+export function buildElaborateTriggerMessage(
+  node: SparkNode,
+  graph: SparkGraph
+): string {
+  const lines = [
+    `Please elaborate on the next action for "${node.title}" (node id: ${node.id}) in the`,
+    `"${graph.name}" idea-spark graph. The next action is:`,
+    "",
+    `> ${node.next_action ?? ""}`,
+    "",
+  ];
+  if (node.references && node.references.length > 0) {
+    lines.push(
+      `References attached to the node: ${node.references.join(", ")}`
+    );
+  }
+  lines.push(`Originating thread: ${node.thread_id}`);
+  return lines.join("\n");
 }
 
 /** Listing item — just enough to render the graph picker. */

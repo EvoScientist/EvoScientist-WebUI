@@ -8,6 +8,7 @@ import {
   Loader2,
   MessageSquarePlus,
   RotateCcw,
+  Sparkles,
   X,
 } from "lucide-react";
 import { useQueryState } from "nuqs";
@@ -18,8 +19,10 @@ import { DEFAULT_ASSISTANT_ID } from "@/lib/config";
 import { useClient } from "@/providers/ClientProvider";
 import { cn } from "@/lib/utils";
 import {
+  buildElaborateTriggerMessage,
   rejectCascade,
   restoreCascade,
+  SPARK_PREFILL_STORAGE_PREFIX,
   SparkGraphLockedError,
   threadIdToColorRgba,
   writeSparkGraph,
@@ -100,6 +103,22 @@ export function SparkNodeDetail({
   useEffect(() => setCopied(false), [node.id]);
 
   const openThread = () => {
+    void setThreadId(node.thread_id);
+    void setView(null);
+  };
+
+  // Drop the contract-templated trigger message into the node's originating
+  // thread via the localStorage handshake `ChatInterface` listens on, then
+  // route to that thread and dismiss the spark panel. We deliberately send
+  // it to `node.thread_id` (not `currentThreadId`) so the elaboration lands
+  // where the idea was born — that's the chat the user expects to "continue"
+  // and the one the skill keys on. We do NOT auto-send — per contract the
+  // user submits (and may edit, e.g. to add stage-5 keywords).
+  const elaborateNextAction = () => {
+    window.localStorage.setItem(
+      `${SPARK_PREFILL_STORAGE_PREFIX}${node.thread_id}`,
+      buildElaborateTriggerMessage(node, graph)
+    );
     void setThreadId(node.thread_id);
     void setView(null);
   };
@@ -314,6 +333,40 @@ export function SparkNodeDetail({
         </section>
       </div>
       <footer className="flex flex-shrink-0 flex-col gap-2 border-t border-border px-4 py-3">
+        {(() => {
+          const elaborateDisabledReason = isRejected
+            ? "Rejected directions are not elaborated."
+            : !node.next_action
+            ? "This node has no next action to elaborate on."
+            : !threadIdLooksValid
+            ? "This node's thread id is not a LangGraph UUID — the backend can't route there."
+            : null;
+          return (
+            <>
+              <Button
+                onClick={elaborateNextAction}
+                disabled={elaborateDisabledReason !== null}
+                title={
+                  elaborateDisabledReason ??
+                  "Pre-fill the originating thread's chat with a trigger message for the idea-elaborate skill."
+                }
+                className="w-full justify-center gap-2"
+              >
+                <Sparkles
+                  className="size-4"
+                  aria-hidden="true"
+                />
+                Elaborate next action
+              </Button>
+              {elaborateDisabledReason === null && (
+                <p className="text-xs text-muted-foreground">
+                  Edit the message to add &quot;draft a paper&quot; for a full
+                  manuscript.
+                </p>
+              )}
+            </>
+          );
+        })()}
         <Button
           onClick={openThread}
           disabled={!threadIdLooksValid}
