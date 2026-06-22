@@ -101,6 +101,7 @@ import {
 } from "@/lib/modelCommand";
 import { useAvailableModels } from "@/app/hooks/useAvailableModels";
 import { useClient } from "@/providers/ClientProvider";
+import { SPARK_PREFILL_STORAGE_PREFIX } from "@/lib/sparkTypes";
 
 type DashboardNavTarget =
   | {
@@ -323,6 +324,22 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       window.addEventListener(FILE_LINK_EVENT, onOpenFile);
       return () => window.removeEventListener(FILE_LINK_EVENT, onOpenFile);
     }, []);
+    // Composer prefill handshake from `SparkNodeDetail` (e.g. the Elaborate
+    // next action button). Consumed once per threadId so re-entering the
+    // thread doesn't overwrite what the user has since typed.
+    const prefillCheckedThreadRef = useRef<string | null>(null);
+    useEffect(() => {
+      if (!threadId) return;
+      if (typeof window === "undefined") return;
+      if (prefillCheckedThreadRef.current === threadId) return;
+      prefillCheckedThreadRef.current = threadId;
+      const key = `${SPARK_PREFILL_STORAGE_PREFIX}${threadId}`;
+      const seed = window.localStorage.getItem(key);
+      if (seed) {
+        setInput(seed);
+        window.localStorage.removeItem(key);
+      }
+    }, [threadId]);
     // Empty-state context for threads created from an idea-spark node — read
     // out of thread metadata so the placeholder can orient the user instead of
     // showing the generic "Start Research" copy. Cleared when threadId changes.
