@@ -93,16 +93,18 @@ export const ActionGroup = React.memo<ActionGroupProps>(function ActionGroup({
     return items.some((item) => item.message.id === lastMessageId);
   }, [autoApprove, actionRequests.length, lastMessageId, items]);
 
-  // Start open while live or while waiting for an approval, otherwise honor
-  // the preference.
-  const [open, setOpen] = useState<boolean>(() =>
-    isStreaming || hasPendingApproval ? true : !defaultCollapsed
-  );
+  // Honor the user's preference for the initial state. Per issue #13 the
+  // body stays collapsed during runs AND while an approval is pending —
+  // approvals surface via the preview slot below, which renders the single
+  // approval-bearing message without expanding the whole timeline.
+  const [open, setOpen] = useState<boolean>(() => !defaultCollapsed);
   const wasStreamingRef = useRef(isStreaming);
 
-  // Auto-collapse on settle: only when streaming just ended AND no approval is
+  // Auto-collapse on settle: when streaming just ended AND no approval is
   // pending AND user is at the bottom (so a scrolled-up reader isn't jumped).
-  // Settings opt-out wins.
+  // Folds groups the user expanded mid-run to peek. We don't auto-collapse
+  // on approval resolution: the body is never forced open by approvals, so
+  // if it IS open, the user opened it intentionally — let them keep it.
   useEffect(() => {
     const wasStreaming = wasStreamingRef.current;
     wasStreamingRef.current = isStreaming;
@@ -116,13 +118,6 @@ export const ActionGroup = React.memo<ActionGroupProps>(function ActionGroup({
       setOpen(false);
     }
   }, [isStreaming, hasPendingApproval, defaultCollapsed, isAtBottom]);
-
-  // Force-open whenever live or pending approval kicks in mid-life — a new
-  // turn starting after a previous one finished, or an interrupt arriving on a
-  // group the user had manually collapsed. Hiding either is the wrong default.
-  useEffect(() => {
-    if (isStreaming || hasPendingApproval) setOpen(true);
-  }, [isStreaming, hasPendingApproval]);
 
   const count = items.length;
   const toolName = lastToolName(items);
@@ -155,6 +150,43 @@ export const ActionGroup = React.memo<ActionGroupProps>(function ActionGroup({
         )}
         <span className="truncate">{headerText}</span>
       </button>
+      {/* Approval preview: when the group is collapsed and an approval is
+          pending, render JUST the last item (which carries the action
+          requests) outside the body so the user can act without expanding
+          the whole timeline. When the group is open, this slot is empty
+          and the same item renders inside the body — one instance at a
+          time, no duplication. */}
+      {!open &&
+        hasPendingApproval &&
+        lastMessageId !== undefined &&
+        (() => {
+          const previewItem = items.find((i) => i.message.id === lastMessageId);
+          if (!previewItem) return null;
+          const messageUi = ui?.filter(
+            (u: any) => u.metadata?.message_id === previewItem.message.id
+          );
+          return (
+            <div className="mt-2 space-y-2 border-l-2 border-border pl-3">
+              <ChatMessage
+                message={previewItem.message}
+                toolCalls={previewItem.toolCalls}
+                isLoading={isLoading}
+                isStreaming={isStreaming}
+                actionRequests={actionRequests}
+                submittedActionRequestKeys={submittedActionRequestKeys}
+                onActionRequestSubmitted={onActionRequestSubmitted}
+                reviewConfigsMap={reviewConfigsMap ?? undefined}
+                ui={messageUi}
+                stream={stream}
+                onResumeInterrupt={onResumeInterrupt}
+                graphId={graphId}
+                onEditMessage={onEditMessage}
+                autoApprove={autoApprove}
+                subAgentSteps={subAgentSteps}
+              />
+            </div>
+          );
+        })()}
       {open && (
         <div className="mt-2 space-y-2 border-l-2 border-border pl-3">
           {/* Children render below; the bottom collapse button comes after the
@@ -196,23 +228,22 @@ export const ActionGroup = React.memo<ActionGroupProps>(function ActionGroup({
               </React.Fragment>
             );
           })}
-          {/* Bottom collapse button — easy reach after scrolling through a long
-              group. Hidden while streaming or while waiting for approval, since
-              the section is force-open in those states anyway. */}
-          {!isStreaming && !hasPendingApproval && (
-            <button
-              type="button"
-              onClick={() => setOpen(false)}
-              className="flex w-full items-center justify-center gap-1.5 rounded-md py-1.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              aria-label={`Collapse ${count} action${count === 1 ? "" : "s"}`}
-            >
-              <ChevronUp
-                aria-hidden="true"
-                className="size-3.5"
-              />
-              Collapse
-            </button>
-          )}
+          {/* Bottom collapse button — easy reach after scrolling through a
+              long group. Collapse always sticks now (no force-open during
+              streaming, approval force-open is one-shot), so this is safe
+              to render whenever the body is visible. */}
+          <button
+            type="button"
+            onClick={() => setOpen(false)}
+            className="flex w-full items-center justify-center gap-1.5 rounded-md py-1.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            aria-label={`Collapse ${count} action${count === 1 ? "" : "s"}`}
+          >
+            <ChevronUp
+              aria-hidden="true"
+              className="size-3.5"
+            />
+            Collapse
+          </button>
         </div>
       )}
     </div>
