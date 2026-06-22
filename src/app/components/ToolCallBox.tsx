@@ -23,6 +23,26 @@ import { LoadExternalComponent } from "@langchain/langgraph-sdk/react-ui";
 import { ToolApprovalInterrupt } from "@/app/components/ToolApprovalInterrupt";
 import { formatToolLabel } from "@/lib/toolLabel";
 
+// One-line preview of a tool-call argument value, shown next to the key in
+// the collapsed args row. Strings have newlines collapsed; non-strings are
+// JSON.stringify'd. Both truncated so the row stays one line.
+function previewArgValue(value: unknown): string {
+  const MAX = 80;
+  let s: string;
+  if (typeof value === "string") {
+    s = value.replace(/\s+/g, " ").trim();
+  } else if (value === null || value === undefined) {
+    s = String(value);
+  } else {
+    try {
+      s = JSON.stringify(value);
+    } catch {
+      s = String(value);
+    }
+  }
+  return s.length > MAX ? s.slice(0, MAX - 1) + "…" : s;
+}
+
 interface ToolCallBoxProps {
   toolCall: ToolCall;
   uiComponent?: any;
@@ -254,50 +274,73 @@ export const ToolCallBox = React.memo<ToolCallBoxProps>(
                       Arguments
                     </h4>
                     <div className="space-y-2">
-                      {Object.entries(args).map(([key, value]) => (
-                        <div
-                          key={key}
-                          className="rounded-sm border border-border"
-                        >
-                          <button
-                            type="button"
-                            onClick={() => toggleArgExpanded(key)}
-                            className="flex w-full items-center justify-between bg-muted/30 p-2 text-left text-xs font-medium transition-colors hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                      {Object.entries(args).map(([key, value]) => {
+                        const preview = previewArgValue(value);
+                        const fullText =
+                          typeof value === "string"
+                            ? value
+                            : JSON.stringify(value, null, 2);
+                        // No fold when the preview already shows the value
+                        // verbatim — saves a click on short single-line args.
+                        const isFoldable = preview !== fullText;
+                        const isOpen = isFoldable && !!expandedArgs[key];
+                        const rowInner = (
+                          <span className="flex min-w-0 flex-1 items-baseline gap-2">
+                            <span className="shrink-0 font-mono">{key}:</span>
+                            <span className="truncate font-mono font-normal text-muted-foreground">
+                              {preview}
+                            </span>
+                          </span>
+                        );
+                        return (
+                          <div
+                            key={key}
+                            className="rounded-sm border border-border"
                           >
-                            <span className="font-mono">{key}</span>
-                            {expandedArgs[key] ? (
-                              <ChevronUp
-                                size={12}
-                                className="text-muted-foreground"
-                              />
+                            {isFoldable ? (
+                              <button
+                                type="button"
+                                onClick={() => toggleArgExpanded(key)}
+                                className="flex w-full items-center justify-between gap-2 bg-muted/30 p-2 text-left text-xs font-medium transition-colors hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                              >
+                                {rowInner}
+                                {isOpen ? (
+                                  <ChevronUp
+                                    size={12}
+                                    className="shrink-0 text-muted-foreground"
+                                  />
+                                ) : (
+                                  <ChevronDown
+                                    size={12}
+                                    className="shrink-0 text-muted-foreground"
+                                  />
+                                )}
+                              </button>
                             ) : (
-                              <ChevronDown
-                                size={12}
-                                className="text-muted-foreground"
-                              />
+                              <div className="flex items-center gap-2 bg-muted/30 p-2 text-xs font-medium">
+                                {rowInner}
+                              </div>
                             )}
-                          </button>
-                          {expandedArgs[key] && (
-                            <div
-                              className={cn(
-                                "border-t border-border bg-muted/20 p-2",
-                                compact && "p-1.5"
-                              )}
-                            >
-                              <pre
+                            {isOpen && (
+                              <div
                                 className={cn(
-                                  "m-0 overflow-x-auto whitespace-pre-wrap break-all font-mono text-xs leading-6 text-foreground",
-                                  compact && "text-[11px] leading-5"
+                                  "border-t border-border bg-muted/20 p-2",
+                                  compact && "p-1.5"
                                 )}
                               >
-                                {typeof value === "string"
-                                  ? value
-                                  : JSON.stringify(value, null, 2)}
-                              </pre>
-                            </div>
-                          )}
-                        </div>
-                      ))}
+                                <pre
+                                  className={cn(
+                                    "m-0 overflow-x-auto whitespace-pre-wrap break-all font-mono text-xs leading-6 text-foreground",
+                                    compact && "text-[11px] leading-5"
+                                  )}
+                                >
+                                  {fullText}
+                                </pre>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 )}
