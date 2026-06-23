@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState, useRef, useCallback } from "react";
 import {
   BrainCircuit,
+  Download,
   Loader2,
   MessageSquare,
   Pencil,
@@ -35,6 +36,7 @@ import {
   deleteThread,
   renameThread,
   pinThread,
+  exportThread,
 } from "@/app/hooks/useThreads";
 import { useMemoryActivity } from "@/app/hooks/useMemoryActivity";
 import {
@@ -194,6 +196,9 @@ export function ThreadList({
   const [actionBusy, setActionBusy] = useState(false);
   const [now, setNow] = useState(() => new Date());
   const [pinBusyIds, setPinBusyIds] = useState<Set<string>>(() => new Set());
+  const [exportBusyIds, setExportBusyIds] = useState<Set<string>>(
+    () => new Set()
+  );
 
   const threads = useThreads({
     status: statusFilter === "all" ? undefined : statusFilter,
@@ -318,6 +323,7 @@ export function ThreadList({
   // so a fast second Enter could fire a mutation twice. The ref guards instantly.
   const actionBusyRef = useRef(false);
   const pinBusyIdsRef = useRef<Set<string>>(new Set());
+  const exportBusyIdsRef = useRef<Set<string>>(new Set());
 
   // After deleting a thread its row (and the trigger button) is gone, so move
   // keyboard focus to a stable target (New Chat) instead of dropping to <body>.
@@ -400,11 +406,34 @@ export function ThreadList({
     }
   };
 
+  const runExport = async (thread: ThreadItem) => {
+    if (exportBusyIdsRef.current.has(thread.id)) return;
+    exportBusyIdsRef.current.add(thread.id);
+    setExportBusyIds((current) => {
+      const next = new Set(current);
+      next.add(thread.id);
+      return next;
+    });
+    try {
+      await exportThread(thread.id, thread.title);
+    } catch {
+      toast.error("Couldn't export — try again.");
+    } finally {
+      exportBusyIdsRef.current.delete(thread.id);
+      setExportBusyIds((current) => {
+        const next = new Set(current);
+        next.delete(thread.id);
+        return next;
+      });
+    }
+  };
+
   // A single thread row (select button + per-thread actions). Used by both the
   // pinned "Research" section and the time-grouped "Recents" sections; the only
   // difference is the Pin ↔ Unpin action, driven by `thread.pinned`.
   const renderThreadCard = (thread: ThreadItem) => {
     const pinBusy = pinBusyIds.has(thread.id);
+    const exportBusy = exportBusyIds.has(thread.id);
 
     return (
       <div
@@ -417,7 +446,7 @@ export function ThreadList({
           type="button"
           onClick={() => onThreadSelect(thread.id)}
           className={cn(
-            "grid w-full cursor-pointer items-center gap-2 rounded-md py-2 pl-2.5 pr-20 text-left transition-colors duration-200 md:pr-2.5 md:group-focus-within:pr-20 md:group-hover:pr-20",
+            "grid w-full cursor-pointer items-center gap-2 rounded-md py-2 pl-2.5 pr-28 text-left transition-colors duration-200 md:pr-2.5 md:group-focus-within:pr-28 md:group-hover:pr-28",
             "hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
             currentThreadId === thread.id
               ? "border border-primary bg-accent hover:bg-accent"
@@ -511,6 +540,26 @@ export function ThreadList({
               className="size-3.5"
               aria-hidden="true"
             />
+          </button>
+          <button
+            type="button"
+            aria-label={`Export "${thread.title}" as JSON`}
+            title="Export JSON"
+            onClick={() => runExport(thread)}
+            disabled={exportBusy}
+            className="rounded p-1 text-muted-foreground transition-colors hover:bg-background hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {exportBusy ? (
+              <Loader2
+                className="size-3.5 animate-spin"
+                aria-hidden="true"
+              />
+            ) : (
+              <Download
+                className="size-3.5"
+                aria-hidden="true"
+              />
+            )}
           </button>
           <button
             type="button"

@@ -234,3 +234,48 @@ export async function pinThread(id: string, pinned: boolean): Promise<void> {
   if (!client) throw new Error("No EvoScientist deployment configured.");
   await updateThreadMetadata(client, id, { pinned });
 }
+
+// Strip characters that are unsafe in filenames on Windows/macOS/Linux, then
+// collapse whitespace. Keep this lenient — we just need a valid filename, not
+// a slug.
+function slugifyForFilename(input: string): string {
+  return (
+    input
+      // Stripping control chars is the point — silence the lint rule.
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\\/:*?"<>|\u0000-\u001F]+/g, "")
+      .trim()
+      .replace(/\s+/g, "-")
+      .slice(0, 80)
+  );
+}
+
+/**
+ * Download the full thread state as JSON. We fetch via `client.threads.get`
+ * which returns the thread plus its current `values` (every message including
+ * tool calls, sub-agent output, and assistant thinking) — i.e. everything the
+ * backend has, suitable for debugging.
+ */
+export async function exportThread(
+  id: string,
+  filenameHint?: string
+): Promise<void> {
+  const client = makeThreadsClient();
+  if (!client) throw new Error("No EvoScientist deployment configured.");
+  const thread = await client.threads.get(id);
+  const blob = new Blob([JSON.stringify(thread, null, 2)], {
+    type: "application/json",
+  });
+  const url = URL.createObjectURL(blob);
+  const safeName =
+    (filenameHint && slugifyForFilename(filenameHint)) ||
+    `thread-${id.slice(0, 8)}`;
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${safeName}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Defer URL revocation a tick so Safari/Firefox finish the download trigger.
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
