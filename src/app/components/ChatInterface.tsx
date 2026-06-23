@@ -90,6 +90,9 @@ import {
 } from "@/components/ui/dialog";
 import { useQueryState } from "nuqs";
 import { toast } from "sonner";
+import { WorkspaceFileDialog } from "@/app/components/WorkspaceFileDialog";
+import { MemoryFileDialog } from "@/app/components/MemoryFileDialog";
+import { FILE_LINK_EVENT, type FileLinkEventDetail } from "@/lib/fileLink";
 
 interface ChatInterfaceProps {
   assistant: Assistant | null;
@@ -255,6 +258,27 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     const queueIdRef = useRef(0);
     const draggedQueuedMessageIdRef = useRef<number | null>(null);
     const [threadId] = useQueryState("threadId");
+    // Inline file paths in agent messages are rendered as click-to-open links
+    // by MarkdownContent. They dispatch a window event with the resolved
+    // workspace / memory path; we open the matching modal over the chat so
+    // workspace and memory feel uniform to the user (no view switch).
+    const [workspaceFilePath, setWorkspaceFilePath] = useState<string | null>(
+      null
+    );
+    const [memoryFilePath, setMemoryFilePath] = useState<string | null>(null);
+    useEffect(() => {
+      const onOpenFile = (e: Event) => {
+        const detail = (e as CustomEvent<FileLinkEventDetail>).detail;
+        if (!detail) return;
+        if (detail.kind === "memory") {
+          setMemoryFilePath(detail.path);
+        } else {
+          setWorkspaceFilePath(detail.path);
+        }
+      };
+      window.addEventListener(FILE_LINK_EVENT, onOpenFile);
+      return () => window.removeEventListener(FILE_LINK_EVENT, onOpenFile);
+    }, []);
     // Auto-approve is per-thread and persisted (see lib/autoApprove): it follows
     // the conversation across view switches (Skills/Memory unmount this), thread
     // switches, and reloads. Seed from storage for whatever thread is active on
@@ -1140,6 +1164,14 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
             </DialogFooter>
           </DialogContent>
         </Dialog>
+        <WorkspaceFileDialog
+          path={workspaceFilePath}
+          onClose={() => setWorkspaceFilePath(null)}
+        />
+        <MemoryFileDialog
+          path={memoryFilePath}
+          onClose={() => setMemoryFilePath(null)}
+        />
         <div
           className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain"
           ref={scrollRef}

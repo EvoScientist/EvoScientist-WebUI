@@ -10,6 +10,12 @@ import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import { cn } from "@/lib/utils";
 import { CodeBlock } from "./CodeBlock";
 import { MermaidDiagram } from "./MermaidDiagram";
+import {
+  detectFileLink,
+  dispatchFileLink,
+  FILE_LINK_HREF_PREFIX,
+  rehypePathLinks,
+} from "@/lib/fileLink";
 
 interface MarkdownContentProps {
   content: string;
@@ -42,23 +48,25 @@ export const MarkdownContent = React.memo<MarkdownContentProps>(
           remarkPlugins={[remarkGfm, remarkMath]}
           rehypePlugins={[
             rehypeRaw,
+            rehypePathLinks,
             [rehypeSanitize, sanitizeSchema],
             [rehypeKatex, { throwOnError: false, strict: false }],
           ]}
           components={{
             code({
-              inline,
               className,
               children,
               ...props
             }: {
-              inline?: boolean;
               className?: string;
               children?: React.ReactNode;
             }) {
               const match = /language-(\w+)/.exec(className || "");
               const code = String(children).replace(/\n$/, "");
-              if (!inline && match?.[1] === "mermaid") {
+              // react-markdown v9 dropped the `inline` prop. Block code carries
+              // a `language-*` className from the fenced ```lang form; inline
+              // code does not. Treat absence of a language match as inline.
+              if (match?.[1] === "mermaid") {
                 return (
                   <MermaidDiagram
                     code={code}
@@ -66,12 +74,31 @@ export const MarkdownContent = React.memo<MarkdownContentProps>(
                   />
                 );
               }
-              return !inline && match ? (
-                <CodeBlock
-                  language={match[1]}
-                  value={code}
-                />
-              ) : (
+              if (match) {
+                return (
+                  <CodeBlock
+                    language={match[1]}
+                    value={code}
+                  />
+                );
+              }
+              // Inline code that names a workspace or memory file becomes a
+              // click-to-open link. ChatInterface (or any ancestor) listens
+              // for `evosci:open-file` and routes to the right dialog.
+              const link = detectFileLink(code);
+              if (link) {
+                return (
+                  <button
+                    type="button"
+                    onClick={() => dispatchFileLink(link)}
+                    title={`Open ${link.display}`}
+                    className="rounded-sm bg-[var(--color-surface)] px-1 py-0.5 font-mono text-[0.9em] text-primary underline underline-offset-2 hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    {link.display}
+                  </button>
+                );
+              }
+              return (
                 <code
                   className="rounded-sm bg-[var(--color-surface)] px-1 py-0.5 font-mono text-[0.9em]"
                   {...props}
@@ -94,6 +121,32 @@ export const MarkdownContent = React.memo<MarkdownContentProps>(
               href?: string;
               children?: React.ReactNode;
             }) {
+              // Bare-text path matches surfaced by rehypePathLinks — clickable
+              // file link, no code box (kept for backticked input via the code
+              // handler above).
+              if (href && href.startsWith(FILE_LINK_HREF_PREFIX)) {
+                const encoded = href.slice(FILE_LINK_HREF_PREFIX.length);
+                let raw: string;
+                try {
+                  raw = decodeURIComponent(encoded);
+                } catch {
+                  raw = encoded;
+                }
+                const link = detectFileLink(raw);
+                if (!link) {
+                  return <span>{children}</span>;
+                }
+                return (
+                  <button
+                    type="button"
+                    onClick={() => dispatchFileLink(link)}
+                    title={`Open ${link.display}`}
+                    className="text-primary underline underline-offset-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    {children}
+                  </button>
+                );
+              }
               return (
                 <a
                   href={href}
