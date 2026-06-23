@@ -76,7 +76,12 @@ export function detectFileLink(text: string): FileLink | null {
       path: s.replace(/^\/memories\/+/, ""),
     };
   }
-  return { kind: "workspace", display: s, path: s.replace(/^\/+/, "") };
+  // Workspace API resolves relative to the workspace root. Strip both a
+  // leading `/` (the absolute form the agent sometimes emits) and a leading
+  // `./` (the explicit-relative form, e.g. `./attention.pdf`) so the server's
+  // hidden-entry guard doesn't reject the `.` segment.
+  const workspacePath = s.replace(/^\/+/, "").replace(/^\.\/+/, "");
+  return { kind: "workspace", display: s, path: workspacePath };
 }
 
 export const FILE_LINK_EVENT = "evosci:open-file";
