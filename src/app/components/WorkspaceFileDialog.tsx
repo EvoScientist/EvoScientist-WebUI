@@ -264,7 +264,10 @@ export const WorkspaceFileDialog = React.memo<{
           <DialogTitle className="sr-only">{path}</DialogTitle>
           <div className="mb-4 flex items-center justify-between gap-3 border-b border-border pb-4">
             <div className="flex min-w-0 items-center gap-2">
-              <FileText className="h-5 w-5 shrink-0 text-[var(--color-text-tertiary)]" />
+              <FileText
+                className="h-5 w-5 shrink-0 text-[var(--color-text-tertiary)]"
+                aria-hidden="true"
+              />
               <span className="overflow-hidden text-ellipsis whitespace-nowrap text-base font-medium text-primary">
                 {path}
               </span>
@@ -284,6 +287,7 @@ export const WorkspaceFileDialog = React.memo<{
                     <Eye
                       size={16}
                       className="mr-1"
+                      aria-hidden="true"
                     />
                     Cancel
                   </Button>
@@ -297,11 +301,13 @@ export const WorkspaceFileDialog = React.memo<{
                       <Loader2
                         size={16}
                         className="mr-1 animate-spin"
+                        aria-hidden="true"
                       />
                     ) : (
                       <Save
                         size={16}
                         className="mr-1"
+                        aria-hidden="true"
                       />
                     )}
                     {saving ? "Saving…" : "Save"}
@@ -321,29 +327,29 @@ export const WorkspaceFileDialog = React.memo<{
                       <Pencil
                         size={16}
                         className="mr-1"
+                        aria-hidden="true"
                       />
                       Edit
                     </Button>
                   )}
-                  <a
-                    href={workspaceFileUrl(path, true)}
-                    download={name}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 px-2"
+                    asChild
                   >
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-8 px-2"
-                      asChild
+                    <a
+                      href={workspaceFileUrl(path, true)}
+                      download={name}
                     >
-                      <span>
-                        <Download
-                          size={16}
-                          className="mr-1"
-                        />
-                        Download
-                      </span>
-                    </Button>
-                  </a>
+                      <Download
+                        size={16}
+                        className="mr-1"
+                        aria-hidden="true"
+                      />
+                      Download
+                    </a>
+                  </Button>
                   <Button
                     variant="ghost"
                     size="sm"
@@ -357,9 +363,13 @@ export const WorkspaceFileDialog = React.memo<{
                       <Loader2
                         size={16}
                         className="animate-spin"
+                        aria-hidden="true"
                       />
                     ) : (
-                      <Trash2 size={16} />
+                      <Trash2
+                        size={16}
+                        aria-hidden="true"
+                      />
                     )}
                   </Button>
                 </>
@@ -409,25 +419,30 @@ export const WorkspaceFileDialog = React.memo<{
                     ? "This file is too large to preview inline."
                     : "This file type can't be previewed."}
                 </p>
-                <a
-                  href={workspaceFileUrl(path, true)}
-                  download={name}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  asChild
                 >
-                  <Button
-                    variant="outline"
-                    size="sm"
+                  <a
+                    href={workspaceFileUrl(path, true)}
+                    download={name}
                   >
                     <Download
                       size={16}
                       className="mr-1"
+                      aria-hidden="true"
                     />
                     Download file
-                  </Button>
-                </a>
+                  </a>
+                </Button>
               </div>
             ) : loading ? (
               <div className="flex h-full items-center justify-center">
-                <Loader2 className="size-5 animate-spin text-muted-foreground" />
+                <Loader2
+                  className="size-5 animate-spin text-muted-foreground"
+                  aria-hidden="true"
+                />
               </div>
             ) : error ? (
               <div className="flex h-full items-center justify-center p-12">

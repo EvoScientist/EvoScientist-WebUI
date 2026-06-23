@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { flushSync } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -16,6 +16,30 @@ interface ToolApprovalInterruptProps {
   onSubmitted?: () => void;
 }
 
+function argsToRecord(args: unknown): Record<string, unknown> {
+  return args && typeof args === "object"
+    ? (args as Record<string, unknown>)
+    : {};
+}
+
+function cloneArgs(args: Record<string, unknown>): Record<string, unknown> {
+  try {
+    return JSON.parse(JSON.stringify(args)) as Record<string, unknown>;
+  } catch {
+    return { ...args };
+  }
+}
+
+function formatValue(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value === undefined) return "undefined";
+  try {
+    return JSON.stringify(value, null, 2) ?? String(value);
+  } catch {
+    return String(value);
+  }
+}
+
 export function ToolApprovalInterrupt({
   actionRequest,
   reviewConfig,
@@ -29,6 +53,10 @@ export function ToolApprovalInterrupt({
   const [showRejectionInput, setShowRejectionInput] = useState(false);
   const [submitted, setSubmitted] = useState(false);
 
+  const actionArgs = useMemo(
+    () => argsToRecord(actionRequest.args),
+    [actionRequest.args]
+  );
   const allowedDecisions = reviewConfig?.allowedDecisions ??
     reviewConfig?.allowed_decisions ?? ["approve", "reject", "edit"];
 
@@ -94,7 +122,7 @@ export function ToolApprovalInterrupt({
 
   const startEditing = () => {
     setIsEditing(true);
-    setEditedArgs(JSON.parse(JSON.stringify(actionRequest.args)));
+    setEditedArgs(cloneArgs(actionArgs));
     setShowRejectionInput(false);
   };
 
@@ -126,6 +154,7 @@ export function ToolApprovalInterrupt({
         <AlertCircle
           size={16}
           className="text-yellow-600 dark:text-yellow-400"
+          aria-hidden="true"
         />
         <span className="text-xs font-semibold uppercase tracking-wider">
           Approval Required
@@ -156,7 +185,7 @@ export function ToolApprovalInterrupt({
               Edit Arguments
             </span>
             <div className="mt-2 space-y-3">
-              {Object.entries(actionRequest.args).map(([key, value]) => (
+              {Object.entries(actionArgs).map(([key, value]) => (
                 <div key={key}>
                   <label className="mb-1 block text-xs font-medium text-foreground">
                     {key}
@@ -166,10 +195,10 @@ export function ToolApprovalInterrupt({
                       editedArgs[key] !== undefined
                         ? typeof editedArgs[key] === "string"
                           ? (editedArgs[key] as string)
-                          : JSON.stringify(editedArgs[key], null, 2)
+                          : formatValue(editedArgs[key])
                         : typeof value === "string"
                         ? value
-                        : JSON.stringify(value, null, 2)
+                        : formatValue(value)
                     }
                     onChange={(e) => updateEditedArg(key, e.target.value)}
                     className="font-mono text-xs"
@@ -188,7 +217,7 @@ export function ToolApprovalInterrupt({
               Arguments
             </span>
             <pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-all rounded-sm border border-border bg-muted/40 p-2 font-mono text-xs text-foreground">
-              {JSON.stringify(actionRequest.args, null, 2)}
+              {formatValue(actionArgs)}
             </pre>
           </div>
         )}
@@ -231,7 +260,10 @@ export function ToolApprovalInterrupt({
               disabled={isLoading}
               className="bg-green-600 text-white hover:bg-green-700 dark:bg-green-600 dark:hover:bg-green-700"
             >
-              <Check size={14} />
+              <Check
+                size={14}
+                aria-hidden="true"
+              />
               {isLoading ? "Saving…" : "Save & Approve"}
             </Button>
           </>
@@ -270,7 +302,10 @@ export function ToolApprovalInterrupt({
                 disabled={isLoading}
                 className="text-destructive hover:bg-destructive/10"
               >
-                <X size={14} />
+                <X
+                  size={14}
+                  aria-hidden="true"
+                />
                 Reject
               </Button>
             )}
@@ -282,7 +317,10 @@ export function ToolApprovalInterrupt({
                 onClick={startEditing}
                 disabled={isLoading}
               >
-                <Pencil size={14} />
+                <Pencil
+                  size={14}
+                  aria-hidden="true"
+                />
                 Edit
               </Button>
             )}
@@ -297,7 +335,10 @@ export function ToolApprovalInterrupt({
                   "dark:bg-green-600 dark:hover:bg-green-700"
                 )}
               >
-                <Check size={14} />
+                <Check
+                  size={14}
+                  aria-hidden="true"
+                />
                 {isLoading ? "Approving…" : "Approve"}
               </Button>
             )}

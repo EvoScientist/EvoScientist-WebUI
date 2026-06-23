@@ -1,6 +1,6 @@
 {
   "name": "@evoscientist/webui",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Web UI for EvoScientist — a self-evolving AI scientist built on DeepAgents/LangGraph.",
   "author": "Xi Zhang <zacharyzhang2022@gmail.com>",
   "type": "module",

@@ -62,7 +62,12 @@ export const MarkdownContent = React.memo<MarkdownContentProps>(
               children?: React.ReactNode;
             }) {
               const match = /language-(\w+)/.exec(className || "");
-              const code = String(children).replace(/\n$/, "");
+              const raw = String(children);
+              // Fenced blocks always end with \n; inline code does not. Use
+              // this to distinguish unlanguaged fenced blocks from inline code
+              // so detectFileLink is only called for true inline code.
+              const isBlock = raw.endsWith("\n");
+              const code = raw.replace(/\n$/, "");
               // react-markdown v9 dropped the `inline` prop. Block code carries
               // a `language-*` className from the fenced ```lang form; inline
               // code does not. Treat absence of a language match as inline.
@@ -85,7 +90,7 @@ export const MarkdownContent = React.memo<MarkdownContentProps>(
               // Inline code that names a workspace or memory file becomes a
               // click-to-open link. ChatInterface (or any ancestor) listens
               // for `evosci:open-file` and routes to the right dialog.
-              const link = detectFileLink(code);
+              const link = !isBlock ? detectFileLink(code) : null;
               if (link) {
                 return (
                   <button
