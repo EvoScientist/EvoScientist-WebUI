@@ -200,8 +200,21 @@ export function ThreadList({
     limit: 20,
   });
 
+  // Dedupe by id, keeping the first occurrence — page 0 wins, so the freshest
+  // `updated_at` survives. Without this, a thread whose `updated_at` advances
+  // mid-run (every agent step persists) appears in page 0 with the new value
+  // AND in a stale page 1+ with the old value, getting bucketed into both
+  // "Today" and "This Week" simultaneously. `revalidateFirstPage: true` in
+  // useThreads.ts keeps page 0 fresh but leaves later pages cached.
   const flattened = useMemo(() => {
-    return threads.data?.flat() ?? [];
+    const seen = new Set<string>();
+    const out: ThreadItem[] = [];
+    for (const t of threads.data?.flat() ?? []) {
+      if (seen.has(t.id)) continue;
+      seen.add(t.id);
+      out.push(t);
+    }
+    return out;
   }, [threads.data]);
 
   // Client-side filter of the loaded threads by title.
