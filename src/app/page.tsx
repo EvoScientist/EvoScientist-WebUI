@@ -26,6 +26,7 @@ import { ChatProvider } from "@/providers/ChatProvider";
 import { ChatInterface } from "@/app/components/ChatInterface";
 import { SkillsMarketplace } from "@/app/components/SkillsMarketplace";
 import { MemoryPanel } from "@/app/components/MemoryPanel";
+import { SparkPanel } from "@/app/components/SparkPanel";
 import { ThemeToggle } from "@/app/components/ThemeToggle";
 import { HealthIndicator } from "@/app/components/HealthIndicator";
 import { InspectorPanel } from "@/app/components/InspectorPanel";
@@ -389,6 +390,8 @@ function HomePageInner({
                 <SkillsMarketplace />
               ) : view === "memory" ? (
                 <MemoryPanel />
+              ) : view === "spark" ? (
+                <SparkPanel />
               ) : (
                 <ChatProvider
                   key={chatSessionRevision}

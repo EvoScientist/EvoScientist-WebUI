@@ -10,6 +10,7 @@ import {
   PinOff,
   Puzzle,
   Search,
+  Sparkles,
   SquarePen,
   Trash2,
   X,
@@ -593,6 +594,28 @@ export function ThreadList({
             {memoryUnseen}
           </span>
         )}
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          if (view === "spark") {
+            setView(null);
+            onClose?.();
+            return;
+          }
+          setView("spark");
+          onClose?.();
+        }}
+        className={cn(
+          "flex flex-shrink-0 items-center gap-2.5 border-b border-border px-3 py-3 text-left text-sm font-medium transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+          view === "spark" && "bg-accent"
+        )}
+      >
+        <Sparkles
+          className="size-4"
+          aria-hidden="true"
+        />
+        Idea Spark
       </button>
       <div className="flex-shrink-0 border-b border-border p-2.5">
         <div className="relative">
