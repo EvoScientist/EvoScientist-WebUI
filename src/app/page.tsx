@@ -31,6 +31,7 @@ import { HealthIndicator } from "@/app/components/HealthIndicator";
 import { InspectorPanel } from "@/app/components/InspectorPanel";
 import { setThreadAutoApprove } from "@/lib/autoApprove";
 import type { MainChatReporter } from "@/lib/asyncAgents";
+import { cn } from "@/lib/utils";
 
 interface HomePageInnerProps {
   config: DeploymentConfig;
@@ -46,7 +47,7 @@ function HomePageInner({
   handleSaveConfig,
 }: HomePageInnerProps) {
   const client = useClient();
-  const [, setThreadId] = useQueryState("threadId");
+  const [threadId, setThreadId] = useQueryState("threadId");
   const [sidebar, setSidebar] = useQueryState("sidebar");
   const [view, setView] = useQueryState("view");
   const [inspector, setInspector] = useQueryState("inspector");
@@ -191,10 +192,18 @@ function HomePageInner({
     async (id: string) => {
       setThreadAutoApprove(null, false);
       setView(null);
+      const sameThread = threadId === id;
       await setThreadId(id);
-      setChatSessionRevision((revision) => revision + 1);
+      // Only force a fresh ChatProvider mount when the thread actually
+      // changes. Clicking the active thread row (e.g. to return to chat from
+      // the Memory view) used to bump the revision unconditionally, which
+      // tore down ChatInterface and forced useStream to re-fetch the full
+      // thread `/history` — defeating the keep-chat-mounted layout.
+      if (!sameThread) {
+        setChatSessionRevision((revision) => revision + 1);
+      }
     },
-    [setThreadId, setView]
+    [setThreadId, setView, threadId]
   );
 
   return (
@@ -385,11 +394,18 @@ function HomePageInner({
               className="relative flex flex-col"
               order={2}
             >
-              {view === "skills" ? (
-                <SkillsMarketplace />
-              ) : view === "memory" ? (
-                <MemoryPanel />
-              ) : (
+              {/* Chat stays mounted across view switches. We hide it via
+                  `display:none` (rather than unmounting) so flipping to
+                  Skills/Memory and back is instant — no thread re-fetch, no
+                  message-list rebuild, and any in-flight run keeps streaming
+                  in the background. Cost is bounded: only the *current*
+                  thread's state is held; no accumulation per switch. */}
+              <div
+                className={cn(
+                  "flex h-full min-h-0 flex-1 flex-col",
+                  view !== null && "hidden"
+                )}
+              >
                 <ChatProvider
                   key={chatSessionRevision}
                   activeAssistant={assistant}
@@ -401,7 +417,9 @@ function HomePageInner({
                     onNotifyReady={(fn) => setNotifyMainChat(() => fn)}
                   />
                 </ChatProvider>
-              )}
+              </div>
+              {view === "skills" && <SkillsMarketplace />}
+              {view === "memory" && <MemoryPanel />}
             </ResizablePanel>
 
             {inspector && isDesktopLayout && (
