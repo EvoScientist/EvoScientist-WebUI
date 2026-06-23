@@ -28,19 +28,18 @@ import { formatToolLabel } from "@/lib/toolLabel";
 // JSON.stringify'd. Both truncated so the row stays one line.
 function previewArgValue(value: unknown): string {
   const MAX = 80;
-  let s: string;
-  if (typeof value === "string") {
-    s = value.replace(/\s+/g, " ").trim();
-  } else if (value === null || value === undefined) {
-    s = String(value);
-  } else {
-    try {
-      s = JSON.stringify(value);
-    } catch {
-      s = String(value);
-    }
-  }
+  const s = formatValue(value, { pretty: false }).replace(/\s+/g, " ").trim();
   return s.length > MAX ? s.slice(0, MAX - 1) + "…" : s;
+}
+
+function formatValue(value: unknown, options?: { pretty?: boolean }): string {
+  if (typeof value === "string") return value;
+  if (value === null || value === undefined) return String(value);
+  try {
+    return JSON.stringify(value, null, options?.pretty ? 2 : 0);
+  } catch {
+    return String(value);
+  }
 }
 
 interface ToolCallBoxProps {
@@ -83,8 +82,9 @@ export const ToolCallBox = React.memo<ToolCallBoxProps>(
     );
     const fallbackActionRequestKey = useMemo(() => {
       if (!actionRequest) return null;
-      return `${toolCall.id}:${actionRequest.name}:${JSON.stringify(
-        actionRequest.args
+      return `${toolCall.id}:${actionRequest.name}:${formatValue(
+        actionRequest.args,
+        { pretty: false }
       )}`;
     }, [actionRequest, toolCall.id]);
     const actionRequestKey =
@@ -184,7 +184,8 @@ export const ToolCallBox = React.memo<ToolCallBoxProps>(
       }));
     }, []);
 
-    const hasContent = result || Object.keys(args).length > 0;
+    const hasResult = result !== undefined && result !== null;
+    const hasContent = hasResult || Object.keys(args).length > 0;
     const isActionRequestSubmitted =
       actionRequestSubmitted ?? submittedActionRequestKey === actionRequestKey;
     const showApproval =
@@ -276,10 +277,7 @@ export const ToolCallBox = React.memo<ToolCallBoxProps>(
                     <div className="space-y-2">
                       {Object.entries(args).map(([key, value]) => {
                         const preview = previewArgValue(value);
-                        const fullText =
-                          typeof value === "string"
-                            ? value
-                            : JSON.stringify(value, null, 2);
+                        const fullText = formatValue(value, { pretty: true });
                         // No fold when the preview already shows the value
                         // verbatim — saves a click on short single-line args.
                         const isFoldable = preview !== fullText;
@@ -344,7 +342,7 @@ export const ToolCallBox = React.memo<ToolCallBoxProps>(
                     </div>
                   </div>
                 )}
-                {result && (
+                {hasResult && (
                   <div className={cn("mt-4", compact && "mt-2")}>
                     <h4 className="mb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                       Result
@@ -355,9 +353,7 @@ export const ToolCallBox = React.memo<ToolCallBoxProps>(
                         compact && "p-1.5 text-[11px] leading-5"
                       )}
                     >
-                      {typeof result === "string"
-                        ? result
-                        : JSON.stringify(result, null, 2)}
+                      {formatValue(result, { pretty: true })}
                     </pre>
                   </div>
                 )}

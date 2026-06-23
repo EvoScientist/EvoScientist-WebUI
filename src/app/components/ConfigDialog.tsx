@@ -137,6 +137,8 @@ export function ConfigDialog({
               type="checkbox"
               checked={collapseAgentActions}
               onChange={(e) => setCollapseAgentActions(e.target.checked)}
+              aria-label="Collapse agent actions by default"
+              aria-describedby="collapseAgentActions-description"
               className="mt-1 size-4 rounded border-border accent-[var(--brand)]"
             />
             <Label
@@ -144,7 +146,10 @@ export function ConfigDialog({
               className="text-sm font-normal leading-snug"
             >
               Collapse agent actions by default
-              <span className="block text-xs text-muted-foreground">
+              <span
+                id="collapseAgentActions-description"
+                className="block text-xs text-muted-foreground"
+              >
                 Keeps tool-call sequences folded while running and after
                 completion. Approval controls remain visible.
               </span>
