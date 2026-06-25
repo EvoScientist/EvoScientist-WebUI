@@ -183,6 +183,9 @@ export interface SparkGraphSummary {
   mtime: number;
   /** File size in bytes (useful for filtering empty/broken files). */
   size: number;
+  /** True when `graph.lock` exists alongside `graph.json` — the skill is
+   *  holding exclusive access. UI gates destructive actions (delete) on this. */
+  locked: boolean;
 }
 
 /**
@@ -380,4 +383,57 @@ export async function writeSparkGraph(graph: SparkGraph): Promise<void> {
     }
     throw new Error(detail);
   }
+}
+
+export interface SparkGraphDeleteReport {
+  /** Number of files removed from the graph's directory (graph.json, lock,
+   *  and any other direct-child files the skill might have written). */
+  deleted: number;
+  /** Subdirectories left untouched (e.g. `elaborations`). Caller surfaces
+   *  these as orphan warnings so the user can clean up via the Memory view. */
+  skippedDirs: string[];
+}
+
+/**
+ * Delete a spark graph's whole directory in the "rm <dir>/*"-but-skip-dirs
+ * shape: removes graph.json plus any sibling files, but does NOT recurse
+ * into subdirectories (e.g. `elaborations/<node-id>/…`). The server reports
+ * back any subdirs it skipped so the UI can warn about orphans.
+ *
+ * Locked graphs are not protected at this layer — the caller is expected
+ * to check `isGraphLocked` before invoking, the same pattern
+ * `writeSparkGraph` uses but with the gate raised UI-side rather than here
+ * (deletion is a deliberate user gesture; we want the user-visible "the
+ * skill is using this graph" message coming from the UI, not a generic
+ * 4xx from the API).
+ */
+export async function deleteSparkGraph(
+  graphId: string
+): Promise<SparkGraphDeleteReport> {
+  const path = `${SPARK_MEMORY_PREFIX}${graphId}`;
+  const res = await fetch(`/api/memory?path=${encodeURIComponent(path)}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try {
+      const body = (await res.json()) as { error?: unknown };
+      if (typeof body.error === "string" && body.error) {
+        detail = `${body.error} (HTTP ${res.status})`;
+      }
+    } catch {
+      // Response body wasn't JSON — keep the bare status code.
+    }
+    throw new Error(detail);
+  }
+  const body = (await res.json().catch(() => ({}))) as {
+    deleted?: unknown;
+    skippedDirs?: unknown;
+  };
+  return {
+    deleted: typeof body.deleted === "number" ? body.deleted : 0,
+    skippedDirs: Array.isArray(body.skippedDirs)
+      ? body.skippedDirs.filter((s): s is string => typeof s === "string")
+      : [],
+  };
 }

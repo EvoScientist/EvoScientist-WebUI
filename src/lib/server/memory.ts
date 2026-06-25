@@ -529,3 +529,75 @@ export async function deleteMemory(relPath: string): Promise<void> {
   if (!st.isFile()) throw new Error("Only files can be deleted.");
   await fs.rm(abs, { force: true });
 }
+
+export interface DirDeleteReport {
+  /** Files removed directly from the directory. */
+  deleted: number;
+  /** Names of subdirectories that were NOT touched. The caller decides
+   *  whether to surface them (e.g. as orphan warnings) or ignore. */
+  skippedDirs: string[];
+}
+
+/**
+ * Delete every direct-file child of a directory under the memory root, in
+ * the shape of `rm <dir>/*` — subdirectories are deliberately skipped, not
+ * recursed into. This keeps the destructive blast radius bounded to one
+ * level: a nested tree (e.g. `elaborations/` under a spark graph) survives
+ * unless the caller cleans it up separately. Hidden entries and `..`
+ * escapes are blocked by `safeResolveExisting`, same as file deletes.
+ */
+export async function deleteMemoryDir(
+  relPath: string
+): Promise<DirDeleteReport> {
+  const root = await canonicalDirIfExists();
+  if (!root) throw new Error("No memory directory found.");
+  const abs = await safeResolveExisting(root, relPath);
+  const st = await fs.stat(abs);
+  if (!st.isDirectory()) {
+    throw new Error("Path is not a directory.");
+  }
+  const entries = await fs.readdir(abs, { withFileTypes: true });
+  let deleted = 0;
+  const skippedDirs: string[] = [];
+  for (const ent of entries) {
+    if (isHiddenEntry(ent.name)) continue;
+    if (ent.isDirectory()) {
+      skippedDirs.push(ent.name);
+      continue;
+    }
+    if (!ent.isFile()) continue;
+    await fs.rm(resolve(abs, ent.name), { force: true });
+    deleted += 1;
+  }
+  // If nothing remains (no skipped subdirs) we can drop the now-empty
+  // directory itself. Leaving it would clutter the memory tree with
+  // ghost entries that the spark sidebar's listing-filter wouldn't show
+  // but the Memory view would.
+  if (skippedDirs.length === 0) {
+    await fs.rmdir(abs).catch(() => {
+      // Race with a concurrent writer — fine to leave the dir; a future
+      // delete or manual cleanup will catch it.
+    });
+  }
+  return { deleted, skippedDirs };
+}
+
+/**
+ * Dispatch entry point used by the DELETE route. Stats the resolved path and
+ * routes to the file or directory variant. Returns the dir-delete report so
+ * the API surface stays uniform — single-file deletes get `deleted: 1` and
+ * an empty `skippedDirs`.
+ */
+export async function deleteMemoryEntry(
+  relPath: string
+): Promise<DirDeleteReport> {
+  const root = await canonicalDirIfExists();
+  if (!root) throw new Error("No memory directory found.");
+  const abs = await safeResolveExisting(root, relPath);
+  const st = await fs.stat(abs);
+  if (st.isDirectory()) {
+    return deleteMemoryDir(relPath);
+  }
+  await deleteMemory(relPath);
+  return { deleted: 1, skippedDirs: [] };
+}

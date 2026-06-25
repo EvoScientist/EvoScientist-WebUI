@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   SPARK_GRAPH_JSON,
+  SPARK_GRAPH_LOCK,
   SPARK_MEMORY_PREFIX,
   type SparkGraphSummary,
 } from "@/lib/sparkTypes";
@@ -51,6 +52,19 @@ export function useSparkGraphs(): {
           setGraphs([]);
           return;
         }
+        // First pass: collect the set of graph ids whose `graph.lock`
+        // sentinel is present — the skill writes this while it holds
+        // exclusive access. We surface it as a `locked` flag on each
+        // summary so the UI can gate destructive actions (e.g. delete)
+        // without waiting for a race-prone 4xx from the server.
+        const lockedIds = new Set<string>();
+        for (const entry of listing.entries) {
+          if (!entry.path.startsWith(SPARK_MEMORY_PREFIX)) continue;
+          const rest = entry.path.slice(SPARK_MEMORY_PREFIX.length);
+          const parts = rest.split("/");
+          if (parts.length !== 2 || parts[1] !== SPARK_GRAPH_LOCK) continue;
+          lockedIds.add(parts[0]);
+        }
         // Match `idea_spark_tree/<id>/graph.json` exactly — two segments past
         // the prefix, where the second is the canonical filename. Skipping
         // any deeper-nested entries the skill might add later.
@@ -65,6 +79,7 @@ export function useSparkGraphs(): {
             path: entry.path,
             mtime: entry.mtime,
             size: entry.size,
+            locked: lockedIds.has(parts[0]),
           });
         }
         // Newest first — same convention as the threads list.

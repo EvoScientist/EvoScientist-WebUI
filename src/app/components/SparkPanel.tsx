@@ -1,13 +1,34 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { ChevronRight, Loader2, RotateCw, Sparkles } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  ChevronRight,
+  Loader2,
+  Lock,
+  RotateCw,
+  Sparkles,
+  Trash2,
+} from "lucide-react";
 import { useSparkGraphs } from "@/app/hooks/useSparkGraphs";
 import { useSparkGraph } from "@/app/hooks/useSparkGraph";
 import { SparkGraph } from "@/app/components/SparkGraph";
 import { SparkNodeDetail } from "@/app/components/SparkNodeDetail";
-import { partitionGraphByRejection } from "@/lib/sparkTypes";
+import {
+  deleteSparkGraph,
+  partitionGraphByRejection,
+  type SparkGraphSummary,
+} from "@/lib/sparkTypes";
 import { cn } from "@/lib/utils";
+import { toast } from "sonner";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
 
 /**
  * Top-level Idea Spark view. Three regions, hidden when irrelevant:
@@ -62,6 +83,49 @@ export function SparkPanel() {
   );
   const [rejectedOpen, setRejectedOpen] = useState(false);
 
+  // Delete-graph flow — mirrors the ThreadList "delete this research?"
+  // pattern: an explicit confirmation dialog, an actionBusy gate to keep
+  // Escape / backdrop from closing mid-delete, and a refresh + selection
+  // clear once the server returns. We surface skipped subdirectories
+  // (e.g. orphaned `elaborations/`) as a follow-up toast so the user can
+  // clean up via the Memory view if they want.
+  const [deleteTarget, setDeleteTarget] = useState<SparkGraphSummary | null>(
+    null
+  );
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const deleteBusyRef = useRef(false);
+  const confirmDelete = async () => {
+    if (!deleteTarget || deleteBusyRef.current) return;
+    deleteBusyRef.current = true;
+    setDeleteBusy(true);
+    try {
+      const report = await deleteSparkGraph(deleteTarget.id);
+      if (selectedGraphId === deleteTarget.id) {
+        setSelectedGraphId(null);
+      }
+      setDeleteTarget(null);
+      refresh();
+      if (report.skippedDirs.length > 0) {
+        toast.message(
+          `Graph removed; ${
+            report.skippedDirs.length
+          } subdirectory(ies) remained (${report.skippedDirs.join(
+            ", "
+          )}). Clean up via the Memory view if needed.`
+        );
+      }
+    } catch (err) {
+      toast.error(
+        err instanceof Error
+          ? `Couldn't delete: ${err.message}`
+          : "Couldn't delete — try again."
+      );
+    } finally {
+      deleteBusyRef.current = false;
+      setDeleteBusy(false);
+    }
+  };
+
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
       <header className="flex flex-shrink-0 items-center gap-2 border-b border-border px-4 py-3">
@@ -112,18 +176,59 @@ export function SparkPanel() {
             )}
             <ul className="space-y-0.5">
               {graphs.map((g) => (
-                <li key={g.id}>
+                <li
+                  key={g.id}
+                  className="group relative"
+                >
                   <button
                     type="button"
                     onClick={() => setSelectedGraphId(g.id)}
                     aria-current={selectedGraphId === g.id}
                     className={cn(
-                      "w-full truncate px-3 py-1.5 text-left text-sm transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+                      "w-full truncate py-1.5 pl-8 pr-3 text-left text-sm transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
                       selectedGraphId === g.id && "bg-accent"
                     )}
                     title={g.id}
                   >
                     {g.id}
+                  </button>
+                  {/* Trash sits in the gutter on the left, revealed on hover
+                      or keyboard focus (same pattern as the chat row). The
+                      lock icon replaces it when the skill is mid-write; we
+                      keep that one visible at all times so the user can see
+                      WHY the row is uninteractable. */}
+                  <button
+                    type="button"
+                    onClick={() => setDeleteTarget(g)}
+                    disabled={g.locked}
+                    aria-label={
+                      g.locked
+                        ? `"${g.id}" is locked by the skill`
+                        : `Delete "${g.id}"`
+                    }
+                    title={
+                      g.locked
+                        ? "Skill is using this graph — try again in a moment."
+                        : "Delete graph"
+                    }
+                    className={cn(
+                      "absolute left-1.5 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground transition-opacity hover:bg-destructive/10 hover:text-destructive focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-muted-foreground",
+                      g.locked
+                        ? "opacity-50"
+                        : "opacity-0 group-focus-within:opacity-100 group-hover:opacity-100"
+                    )}
+                  >
+                    {g.locked ? (
+                      <Lock
+                        className="size-3.5"
+                        aria-hidden="true"
+                      />
+                    ) : (
+                      <Trash2
+                        className="size-3.5"
+                        aria-hidden="true"
+                      />
+                    )}
                   </button>
                 </li>
               ))}
@@ -221,6 +326,41 @@ export function SparkPanel() {
           </div>
         )}
       </div>
+      <Dialog
+        open={deleteTarget !== null}
+        onOpenChange={(open) => {
+          if (!open && !deleteBusy) setDeleteTarget(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Delete this graph?</DialogTitle>
+            <DialogDescription>
+              &ldquo;{deleteTarget?.id}&rdquo; and its sibling files
+              (graph.json, lock) will be permanently removed. Subdirectories
+              such as <span className="font-mono">elaborations/</span> are left
+              untouched; you can clean those up via the Memory view. This
+              can&rsquo;t be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setDeleteTarget(null)}
+              disabled={deleteBusy}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={confirmDelete}
+              disabled={deleteBusy}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {deleteBusy ? "Deleting…" : "Delete"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
