@@ -113,7 +113,11 @@ import {
 } from "@/lib/modelCommand";
 import { useAvailableModels } from "@/app/hooks/useAvailableModels";
 import { useClient } from "@/providers/ClientProvider";
-import { SPARK_PREFILL_STORAGE_PREFIX } from "@/lib/sparkTypes";
+import {
+  SPARK_PREFILL_EVENT,
+  SPARK_PREFILL_STORAGE_PREFIX,
+  type SparkPrefillEventDetail,
+} from "@/lib/sparkTypes";
 
 type DashboardNavTarget =
   | {
@@ -339,21 +343,42 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       return () => window.removeEventListener(FILE_LINK_EVENT, onOpenFile);
     }, []);
     // Composer prefill handshake from `SparkNodeDetail` (e.g. the Elaborate
-    // next action button). Consumed once per threadId so re-entering the
-    // thread doesn't overwrite what the user has since typed.
+    // next action button). Two paths cover both fresh navigations and
+    // same-thread elaborates:
+    //   (1) threadId-change effect — if the user lands on a thread that
+    //       already has a prefill waiting in localStorage (e.g. they
+    //       refreshed mid-flight), consume it on arrival. Ref-guarded so
+    //       re-renders don't re-fire on the same thread.
+    //   (2) window event — SparkNodeDetail dispatches
+    //       `SPARK_PREFILL_EVENT` after writing. We consume regardless of
+    //       ref state because the user just clicked. Required since
+    //       chat now stays mounted across view switches: a same-thread
+    //       elaborate doesn't change threadId, so (1) wouldn't fire on
+    //       its own.
+    const consumeSparkPrefill = useCallback((targetThreadId: string) => {
+      if (typeof window === "undefined") return;
+      const key = `${SPARK_PREFILL_STORAGE_PREFIX}${targetThreadId}`;
+      const seed = window.localStorage.getItem(key);
+      if (!seed) return;
+      setInput(seed);
+      window.localStorage.removeItem(key);
+    }, []);
     const prefillCheckedThreadRef = useRef<string | null>(null);
     useEffect(() => {
       if (!threadId) return;
-      if (typeof window === "undefined") return;
       if (prefillCheckedThreadRef.current === threadId) return;
       prefillCheckedThreadRef.current = threadId;
-      const key = `${SPARK_PREFILL_STORAGE_PREFIX}${threadId}`;
-      const seed = window.localStorage.getItem(key);
-      if (seed) {
-        setInput(seed);
-        window.localStorage.removeItem(key);
-      }
-    }, [threadId]);
+      consumeSparkPrefill(threadId);
+    }, [threadId, consumeSparkPrefill]);
+    useEffect(() => {
+      const handler = (e: Event) => {
+        const detail = (e as CustomEvent<SparkPrefillEventDetail>).detail;
+        if (!detail?.threadId) return;
+        consumeSparkPrefill(detail.threadId);
+      };
+      window.addEventListener(SPARK_PREFILL_EVENT, handler);
+      return () => window.removeEventListener(SPARK_PREFILL_EVENT, handler);
+    }, [consumeSparkPrefill]);
     // Empty-state context for threads created from an idea-spark node — read
     // out of thread metadata so the placeholder can orient the user instead of
     // showing the generic "Start Research" copy. Cleared when threadId changes.

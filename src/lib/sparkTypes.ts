@@ -63,6 +63,20 @@ export const THREAD_COLOR_ALPHA = 0.5;
 export const SPARK_PREFILL_STORAGE_PREFIX = "spark-prefill:";
 
 /**
+ * Window event dispatched by `SparkNodeDetail` right after writing a prefill to
+ * localStorage. Carries the target `thread_id` in `detail`. `ChatInterface`
+ * listens for it and consumes synchronously, which matters now that chat
+ * stays mounted across view switches — a same-thread elaborate doesn't change
+ * threadId, so a threadId-keyed effect wouldn't re-fire and the prefill would
+ * sit in storage unused.
+ */
+export const SPARK_PREFILL_EVENT = "evosci:spark-prefill";
+
+export interface SparkPrefillEventDetail {
+  threadId: string;
+}
+
+/**
  * Deterministic hex colour for a node's originating thread. Pure function of
  * `thread_id` — no per-graph state, so two graphs that share a thread show
  * the same colour. Uses djb2-style hashing for cheap, well-spread bucketing.

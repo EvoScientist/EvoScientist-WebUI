@@ -22,12 +22,14 @@ import {
   buildElaborateTriggerMessage,
   rejectCascade,
   restoreCascade,
+  SPARK_PREFILL_EVENT,
   SPARK_PREFILL_STORAGE_PREFIX,
   SparkGraphLockedError,
   threadIdToColorRgba,
   writeSparkGraph,
   type SparkGraph,
   type SparkNode,
+  type SparkPrefillEventDetail,
 } from "@/lib/sparkTypes";
 
 // Per SCHEMA.md, references[] may contain plain URLs OR academic ids
@@ -121,6 +123,14 @@ export function SparkNodeDetail({
     );
     void setThreadId(node.thread_id);
     void setView(null);
+    // Tell ChatInterface to consume the prefill now. Necessary since chat
+    // stays mounted across view switches — a same-thread elaborate doesn't
+    // change `threadId`, so the threadId-keyed effect alone wouldn't fire.
+    window.dispatchEvent(
+      new CustomEvent<SparkPrefillEventDetail>(SPARK_PREFILL_EVENT, {
+        detail: { threadId: node.thread_id },
+      })
+    );
   };
 
   const copyThreadId = async () => {
