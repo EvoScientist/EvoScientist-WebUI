@@ -13,6 +13,11 @@ import {
   type SubAgentStep,
 } from "@/lib/subAgentActivity";
 import { parseSummarizationEvent } from "@/lib/summarization";
+import {
+  MODEL_OVERRIDE_METADATA_KEY,
+  type ModelOverride,
+} from "@/lib/modelCommand";
+import { setThreadModelOverride } from "@/app/hooks/useThreads";
 
 export type StateType = {
   messages: Message[];
@@ -203,6 +208,99 @@ export function useChat({
   );
   const [fetchedThreadId, setFetchedThreadId] = useState<string | null>(null);
   const recoveryRunRef = useRef(0);
+
+  // Per-thread model override. When set, gets folded into
+  // `configurable.model` on every `stream.submit` — the backend's
+  // `configurable_model` middleware
+  // (EvoScientist/middleware/configurable_model.py) is what actually swaps
+  // the chat model per request.
+  //
+  // The persistence dance gets a wrinkle for fresh chats: the thread row
+  // doesn't exist server-side until the first `stream.submit` creates it,
+  // so we can't write `model_override` into thread metadata yet. We stash
+  // any pre-thread pick in `pendingOverrideRef`, fold it into the first
+  // run's config via `buildRunConfig`, and write it through to metadata
+  // when `threadId` actually shows up. Without this, the user's first
+  // message goes to the deployment default even after they picked a model
+  // from the empty composer.
+  const [modelOverride, setModelOverrideState] = useState<ModelOverride | null>(
+    null
+  );
+  const pendingOverrideRef = useRef<ModelOverride | null>(null);
+  useEffect(() => {
+    if (!threadId) {
+      // Don't clobber a pending pre-thread override — `buildRunConfig` still
+      // needs to read it for the first send.
+      if (!pendingOverrideRef.current) setModelOverrideState(null);
+      return;
+    }
+    // Thread just came into existence (or we switched onto an existing one).
+    // If we have a pending pre-thread override, write it through to metadata
+    // and keep the local state as-is. Otherwise fetch the thread's persisted
+    // override and seed local state from it.
+    if (pendingOverrideRef.current) {
+      const pending = pendingOverrideRef.current;
+      pendingOverrideRef.current = null;
+      void (async () => {
+        try {
+          await setThreadModelOverride(threadId, pending);
+        } catch {
+          // The local state still reflects the pick; the next `setModelOverride`
+          // call (or thread reopen) gets another chance to persist it.
+        }
+      })();
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const t = (await client.threads.get(threadId)) as {
+          metadata?: Record<string, unknown>;
+        };
+        if (cancelled) return;
+        const raw = (t.metadata ?? {})[MODEL_OVERRIDE_METADATA_KEY];
+        if (
+          raw &&
+          typeof raw === "object" &&
+          typeof (raw as { model?: unknown }).model === "string"
+        ) {
+          const r = raw as { model: string; model_provider?: unknown };
+          setModelOverrideState({
+            model: r.model,
+            model_provider:
+              typeof r.model_provider === "string"
+                ? r.model_provider
+                : undefined,
+          });
+        } else {
+          setModelOverrideState(null);
+        }
+      } catch {
+        if (!cancelled) setModelOverrideState(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [client, threadId]);
+
+  // Persist + apply locally. When the thread row exists, writes metadata
+  // first so a reload keeps the choice. Pre-thread (new chat with no
+  // threadId yet), stashes the override in a ref so the next send picks it
+  // up via `buildRunConfig` and the thread-id effect can persist it as soon
+  // as the row is created server-side.
+  const setModelOverride = useCallback(
+    async (next: ModelOverride | null) => {
+      setModelOverrideState(next);
+      if (!threadId) {
+        pendingOverrideRef.current = next;
+        return;
+      }
+      pendingOverrideRef.current = null;
+      await setThreadModelOverride(threadId, next);
+    },
+    [threadId]
+  );
   useEffect(() => {
     if (!threadId) {
       setFetchedInterrupt(undefined);
@@ -353,6 +451,24 @@ export function useChat({
     return stream.messages;
   })();
 
+  // Fold the per-thread model override into the assistant's base config. The
+  // backend reads `configurable.model` + `configurable.model_provider` per
+  // request. We always send a `configurable` object (possibly empty) so the
+  // override leaves no trace on runs that don't need it.
+  const buildRunConfig = useCallback(() => {
+    const base = activeAssistant?.config ?? {};
+    const baseConfigurable =
+      (base as { configurable?: Record<string, unknown> }).configurable ?? {};
+    const configurable: Record<string, unknown> = { ...baseConfigurable };
+    if (modelOverride) {
+      configurable.model = modelOverride.model;
+      if (modelOverride.model_provider) {
+        configurable.model_provider = modelOverride.model_provider;
+      }
+    }
+    return { ...base, configurable, recursion_limit: 100 };
+  }, [activeAssistant?.config, modelOverride]);
+
   const sendMessage = useCallback(
     (content: string) => {
       // Drop any settled-run snapshot up front. Otherwise, until `isLoading`
@@ -371,7 +487,7 @@ export function useChat({
           optimisticValues: (prev) => ({
             messages: [...(prev.messages ?? []), newMessage],
           }),
-          config: { ...(activeAssistant?.config ?? {}), recursion_limit: 100 },
+          config: buildRunConfig(),
           streamSubgraphs: true,
           streamMode: ["updates"],
           streamResumable: true,
@@ -381,7 +497,7 @@ export function useChat({
       // Update thread list immediately when sending a message
       onHistoryRevalidate?.();
     },
-    [stream, activeAssistant?.config, onHistoryRevalidate]
+    [stream, buildRunConfig, onHistoryRevalidate]
   );
 
   const setFiles = useCallback(
@@ -406,6 +522,7 @@ export function useChat({
       recoveryRunRef.current += 1;
       stream.submit(null, {
         command: { resume: value },
+        config: buildRunConfig(),
         streamSubgraphs: true,
         streamMode: ["updates"],
         streamResumable: true,
@@ -414,7 +531,7 @@ export function useChat({
       // Update thread list when resuming from interrupt
       onHistoryRevalidate?.();
     },
-    [stream, onHistoryRevalidate]
+    [stream, buildRunConfig, onHistoryRevalidate]
   );
 
   const stopStream = useCallback(() => {
@@ -440,5 +557,7 @@ export function useChat({
     stopStream,
     resumeInterrupt,
     subAgentActivity,
+    modelOverride,
+    setModelOverride,
   };
 }

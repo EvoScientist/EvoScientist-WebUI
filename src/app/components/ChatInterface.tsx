@@ -93,6 +93,12 @@ import { toast } from "sonner";
 import { WorkspaceFileDialog } from "@/app/components/WorkspaceFileDialog";
 import { MemoryFileDialog } from "@/app/components/MemoryFileDialog";
 import { FILE_LINK_EVENT, type FileLinkEventDetail } from "@/lib/fileLink";
+import {
+  COMMON_MODELS,
+  parseModelCommand,
+  type ModelOverride,
+} from "@/lib/modelCommand";
+import { useAvailableModels } from "@/app/hooks/useAvailableModels";
 
 interface ChatInterfaceProps {
   assistant: Assistant | null;
@@ -287,6 +293,45 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       getThreadAutoApprove(threadId)
     );
     const [autoApproveDialogOpen, setAutoApproveDialogOpen] = useState(false);
+    const [modelPickerOpen, setModelPickerOpen] = useState(false);
+    const [modelSearch, setModelSearch] = useState("");
+    // Reset the search box every time the picker opens — stale filter state
+    // surviving across opens would surprise the user.
+    useEffect(() => {
+      if (modelPickerOpen) setModelSearch("");
+    }, [modelPickerOpen]);
+    const { registry: modelRegistry, loading: modelRegistryLoading } =
+      useAvailableModels();
+    // Picker source: prefer the backend's authoritative registry; fall back
+    // to the curated short list when the endpoint isn't available (older
+    // deployment, network blip). Registry order is the rank the backend
+    // recommends — we don't re-sort.
+    const pickerModels = useMemo(() => {
+      if (modelRegistry.entries.length > 0) {
+        return modelRegistry.entries.map((e) => ({
+          model: e.name,
+          model_provider: e.provider,
+        }));
+      }
+      return COMMON_MODELS.map((m) => ({
+        model: m.model,
+        model_provider: m.model_provider,
+      }));
+    }, [modelRegistry.entries]);
+    // Case-insensitive substring filter on name + provider. Fuzzy match was
+    // discussed but punted — substring catches the common "I know roughly
+    // what I want" case and keeps the picker behavior predictable.
+    const filteredPickerModels = useMemo(() => {
+      const q = modelSearch.trim().toLowerCase();
+      if (!q) return pickerModels;
+      return pickerModels.filter((m) => {
+        const provider = m.model_provider ?? "";
+        return (
+          m.model.toLowerCase().includes(q) ||
+          provider.toLowerCase().includes(q)
+        );
+      });
+    }, [pickerModels, modelSearch]);
     const autoApprovedRef = useRef<unknown>(null);
     const previousThreadIdRef = useRef(threadId);
     const migrateAutoApproveForCreatedThreadRef = useRef(false);
@@ -309,6 +354,8 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       subAgentActivity,
       asyncTasks,
       summarizationEvent,
+      modelOverride,
+      setModelOverride,
     } = useChatContext();
 
     // Count of background async sub-agents (writing / data-analysis) still
@@ -457,10 +504,42 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       return () => onNotifyReadyRef.current?.(null);
     }, []);
 
-    // The model behind the latest assistant reply (read from message metadata).
-    // Token/context usage is intentionally NOT shown — the backend doesn't persist
-    // usage_metadata, so it isn't reliably available here.
+    // What model will the next turn use? The pill is forward-looking — it
+    // updates the moment the user changes (or clears) the override, instead
+    // of lingering on what just ran. Priority:
+    //   1. Per-thread model override (`/model` command, picker) — the next
+    //      run will use this verbatim.
+    //   2. The model registry endpoint's reported deployment default —
+    //      what the next run will use when no override is set.
+    //   3. The assistant's configured default from `assistant.config.configurable`.
+    //   4. Last AI message's `response_metadata.model_name` — final fallback
+    //      when none of the above are available (older deployment without
+    //      `/api/models`).
+    // The endpoint's `default` can disagree with what the runtime actually
+    // boots with; that's a backend honesty problem and tracked separately.
+    // Token/context usage is intentionally NOT shown — the backend doesn't
+    // persist usage_metadata, so it isn't reliably available here.
     const currentModel = useMemo(() => {
+      if (modelOverride) {
+        return formatModel(modelOverride.model, modelOverride.model_provider);
+      }
+      if (modelRegistry.defaultEntry) {
+        return formatModel(
+          modelRegistry.defaultEntry.name,
+          modelRegistry.defaultEntry.provider ?? undefined
+        );
+      }
+      const cfg = assistant?.config as
+        | { configurable?: Record<string, unknown> }
+        | undefined;
+      const configurable = cfg?.configurable;
+      if (configurable) {
+        const info = formatModel(
+          configurable.model ?? configurable.model_name,
+          configurable.model_provider
+        );
+        if (info) return info;
+      }
       for (let i = messages.length - 1; i >= 0; i--) {
         const m = messages[i];
         if (m.type !== "ai") continue;
@@ -472,7 +551,12 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         if (info) return info;
       }
       return null;
-    }, [messages]);
+    }, [
+      messages,
+      modelOverride,
+      assistant?.config,
+      modelRegistry.defaultEntry,
+    ]);
 
     // Bind captured sub-agent activity (keyed by subgraph namespace) to each task
     // tool call → its live steps. B': match a finished sub-agent to a task by its
@@ -659,6 +743,49 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       );
     }, []);
 
+    // Apply a parsed `/model` command. Three forms:
+    //   - show  → open the model picker dialog
+    //   - reset → clear the per-thread override (revert to assistant default)
+    //   - set   → persist the new override and confirm via toast. Names that
+    //             aren't in our curated list are still accepted — the backend
+    //             accepts anything `init_chat_model` knows, and we'd rather
+    //             not block a power user on our curation lagging the registry.
+    const applyModelCommand = useCallback(
+      async (cmd: ReturnType<typeof parseModelCommand>) => {
+        if (!cmd) return;
+        if (cmd.kind === "show") {
+          setModelPickerOpen(true);
+          return;
+        }
+        // Pre-thread picks are staged in useChat and applied to the first
+        // run; no threadId guard needed.
+        try {
+          if (cmd.kind === "reset") {
+            await setModelOverride(null);
+            toast.success("Model override cleared.");
+          } else {
+            const next: ModelOverride = {
+              model: cmd.model,
+              ...(cmd.provider ? { model_provider: cmd.provider } : {}),
+            };
+            await setModelOverride(next);
+            toast.success(
+              `Model set to ${cmd.model}${
+                cmd.provider ? ` (${cmd.provider})` : ""
+              }.`
+            );
+          }
+        } catch (err) {
+          toast.error(
+            err instanceof Error
+              ? `Couldn't update model: ${err.message}`
+              : "Couldn't update model — try again."
+          );
+        }
+      },
+      [setModelOverride]
+    );
+
     const handleSubmit = useCallback(
       (e?: FormEvent) => {
         if (e) {
@@ -666,6 +793,15 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         }
         const messageText = input.trim();
         if (!messageText) return;
+        // Intercept `/model` before the agent sees it — purely client-side
+        // state on the thread metadata. The textarea clears regardless of
+        // outcome so the command echo doesn't linger.
+        const modelCmd = parseModelCommand(messageText);
+        if (modelCmd) {
+          void applyModelCommand(modelCmd);
+          setInput("");
+          return;
+        }
         // Can't compose with no assistant, a pending interrupt, or files still
         // uploading. (Unlike before, isLoading is NOT a blocker — see below.)
         if (!assistant || hasPendingInterrupt || isUploadingFiles) return;
@@ -694,6 +830,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       },
       [
         input,
+        applyModelCommand,
         assistant,
         hasPendingInterrupt,
         autoApprove,
@@ -1172,6 +1309,132 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
           path={memoryFilePath}
           onClose={() => setMemoryFilePath(null)}
         />
+        <Dialog
+          open={modelPickerOpen}
+          onOpenChange={setModelPickerOpen}
+        >
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Pick a model for this chat</DialogTitle>
+              <DialogDescription>
+                The choice applies per-thread. Type{" "}
+                <span className="font-mono text-xs">/model &lt;name&gt;</span>{" "}
+                in the composer to use a name not in the list.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="mt-2 space-y-2">
+              <div className="text-xs text-muted-foreground">
+                Current:{" "}
+                <span className="font-mono">
+                  {currentModel
+                    ? `${currentModel.name}${
+                        currentModel.provider
+                          ? ` (${currentModel.provider})`
+                          : ""
+                      }`
+                    : "deployment default"}
+                </span>
+                {modelRegistryLoading && (
+                  <span className="ml-2 italic">loading registry…</span>
+                )}
+              </div>
+              <input
+                type="text"
+                value={modelSearch}
+                onChange={(e) => setModelSearch(e.target.value)}
+                placeholder="Filter by name or provider…"
+                autoFocus
+                className="w-full rounded-md border border-border bg-background px-3 py-1.5 font-mono text-sm placeholder:font-sans placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              />
+              <ul className="max-h-72 space-y-1 overflow-y-auto pl-0">
+                {filteredPickerModels.length === 0 && (
+                  <li className="px-3 py-2 text-xs text-muted-foreground">
+                    No models match &ldquo;{modelSearch}&rdquo;.
+                  </li>
+                )}
+                {filteredPickerModels.map((m) => {
+                  const isActive =
+                    modelOverride?.model === m.model &&
+                    modelOverride?.model_provider === m.model_provider;
+                  const isDefault =
+                    !modelOverride &&
+                    modelRegistry.defaultEntry?.name === m.model &&
+                    (modelRegistry.defaultEntry?.provider ?? null) ===
+                      (m.model_provider ?? null);
+                  return (
+                    <li key={`${m.model}|${m.model_provider ?? ""}`}>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          try {
+                            await setModelOverride({
+                              model: m.model,
+                              ...(m.model_provider
+                                ? { model_provider: m.model_provider }
+                                : {}),
+                            });
+                            toast.success(
+                              `Model set to ${m.model}${
+                                m.model_provider ? ` (${m.model_provider})` : ""
+                              }.`
+                            );
+                            setModelPickerOpen(false);
+                          } catch (err) {
+                            toast.error(
+                              err instanceof Error
+                                ? `Couldn't update model: ${err.message}`
+                                : "Couldn't update model — try again."
+                            );
+                          }
+                        }}
+                        className={cn(
+                          "flex w-full items-center justify-between rounded px-3 py-2 text-left text-sm transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+                          isActive && "bg-accent"
+                        )}
+                      >
+                        <span className="font-mono">
+                          {m.model}
+                          {isDefault && (
+                            <span className="ml-2 text-xs font-normal text-muted-foreground">
+                              · default
+                            </span>
+                          )}
+                        </span>
+                        {m.model_provider && (
+                          <span className="text-xs text-muted-foreground">
+                            {m.model_provider}
+                          </span>
+                        )}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={async () => {
+                  try {
+                    await setModelOverride(null);
+                    toast.success("Model override cleared.");
+                    setModelPickerOpen(false);
+                  } catch (err) {
+                    toast.error(
+                      err instanceof Error
+                        ? `Couldn't clear override: ${err.message}`
+                        : "Couldn't clear override — try again."
+                    );
+                  }
+                }}
+                disabled={!modelOverride}
+              >
+                Reset to default
+              </Button>
+              <Button onClick={() => setModelPickerOpen(false)}>Close</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
         <div
           className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain"
           ref={scrollRef}
@@ -1747,7 +2010,13 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
             {(currentModel || runningAgents > 0) && (
               <div className="flex items-center gap-1.5 border-t border-border px-3 py-1.5 text-xs text-muted-foreground">
                 {currentModel && (
-                  <>
+                  <button
+                    type="button"
+                    onClick={() => setModelPickerOpen(true)}
+                    title="Click to change model for this chat"
+                    aria-label="Change model for this chat"
+                    className="-mx-1 flex items-center gap-1.5 rounded px-1 py-0.5 transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
                     <Sparkles
                       className="size-3.5 shrink-0 text-[var(--brand)]"
                       aria-hidden="true"
@@ -1758,7 +2027,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                     {currentModel.provider && (
                       <span>· {currentModel.provider}</span>
                     )}
-                  </>
+                  </button>
                 )}
                 {runningAgents > 0 && (
                   <button

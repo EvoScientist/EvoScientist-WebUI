@@ -235,6 +235,24 @@ export async function pinThread(id: string, pinned: boolean): Promise<void> {
   await updateThreadMetadata(client, id, { pinned });
 }
 
+/**
+ * Persist (or clear) the per-thread model override. Pass `null` to remove the
+ * key so the thread reverts to the deployment-default model. Reads on
+ * subsequent runs flow through `useChat` → `stream.submit({ config: ... })`,
+ * which the backend's `configurable_model` middleware resolves per request.
+ */
+export async function setThreadModelOverride(
+  id: string,
+  override: { model: string; model_provider?: string } | null
+): Promise<void> {
+  const client = makeThreadsClient();
+  if (!client) throw new Error("No EvoScientist deployment configured.");
+  // Passing `null` here keeps the key present in metadata but explicitly
+  // un-set, which matches how langgraph treats absence-vs-null in the
+  // configurable middleware (`getattr(cfg, "model", None)` accepts both).
+  await updateThreadMetadata(client, id, { model_override: override });
+}
+
 // Strip characters that are unsafe in filenames on Windows/macOS/Linux, then
 // collapse whitespace. Keep this lenient — we just need a valid filename, not
 // a slug.
