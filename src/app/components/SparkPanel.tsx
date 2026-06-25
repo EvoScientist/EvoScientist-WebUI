@@ -198,7 +198,7 @@ export function SparkPanel() {
                     a research direction.
                   </div>
                 )}
-                <ul className="space-y-0.5">
+                <ul className="space-y-0.5 pl-1 pr-1">
                   {graphs.map((g) => (
                     <li
                       key={g.id}
@@ -209,7 +209,7 @@ export function SparkPanel() {
                         onClick={() => setSelectedGraphId(g.id)}
                         aria-current={selectedGraphId === g.id}
                         className={cn(
-                          "w-full truncate py-1.5 pl-8 pr-3 text-left text-sm transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+                          "w-full truncate rounded py-1.5 pl-8 pr-3 text-left text-sm transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
                           selectedGraphId === g.id && "bg-accent"
                         )}
                         title={g.id}
