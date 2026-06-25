@@ -8,7 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { RotateCcw } from "lucide-react";
+import { Minus, Plus, RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/providers/ThemeProvider";
 import { renderMermaid, type MermaidTheme } from "@/lib/mermaidRenderer";
@@ -261,13 +261,24 @@ export function SparkGraph({
 
   const reset = useCallback(() => setTransform(INITIAL_TRANSFORM), []);
 
+  // Step-zoom around the viewport centre — shared by the +/- on-screen
+  // buttons and the keyboard handler. The keyboard path passes through here
+  // so both surfaces stay in sync.
+  const zoomStep = useCallback((direction: "in" | "out") => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    const rect = viewport.getBoundingClientRect();
+    const factor = direction === "in" ? KEY_ZOOM_STEP : 1 / KEY_ZOOM_STEP;
+    setTransform((t) =>
+      zoomAround(t, rect.width / 2, rect.height / 2, t.scale * factor)
+    );
+  }, []);
+
   // Keyboard shortcuts: 0 = reset, +/= = zoom in, - = zoom out. Anchored to
   // the viewport centre (not the cursor) since there's no cursor coord for
   // a key press. Only fire when the viewport itself has focus so we don't
   // hijack typing elsewhere on the page.
   const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    const viewport = viewportRef.current;
-    if (!viewport) return;
     if (e.key === "0") {
       e.preventDefault();
       reset();
@@ -275,18 +286,12 @@ export function SparkGraph({
     }
     if (e.key === "+" || e.key === "=") {
       e.preventDefault();
-      const rect = viewport.getBoundingClientRect();
-      setTransform((t) =>
-        zoomAround(t, rect.width / 2, rect.height / 2, t.scale * KEY_ZOOM_STEP)
-      );
+      zoomStep("in");
       return;
     }
     if (e.key === "-" || e.key === "_") {
       e.preventDefault();
-      const rect = viewport.getBoundingClientRect();
-      setTransform((t) =>
-        zoomAround(t, rect.width / 2, rect.height / 2, t.scale / KEY_ZOOM_STEP)
-      );
+      zoomStep("out");
     }
   };
 
@@ -342,19 +347,45 @@ export function SparkGraph({
         )}
         dangerouslySetInnerHTML={{ __html: svg }}
       />
-      <button
-        type="button"
-        onClick={reset}
-        disabled={!transformChanged}
-        aria-label="Reset zoom and pan"
-        title="Reset zoom and pan (0)"
-        className="absolute right-3 top-3 inline-flex size-8 items-center justify-center rounded-md border border-border bg-background/90 text-muted-foreground shadow-sm transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
-      >
-        <RotateCcw
-          className="size-4"
-          aria-hidden="true"
-        />
-      </button>
+      <div className="absolute right-3 top-3 flex flex-col gap-1.5">
+        <button
+          type="button"
+          onClick={() => zoomStep("in")}
+          aria-label="Zoom in"
+          title="Zoom in (+)"
+          className="inline-flex size-8 items-center justify-center rounded-md border border-border bg-background/90 text-muted-foreground shadow-sm transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <Plus
+            className="size-4"
+            aria-hidden="true"
+          />
+        </button>
+        <button
+          type="button"
+          onClick={() => zoomStep("out")}
+          aria-label="Zoom out"
+          title="Zoom out (-)"
+          className="inline-flex size-8 items-center justify-center rounded-md border border-border bg-background/90 text-muted-foreground shadow-sm transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <Minus
+            className="size-4"
+            aria-hidden="true"
+          />
+        </button>
+        <button
+          type="button"
+          onClick={reset}
+          disabled={!transformChanged}
+          aria-label="Reset zoom and pan"
+          title="Reset zoom and pan (0)"
+          className="inline-flex size-8 items-center justify-center rounded-md border border-border bg-background/90 text-muted-foreground shadow-sm transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <RotateCcw
+            className="size-4"
+            aria-hidden="true"
+          />
+        </button>
+      </div>
     </div>
   );
 }
