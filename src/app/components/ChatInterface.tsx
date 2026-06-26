@@ -300,8 +300,25 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     useEffect(() => {
       if (modelPickerOpen) setModelSearch("");
     }, [modelPickerOpen]);
-    const { registry: modelRegistry, loading: modelRegistryLoading } =
-      useAvailableModels();
+    const {
+      registry: modelRegistry,
+      loading: modelRegistryLoading,
+      error: modelRegistryError,
+    } = useAvailableModels();
+    // We're on the curated fallback list when the registry fetch settled
+    // (not loading) but produced no entries — either an explicit error from
+    // the backend's `/api/models` route, or a successful response that came
+    // back empty. We log once so dev tools surface the cause.
+    const isFallbackModelList =
+      !modelRegistryLoading && modelRegistry.entries.length === 0;
+    useEffect(() => {
+      if (isFallbackModelList) {
+        console.warn(
+          "[model picker] using curated fallback list — registry fetch failed or empty",
+          modelRegistryError ?? "(no error message)"
+        );
+      }
+    }, [isFallbackModelList, modelRegistryError]);
     // Picker source: prefer the backend's authoritative registry; fall back
     // to the curated short list when the endpoint isn't available (older
     // deployment, network blip). Registry order is the rank the backend
@@ -1338,6 +1355,24 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                   <span className="ml-2 italic">loading registry…</span>
                 )}
               </div>
+              {isFallbackModelList && (
+                <div className="border-[var(--color-warning)]/30 bg-[var(--color-warning)]/5 flex items-start gap-2 rounded-md border px-3 py-2 text-xs text-foreground">
+                  <span
+                    aria-hidden="true"
+                    className="text-base leading-none text-[var(--color-warning)]"
+                  >
+                    {"\u26A0"}
+                  </span>
+                  <span>
+                    Showing a curated subset — the deployment&rsquo;s
+                    <span className="mx-1 font-mono">/api/models</span>
+                    registry didn&rsquo;t load
+                    {modelRegistryError ? ` (${modelRegistryError})` : ""}.
+                    Other short names still work via{" "}
+                    <span className="font-mono">/model &lt;name&gt;</span>.
+                  </span>
+                </div>
+              )}
               <input
                 type="text"
                 value={modelSearch}
