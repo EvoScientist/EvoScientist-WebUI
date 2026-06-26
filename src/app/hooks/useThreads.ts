@@ -11,6 +11,11 @@ export interface ThreadItem {
   description: string;
   assistantId?: string;
   pinned: boolean;
+  /** True when any of the thread's pending interrupts is an `ask_user` —
+   *  i.e. the agent is asking the user a question that auto-approve can't
+   *  resolve. Used by the sidebar to keep these threads in "Requiring
+   *  Attention" even when auto-approve is on. */
+  needsUserInput: boolean;
 }
 
 const DEFAULT_PAGE_SIZE = 20;
@@ -163,6 +168,28 @@ export function useThreads(props: {
           (thread.metadata as Record<string, unknown> | undefined)?.pinned ===
           true;
 
+        // Walk `thread.interrupts` (Record<task_id, Interrupt[]>) and flag any
+        // value with `type: "ask_user"`. The auto-approver can't resolve those,
+        // so the sidebar should keep the row in "Requiring Attention" even when
+        // auto-approve is on for the thread.
+        let needsUserInput = false;
+        const interrupts = thread.interrupts as
+          | Record<string, Array<{ value?: unknown }>>
+          | undefined;
+        if (interrupts && typeof interrupts === "object") {
+          for (const list of Object.values(interrupts)) {
+            if (!Array.isArray(list)) continue;
+            for (const ir of list) {
+              const value = ir?.value as { type?: unknown } | undefined;
+              if (value && value.type === "ask_user") {
+                needsUserInput = true;
+                break;
+              }
+            }
+            if (needsUserInput) break;
+          }
+        }
+
         return {
           id: thread.thread_id,
           updatedAt: new Date(thread.updated_at),
@@ -171,6 +198,7 @@ export function useThreads(props: {
           description,
           assistantId,
           pinned,
+          needsUserInput,
         };
       });
     },

@@ -41,6 +41,7 @@ import {
   exportThread,
 } from "@/app/hooks/useThreads";
 import { useMemoryActivity } from "@/app/hooks/useMemoryActivity";
+import { getThreadAutoApprove } from "@/lib/autoApprove";
 import {
   Dialog,
   DialogContent,
@@ -235,7 +236,20 @@ export function ThreadList({
       // Pinned threads live in the "Research" section only, not the time groups.
       if (thread.pinned) return;
 
-      if (thread.status === "interrupted") {
+      // Bucket into "Requiring Attention" when the interrupt actually needs
+      // the user. Two cases qualify:
+      //   - `needsUserInput` (an `ask_user` interrupt is active) - auto-approve
+      //     can NOT handle these, so the row must surface no matter what.
+      //   - Plain interrupt with auto-approve off - the user has to approve
+      //     the tool call themselves.
+      // With auto-approve on AND no `ask_user`, the WebUI resumes the run on
+      // its own; lifting the row out of its time group would make it jump
+      // around in the sidebar for a behaviour the user has explicitly opted
+      // out of seeing.
+      if (
+        thread.needsUserInput ||
+        (thread.status === "interrupted" && !getThreadAutoApprove(thread.id))
+      ) {
         groups.interrupted.push(thread);
         return;
       }
@@ -258,7 +272,14 @@ export function ThreadList({
   }, [filtered, now]);
 
   const interruptedCount = useMemo(() => {
-    return flattened.filter((t) => t.status === "interrupted").length;
+    // Mirrors the `grouped` logic: count threads that actually need the user
+    // either via an ask_user interrupt OR a plain interrupt with auto-approve
+    // off. Auto-approve threads with tool-call interrupts skip the badge.
+    return flattened.filter(
+      (t) =>
+        t.needsUserInput ||
+        (t.status === "interrupted" && !getThreadAutoApprove(t.id))
+    ).length;
   }, [flattened]);
 
   // Expose thread list revalidation to parent component
