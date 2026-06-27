@@ -18,6 +18,7 @@ import { homedir } from "os";
 import { join, dirname, relative, resolve, sep } from "path";
 import { randomUUID } from "crypto";
 import { hasControlChar } from "@/lib/server/workspace";
+import type { ObsGraphData, ObsNode, ObsEdge } from "@/lib/observationGraph";
 
 // Re-export so memory API routes can share the workspace cross-origin guard.
 export { isCrossOrigin } from "@/lib/server/workspace";
@@ -268,6 +269,22 @@ export interface MemoryFile {
   mtime: number;
 }
 
+export interface ExecEntry {
+  id: string;
+  created_at: string;
+  agent: string;
+  session_id: string;
+  project_id: string;
+  summary: string;
+  obs_ids: string[];
+  path: string;
+}
+
+export interface ExecListData {
+  entries: ExecEntry[];
+  truncated: boolean;
+}
+
 /** Read one memory text file. */
 export async function readMemory(relPath: string): Promise<MemoryFile> {
   const root = await canonicalDirIfExists();
@@ -317,6 +334,190 @@ export async function writeMemory(
     size: st.size,
     mtime: st.mtimeMs,
   };
+}
+
+function extractFm(content: string): string {
+  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  return match ? match[1] : "";
+}
+
+function fmScalar(yaml: string, key: string): string {
+  const re = new RegExp(`^${key}:\\s*(.+)`, "m");
+  const m = yaml.match(re);
+  if (!m) return "";
+  return m[1]
+    .trim()
+    .replace(/^'(.*)'$/, "$1")
+    .replace(/^"(.*)"$/, "$1");
+}
+
+function fmRelated(yaml: string): Array<{ id: string; relation: string }> {
+  const start = yaml.indexOf("related_observations:");
+  if (start === -1) return [];
+  const chunk = yaml.slice(start + "related_observations:".length);
+  const results: Array<{ id: string; relation: string }> = [];
+  const itemRe = /^- id:\s*(.+)$/gm;
+  let m: RegExpExecArray | null;
+  while ((m = itemRe.exec(chunk)) !== null) {
+    const itemStart = m.index;
+    const rest = chunk.slice(itemStart + 1);
+    const nextBoundary = rest.match(/^(?:- |[a-z_])/m);
+    const itemText = chunk.slice(
+      itemStart,
+      itemStart + 1 + (nextBoundary?.index ?? rest.length)
+    );
+    const id = m[1].trim().replace(/^['"]|['"]$/g, "");
+    const relMatch = itemText.match(/^\s+relation:\s*(.+)$/m);
+    const relation = relMatch?.[1]?.trim() ?? "";
+    if (id && relation) results.push({ id, relation });
+  }
+  return results;
+}
+
+function fmNestedScalar(yaml: string, key: string): string {
+  const re = new RegExp(`\\b${key}:\\s*(.+)`, "m");
+  const m = yaml.match(re);
+  if (!m) return "";
+  return m[1]
+    .trim()
+    .replace(/^'(.*)'$/, "$1")
+    .replace(/^"(.*)"$/, "$1");
+}
+
+export async function listObservations(): Promise<ObsGraphData> {
+  const maybeRoot = await canonicalDirIfExists();
+  if (!maybeRoot) return { nodes: [], edges: [] };
+  const root = maybeRoot;
+  const obsDir = join(root, "observations");
+  try {
+    await fs.access(obsDir);
+  } catch {
+    return { nodes: [], edges: [] };
+  }
+
+  const nodeMap = new Map<string, ObsNode>();
+  const rawEdges: ObsEdge[] = [];
+
+  async function walk(dir: string): Promise<void> {
+    let dirents: import("fs").Dirent[];
+    try {
+      dirents = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    dirents.sort((a, b) => a.name.localeCompare(b.name));
+    for (const ent of dirents) {
+      if (isHiddenEntry(ent.name)) continue;
+      const abs = join(dir, ent.name);
+      if (ent.isDirectory()) {
+        await walk(abs);
+      } else if (ent.isFile() && ent.name.endsWith(".md")) {
+        const content = await fs.readFile(abs, "utf-8").catch(() => null);
+        if (!content) continue;
+        const yaml = extractFm(content);
+        const id = fmScalar(yaml, "id") || ent.name.replace(/\.md$/, "");
+        const summary = fmScalar(yaml, "summary") || id;
+        const memory_type = fmScalar(yaml, "memory_type") || "semantic";
+        const scope = fmScalar(yaml, "scope") || "global";
+        const created_at = fmScalar(yaml, "created_at") || "";
+        const related = fmRelated(yaml);
+        const path = relative(root, abs).split(sep).join("/");
+        nodeMap.set(id, {
+          id,
+          path,
+          summary,
+          memory_type,
+          scope,
+          created_at,
+          degree: 0,
+        });
+        for (const rel of related) {
+          rawEdges.push({ source: id, target: rel.id, relation: rel.relation });
+        }
+      }
+    }
+  }
+
+  await walk(obsDir);
+
+  const edges = rawEdges.filter(
+    (e) => nodeMap.has(e.source) && nodeMap.has(e.target)
+  );
+  for (const e of edges) {
+    nodeMap.get(e.source)!.degree++;
+    nodeMap.get(e.target)!.degree++;
+  }
+
+  return { nodes: Array.from(nodeMap.values()), edges };
+}
+
+export async function listExecutions(): Promise<ExecListData> {
+  const maybeRoot = await canonicalDirIfExists();
+  if (!maybeRoot) return { entries: [], truncated: false };
+  const root = maybeRoot;
+  const execDir = join(root, "executions");
+  try {
+    await fs.access(execDir);
+  } catch {
+    return { entries: [], truncated: false };
+  }
+
+  const entries: ExecEntry[] = [];
+  let truncated = false;
+
+  async function walk(dir: string): Promise<void> {
+    if (entries.length >= MAX_ENTRIES) {
+      truncated = true;
+      return;
+    }
+    let dirents: import("fs").Dirent[];
+    try {
+      dirents = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    dirents.sort((a, b) => a.name.localeCompare(b.name));
+    for (const ent of dirents) {
+      if (isHiddenEntry(ent.name)) continue;
+      const abs = join(dir, ent.name);
+      if (ent.isDirectory()) {
+        await walk(abs);
+      } else if (ent.isFile() && ent.name.endsWith(".md")) {
+        const content = await fs.readFile(abs, "utf-8").catch(() => null);
+        if (!content) continue;
+        const yaml = extractFm(content);
+        const id = fmScalar(yaml, "id") || ent.name.replace(/\.md$/, "");
+        const created_at = fmScalar(yaml, "created_at") || "";
+        const project_id = fmScalar(yaml, "project_id") || "";
+        const agent = fmNestedScalar(yaml, "agent");
+        const session_id = fmNestedScalar(yaml, "session_id");
+        const body = content
+          .replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "")
+          .trim();
+        const summaryMatch = body.match(
+          /^##\s+Summary\s*\r?\n([\s\S]*?)(?=\n##\s|\s*$)/m
+        );
+        const summary = summaryMatch
+          ? summaryMatch[1].trim()
+          : body.slice(0, 500);
+        const obs_ids = [...new Set(body.match(/\bO-[0-9a-f]{16}\b/g) ?? [])];
+        entries.push({
+          id,
+          created_at,
+          agent,
+          session_id,
+          project_id,
+          summary,
+          obs_ids,
+          path: relative(root, abs).split(sep).join("/"),
+        });
+      }
+    }
+  }
+
+  await walk(execDir);
+  entries.sort((a, b) => b.created_at.localeCompare(a.created_at));
+  return { entries, truncated };
 }
 
 /** Permanently delete a memory file. */
