@@ -998,7 +998,7 @@ export function ScheduledTasksPanel() {
                   </p>
                 </div>
                 {tasks.length > 0 && (
-                  <div className="grid gap-2 sm:grid-cols-3">
+                  <div className="mx-auto grid w-full max-w-xl gap-2 sm:grid-cols-2">
                     {TEMPLATES.map((template) => (
                       <TemplateButton
                         key={template.label}
