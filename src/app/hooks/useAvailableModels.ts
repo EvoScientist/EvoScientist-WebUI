@@ -34,7 +34,10 @@ const EMPTY: ModelRegistry = { entries: [], defaultEntry: null };
 // Failed fetches are evicted so the next mount retries.
 const cache = new Map<string, Promise<ModelRegistry>>();
 
-function fetchRegistry(deploymentUrl: string, apiKey: string): Promise<ModelRegistry> {
+function fetchRegistry(
+  deploymentUrl: string,
+  apiKey: string
+): Promise<ModelRegistry> {
   const key = deploymentUrl.replace(/\/$/, "");
   const hit = cache.get(key);
   if (hit) return hit;
@@ -76,9 +79,7 @@ function fetchRegistry(deploymentUrl: string, apiKey: string): Promise<ModelRegi
           defaultEntry = {
             name: d.name,
             provider:
-              typeof d.provider === "string" && d.provider
-                ? d.provider
-                : null,
+              typeof d.provider === "string" && d.provider ? d.provider : null,
           };
         }
       }

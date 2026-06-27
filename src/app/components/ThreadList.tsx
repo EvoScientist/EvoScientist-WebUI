@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState, useRef, useCallback } from "react";
 import {
   BrainCircuit,
+  Clock,
   Download,
   Loader2,
   MessageSquare,
@@ -655,6 +656,28 @@ export function ThreadList({
             {memoryUnseen}
           </span>
         )}
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          if (view === "schedule") {
+            setView(null);
+            onClose?.();
+            return;
+          }
+          setView("schedule");
+          onClose?.();
+        }}
+        className={cn(
+          "flex flex-shrink-0 items-center gap-2.5 border-b border-border px-3 py-3 text-left text-sm font-medium transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+          view === "schedule" && "bg-accent"
+        )}
+      >
+        <Clock
+          className="size-4"
+          aria-hidden="true"
+        />
+        Scheduled
       </button>
       <div className="flex-shrink-0 border-b border-border p-2.5">
         <div className="relative">

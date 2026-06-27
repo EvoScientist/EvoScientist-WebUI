@@ -26,6 +26,7 @@ import { ChatProvider } from "@/providers/ChatProvider";
 import { ChatInterface } from "@/app/components/ChatInterface";
 import { SkillsMarketplace } from "@/app/components/SkillsMarketplace";
 import { MemoryPanel } from "@/app/components/MemoryPanel";
+import { ScheduledTasksPanel } from "@/app/components/ScheduledTasksPanel";
 import { ThemeToggle } from "@/app/components/ThemeToggle";
 import { HealthIndicator } from "@/app/components/HealthIndicator";
 import { InspectorPanel } from "@/app/components/InspectorPanel";
@@ -420,6 +421,7 @@ function HomePageInner({
               </div>
               {view === "skills" && <SkillsMarketplace />}
               {view === "memory" && <MemoryPanel />}
+              {view === "schedule" && <ScheduledTasksPanel />}
             </ResizablePanel>
 
             {inspector && isDesktopLayout && (
