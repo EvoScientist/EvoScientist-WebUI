@@ -31,6 +31,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import { formatTime, formatFullTime } from "@/lib/time";
 import type { ThreadItem } from "@/app/hooks/useThreads";
 import {
   useThreads,
@@ -77,38 +78,6 @@ const STATUS_LABELS: Record<ThreadItem["status"], string> = {
 
 function getThreadColor(status: ThreadItem["status"]): string {
   return STATUS_COLORS[status] ?? "bg-gray-400";
-}
-
-function formatTime(date: Date, now = new Date()): string {
-  const diff = now.getTime() - date.getTime();
-  const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-
-  if (days === 0) {
-    // Pin 24-hour time (h23) so the clock stays consistent regardless of the
-    // browser locale (e.g. en-US would otherwise render "06:55 PM"). The
-    // weekday/date below intentionally stay locale-aware.
-    return new Intl.DateTimeFormat(undefined, {
-      hour: "2-digit",
-      minute: "2-digit",
-      hourCycle: "h23",
-    }).format(date);
-  }
-  if (days === 1) return "Yesterday";
-  if (days < 7) {
-    return new Intl.DateTimeFormat(undefined, { weekday: "long" }).format(date);
-  }
-  return new Intl.DateTimeFormat(undefined, {
-    month: "2-digit",
-    day: "2-digit",
-  }).format(date);
-}
-
-function formatFullTime(date: Date): string {
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-    hourCycle: "h23",
-  }).format(date);
 }
 
 function StatusFilterItem({

@@ -19,7 +19,23 @@ import {
 import type { ObsGraphData } from "@/lib/observationGraph";
 import { cn } from "@/lib/utils";
 
-export function MemoryPanel() {
+interface MemoryPanelProps {
+  initialTab?: "identity" | "knowledge" | "history" | null;
+  initialObsId?: string | null;
+  initialExecId?: string | null;
+}
+
+function isMemoryTab(
+  value: unknown
+): value is "identity" | "knowledge" | "history" {
+  return value === "identity" || value === "knowledge" || value === "history";
+}
+
+export function MemoryPanel({
+  initialTab,
+  initialObsId,
+  initialExecId,
+}: MemoryPanelProps = {}) {
   const [listing, setListing] = useState<{
     entries: Array<{
       path: string;
@@ -32,7 +48,7 @@ export function MemoryPanel() {
 
   const [activeTab, setActiveTab] = useState<
     "identity" | "knowledge" | "history"
-  >("identity");
+  >(isMemoryTab(initialTab) ? initialTab : "identity");
 
   const [obsData, setObsData] = useState<ObsGraphData | null>(null);
   const [obsLoading, setObsLoading] = useState(false);
@@ -45,7 +61,9 @@ export function MemoryPanel() {
   const [execLoading, setExecLoading] = useState(false);
   const [execError, setExecError] = useState<string | null>(null);
 
-  const [highlightObsId, setHighlightObsId] = useState<string | null>(null);
+  const [highlightObsId, setHighlightObsId] = useState<string | null>(
+    initialObsId ?? null
+  );
 
   const obsReqRef = useRef(0);
   const execReqRef = useRef(0);
@@ -121,6 +139,25 @@ export function MemoryPanel() {
   }, [loadListing]);
 
   useEffect(() => {
+    if (isMemoryTab(initialTab)) {
+      setActiveTab(initialTab);
+    }
+  }, [initialTab]);
+
+  useEffect(() => {
+    if (!initialObsId) {
+      setHighlightObsId(null);
+      return;
+    }
+    setHighlightObsId(initialObsId);
+    setActiveTab("knowledge");
+  }, [initialObsId]);
+
+  useEffect(() => {
+    if (initialExecId) setActiveTab("history");
+  }, [initialExecId]);
+
+  useEffect(() => {
     if (activeTab !== "history") return;
     const refresh = () => {
       void loadExecutions();
@@ -130,6 +167,12 @@ export function MemoryPanel() {
     const id = setInterval(refresh, 30_000);
     return () => clearInterval(id);
   }, [activeTab, loadExecutions, loadObservations]);
+
+  useEffect(() => {
+    if (activeTab === "knowledge" && !obsData && !obsLoading) {
+      void loadObservations();
+    }
+  }, [activeTab, obsData, obsLoading, loadObservations]);
 
   const timelineItems = useMemo<TimelineItem[] | null>(() => {
     if (!execData && !obsData) return null;
@@ -159,14 +202,12 @@ export function MemoryPanel() {
 
   const handleTabClick = (id: "identity" | "knowledge" | "history") => {
     setActiveTab(id);
-    if (id === "knowledge" && !obsData && !obsLoading) loadObservations();
     if (id !== "knowledge") setHighlightObsId(null);
   };
 
   const handleNavigateToObs = (obsId: string) => {
     setHighlightObsId(obsId);
     setActiveTab("knowledge");
-    if (!obsData && !obsLoading) loadObservations();
   };
 
   return (
@@ -272,6 +313,7 @@ export function MemoryPanel() {
               truncated={Boolean(execData?.truncated)}
               loading={execLoading || obsLoading}
               error={execError || obsError}
+              highlightExecId={initialExecId}
               onRefresh={() => {
                 loadExecutions();
                 loadObservations();

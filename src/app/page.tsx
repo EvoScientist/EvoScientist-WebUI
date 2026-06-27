@@ -51,6 +51,9 @@ function HomePageInner({
   const [threadId, setThreadId] = useQueryState("threadId");
   const [sidebar, setSidebar] = useQueryState("sidebar");
   const [view, setView] = useQueryState("view");
+  const [memoryTab, setMemoryTab] = useQueryState("memoryTab");
+  const [memoryObs, setMemoryObs] = useQueryState("memoryObs");
+  const [memoryExec, setMemoryExec] = useQueryState("memoryExec");
   const [inspector, setInspector] = useQueryState("inspector");
   const [, setInspectorTab] = useQueryState("inspectorTab");
 
@@ -189,6 +192,39 @@ function HomePageInner({
     setView(null);
     setChatSessionRevision((revision) => revision + 1);
   }, [setThreadId, setView]);
+  const handleDashboardNav = useCallback(
+    (
+      target:
+        | {
+            view: "memory";
+            tab: "identity" | "knowledge" | "history";
+            obsId?: string;
+            execId?: string;
+          }
+        | { view: "schedule" }
+        | { view: "workspace" }
+    ) => {
+      if (target.view === "memory") {
+        setMemoryTab(target.tab);
+        setMemoryObs(target.obsId ?? null);
+        setMemoryExec(target.execId ?? null);
+        setView("memory");
+      } else if (target.view === "schedule") {
+        setView("schedule");
+      } else {
+        setInspectorTab(null);
+        setInspector("1");
+      }
+    },
+    [
+      setInspector,
+      setInspectorTab,
+      setMemoryExec,
+      setMemoryObs,
+      setMemoryTab,
+      setView,
+    ]
+  );
   const selectThread = useCallback(
     async (id: string) => {
       setThreadAutoApprove(null, false);
@@ -416,11 +452,26 @@ function HomePageInner({
                     assistant={assistant}
                     onShowAgents={showAgentsInspector}
                     onNotifyReady={(fn) => setNotifyMainChat(() => fn)}
+                    onNavigate={handleDashboardNav}
+                    onOpenThread={selectThread}
                   />
                 </ChatProvider>
               </div>
               {view === "skills" && <SkillsMarketplace />}
-              {view === "memory" && <MemoryPanel />}
+              {view === "memory" && (
+                <MemoryPanel
+                  initialTab={
+                    memoryTab as
+                      | "identity"
+                      | "knowledge"
+                      | "history"
+                      | null
+                      | undefined
+                  }
+                  initialObsId={memoryObs}
+                  initialExecId={memoryExec}
+                />
+              )}
               {view === "schedule" && <ScheduledTasksPanel />}
             </ResizablePanel>
 

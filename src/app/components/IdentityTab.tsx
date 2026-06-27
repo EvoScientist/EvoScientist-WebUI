@@ -34,22 +34,22 @@ interface ProfileEntry {
 
 const CORE_ENTRIES: ProfileEntry[] = [
   {
-    path: "profile/SOUL.md",
-    label: "SOUL",
-    description: "EvoScientist's core values and personality",
-    Icon: Sparkles,
-  },
-  {
     path: "profile/USER_PROFILE.md",
-    label: "User Profile",
+    label: "User",
     description: "Persistent context about the researcher",
     Icon: User,
   },
   {
     path: "profile/RESEARCH_TASTE.md",
-    label: "Research Taste",
+    label: "Taste",
     description: "Aesthetic and methodological preferences",
     Icon: Compass,
+  },
+  {
+    path: "profile/SOUL.md",
+    label: "SOUL",
+    description: "EvoScientist's core values and personality",
+    Icon: Sparkles,
   },
 ];
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Loader2, RefreshCw, ChevronDown, Network } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { nodeColor } from "@/lib/observationGraph";
@@ -33,6 +33,7 @@ interface HistoryTabProps {
   truncated: boolean;
   loading: boolean;
   error: string | null;
+  highlightExecId?: string | null;
   onRefresh: () => void;
   onNavigateToObs: (obsId: string) => void;
 }
@@ -146,22 +147,36 @@ function TimelineRow({
 function EntryCard({
   entry,
   onNavigateToObs,
+  defaultOpen = false,
 }: {
   entry: ExecEntryClient;
   onNavigateToObs: (id: string) => void;
+  defaultOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
   const toggle = () => setOpen((o) => !o);
+  const cardRef = useRef<HTMLDivElement>(null);
   const label = `${open ? "Collapse" : "Expand"} ${entry.agent} execution: ${
     entry.summary
   }`;
+
+  useEffect(() => {
+    if (!defaultOpen) return;
+    setOpen(true);
+    cardRef.current?.scrollIntoView({ block: "center" });
+  }, [defaultOpen]);
 
   return (
     <TimelineRow
       created_at={entry.created_at}
       dotColor="var(--brand)"
     >
-      <div className="hover:border-[var(--brand)]/40 mb-2 min-w-0 flex-1 overflow-hidden rounded-lg border border-border bg-[var(--color-surface)] transition-colors">
+      <div
+        ref={cardRef}
+        className={`hover:border-[var(--brand)]/40 mb-2 min-w-0 flex-1 overflow-hidden rounded-lg border bg-[var(--color-surface)] transition-colors ${
+          defaultOpen ? "border-[var(--brand)]/40" : "border-border"
+        }`}
+      >
         <button
           type="button"
           aria-expanded={open}
@@ -278,6 +293,7 @@ export function HistoryTab({
   truncated,
   loading,
   error,
+  highlightExecId,
   onRefresh,
   onNavigateToObs,
 }: HistoryTabProps) {
@@ -333,6 +349,7 @@ export function HistoryTab({
                   key={`e-${item.id}`}
                   entry={item}
                   onNavigateToObs={onNavigateToObs}
+                  defaultOpen={highlightExecId === item.id}
                 />
               ) : (
                 <ObsCard

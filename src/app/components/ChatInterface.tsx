@@ -36,6 +36,7 @@ import {
   type GroupedActionItem,
 } from "@/app/components/ActionGroup";
 import { CompactionSummary } from "@/app/components/CompactionSummary";
+import { ResearchDashboard } from "@/app/components/ResearchDashboard";
 import { isSummarizationMessage } from "@/lib/summarization";
 import { useCollapseAgentActions } from "@/lib/uiSettings";
 import {
@@ -100,10 +101,24 @@ import {
 } from "@/lib/modelCommand";
 import { useAvailableModels } from "@/app/hooks/useAvailableModels";
 
+type DashboardNavTarget =
+  | {
+      view: "memory";
+      tab: "identity" | "knowledge" | "history";
+      obsId?: string;
+      execId?: string;
+    }
+  | { view: "schedule" }
+  | { view: "workspace" };
+
 interface ChatInterfaceProps {
   assistant: Assistant | null;
   // Open the right inspector on its Agents tab (composer "agents running" pulse).
   onShowAgents?: () => void;
+  // Navigate to a memory tab / the schedule view from the empty-state dashboard.
+  onNavigate?: (target: DashboardNavTarget) => void;
+  // Open a pinned thread from the empty-state dashboard.
+  onOpenThread?: (id: string) => void;
   // Register a "submit a message on THIS (main) thread" function up to page so
   // the Agents board can loop an async result back to the main agent. Returns
   // false if the main chat is mid-run (can't take a turn). Cleared on unmount.
@@ -241,7 +256,7 @@ const getStatusIcon = (status: TodoItem["status"], className?: string) => {
 };
 
 export const ChatInterface = React.memo<ChatInterfaceProps>(
-  ({ assistant, onShowAgents, onNotifyReady }) => {
+  ({ assistant, onShowAgents, onNotifyReady, onNavigate, onOpenThread }) => {
     const [metaOpen, setMetaOpen] = useState<
       "tasks" | "files" | "workspace" | null
     >(null);
@@ -1485,13 +1500,13 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
             ) : (
               <>
                 {processedMessages.length === 0 && !isLoading && (
-                  <div className="flex min-h-[42vh] flex-col items-center justify-center px-3 text-center">
+                  <div className="flex min-h-[42vh] flex-col items-center justify-center px-3 pt-12 text-center sm:pt-16">
                     <h2 className="text-pretty text-lg font-semibold sm:text-xl">
-                      Start Research
+                      Where research evolves
                     </h2>
                     <p className="mt-2 max-w-lg text-sm text-muted-foreground">
-                      Ask EvoScientist to review literature, inspect workspace
-                      files, or plan the next experiment.
+                      Your self-evolving lab partner — reads the literature,
+                      runs experiments, and remembers what matters.
                     </p>
                     <div className="mt-4 flex max-w-2xl flex-wrap justify-center gap-2">
                       {SUGGESTED_PROMPTS.map((prompt) => (
@@ -1505,6 +1520,12 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                         </button>
                       ))}
                     </div>
+                    {onNavigate && onOpenThread && (
+                      <ResearchDashboard
+                        onNavigate={onNavigate}
+                        onOpenThread={onOpenThread}
+                      />
+                    )}
                   </div>
                 )}
                 {renderedItems.map((item, index) => {

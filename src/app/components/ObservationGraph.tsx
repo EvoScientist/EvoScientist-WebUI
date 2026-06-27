@@ -686,6 +686,7 @@ function GraphCanvas({ data, selectedId, onSelect, w, h }: GraphCanvasProps) {
                 role="button"
                 tabIndex={0}
                 aria-label={`Select observation: ${node.summary}`}
+                className="outline-none [&:focus-visible]:outline-none [&:focus]:outline-none"
                 style={{ cursor: "pointer" }}
                 onClick={(e) => {
                   e.stopPropagation();
