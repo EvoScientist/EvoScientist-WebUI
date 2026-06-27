@@ -80,7 +80,6 @@ import {
 import { lastTextOf, type SubAgentStep } from "@/lib/subAgentActivity";
 import { useStickToBottom } from "use-stick-to-bottom";
 import { FilesPopover } from "@/app/components/TasksFilesSidebar";
-import { WorkspacePanel } from "@/app/components/WorkspacePanel";
 import {
   Dialog,
   DialogContent,
@@ -119,6 +118,8 @@ interface ChatInterfaceProps {
   onNavigate?: (target: DashboardNavTarget) => void;
   // Open a pinned thread from the empty-state dashboard.
   onOpenThread?: (id: string) => void;
+  // Whether the workspace inspector is currently visible.
+  workspaceOpen?: boolean;
   // Register a "submit a message on THIS (main) thread" function up to page so
   // the Agents board can loop an async result back to the main agent. Returns
   // false if the main chat is mid-run (can't take a turn). Cleared on unmount.
@@ -256,10 +257,15 @@ const getStatusIcon = (status: TodoItem["status"], className?: string) => {
 };
 
 export const ChatInterface = React.memo<ChatInterfaceProps>(
-  ({ assistant, onShowAgents, onNotifyReady, onNavigate, onOpenThread }) => {
-    const [metaOpen, setMetaOpen] = useState<
-      "tasks" | "files" | "workspace" | null
-    >(null);
+  ({
+    assistant,
+    onShowAgents,
+    onNotifyReady,
+    onNavigate,
+    onOpenThread,
+    workspaceOpen,
+  }) => {
+    const [metaOpen, setMetaOpen] = useState<"tasks" | "files" | null>(null);
     const tasksContainerRef = useRef<HTMLDivElement | null>(null);
     const textareaRef = useRef<HTMLTextAreaElement | null>(null);
     const uploadInputRef = useRef<HTMLInputElement | null>(null);
@@ -269,6 +275,20 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       []
     );
     const [isUploadingFiles, setIsUploadingFiles] = useState(false);
+    const [workspaceDir, setWorkspaceDir] = useState<string | null>(null);
+
+    useEffect(() => {
+      let cancelled = false;
+      fetch("/api/workspace")
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d: { dir?: string } | null) => {
+          if (!cancelled && d?.dir) setWorkspaceDir(d.dir);
+        })
+        .catch(() => {});
+      return () => {
+        cancelled = true;
+      };
+    }, []);
     // Messages typed while the agent is busy (Claude Code-style queue). They
     // drain one-per-idle-window into the thread once it's free. A ref mirrors the
     // latest queue so event handlers (key ↑, edit) read current state without
@@ -1791,8 +1811,6 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
               "focus-within:ring-2 focus-within:ring-ring"
             )}
           >
-            {/* Always rendered: the Workspace tab is available even with no tasks
-              or state files yet. */}
             {
               <div className="flex max-h-60 flex-col overflow-y-auto border-b border-border bg-sidebar empty:hidden sm:max-h-72">
                 {!metaOpen && (
@@ -1901,31 +1919,12 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                         );
                       })();
 
-                      const workspaceTrigger = (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setMetaOpen((prev) =>
-                              prev === "workspace" ? null : "workspace"
-                            )
-                          }
-                          className="flex flex-shrink-0 cursor-pointer items-center gap-2 px-3 py-2.5 text-left text-sm sm:px-4"
-                          aria-expanded={metaOpen === "workspace"}
-                          aria-label="Open workspace"
-                        >
-                          <FolderOpen
-                            size={16}
-                            aria-hidden="true"
-                          />
-                          <span>Workspace</span>
-                        </button>
-                      );
+                      if (!hasTasks && !hasFiles) return null;
 
                       return (
                         <div className="flex items-center">
                           <div className="min-w-0 flex-1">{tasksTrigger}</div>
                           {filesTrigger}
-                          {workspaceTrigger}
                         </div>
                       );
                     })()}
@@ -1966,18 +1965,6 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                           </span>
                         </button>
                       )}
-                      <button
-                        type="button"
-                        className="inline-flex items-center gap-2 py-2.5 pr-4 first:pl-3 aria-expanded:font-semibold sm:first:pl-4"
-                        onClick={() =>
-                          setMetaOpen((prev) =>
-                            prev === "workspace" ? null : "workspace"
-                          )
-                        }
-                        aria-expanded={metaOpen === "workspace"}
-                      >
-                        Workspace
-                      </button>
                       <button
                         aria-label="Close"
                         className="flex-1"
@@ -2029,12 +2016,6 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                               isLoading === true || interrupt !== undefined
                             }
                           />
-                        </div>
-                      )}
-
-                      {metaOpen === "workspace" && (
-                        <div className="mb-6 pt-2">
-                          <WorkspacePanel />
                         </div>
                       )}
                     </div>
@@ -2214,6 +2195,29 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                       {autoApprove ? "Auto-approve On" : "Auto-approve"}
                     </span>
                   </button>
+                  {onNavigate && workspaceDir && (
+                    <button
+                      type="button"
+                      onClick={() => onNavigate({ view: "workspace" })}
+                      title={`${
+                        workspaceOpen ? "Close" : "Open"
+                      } workspace: ${workspaceDir}`}
+                      aria-label={`${
+                        workspaceOpen ? "Close" : "Open"
+                      } workspace: ${workspaceDir}`}
+                      aria-pressed={Boolean(workspaceOpen)}
+                      className="inline-flex min-w-0 items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                    >
+                      <FolderOpen
+                        className="size-3.5 flex-shrink-0"
+                        aria-hidden="true"
+                      />
+                      <span className="hidden max-w-[140px] truncate font-mono sm:inline lg:max-w-[220px]">
+                        {workspaceDir.split("/").filter(Boolean).pop() ||
+                          workspaceDir}
+                      </span>
+                    </button>
+                  )}
                 </div>
                 <div className="flex justify-end gap-2">
                   <Button

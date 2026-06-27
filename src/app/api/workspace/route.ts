@@ -161,7 +161,12 @@ export async function GET(request: NextRequest) {
         ? relPath.replace(/\/+$/, "").split("/").slice(0, -1).join("/")
         : null;
 
-    return NextResponse.json({ path: relPath, parent, entries });
+    return NextResponse.json({
+      path: relPath,
+      parent,
+      entries,
+      dir: workspaceDir,
+    });
   } catch (error) {
     return NextResponse.json(
       {

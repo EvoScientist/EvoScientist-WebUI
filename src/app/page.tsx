@@ -55,7 +55,7 @@ function HomePageInner({
   const [memoryObs, setMemoryObs] = useQueryState("memoryObs");
   const [memoryExec, setMemoryExec] = useQueryState("memoryExec");
   const [inspector, setInspector] = useQueryState("inspector");
-  const [, setInspectorTab] = useQueryState("inspectorTab");
+  const [inspectorTab, setInspectorTab] = useQueryState("inspectorTab");
 
   const [mutateThreads, setMutateThreads] = useState<(() => void) | null>(null);
   const [interruptCount, setInterruptCount] = useState(0);
@@ -212,16 +212,26 @@ function HomePageInner({
       } else if (target.view === "schedule") {
         setView("schedule");
       } else {
+        if (inspector && inspectorTab !== "agents") {
+          closeInspector();
+          return;
+        }
+        if (isDesktopLayout === false) setSidebar(null);
         setInspectorTab(null);
         setInspector("1");
       }
     },
     [
+      closeInspector,
+      inspector,
+      inspectorTab,
+      isDesktopLayout,
       setInspector,
       setInspectorTab,
       setMemoryExec,
       setMemoryObs,
       setMemoryTab,
+      setSidebar,
       setView,
     ]
   );
@@ -454,6 +464,9 @@ function HomePageInner({
                     onNotifyReady={(fn) => setNotifyMainChat(() => fn)}
                     onNavigate={handleDashboardNav}
                     onOpenThread={selectThread}
+                    workspaceOpen={Boolean(
+                      inspector && inspectorTab !== "agents"
+                    )}
                   />
                 </ChatProvider>
               </div>
