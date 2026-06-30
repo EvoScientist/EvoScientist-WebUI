@@ -20,7 +20,15 @@ import type {
 import { Message } from "@langchain/langgraph-sdk";
 import type { SubAgentStep } from "@/lib/subAgentActivity";
 import { isAsyncUpdateMessage } from "@/lib/asyncAgents";
-import { Bell, Brain, Check, ChevronRight, Copy, Pencil } from "lucide-react";
+import {
+  AlertTriangle,
+  Bell,
+  Brain,
+  Check,
+  ChevronRight,
+  Copy,
+  Pencil,
+} from "lucide-react";
 import {
   extractSubAgentContent,
   extractStringFromMessageContent,
@@ -79,6 +87,35 @@ export const ChatMessage = React.memo<ChatMessageProps>(
       )?.reasoning_content;
       return typeof r === "string" && r.trim() ? r.trim() : null;
     }, [message.additional_kwargs]);
+    // Surface abnormal turn-ends that would otherwise be invisible: the run
+    // finishes server-side (thread idle, no interrupt) but `finish_reason` is
+    // outside the success allowlist — e.g. "error", "length", "content_filter",
+    // or one of the doubled forms the backend is currently emitting
+    // ("stopstop", "tool_callstool_calls"; see
+    // `.backend-ref/notes/finish-reason-errorerror.md`). We render a pill in
+    // two flavours:
+    //   - "missing"  — content is empty AND no tool calls. The user got
+    //     nothing back; the pill replaces the empty turn.
+    //   - "partial"  — content (or tool calls) is present but the finish
+    //     reason still looks off. The agent delivered something but ended
+    //     unexpectedly; the pill renders after the content as a warning.
+    // Tool-call-only turns aren't flagged in v1: they're transient steps
+    // inside an active run, and `finish_reason` doesn't tell us they were
+    // truncated.
+    const terminalError = useMemo(() => {
+      if (isUser) return null;
+      const fr = (
+        message.response_metadata as Record<string, unknown> | undefined
+      )?.finish_reason;
+      if (typeof fr !== "string" || !fr) return null;
+      const successTokens = new Set(["stop", "tool_calls", "function_call"]);
+      if (successTokens.has(fr)) return null;
+      const variant =
+        !hasContent && !hasToolCalls
+          ? ("missing" as const)
+          : ("partial" as const);
+      return { finishReason: fr, variant };
+    }, [isUser, hasContent, hasToolCalls, message.response_metadata]);
     const subAgents = useMemo(() => {
       return toolCalls
         .filter((toolCall: ToolCall) => {
@@ -292,6 +329,21 @@ export const ChatMessage = React.memo<ChatMessageProps>(
               )}
             </div>
           )}
+          {terminalError && terminalError.variant === "missing" && (
+            <div className="mt-4 flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-foreground">
+              <AlertTriangle
+                className="mt-0.5 h-4 w-4 shrink-0 text-destructive"
+                aria-hidden="true"
+              />
+              <span>
+                This turn ended without a response (
+                <span className="font-mono text-xs">
+                  {terminalError.finishReason}
+                </span>
+                ). Re-send your last message to try again.
+              </span>
+            </div>
+          )}
           {hasContent && (
             <div className={cn("relative flex items-end gap-0")}>
               <div
@@ -340,6 +392,21 @@ export const ChatMessage = React.memo<ChatMessageProps>(
                   />
                 )}
               </button>
+            </div>
+          )}
+          {terminalError && terminalError.variant === "partial" && (
+            <div className="border-[var(--color-warning)]/30 bg-[var(--color-warning)]/5 mt-3 flex items-start gap-2 rounded-md border px-3 py-2 text-sm text-foreground">
+              <AlertTriangle
+                className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-warning)]"
+                aria-hidden="true"
+              />
+              <span>
+                Agent ended its turn unexpectedly (
+                <span className="font-mono text-xs">
+                  {terminalError.finishReason}
+                </span>
+                ). The response above may be incomplete.
+              </span>
             </div>
           )}
           {isUser && hasContent && (
