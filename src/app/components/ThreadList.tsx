@@ -222,6 +222,30 @@ export function ThreadList({
   // arrives sorted by updated_at desc from the backend.
   const pinned = useMemo(() => filtered.filter((t) => t.pinned), [filtered]);
 
+  // A thread belongs in "Requiring Attention" when its interrupt actually needs
+  // the user. Single source of truth for both the bucket and the count badge.
+  //   - `needsUserInput` (an `ask_user` interrupt is active) - auto-approve can
+  //     NOT answer these, so the row must surface no matter what.
+  //   - A plain tool-approval interrupt that will NOT be auto-resolved: either
+  //     auto-approve is off (the user has to approve it), OR this is not the
+  //     currently-open thread. The auto-resume effect lives only in the mounted
+  //     ChatInterface (the open thread), so a backgrounded auto-approve thread
+  //     that hits a tool-approval interrupt is NOT resumed on its own - it must
+  //     keep surfacing here until the user opens it (which triggers the resume).
+  // Only the open auto-approve thread is exempted: lifting it out of its time
+  // group would make it jump around for a behaviour the user opted out of, and
+  // it really will resume a moment later.
+  const needsAttention = useCallback(
+    (thread: ThreadItem): boolean => {
+      if (thread.needsUserInput) return true;
+      if (thread.status !== "interrupted") return false;
+      const willAutoResume =
+        thread.id === currentThreadId && getThreadAutoApprove(thread.id);
+      return !willAutoResume;
+    },
+    [currentThreadId]
+  );
+
   // Group threads by time and status
   const grouped = useMemo(() => {
     const groups: Record<keyof typeof GROUP_LABELS, ThreadItem[]> = {
@@ -236,20 +260,7 @@ export function ThreadList({
       // Pinned threads live in the "Research" section only, not the time groups.
       if (thread.pinned) return;
 
-      // Bucket into "Requiring Attention" when the interrupt actually needs
-      // the user. Two cases qualify:
-      //   - `needsUserInput` (an `ask_user` interrupt is active) - auto-approve
-      //     can NOT handle these, so the row must surface no matter what.
-      //   - Plain interrupt with auto-approve off - the user has to approve
-      //     the tool call themselves.
-      // With auto-approve on AND no `ask_user`, the WebUI resumes the run on
-      // its own; lifting the row out of its time group would make it jump
-      // around in the sidebar for a behaviour the user has explicitly opted
-      // out of seeing.
-      if (
-        thread.needsUserInput ||
-        (thread.status === "interrupted" && !getThreadAutoApprove(thread.id))
-      ) {
+      if (needsAttention(thread)) {
         groups.interrupted.push(thread);
         return;
       }
@@ -269,18 +280,13 @@ export function ThreadList({
     });
 
     return groups;
-  }, [filtered, now]);
+  }, [filtered, now, needsAttention]);
 
   const interruptedCount = useMemo(() => {
-    // Mirrors the `grouped` logic: count threads that actually need the user
-    // either via an ask_user interrupt OR a plain interrupt with auto-approve
-    // off. Auto-approve threads with tool-call interrupts skip the badge.
-    return flattened.filter(
-      (t) =>
-        t.needsUserInput ||
-        (t.status === "interrupted" && !getThreadAutoApprove(t.id))
-    ).length;
-  }, [flattened]);
+    // Same predicate as the `grouped` bucket so the badge matches the visible
+    // group exactly.
+    return flattened.filter(needsAttention).length;
+  }, [flattened, needsAttention]);
 
   // Expose thread list revalidation to parent component
   // Use refs to create a stable callback that always calls the latest mutate function
