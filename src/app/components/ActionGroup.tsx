@@ -95,12 +95,28 @@ export const ActionGroup = React.memo<ActionGroupProps>(function ActionGroup({
 
   const [open, setOpen] = useState<boolean>(() => !defaultCollapsed);
   const wasStreamingRef = useRef(isStreaming);
+  // Once the user manually clicks the header (open or close), they own the
+  // state — no more auto-collapse. Without this, expanding a group to
+  // inspect earlier tool calls gets undone the moment the next assistant
+  // message lands (that flips `groupIsStreaming` from true to false, which
+  // is exactly the transition the auto-collapse effect watches for).
+  const userTouchedRef = useRef(false);
+  const handleToggle = () => {
+    userTouchedRef.current = true;
+    setOpen((v) => !v);
+  };
+  const handleCollapse = () => {
+    userTouchedRef.current = true;
+    setOpen(false);
+  };
 
-  // Auto-collapse when streaming ends, but only if the user is at the bottom.
-  // Approvals never force-open; their controls render in the preview below.
+  // Auto-collapse when streaming ends, but only if the user is at the bottom
+  // AND hasn't touched this group. Approvals never force-open; their controls
+  // render in the preview below.
   useEffect(() => {
     const wasStreaming = wasStreamingRef.current;
     wasStreamingRef.current = isStreaming;
+    if (userTouchedRef.current) return;
     if (
       wasStreaming &&
       !isStreaming &&
@@ -127,7 +143,7 @@ export const ActionGroup = React.memo<ActionGroupProps>(function ActionGroup({
         aria-expanded={open}
         aria-label={`${open ? "Collapse" : "Expand"} ${headerText}`}
         title={headerText}
-        onClick={() => setOpen((v) => !v)}
+        onClick={handleToggle}
         className={cn(
           "group flex w-full items-center gap-2 rounded-md border border-border bg-[var(--color-surface)] px-3 py-2 text-left text-sm text-muted-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         )}
@@ -221,7 +237,7 @@ export const ActionGroup = React.memo<ActionGroupProps>(function ActionGroup({
           {/* Bottom collapse button — easy reach after scrolling through a long group. */}
           <button
             type="button"
-            onClick={() => setOpen(false)}
+            onClick={handleCollapse}
             className="flex w-full items-center justify-center gap-1.5 rounded-md py-1.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             aria-label={`Collapse ${count} action${count === 1 ? "" : "s"}`}
           >
