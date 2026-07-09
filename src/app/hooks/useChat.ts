@@ -504,7 +504,7 @@ export function useChat({
         configurable.model_provider = modelOverride.model_provider;
       }
     }
-    return { ...base, configurable, recursion_limit: 100 };
+    return { ...base, configurable };
   }, [activeAssistant?.config, modelOverride]);
 
   const sendMessage = useCallback(
