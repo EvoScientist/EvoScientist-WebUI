@@ -64,11 +64,11 @@ const fixtureAssistant: Assistant = {
   created_at: "2026-07-10T00:00:00Z",
   updated_at: "2026-07-10T00:00:00Z",
   description: null,
-} as Assistant;
+} as unknown as Assistant;
 
 describe("simple chat scenario", () => {
   let stream: MockStreamStore;
-  let historyRevalidate: ReturnType<typeof vi.fn>;
+  let historyRevalidate: ReturnType<typeof vi.fn<() => void>>;
 
   beforeEach(() => {
     stream = new MockStreamStore();
@@ -86,7 +86,7 @@ describe("simple chat scenario", () => {
   it("submits the composed message with the pinned run options", () => {
     const { result } = renderChat({
       activeAssistant: fixtureAssistant,
-      onHistoryRevalidate: historyRevalidate,
+      onHistoryRevalidate: () => historyRevalidate(),
     });
 
     act(() => {
@@ -129,7 +129,7 @@ describe("simple chat scenario", () => {
   it("immediately kicks off a thread-list revalidate on send", () => {
     const { result } = renderChat({
       activeAssistant: fixtureAssistant,
-      onHistoryRevalidate: historyRevalidate,
+      onHistoryRevalidate: () => historyRevalidate(),
     });
     act(() => {
       result.current.sendMessage("hi");
@@ -216,7 +216,7 @@ describe("simple chat scenario", () => {
   it("propagates SDK errors as a toast (onError -> sonner)", () => {
     renderChat({
       activeAssistant: fixtureAssistant,
-      onHistoryRevalidate: historyRevalidate,
+      onHistoryRevalidate: () => historyRevalidate(),
     });
     act(() => {
       stream.emitError(new Error("provider quota exceeded"));

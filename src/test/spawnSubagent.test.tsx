@@ -61,7 +61,7 @@ const fixtureAssistant: Assistant = {
   created_at: "2026-07-10T00:00:00Z",
   updated_at: "2026-07-10T00:00:00Z",
   description: null,
-} as Assistant;
+} as unknown as Assistant;
 
 const spawnInterrupt = {
   value: {
@@ -79,7 +79,7 @@ const spawnInterrupt = {
 
 describe("spawn-subagent scenario", () => {
   let stream: MockStreamStore;
-  let historyRevalidate: ReturnType<typeof vi.fn>;
+  let historyRevalidate: ReturnType<typeof vi.fn<() => void>>;
 
   beforeEach(() => {
     stream = new MockStreamStore();
@@ -118,7 +118,7 @@ describe("spawn-subagent scenario", () => {
   it("resumeInterrupt submits null values with the resume command and pinned options", () => {
     const { result } = renderChat({
       activeAssistant: fixtureAssistant,
-      onHistoryRevalidate: historyRevalidate,
+      onHistoryRevalidate: () => historyRevalidate(),
     });
     act(() => {
       result.current.sendMessage("please draft the intro");
@@ -211,7 +211,7 @@ describe("spawn-subagent scenario", () => {
   it("kicks off a thread-list revalidate on resume", () => {
     const { result } = renderChat({
       activeAssistant: fixtureAssistant,
-      onHistoryRevalidate: historyRevalidate,
+      onHistoryRevalidate: () => historyRevalidate(),
     });
     act(() => {
       stream.setInterrupt(spawnInterrupt);
