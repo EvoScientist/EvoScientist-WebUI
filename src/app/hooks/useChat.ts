@@ -13,6 +13,7 @@ import {
   type SubAgentStep,
 } from "@/lib/subAgentActivity";
 import { parseSummarizationEvent } from "@/lib/summarization";
+import { toast } from "sonner";
 import {
   MODEL_OVERRIDE_METADATA_KEY,
   type ModelOverride,
@@ -130,6 +131,36 @@ function latestTaskInterrupt(
   return undefined;
 }
 
+// Build a human-readable summary from the SDK's `onError` payload, which can
+// be a plain Error, a StreamError (structured `{ name, error, message }`),
+// or a raw string. We try in order: structured `name: message`, plain
+// `message`, JSON-of-`.error`, the raw string, finally a generic fallback.
+// Capped at 300 chars so a giant stack trace doesn't blow up the toast; the
+// full text is still available in the thread JSON via the export affordance.
+function formatStreamError(error: unknown): string {
+  const cap = (s: string) => (s.length > 300 ? s.slice(0, 297) + "..." : s);
+  if (typeof error === "string" && error.trim()) return cap(error.trim());
+  if (error && typeof error === "object") {
+    const e = error as { name?: unknown; message?: unknown; error?: unknown };
+    const name = typeof e.name === "string" ? e.name.trim() : null;
+    const msg = typeof e.message === "string" ? e.message.trim() : null;
+    let inner: string | null = null;
+    if (typeof e.error === "string" && e.error.trim()) {
+      inner = e.error.trim();
+    } else if (e.error && typeof e.error === "object") {
+      try {
+        inner = JSON.stringify(e.error);
+      } catch {
+        inner = null;
+      }
+    }
+    const body = msg ?? inner;
+    const combined = name && body ? `${name}: ${body}` : name ?? body ?? "";
+    if (combined) return cap(combined);
+  }
+  return "Run failed.";
+}
+
 export function useChat({
   activeAssistant,
   onHistoryRevalidate,
@@ -158,9 +189,16 @@ export function useChat({
     defaultHeaders: { "x-auth-scheme": "langsmith" },
     // Enable fetching state history when switching to existing threads
     fetchStateHistory: true,
-    // Revalidate thread list when stream finishes, errors, or creates new thread
+    // Revalidate thread list when stream finishes, errors, or creates new
+    // thread. Errors additionally surface a toast with the SDK's payload -
+    // without this the user only sees React's generic "An internal error
+    // occurred" and has to dig into the server log to learn that, e.g., a
+    // model provider returned a quota error.
     onFinish: onHistoryRevalidate,
-    onError: onHistoryRevalidate,
+    onError: (error) => {
+      onHistoryRevalidate?.();
+      toast.error(formatStreamError(error));
+    },
     onCreated: onHistoryRevalidate,
     // Capture sub-agent (subgraph) node outputs as they stream. `namespace` is
     // non-empty (e.g. ["tools:<id>"]) for subgraphs and empty for the main graph,

@@ -41,6 +41,7 @@ import {
   exportThread,
 } from "@/app/hooks/useThreads";
 import { useMemoryActivity } from "@/app/hooks/useMemoryActivity";
+import { getThreadAutoApprove } from "@/lib/autoApprove";
 import {
   Dialog,
   DialogContent,
@@ -221,6 +222,30 @@ export function ThreadList({
   // arrives sorted by updated_at desc from the backend.
   const pinned = useMemo(() => filtered.filter((t) => t.pinned), [filtered]);
 
+  // A thread belongs in "Requiring Attention" when its interrupt actually needs
+  // the user. Single source of truth for both the bucket and the count badge.
+  //   - `needsUserInput` (an `ask_user` interrupt is active) - auto-approve can
+  //     NOT answer these, so the row must surface no matter what.
+  //   - A plain tool-approval interrupt that will NOT be auto-resolved: either
+  //     auto-approve is off (the user has to approve it), OR this is not the
+  //     currently-open thread. The auto-resume effect lives only in the mounted
+  //     ChatInterface (the open thread), so a backgrounded auto-approve thread
+  //     that hits a tool-approval interrupt is NOT resumed on its own - it must
+  //     keep surfacing here until the user opens it (which triggers the resume).
+  // Only the open auto-approve thread is exempted: lifting it out of its time
+  // group would make it jump around for a behaviour the user opted out of, and
+  // it really will resume a moment later.
+  const needsAttention = useCallback(
+    (thread: ThreadItem): boolean => {
+      if (thread.needsUserInput) return true;
+      if (thread.status !== "interrupted") return false;
+      const willAutoResume =
+        thread.id === currentThreadId && getThreadAutoApprove(thread.id);
+      return !willAutoResume;
+    },
+    [currentThreadId]
+  );
+
   // Group threads by time and status
   const grouped = useMemo(() => {
     const groups: Record<keyof typeof GROUP_LABELS, ThreadItem[]> = {
@@ -235,7 +260,7 @@ export function ThreadList({
       // Pinned threads live in the "Research" section only, not the time groups.
       if (thread.pinned) return;
 
-      if (thread.status === "interrupted") {
+      if (needsAttention(thread)) {
         groups.interrupted.push(thread);
         return;
       }
@@ -255,11 +280,13 @@ export function ThreadList({
     });
 
     return groups;
-  }, [filtered, now]);
+  }, [filtered, now, needsAttention]);
 
   const interruptedCount = useMemo(() => {
-    return flattened.filter((t) => t.status === "interrupted").length;
-  }, [flattened]);
+    // Same predicate as the `grouped` bucket so the badge matches the visible
+    // group exactly.
+    return flattened.filter(needsAttention).length;
+  }, [flattened, needsAttention]);
 
   // Expose thread list revalidation to parent component
   // Use refs to create a stable callback that always calls the latest mutate function
