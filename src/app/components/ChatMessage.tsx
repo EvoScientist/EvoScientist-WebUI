@@ -32,6 +32,7 @@ import {
 import {
   extractSubAgentContent,
   extractStringFromMessageContent,
+  stringifyUnknown,
 } from "@/app/utils/utils";
 import { cn } from "@/lib/utils";
 import { copyText } from "@/lib/clipboard";
@@ -56,6 +57,28 @@ interface ChatMessageProps {
   autoApprove?: boolean;
   /** Live intermediate steps per task tool-call id (sub-agent activity). */
   subAgentSteps?: Record<string, SubAgentStep[]>;
+}
+
+const FINISH_REASON_SUCCESS = new Set([
+  "stop",
+  "tool_calls",
+  "function_call",
+  "end_turn",
+  "tool_use",
+]);
+
+// A duplicated terminal SSE chunk makes langchain's `merge_dicts` concatenate
+// `finish_reason` with itself ("stopstop"), so a successful turn reads as an
+// abnormal one. Backends carrying EvoScientist#313 no longer do this; older
+// ones do, and the WebUI ships separately via npm `@latest`.
+function normalizeFinishReason(raw: string): string {
+  for (const value of FINISH_REASON_SUCCESS) {
+    if (raw !== value && raw.length % value.length === 0) {
+      const repeatCount = raw.length / value.length;
+      if (repeatCount > 1 && value.repeat(repeatCount) === raw) return value;
+    }
+  }
+  return raw;
 }
 
 export const ChatMessage = React.memo<ChatMessageProps>(
@@ -87,34 +110,21 @@ export const ChatMessage = React.memo<ChatMessageProps>(
       )?.reasoning_content;
       return typeof r === "string" && r.trim() ? r.trim() : null;
     }, [message.additional_kwargs]);
-    // Surface abnormal turn-ends that would otherwise be invisible: the run
-    // finishes server-side (thread idle, no interrupt) but `finish_reason` is
-    // outside the success allowlist — e.g. "error", "length", "content_filter",
-    // or one of the doubled forms the backend is currently emitting
-    // ("stopstop", "tool_callstool_calls"; see
-    // `.backend-ref/notes/finish-reason-errorerror.md`). We render a pill in
-    // two flavours:
-    //   - "missing"  — content is empty AND no tool calls. The user got
-    //     nothing back; the pill replaces the empty turn.
-    //   - "partial"  — content (or tool calls) is present but the finish
-    //     reason still looks off. The agent delivered something but ended
-    //     unexpectedly; the pill renders after the content as a warning.
-    // Tool-call-only turns aren't flagged in v1: they're transient steps
-    // inside an active run, and `finish_reason` doesn't tell us they were
-    // truncated.
+    // An abnormal turn-end is otherwise invisible: the run finishes
+    // server-side, the thread goes idle, and no interrupt is raised.
     const terminalError = useMemo(() => {
       if (isUser) return null;
-      const fr = (
+      const raw = (
         message.response_metadata as Record<string, unknown> | undefined
       )?.finish_reason;
-      if (typeof fr !== "string" || !fr) return null;
-      const successTokens = new Set(["stop", "tool_calls", "function_call"]);
-      if (successTokens.has(fr)) return null;
+      if (typeof raw !== "string" || !raw) return null;
+      const finishReason = normalizeFinishReason(raw);
+      if (FINISH_REASON_SUCCESS.has(finishReason)) return null;
       const variant =
         !hasContent && !hasToolCalls
           ? ("missing" as const)
           : ("partial" as const);
-      return { finishReason: fr, variant };
+      return { finishReason, variant };
     }, [isUser, hasContent, hasToolCalls, message.response_metadata]);
     const subAgents = useMemo(() => {
       return toolCalls
@@ -135,7 +145,10 @@ export const ChatMessage = React.memo<ChatMessageProps>(
             name: toolCall.name,
             subAgentName: subagentType,
             input: toolCall.args,
-            output: toolCall.result ? { result: toolCall.result } : undefined,
+            output:
+              toolCall.result !== undefined && toolCall.result !== null
+                ? { result: toolCall.result }
+                : undefined,
             status: toolCall.status,
           } as SubAgent;
         });
@@ -182,11 +195,12 @@ export const ChatMessage = React.memo<ChatMessageProps>(
     }, [actionRequests, toolCalls]);
 
     const actionRequestsKey = useMemo(() => {
-      return JSON.stringify(
+      return stringifyUnknown(
         (actionRequests ?? []).map((ar) => ({
           name: ar.name,
           args: ar.args,
-        }))
+        })),
+        0
       );
     }, [actionRequests]);
     const pendingReviewDecisionsRef = useRef<Record<number, unknown>>({});

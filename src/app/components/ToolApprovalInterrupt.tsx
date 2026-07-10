@@ -7,6 +7,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { AlertCircle, Check, X, Pencil } from "lucide-react";
 import type { ActionRequest, ReviewConfig } from "@/app/types/types";
 import { cn } from "@/lib/utils";
+import { stringifyUnknown } from "@/app/utils/utils";
 
 interface ToolApprovalInterruptProps {
   actionRequest: ActionRequest;
@@ -24,20 +25,14 @@ function argsToRecord(args: unknown): Record<string, unknown> {
 
 function cloneArgs(args: Record<string, unknown>): Record<string, unknown> {
   try {
-    return JSON.parse(JSON.stringify(args)) as Record<string, unknown>;
+    return JSON.parse(stringifyUnknown(args)) as Record<string, unknown>;
   } catch {
     return { ...args };
   }
 }
 
 function formatValue(value: unknown): string {
-  if (typeof value === "string") return value;
-  if (value === undefined) return "undefined";
-  try {
-    return JSON.stringify(value, null, 2) ?? String(value);
-  } catch {
-    return String(value);
-  }
+  return stringifyUnknown(value);
 }
 
 export function ToolApprovalInterrupt({

@@ -49,4 +49,5 @@ Thumbs.db
 # local notes
 CLAUDE.md
 AGENTS.md
+/.claude/
 /.codex-qa/

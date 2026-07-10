@@ -22,6 +22,7 @@ import { cn } from "@/lib/utils";
 import { LoadExternalComponent } from "@langchain/langgraph-sdk/react-ui";
 import { ToolApprovalInterrupt } from "@/app/components/ToolApprovalInterrupt";
 import { formatToolLabel } from "@/lib/toolLabel";
+import { stringifyUnknown } from "@/app/utils/utils";
 
 // One-line preview of a tool-call argument value, shown next to the key in
 // the collapsed args row. Strings have newlines collapsed; non-strings are
@@ -33,13 +34,7 @@ function previewArgValue(value: unknown): string {
 }
 
 function formatValue(value: unknown, options?: { pretty?: boolean }): string {
-  if (typeof value === "string") return value;
-  if (value === null || value === undefined) return String(value);
-  try {
-    return JSON.stringify(value, null, options?.pretty ? 2 : 0);
-  } catch {
-    return String(value);
-  }
+  return stringifyUnknown(value, options?.pretty ? 2 : 0);
 }
 
 interface ToolCallBoxProps {

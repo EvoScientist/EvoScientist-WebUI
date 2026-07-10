@@ -28,6 +28,8 @@ next-env.d.ts
 
 # local planning notes (not committed)
 CLAUDE.md
+AGENTS.md
+.claude/
 
 # lock files
 pnpm-lock.yaml

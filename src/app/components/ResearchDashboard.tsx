@@ -63,6 +63,15 @@ function timeValue(iso: string): number {
   return Number.isFinite(value) ? value : 0;
 }
 
+function activityAriaLabel(item: ActivityItem): string {
+  const kind =
+    item.kind === "observation" ? "recent observation" : "recent execution";
+  // formatTime renders an em dash for an unusable timestamp; don't read it out.
+  const when = formatTime(new Date(item.createdAtMs || Number.NaN));
+  const hasWhen = when !== "" && when !== "—";
+  return `Open ${kind} from ${item.label}${hasWhen ? `, ${when}` : ""}`;
+}
+
 export function ResearchDashboard({
   onNavigate,
   onOpenThread,
@@ -309,7 +318,7 @@ export function ResearchDashboard({
                   )
                 }
                 title={item.summary}
-                aria-label={`Open ${item.kind}: ${item.summary}`}
+                aria-label={activityAriaLabel(item)}
                 className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <span
