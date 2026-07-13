@@ -52,6 +52,7 @@ import type {
 import { Assistant, Message } from "@langchain/langgraph-sdk";
 import { extractStringFromMessageContent } from "@/app/utils/utils";
 import { useChatContext } from "@/providers/ChatProvider";
+import { interruptValueKey } from "@/app/hooks/useChat";
 import { cn } from "@/lib/utils";
 import { formatModel } from "@/lib/model";
 import {
@@ -99,6 +100,12 @@ import {
   type ModelOverride,
 } from "@/lib/modelCommand";
 import { useAvailableModels } from "@/app/hooks/useAvailableModels";
+import { useClient } from "@/providers/ClientProvider";
+import {
+  SPARK_PREFILL_EVENT,
+  SPARK_PREFILL_STORAGE_PREFIX,
+  type SparkPrefillEventDetail,
+} from "@/lib/sparkTypes";
 
 type DashboardNavTarget =
   | {
@@ -299,6 +306,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     const queueIdRef = useRef(0);
     const draggedQueuedMessageIdRef = useRef<number | null>(null);
     const [threadId] = useQueryState("threadId");
+    const client = useClient();
     // Inline file paths in agent messages are rendered as click-to-open links
     // by MarkdownContent. They dispatch a window event with the resolved
     // workspace / memory path; we open the matching modal over the chat so
@@ -320,6 +328,89 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       window.addEventListener(FILE_LINK_EVENT, onOpenFile);
       return () => window.removeEventListener(FILE_LINK_EVENT, onOpenFile);
     }, []);
+    // Composer prefill handshake from `SparkNodeDetail` (e.g. the Elaborate
+    // next action button). Two paths cover both fresh navigations and
+    // same-thread elaborates:
+    //   (1) threadId-change effect — if the user lands on a thread that
+    //       already has a prefill waiting in localStorage (e.g. they
+    //       refreshed mid-flight), consume it on arrival. Ref-guarded so
+    //       re-renders don't re-fire on the same thread.
+    //   (2) window event — SparkNodeDetail dispatches
+    //       `SPARK_PREFILL_EVENT` after writing. We consume regardless of
+    //       ref state because the user just clicked. Required since
+    //       chat now stays mounted across view switches: a same-thread
+    //       elaborate doesn't change threadId, so (1) wouldn't fire on
+    //       its own.
+    const consumeSparkPrefill = useCallback((targetThreadId: string) => {
+      if (typeof window === "undefined") return;
+      const key = `${SPARK_PREFILL_STORAGE_PREFIX}${targetThreadId}`;
+      const seed = window.localStorage.getItem(key);
+      if (!seed) return;
+      setInput(seed);
+      window.localStorage.removeItem(key);
+    }, []);
+    const prefillCheckedThreadRef = useRef<string | null>(null);
+    useEffect(() => {
+      if (!threadId) return;
+      if (prefillCheckedThreadRef.current === threadId) return;
+      prefillCheckedThreadRef.current = threadId;
+      consumeSparkPrefill(threadId);
+    }, [threadId, consumeSparkPrefill]);
+    useEffect(() => {
+      const handler = (e: Event) => {
+        const detail = (e as CustomEvent<SparkPrefillEventDetail>).detail;
+        if (!detail?.threadId) return;
+        consumeSparkPrefill(detail.threadId);
+      };
+      window.addEventListener(SPARK_PREFILL_EVENT, handler);
+      return () => window.removeEventListener(SPARK_PREFILL_EVENT, handler);
+    }, [consumeSparkPrefill]);
+    // Empty-state context for threads created from an idea-spark node — read
+    // out of thread metadata so the placeholder can orient the user instead of
+    // showing the generic "Start Research" copy. Cleared when threadId changes.
+    const [sparkContext, setSparkContext] = useState<{
+      threadId: string;
+      nodeTitle: string;
+      graphId: string;
+    } | null>(null);
+    useEffect(() => {
+      if (!threadId) {
+        setSparkContext(null);
+        return;
+      }
+      let cancelled = false;
+      void (async () => {
+        try {
+          const t = (await client.threads.get(threadId)) as {
+            metadata?: {
+              idea_spark_graph_id?: unknown;
+              idea_spark_node_snapshot?: { title?: unknown } | null;
+            };
+          };
+          if (cancelled) return;
+          const meta = t.metadata ?? {};
+          const graphId =
+            typeof meta.idea_spark_graph_id === "string"
+              ? meta.idea_spark_graph_id
+              : null;
+          const nodeTitle =
+            meta.idea_spark_node_snapshot &&
+            typeof meta.idea_spark_node_snapshot.title === "string"
+              ? meta.idea_spark_node_snapshot.title
+              : null;
+          if (graphId && nodeTitle) {
+            setSparkContext({ threadId, nodeTitle, graphId });
+          } else {
+            setSparkContext(null);
+          }
+        } catch {
+          if (!cancelled) setSparkContext(null);
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }, [client, threadId]);
     // Auto-approve is per-thread and persisted (see lib/autoApprove): it follows
     // the conversation across view switches (Skills/Memory unmount this), thread
     // switches, and reloads. Seed from storage for whatever thread is active on
@@ -384,7 +475,17 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         );
       });
     }, [pickerModels, modelSearch]);
-    const autoApprovedRef = useRef<unknown>(null);
+    // Set of interrupt-id keys already auto-approved this session. Never
+    // cleared except on thread switch and turnOffAutoApprove: interrupt ids
+    // are backend-generated per logical interrupt, so re-observing a past-
+    // approved id means the SDK is still holding pre-resume state (tail-
+    // state recovery, `values.__interrupt__` getter churn, brief mid-submit
+    // reappearance) - all cases that should NOT trigger a duplicate approve.
+    // A different logical interrupt has a different id, misses the Set, and
+    // legitimately fires. A Set (not a single-slot ref) makes any unintended
+    // "reset" from an upstream state change a no-op unless we deliberately
+    // clear it.
+    const autoApprovedIdsRef = useRef<Set<string>>(new Set());
     const previousThreadIdRef = useRef(threadId);
     const migrateAutoApproveForCreatedThreadRef = useRef(false);
     const { scrollRef, contentRef, scrollToBottom, isAtBottom } =
@@ -721,7 +822,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       setAutoApproveState(false);
       setThreadAutoApprove(threadId, false);
       setAutoApproveDialogOpen(false);
-      autoApprovedRef.current = null;
+      autoApprovedIdsRef.current = new Set();
     }, [threadId]);
 
     // Follow the thread: when the active thread changes, load THAT thread's saved
@@ -744,7 +845,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       }
 
       setAutoApproveState(getThreadAutoApprove(threadId));
-      autoApprovedRef.current = null;
+      autoApprovedIdsRef.current = new Set();
       setAutoApproveDialogOpen(false);
       setPendingFiles([]);
       migrateAutoApproveForCreatedThreadRef.current = false;
@@ -1008,9 +1109,17 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     }, []);
 
     // Auto-approve: when enabled, approve any pending tool-execution interrupt
-    // for the rest of this conversation (each interrupt is handled once).
+    // for the rest of this conversation (each interrupt is handled once,
+    // keyed by `Interrupt.id`).
     useEffect(() => {
       if (!autoApprove) return;
+      // The SDK's `start()` early-returns when `isLoading` is already true,
+      // silently swallowing our resume - the promise resolves fine, but no
+      // HTTP goes out. This races with SSE arrival: a new interrupt lands in
+      // `values.__interrupt__` and the effect fires before the SDK's `finally`
+      // has flipped `isLoading` to false. Wait for the transition; the effect
+      // re-runs when `isLoading` changes (it's in deps).
+      if (isLoading) return;
       const ir = interrupt;
       const actionRequests =
         ir?.value && ((ir.value as any)["action_requests"] as unknown[]);
@@ -1019,15 +1128,15 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         !Array.isArray(actionRequests) ||
         actionRequests.length === 0
       ) {
-        autoApprovedRef.current = null;
         return;
       }
-      if (autoApprovedRef.current === ir) return;
-      autoApprovedRef.current = ir;
+      const key = interruptValueKey(ir);
+      if (key === null || autoApprovedIdsRef.current.has(key)) return;
+      autoApprovedIdsRef.current.add(key);
       resumeInterrupt({
         decisions: actionRequests.map(() => ({ type: "approve" })),
       });
-    }, [autoApprove, interrupt, resumeInterrupt]);
+    }, [autoApprove, interrupt, resumeInterrupt, isLoading]);
 
     // ask_user: the agent is asking the user structured questions.
     const askUserQuestions = useMemo<AskUserQuestion[] | null>(() => {
@@ -1525,11 +1634,14 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                 {processedMessages.length === 0 && !isLoading && (
                   <div className="flex min-h-[42vh] flex-col items-center justify-center px-3 pt-12 text-center sm:pt-16">
                     <h2 className="text-pretty text-lg font-semibold sm:text-xl">
-                      Where research evolves
+                      {sparkContext && sparkContext.threadId === threadId
+                        ? `Continuation of "${sparkContext.nodeTitle}"`
+                        : "Where research evolves"}
                     </h2>
                     <p className="mt-2 max-w-lg text-sm text-muted-foreground">
-                      Your self-evolving lab partner — reads the literature,
-                      runs experiments, and remembers what matters.
+                      {sparkContext && sparkContext.threadId === threadId
+                        ? `from spark graph ${sparkContext.graphId}`
+                        : "Your self-evolving lab partner — reads the literature, runs experiments, and remembers what matters."}
                     </p>
                     <div className="mt-4 flex max-w-2xl flex-wrap justify-center gap-2">
                       {SUGGESTED_PROMPTS.map((prompt) => (

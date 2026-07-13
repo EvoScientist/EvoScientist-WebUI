@@ -12,7 +12,7 @@ import {
   listMemory,
   readMemory,
   writeMemory,
-  deleteMemory,
+  deleteMemoryEntry,
   isCrossOrigin,
 } from "@/lib/server/memory";
 
@@ -81,8 +81,8 @@ export async function DELETE(request: NextRequest) {
     }
     const path = request.nextUrl.searchParams.get("path");
     if (!path) return fail("A file path is required.");
-    await deleteMemory(path);
-    return NextResponse.json({ ok: true });
+    const report = await deleteMemoryEntry(path);
+    return NextResponse.json({ ok: true, ...report });
   } catch (error) {
     return fail(error);
   }

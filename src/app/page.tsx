@@ -27,6 +27,7 @@ import { ChatInterface } from "@/app/components/ChatInterface";
 import { SkillsMarketplace } from "@/app/components/SkillsMarketplace";
 import { MemoryPanel } from "@/app/components/MemoryPanel";
 import { ScheduledTasksPanel } from "@/app/components/ScheduledTasksPanel";
+import { SparkPanel } from "@/app/components/SparkPanel";
 import { ThemeToggle } from "@/app/components/ThemeToggle";
 import { HealthIndicator } from "@/app/components/HealthIndicator";
 import { InspectorPanel } from "@/app/components/InspectorPanel";
@@ -443,10 +444,11 @@ function HomePageInner({
             >
               {/* Chat stays mounted across view switches. We hide it via
                   `display:none` (rather than unmounting) so flipping to
-                  Skills/Memory and back is instant — no thread re-fetch, no
-                  message-list rebuild, and any in-flight run keeps streaming
-                  in the background. Cost is bounded: only the *current*
-                  thread's state is held; no accumulation per switch. */}
+                  Skills/Memory/Spark and back is instant — no thread re-fetch,
+                  no message-list rebuild, and any in-flight run keeps
+                  streaming in the background. Cost is bounded: only the
+                  *current* thread's state is held; no accumulation per
+                  switch. */}
               <div
                 className={cn(
                   "flex h-full min-h-0 flex-1 flex-col",
@@ -486,6 +488,7 @@ function HomePageInner({
                 />
               )}
               {view === "schedule" && <ScheduledTasksPanel />}
+              {view === "spark" && <SparkPanel />}
             </ResizablePanel>
 
             {inspector && isDesktopLayout && (
