@@ -224,6 +224,49 @@ describe("ChatInterface composition", () => {
     expect(body.messages[0].content).toBe("hi");
   });
 
+  it("renders regular ChatMessages while isLoading is true (streaming in progress)", () => {
+    renderChatInterface();
+    act(() => {
+      stream.setMessages([humanTurn("hi"), aiTurn("streaming...")]);
+      stream.setLoading(true);
+    });
+    // Composer flipped to Stop button; message list still renders.
+    expect(screen.getAllByTestId("stub-ChatMessage").length).toBeGreaterThan(0);
+    // No error surface at this point.
+    expect(screen.queryAllByTestId("stub-AskUserInterrupt")).toHaveLength(0);
+  });
+
+  it("stops loading and re-enables the composer when the SDK settles", () => {
+    const { container } = renderChatInterface();
+    act(() => {
+      stream.setLoading(true);
+    });
+    // The composer submit-slot is a Stop button.
+    const form = container.querySelector("form")!;
+    expect(
+      within(form).queryByRole("button", { name: /stop/i })
+    ).not.toBeNull();
+
+    act(() => {
+      stream.setLoading(false);
+    });
+    // Back to a Send button — but disabled because the textarea is empty.
+    expect(
+      within(form).queryByRole("button", { name: /send message/i })
+    ).not.toBeNull();
+  });
+
+  it("surfaces an SDK error as a toast (onError fires, no crash)", async () => {
+    const { toast } = await import("sonner");
+    renderChatInterface();
+    act(() => {
+      stream.emitError(new Error("provider outage"));
+    });
+    expect(toast.error).toHaveBeenCalled();
+    const msg = vi.mocked(toast.error).mock.calls[0][0];
+    expect(String(msg)).toContain("outage");
+  });
+
   it("flows autoApprove state from thread-local storage into ActionGroup props", () => {
     // Seed storage BEFORE mount so ChatInterface's initial useState reads
     // the persisted value. threadId is null on a fresh chat -> the sentinel

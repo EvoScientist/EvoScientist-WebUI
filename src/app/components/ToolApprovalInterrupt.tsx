@@ -182,10 +182,14 @@ export function ToolApprovalInterrupt({
             <div className="mt-2 space-y-3">
               {Object.entries(actionArgs).map(([key, value]) => (
                 <div key={key}>
-                  <label className="mb-1 block text-xs font-medium text-foreground">
+                  <label
+                    htmlFor={`edit-arg-${key}`}
+                    className="mb-1 block text-xs font-medium text-foreground"
+                  >
                     {key}
                   </label>
                   <Textarea
+                    id={`edit-arg-${key}`}
                     value={
                       editedArgs[key] !== undefined
                         ? typeof editedArgs[key] === "string"
@@ -225,6 +229,7 @@ export function ToolApprovalInterrupt({
             Rejection Message (optional)
           </label>
           <Textarea
+            aria-label="Rejection message"
             value={rejectionMessage}
             onChange={(e) => setRejectionMessage(e.target.value)}
             placeholder="Explain why you're rejecting this action…"

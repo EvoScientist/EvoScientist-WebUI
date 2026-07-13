@@ -11,7 +11,6 @@ import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
 import { act } from "@testing-library/react";
 import { renderHook } from "@testing-library/react";
 import { toast } from "sonner";
-import type { Assistant } from "@langchain/langgraph-sdk";
 import type { ReactNode } from "react";
 import {
   MockStreamStore,
@@ -53,18 +52,7 @@ vi.mock("sonner", () => ({
 
 import { ChatProvider, useChatContext } from "@/providers/ChatProvider";
 import { useAutoApproveInterrupt } from "@/app/hooks/useAutoApproveInterrupt";
-
-const fixtureAssistant: Assistant = {
-  assistant_id: "EvoScientist",
-  graph_id: "EvoScientist",
-  name: "EvoScientist",
-  config: {},
-  metadata: {},
-  version: 1,
-  created_at: "2026-07-10T00:00:00Z",
-  updated_at: "2026-07-10T00:00:00Z",
-  description: null,
-} as unknown as Assistant;
+import { fixtureAssistant } from "@/test/fixtures/assistants";
 
 // Interrupts as they arrive from the HumanInTheLoopMiddleware — the reference
 // held on each object matters for the identity guard, so tests either reuse

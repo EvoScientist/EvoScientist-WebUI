@@ -182,6 +182,12 @@ export function useMockStreamHook(options: Record<string, unknown>) {
     setBranch: () => {},
     history: [],
     experimental_branchTree: { items: [] },
+    // Metadata-driven rendering (e.g. per-message branch info in
+    // ChatMessage) is OUT OF SCOPE for this harness — callers get
+    // `undefined` and any consumer that gates behavior on metadata
+    // has to be tested elsewhere. If a scenario needs to distinguish
+    // messages by first-seen-thread-state, expose a store hook and
+    // seed it explicitly instead of relying on the mock's silence.
     getMessagesMetadata: () => undefined,
     joinStream: async () => {},
     client: options?.client ?? {},

@@ -10,7 +10,7 @@
 import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
 import { act } from "@testing-library/react";
 import { toast } from "sonner";
-import type { Message, Assistant } from "@langchain/langgraph-sdk";
+import type { Message } from "@langchain/langgraph-sdk";
 import {
   MockStreamStore,
   clearMockStreamStore,
@@ -50,18 +50,7 @@ vi.mock("sonner", () => ({
 }));
 
 import { renderChat } from "@/test/renderChat";
-
-const fixtureAssistant: Assistant = {
-  assistant_id: "EvoScientist",
-  graph_id: "EvoScientist",
-  name: "EvoScientist",
-  config: {},
-  metadata: {},
-  version: 1,
-  created_at: "2026-07-10T00:00:00Z",
-  updated_at: "2026-07-10T00:00:00Z",
-  description: null,
-} as unknown as Assistant;
+import { fixtureAssistant } from "@/test/fixtures/assistants";
 
 const spawnInterrupt = {
   value: {

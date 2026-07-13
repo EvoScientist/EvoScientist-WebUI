@@ -7,9 +7,6 @@ import { fireEvent, within } from "@testing-library/react";
 export const findCardHeader = (scope: HTMLElement) =>
   within(scope).findByText(/approval required/i);
 
-export const getToolName = (scope: HTMLElement) =>
-  within(scope).getByText(/^Tool$/i).nextElementSibling as HTMLElement;
-
 export const getApproveButton = (scope: HTMLElement) =>
   within(scope).getByRole("button", { name: /^(approve|approving)/i });
 
@@ -34,24 +31,26 @@ export const clickReject = (scope: HTMLElement) =>
 export const clickEdit = (scope: HTMLElement) =>
   fireEvent.click(getEditButton(scope));
 
+// Uses the `aria-label="Rejection message"` on the textarea instead of the
+// placeholder or a DOM-shape sibling walk. Robust across visual refactors.
 export const typeRejectionMessage = (scope: HTMLElement, message: string) => {
-  const textarea = within(scope).getByPlaceholderText(
-    /explain why you're rejecting/i
-  );
+  const textarea = within(scope).getByRole("textbox", {
+    name: /rejection message/i,
+  });
   fireEvent.change(textarea, { target: { value: message } });
 };
 
 export const confirmReject = (scope: HTMLElement) =>
   fireEvent.click(getConfirmRejectButton(scope));
 
+// Uses the label/htmlFor association (label points at `edit-arg-<key>`),
+// so the query stays valid even if the surrounding DOM structure changes.
 export const setEditedArg = (
   scope: HTMLElement,
   argKey: string,
   value: string
 ) => {
-  const label = within(scope).getByText(argKey);
-  const textarea = label.parentElement?.querySelector("textarea");
-  if (!textarea) throw new Error(`no textarea found for arg "${argKey}"`);
+  const textarea = within(scope).getByLabelText(argKey);
   fireEvent.change(textarea, { target: { value } });
 };
 

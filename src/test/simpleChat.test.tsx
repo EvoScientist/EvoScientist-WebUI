@@ -9,7 +9,7 @@
 import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
 import { act } from "@testing-library/react";
 import { toast } from "sonner";
-import type { Message, Assistant } from "@langchain/langgraph-sdk";
+import type { Message } from "@langchain/langgraph-sdk";
 import {
   MockStreamStore,
   clearMockStreamStore,
@@ -53,18 +53,7 @@ vi.mock("sonner", () => ({
 }));
 
 import { renderChat } from "@/test/renderChat";
-
-const fixtureAssistant: Assistant = {
-  assistant_id: "EvoScientist",
-  graph_id: "EvoScientist",
-  name: "EvoScientist",
-  config: { configurable: { some_seed: "abc" } },
-  metadata: {},
-  version: 1,
-  created_at: "2026-07-10T00:00:00Z",
-  updated_at: "2026-07-10T00:00:00Z",
-  description: null,
-} as unknown as Assistant;
+import { fixtureAssistantWithConfig as fixtureAssistant } from "@/test/fixtures/assistants";
 
 describe("simple chat scenario", () => {
   let stream: MockStreamStore;
@@ -229,5 +218,47 @@ describe("simple chat scenario", () => {
     // onError also revalidates the thread list so a failed run's status
     // update reaches the sidebar.
     expect(historyRevalidate).toHaveBeenCalled();
+  });
+
+  it("stopStream during an active run records a stop call and clears loading on next tick", () => {
+    const { result } = renderChat({ activeAssistant: fixtureAssistant });
+    // Start a run and confirm we're loading.
+    act(() => {
+      result.current.sendMessage("hi");
+      stream.setLoading(true);
+    });
+    expect(result.current.isLoading).toBe(true);
+
+    // User hits Stop.
+    act(() => {
+      result.current.stopStream();
+    });
+    expect(stream.getStopCallCount()).toBe(1);
+
+    // The SDK signals settle after stopping.
+    act(() => {
+      stream.setLoading(false);
+    });
+    expect(result.current.isLoading).toBe(false);
+  });
+
+  it("stopStream while an interrupt is pending still records a stop call (no crash)", () => {
+    const { result } = renderChat({ activeAssistant: fixtureAssistant });
+    act(() => {
+      result.current.sendMessage("hi");
+      stream.setInterrupt({
+        value: { action_requests: [{ name: "execute", args: {} }] },
+      });
+    });
+    expect(result.current.interrupt).toBeDefined();
+
+    // User bails out mid-approval.
+    act(() => {
+      result.current.stopStream();
+    });
+    expect(stream.getStopCallCount()).toBe(1);
+    // Interrupt state is still there until the SDK clears it — stopStream
+    // doesn't manipulate our fetchedInterrupt / resolvedInterruptKey state.
+    expect(result.current.interrupt).toBeDefined();
   });
 });
