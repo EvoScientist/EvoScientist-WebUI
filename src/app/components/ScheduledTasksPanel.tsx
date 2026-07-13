@@ -382,7 +382,14 @@ function TaskForm({
   const cron = specToCron(spec);
   const cronError =
     spec.frequency === "custom" ? validateCronExpression(cron) : null;
-  const canSave = Boolean(name.trim() && prompt.trim() && !cronError);
+  const hasChanges =
+    !initialTask ||
+    name.trim() !== initialTask.name.trim() ||
+    prompt.trim() !== initialTask.prompt.trim() ||
+    cron !== initialTask.schedule.trim();
+  const canSave = Boolean(
+    name.trim() && prompt.trim() && !cronError && hasChanges
+  );
 
   useEffect(() => {
     nameRef.current?.focus();
@@ -402,6 +409,7 @@ function TaskForm({
       toast.error(cronError);
       return;
     }
+    if (!hasChanges) return;
 
     setSaving(true);
     try {

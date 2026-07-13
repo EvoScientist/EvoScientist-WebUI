@@ -169,12 +169,15 @@ export function MemoryPanel({
   }, [activeTab, obsData, obsLoading, loadObservations]);
 
   const timelineItems = useMemo<TimelineItem[] | null>(() => {
-    if (!execData && !obsData) return null;
+    // History combines two independently loaded sources. Keep the initial
+    // loading state until both arrive so the stats never present partial data
+    // as a complete total (for example, briefly showing zero executions).
+    if (!execData || !obsData) return null;
     const items: TimelineItem[] = [];
-    for (const e of execData?.entries ?? []) {
+    for (const e of execData.entries) {
       items.push({ kind: "execution", ...e });
     }
-    for (const n of obsData?.nodes ?? []) {
+    for (const n of obsData.nodes) {
       items.push({
         kind: "observation",
         id: n.id,
