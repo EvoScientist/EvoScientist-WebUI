@@ -2,6 +2,7 @@ import useSWRInfinite from "swr/infinite";
 import type { Thread } from "@langchain/langgraph-sdk";
 import { Client } from "@langchain/langgraph-sdk";
 import { getConfig } from "@/lib/config";
+import { patchClientStreamModes } from "@/lib/streamMode";
 
 export interface ThreadItem {
   id: string;
@@ -69,10 +70,12 @@ export function useThreads(props: {
       apiKey: string;
       status?: Thread["status"];
     }) => {
-      const client = new Client({
-        apiUrl: deploymentUrl,
-        defaultHeaders: apiKey ? { "X-Api-Key": apiKey } : {},
-      });
+      const client = patchClientStreamModes(
+        new Client({
+          apiUrl: deploymentUrl,
+          defaultHeaders: apiKey ? { "X-Api-Key": apiKey } : {},
+        })
+      );
 
       // Always scope the thread list to the selected assistant so we never
       // show threads spawned by async sub-agents (e.g. writing-agent,
@@ -216,10 +219,12 @@ function makeThreadsClient(): Client | null {
   if (!config) return null;
   const apiKey =
     config.langsmithApiKey || process.env.NEXT_PUBLIC_LANGSMITH_API_KEY || "";
-  return new Client({
-    apiUrl: config.deploymentUrl,
-    defaultHeaders: apiKey ? { "X-Api-Key": apiKey } : {},
-  });
+  return patchClientStreamModes(
+    new Client({
+      apiUrl: config.deploymentUrl,
+      defaultHeaders: apiKey ? { "X-Api-Key": apiKey } : {},
+    })
+  );
 }
 
 /** Permanently delete a thread. Throws if no deployment is configured. */

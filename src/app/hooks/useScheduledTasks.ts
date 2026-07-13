@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { Cron } from "@langchain/langgraph-sdk";
 import { Client } from "@langchain/langgraph-sdk";
 import { getConfig } from "@/lib/config";
+import { patchClientStreamModes } from "@/lib/streamMode";
 
 const SCHEDULED_RUN_KIND = "scheduled_task";
 const SCHEDULER_GRAPH_ID = "scheduler";
@@ -13,10 +14,12 @@ function makeClient(): Client | null {
   if (!config) return null;
   const apiKey =
     config.langsmithApiKey || process.env.NEXT_PUBLIC_LANGSMITH_API_KEY || "";
-  return new Client({
-    apiUrl: config.deploymentUrl,
-    defaultHeaders: apiKey ? { "X-Api-Key": apiKey } : {},
-  });
+  return patchClientStreamModes(
+    new Client({
+      apiUrl: config.deploymentUrl,
+      defaultHeaders: apiKey ? { "X-Api-Key": apiKey } : {},
+    })
+  );
 }
 
 export interface ScheduledTask {

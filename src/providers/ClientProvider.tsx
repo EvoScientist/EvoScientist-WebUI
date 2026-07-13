@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useMemo, ReactNode } from "react";
 import { Client } from "@langchain/langgraph-sdk";
+import { makeClient } from "@/lib/streamMode";
 
 interface ClientContextValue {
   client: Client;
@@ -21,7 +22,7 @@ export function ClientProvider({
   apiKey,
 }: ClientProviderProps) {
   const client = useMemo(() => {
-    return new Client({
+    return makeClient({
       apiUrl: deploymentUrl,
       defaultHeaders: {
         "Content-Type": "application/json",

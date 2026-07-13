@@ -1,6 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { useStream } from "@langchain/langgraph-sdk/react";
 import { type Message, type Assistant } from "@langchain/langgraph-sdk";
 import { v4 as uuidv4 } from "uuid";
@@ -93,15 +99,24 @@ function totalTextLength(msgs: Message[]): number {
 }
 
 /**
- * A content key for an interrupt, used to tell "the stale interrupt the server
- * already resolved" apart from "a genuinely new interrupt". We key on the
- * `value` payload because both the live SDK interrupt and the getState-fetched
- * one share it (and a fresh object identity each poll can't be compared).
+ * A stable key for an interrupt, used to tell "the stale interrupt the server
+ * already resolved" apart from "a genuinely new interrupt". Prefer the
+ * backend-supplied `Interrupt.id` (unique per logical interrupt, populated
+ * consistently by LangGraph's checkpoint state on both the live
+ * `values.__interrupt__` path and the getState-fetched path). Falling back to
+ * a `value` content hash would collapse two calls to the same tool with the
+ * same args - the "repeat the same action" scenario - making auto-approve
+ * skip legitimate re-approvals. Object identity alone can't be trusted
+ * because the SDK's getter re-derives the object per render.
  */
-function interruptValueKey(i: unknown): string | null {
+export function interruptValueKey(i: unknown): string | null {
   if (!i || typeof i !== "object") return null;
+  const asObj = i as { id?: unknown; value?: unknown };
+  if (typeof asObj.id === "string" && asObj.id.length > 0) {
+    return `id:${asObj.id}`;
+  }
   try {
-    return JSON.stringify((i as { value?: unknown }).value ?? null);
+    return `v:${JSON.stringify(asObj.value ?? null)}`;
   } catch {
     return null;
   }
@@ -187,6 +202,17 @@ export function useChat({
     threadId: threadId ?? null,
     onThreadId: setThreadId,
     defaultHeaders: { "x-auth-scheme": "langsmith" },
+    // NOTE: do NOT set `throttle: <ms>` here. The SDK's `throttle` option
+    // (from 1.1.0) is implemented as a debounce in `dist/ui/manager.js` -
+    // each notification cancels the previous timer and restarts it. Under
+    // continuous streaming (backend emits frames faster than the timer
+    // window), the timer never fires and updates accumulate silently until
+    // the model briefly pauses, at which point the entire buffer flushes in
+    // one avalanche render (visible as "chat freezes for minutes, then
+    // suddenly unfolds"). The always-on setTimeout(0) RootMessageProjection
+    // coalescing added in SDK 1.9.3 does the actual render-pressure fix we
+    // wanted from throttle - flushes every macrotask, not every debounce
+    // window - so we don't need the option here.
     // Enable fetching state history when switching to existing threads
     fetchStateHistory: true,
     // Revalidate thread list when stream finishes, errors, or creates new
@@ -214,8 +240,19 @@ export function useChat({
         [key]: [...(prev[key] ?? []), ...steps],
       }));
     },
-    experimental_thread: thread,
+    thread,
   });
+
+  // `stream` is a NEW object every render of `useStream` — depending on it in a
+  // `useCallback` makes the callback churn on every stream notification (which
+  // fires on each token under fine-grained streaming, e.g. DeepSeek). Any
+  // effect that lists such a callback in its deps then re-runs per token,
+  // repeatedly hitting React's "Maximum update depth" guard and — pre backend
+  // dedup — firing bursts of duplicate `/runs/stream` POSTs. We hold `stream`
+  // in a ref that we refresh each render and read `.current.submit(...)` from
+  // inside stable callbacks, so downstream callback identity stays constant.
+  const streamRef = useRef(stream);
+  streamRef.current = stream;
 
   // --- Resilient pending-state fallback ------------------------------------
   // The live SSE stream can end (isLoading flips false) BEFORE the run actually
@@ -474,7 +511,7 @@ export function useChat({
   // would keep us on the stream — which makes the downstream subgraph-namespace
   // filter (ChatInterface.processedMessages) drop legitimate main-thread
   // history that's only tagged subgraph in stale stream metadata.
-  const messages = (() => {
+  const rawMessages = (() => {
     if (!fetchedMessages || fetchedThreadId !== threadId)
       return stream.messages;
     if (fetchedInterrupt) return fetchedMessages;
@@ -488,6 +525,19 @@ export function useChat({
     }
     return stream.messages;
   })();
+  // Defer `messages` so token-stream bursts (per-token setStreamValues calls
+  // inside the SDK) become low-priority updates. React 19 coalesces rapid
+  // changes and delivers a single commit when the CPU catches up, instead of
+  // scheduling one render per SDK notify. Targets the residual max-update-
+  // depth trips at run tail, mid-run join on reload, and rapid parallel-tool
+  // interrupt bursts - all cases where the SDK emits setStreamValues faster
+  // than React can commit and the 1.9.3 RootMessageProjection coalescer
+  // doesn't cover (it only batches projection writes, not raw values).
+  // Downstream consumers (`processedMessages` memo, auto-report effect,
+  // ChatMessage render) see a slightly-lagged messages list under bursts, but
+  // the actual displayed content catches up within one animation frame in
+  // practice.
+  const messages = useDeferredValue(rawMessages);
 
   // Fold the per-thread model override into the assistant's base config. The
   // backend reads `configurable.model` + `configurable.model_provider` per
@@ -519,7 +569,7 @@ export function useChat({
       setResolvedInterruptKey(null);
       recoveryRunRef.current += 1;
       const newMessage: Message = { id: uuidv4(), type: "human", content };
-      stream.submit(
+      streamRef.current.submit(
         { messages: [newMessage] },
         {
           optimisticValues: (prev) => ({
@@ -535,7 +585,7 @@ export function useChat({
       // Update thread list immediately when sending a message
       onHistoryRevalidate?.();
     },
-    [stream, buildRunConfig, onHistoryRevalidate]
+    [buildRunConfig, onHistoryRevalidate]
   );
 
   const setFiles = useCallback(
@@ -558,7 +608,7 @@ export function useChat({
       setFetchedThreadId(null);
       setResolvedInterruptKey(null);
       recoveryRunRef.current += 1;
-      stream.submit(null, {
+      streamRef.current.submit(null, {
         command: { resume: value },
         config: buildRunConfig(),
         streamSubgraphs: true,
@@ -569,12 +619,12 @@ export function useChat({
       // Update thread list when resuming from interrupt
       onHistoryRevalidate?.();
     },
-    [stream, buildRunConfig, onHistoryRevalidate]
+    [buildRunConfig, onHistoryRevalidate]
   );
 
   const stopStream = useCallback(() => {
-    stream.stop();
-  }, [stream]);
+    streamRef.current.stop();
+  }, []);
 
   return {
     stream,
