@@ -30,6 +30,7 @@ next-env.d.ts
 CLAUDE.md
 AGENTS.md
 .claude/
+.superpowers/
 
 # lock files
 pnpm-lock.yaml

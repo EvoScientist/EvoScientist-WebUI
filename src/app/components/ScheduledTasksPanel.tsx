@@ -35,6 +35,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
+import { ScheduledTaskActivity } from "@/app/components/ScheduledTaskActivity";
 import {
   createScheduledTask,
   deleteScheduledTask,
@@ -562,7 +563,7 @@ function TaskDetail({ task, onBack, onEdit, onDeleted }: TaskDetailProps) {
   const handleRunNow = useCallback(async () => {
     setRunning(true);
     try {
-      await runScheduledTaskNow(task.prompt);
+      await runScheduledTaskNow(task);
       toast.success(`"${task.name}" started.`);
     } catch (err) {
       toast.error(
@@ -676,6 +677,8 @@ function TaskDetail({ task, onBack, onEdit, onDeleted }: TaskDetailProps) {
                 )}
               </div>
             </section>
+
+            <ScheduledTaskActivity task={task} />
           </div>
         </ScrollArea>
 

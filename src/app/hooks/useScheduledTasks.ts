@@ -9,7 +9,7 @@ import { patchClientStreamModes } from "@/lib/streamMode";
 const SCHEDULED_RUN_KIND = "scheduled_task";
 const SCHEDULER_GRAPH_ID = "scheduler";
 
-function makeClient(): Client | null {
+export function makeClient(): Client | null {
   const config = getConfig();
   if (!config) return null;
   const apiKey =
@@ -52,12 +52,20 @@ export async function listScheduledTasks(): Promise<ScheduledTask[]> {
   // The TS SDK's crons.search doesn't support metadata filtering — fetch all
   // and filter client-side. Only EvoScientist crons carry run_kind in metadata.
   const crons = await client.crons.search({ limit: 200 });
-  return crons
-    .filter(
-      (c) =>
-        (c.metadata as Record<string, unknown>)?.run_kind === SCHEDULED_RUN_KIND
-    )
-    .map(parseCron);
+  const scheduledCrons = crons.filter(
+    (c) =>
+      (c.metadata as Record<string, unknown>)?.run_kind === SCHEDULED_RUN_KIND
+  );
+
+  await Promise.allSettled(
+    scheduledCrons
+      .filter((cron) => cron.on_run_completed !== "keep")
+      .map((cron) =>
+        client.crons.update(cron.cron_id, { onRunCompleted: "keep" })
+      )
+  );
+
+  return scheduledCrons.map(parseCron);
 }
 
 export async function createScheduledTask(params: {
@@ -70,6 +78,7 @@ export async function createScheduledTask(params: {
   const cron = await client.crons.create(SCHEDULER_GRAPH_ID, {
     input: { messages: [{ role: "user", content: params.prompt }] },
     schedule: params.schedule,
+    onRunCompleted: "keep",
     metadata: {
       run_kind: SCHEDULED_RUN_KIND,
       name: params.name,
@@ -105,17 +114,28 @@ export async function updateScheduledTask(params: {
   }
 }
 
-export async function runScheduledTaskNow(prompt: string): Promise<void> {
+export async function runScheduledTaskNow(task: {
+  cron_id: string;
+  name: string;
+  prompt: string;
+}): Promise<void> {
   const client = makeClient();
   if (!client) throw new Error("No EvoScientist deployment configured.");
-  const thread = await client.threads.create({ graphId: SCHEDULER_GRAPH_ID });
+  const metadata = {
+    run_kind: SCHEDULED_RUN_KIND,
+    cron_id: task.cron_id,
+    trigger: "manual",
+    name: task.name,
+    prompt: task.prompt,
+  };
+  const thread = await client.threads.create({
+    graphId: SCHEDULER_GRAPH_ID,
+    metadata,
+  });
   await client.runs.create(thread.thread_id, SCHEDULER_GRAPH_ID, {
-    input: { messages: [{ role: "user", content: prompt }] },
-    metadata: {
-      run_kind: SCHEDULED_RUN_KIND,
-      name: "manual-run",
-      prompt,
-    },
+    input: { messages: [{ role: "user", content: task.prompt }] },
+    metadata,
+    config: { configurable: { cron_id: task.cron_id } },
   });
 }
 
