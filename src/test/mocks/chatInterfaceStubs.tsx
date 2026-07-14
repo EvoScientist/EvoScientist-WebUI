@@ -55,8 +55,20 @@ export const useAutoNotifyMock = (): [boolean, (on: boolean) => void] => [
   () => {},
 ];
 
+// Populated by default so ChatInterface's fallback-list diagnostic warn
+// (fires when the registry settles empty) doesn't spam stderr in every test.
+// Individual tests can re-mock to an empty registry to cover the fallback branch.
 export const useAvailableModelsMock = () => ({
-  registry: { entries: [], defaultEntry: null },
+  registry: {
+    entries: [
+      {
+        name: "claude-sonnet-4-6",
+        model_id: "claude-sonnet-4-6",
+        provider: "anthropic",
+      },
+    ],
+    defaultEntry: { name: "claude-sonnet-4-6", provider: "anthropic" },
+  },
   loading: false,
   error: null,
 });
