@@ -43,8 +43,9 @@ export const typeRejectionMessage = (scope: HTMLElement, message: string) => {
 export const confirmReject = (scope: HTMLElement) =>
   fireEvent.click(getConfirmRejectButton(scope));
 
-// Uses the label/htmlFor association (label points at `edit-arg-<key>`),
-// so the query stays valid even if the surrounding DOM structure changes.
+// Uses the label/htmlFor association (label points at the card's uniquely
+// prefixed `edit-arg` textarea id), so the query stays valid even if the
+// surrounding DOM structure changes.
 export const setEditedArg = (
   scope: HTMLElement,
   argKey: string,

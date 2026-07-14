@@ -122,6 +122,44 @@ describe("ToolApprovalInterrupt", () => {
     });
   });
 
+  it("keeps arg editor ids unique across two cards sharing an arg name", () => {
+    const first = render(
+      <ToolApprovalInterrupt
+        actionRequest={executeActionRequest("ls")}
+        onResume={vi.fn()}
+      />
+    );
+    const onResumeSecond = vi.fn();
+    const second = render(
+      <ToolApprovalInterrupt
+        actionRequest={executeActionRequest("pwd")}
+        onResume={onResumeSecond}
+      />
+    );
+    clickEdit(first.container);
+    clickEdit(second.container);
+
+    const ids = Array.from(document.querySelectorAll("textarea[id]")).map(
+      (t) => t.id
+    );
+    expect(ids).toHaveLength(2);
+    expect(new Set(ids).size).toBe(ids.length);
+
+    setEditedArg(second.container, "command", "echo hi");
+    clickSaveApprove(second.container);
+    expect(onResumeSecond).toHaveBeenCalledWith({
+      decisions: [
+        {
+          type: "edit",
+          edited_action: {
+            name: "execute",
+            args: { command: "echo hi" },
+          },
+        },
+      ],
+    });
+  });
+
   it("filters buttons by allowedDecisions from reviewConfig", () => {
     const { container } = render(
       <ToolApprovalInterrupt
