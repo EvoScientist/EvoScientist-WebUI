@@ -14,7 +14,8 @@
 import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import { toast } from "sonner";
-import type { ReactNode } from "react";
+import { StrictMode, type ReactNode } from "react";
+import { createRoot } from "react-dom/client";
 import {
   MockStreamStore,
   clearMockStreamStore,
@@ -268,6 +269,41 @@ describe("auto-approve scenario", () => {
     });
     // The Set was reset on autoApprove change; still-pending interrupt fires again.
     expect(stream.getSubmitCalls()).toHaveLength(2);
+  });
+
+  it("fires exactly once under StrictMode mount replay with a pre-existing interrupt", async () => {
+    stream.setInterrupt(makeExecuteInterrupt("ls"));
+
+    function StrictHarness() {
+      const chat = useChatContext();
+      useAutoApproveInterrupt({
+        autoApprove: true,
+        interrupt: chat.interrupt,
+        resumeInterrupt: chat.resumeInterrupt,
+        isLoading: false,
+        resetKey: "thread-1",
+      });
+      return null;
+    }
+
+    const el = document.createElement("div");
+    document.body.appendChild(el);
+    const root = createRoot(el);
+    root.render(
+      <StrictMode>
+        <ChatProvider activeAssistant={fixtureAssistant}>
+          <StrictHarness />
+        </ChatProvider>
+      </StrictMode>
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(stream.getSubmitCalls()).toHaveLength(1);
+
+    await act(async () => {
+      root.unmount();
+    });
+    el.remove();
   });
 
   it("resets the Set when resetKey changes (thread switch)", () => {

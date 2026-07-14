@@ -39,10 +39,22 @@ export function useAutoApproveInterrupt({
   resetKey,
 }: UseAutoApproveInterruptArgs): void {
   const approvedIdsRef = useRef<Set<string>>(new Set());
+  const boundaryRef = useRef({ resetKey, autoApprove });
 
   // Reset on boundary changes (thread switch, feature toggle). Fires before
   // the fire effect on the same render because effects run in declaration order.
+  // Guarded by the previous boundary values so a Strict Mode mount replay
+  // (which re-runs effects without any prop change) is a no-op — otherwise the
+  // replay would erase the just-recorded key and approve the same interrupt twice.
   useEffect(() => {
+    const previous = boundaryRef.current;
+    if (
+      previous.resetKey === resetKey &&
+      previous.autoApprove === autoApprove
+    ) {
+      return;
+    }
+    boundaryRef.current = { resetKey, autoApprove };
     approvedIdsRef.current = new Set();
   }, [resetKey, autoApprove]);
 

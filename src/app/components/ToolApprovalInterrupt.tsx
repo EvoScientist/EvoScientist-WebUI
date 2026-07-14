@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import { flushSync } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -42,6 +42,7 @@ export function ToolApprovalInterrupt({
   isLoading,
   onSubmitted,
 }: ToolApprovalInterruptProps) {
+  const editArgIdPrefix = useId();
   const [rejectionMessage, setRejectionMessage] = useState("");
   const [isEditing, setIsEditing] = useState(false);
   const [editedArgs, setEditedArgs] = useState<Record<string, unknown>>({});
@@ -183,13 +184,13 @@ export function ToolApprovalInterrupt({
               {Object.entries(actionArgs).map(([key, value]) => (
                 <div key={key}>
                   <label
-                    htmlFor={`edit-arg-${key}`}
+                    htmlFor={`${editArgIdPrefix}-edit-arg-${key}`}
                     className="mb-1 block text-xs font-medium text-foreground"
                   >
                     {key}
                   </label>
                   <Textarea
-                    id={`edit-arg-${key}`}
+                    id={`${editArgIdPrefix}-edit-arg-${key}`}
                     value={
                       editedArgs[key] !== undefined
                         ? typeof editedArgs[key] === "string"
