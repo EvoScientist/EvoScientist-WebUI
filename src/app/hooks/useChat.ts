@@ -652,6 +652,16 @@ export function useChat({
           streamMode: ["updates"],
           streamResumable: true,
           onDisconnect: "continue",
+          // Without this the SDK forwards `undefined` and the backend defaults
+          // to cancel-and-restart on a duplicate POST for the same thread —
+          // the mid-run cancel rolls back the checkpoint but not
+          // already-executed tool side effects (files written by `execute`,
+          // graph mutations), leaving orphaned on-disk state that duplicates
+          // on the retry. "reject" opts the whole thread into langgraph's
+          // native 409-on-duplicate path, which is what any second
+          // send-during-run (SSE reconnect resubmit, double-click, useEffect
+          // double-fire) should hit instead.
+          multitaskStrategy: "reject",
         }
       );
       // Update thread list immediately when sending a message
@@ -687,6 +697,9 @@ export function useChat({
         streamMode: ["updates"],
         streamResumable: true,
         onDisconnect: "continue",
+        // See sendMessage for the rationale — same "opt out of destructive
+        // cancel-and-restart" reason applies to resume POSTs.
+        multitaskStrategy: "reject",
       });
       // Update thread list when resuming from interrupt
       onHistoryRevalidate?.();
