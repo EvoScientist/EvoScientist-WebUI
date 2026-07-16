@@ -32,7 +32,11 @@ import {
   MODEL_OVERRIDE_METADATA_KEY,
   type ModelOverride,
 } from "@/lib/modelCommand";
-import { setThreadModelOverride } from "@/app/hooks/useThreads";
+import { ACTIVE_TEAMS_METADATA_KEY } from "@/lib/teams";
+import {
+  setThreadActiveTeams,
+  setThreadModelOverride,
+} from "@/app/hooks/useThreads";
 
 export type StateType = {
   messages: Message[];
@@ -369,6 +373,21 @@ export function useChat({
     null
   );
   const pendingOverrideRef = useRef<ModelOverride | null>(null);
+
+  // Per-thread summoned teams (user-picked "experts" that bias the main agent
+  // toward the named subagent for this thread). Same lifecycle shape as
+  // `modelOverride`: local state is source of truth for the running send,
+  // persisted to thread metadata (`ACTIVE_TEAMS_METADATA_KEY` = `active_teams`)
+  // so the choice survives reload / thread switch / cross-device, and folded
+  // into every `stream.submit` via `configurable.active_teams` where the
+  // backend's `ActiveTeamMiddleware` reads it.
+  //
+  // The pending ref handles the fresh-chat case (user summons a team from the
+  // empty composer before the thread row exists server-side) — the pick is
+  // stashed until `threadId` shows up, then flushed to metadata and included
+  // on the first send via `buildRunConfig`.
+  const [activeTeams, setActiveTeamsState] = useState<string[]>([]);
+  const pendingActiveTeamsRef = useRef<string[] | null>(null);
   useEffect(() => {
     if (!threadId) {
       // Don't clobber a pending pre-thread override — `buildRunConfig` still
@@ -443,6 +462,72 @@ export function useChat({
     },
     [threadId]
   );
+
+  // Seed `activeTeams` from thread metadata on thread switch. Same shape as
+  // the modelOverride effect above: if a pending pick exists (from before the
+  // thread was created), flush it to metadata and keep the local state as-is;
+  // otherwise fetch the persisted list and seed local state from it. Non-list
+  // (or empty / malformed) metadata resolves to `[]` — never leaves stale
+  // teams from a previous thread visible.
+  useEffect(() => {
+    if (!threadId) {
+      if (!pendingActiveTeamsRef.current) setActiveTeamsState([]);
+      return;
+    }
+    if (pendingActiveTeamsRef.current) {
+      const pending = pendingActiveTeamsRef.current;
+      pendingActiveTeamsRef.current = null;
+      void (async () => {
+        try {
+          await setThreadActiveTeams(threadId, pending);
+        } catch {
+          // Local state still reflects the pick; next setActiveTeams or
+          // thread reopen retries persistence.
+        }
+      })();
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const t = (await client.threads.get(threadId)) as {
+          metadata?: Record<string, unknown>;
+        };
+        if (cancelled) return;
+        const raw = (t.metadata ?? {})[ACTIVE_TEAMS_METADATA_KEY];
+        if (Array.isArray(raw)) {
+          setActiveTeamsState(
+            raw.filter((v): v is string => typeof v === "string")
+          );
+        } else {
+          setActiveTeamsState([]);
+        }
+      } catch {
+        if (!cancelled) setActiveTeamsState([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [client, threadId]);
+
+  // Persist + apply locally. Mirrors `setModelOverride`: writes metadata
+  // when the thread row exists, otherwise stashes in the pending ref so the
+  // first send picks the pick up via `buildRunConfig` and the thread-id
+  // effect above can persist it once the row appears.
+  const setActiveTeams = useCallback(
+    async (next: string[]) => {
+      setActiveTeamsState(next);
+      if (!threadId) {
+        pendingActiveTeamsRef.current = next;
+        return;
+      }
+      pendingActiveTeamsRef.current = null;
+      await setThreadActiveTeams(threadId, next);
+    },
+    [threadId]
+  );
+
   useEffect(() => {
     if (!threadId) {
       setFetchedInterrupt(undefined);
@@ -621,8 +706,16 @@ export function useChat({
         configurable.model_provider = modelOverride.model_provider;
       }
     }
+    // Only include the key when a team is summoned. Sending an empty array
+    // would also work (backend middleware treats [] as no-op) but leaving
+    // the key absent keeps the run config minimal for chats without a
+    // summon and makes it obvious from network traces which sends carry
+    // an active-team bias.
+    if (activeTeams.length > 0) {
+      configurable.active_teams = activeTeams;
+    }
     return { ...base, configurable };
-  }, [activeAssistant?.config, modelOverride]);
+  }, [activeAssistant?.config, modelOverride, activeTeams]);
 
   const sendMessage = useCallback(
     (content: string) => {
@@ -715,5 +808,7 @@ export function useChat({
     dynamicWorkflows,
     modelOverride,
     setModelOverride,
+    activeTeams,
+    setActiveTeams,
   };
 }
