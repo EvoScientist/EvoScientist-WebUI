@@ -33,6 +33,7 @@ import { HealthIndicator } from "@/app/components/HealthIndicator";
 import { InspectorPanel } from "@/app/components/InspectorPanel";
 import { setThreadAutoApprove } from "@/lib/autoApprove";
 import type { MainChatReporter } from "@/lib/asyncAgents";
+import { useAutoOpenExpertsOnNewChat } from "@/lib/uiSettings";
 import { cn } from "@/lib/utils";
 
 interface HomePageInnerProps {
@@ -186,6 +187,40 @@ function HomePageInner({
     if (isDesktopLayout === false) setSidebar(null);
     setInspector("1");
   }, [isDesktopLayout, setInspector, setSidebar, setInspectorTab]);
+  // Toggle the inspector on a specific tab (composer toolbar buttons).
+  // Clicking the button for the CURRENTLY-open tab closes the inspector;
+  // clicking a different tab switches to it (opening the inspector if
+  // closed). Contrast with `showAgentsInspector` / `showExpertsInspector`
+  // above, which are open-only (used by the composer pulse and the active-
+  // team chip where second-click-close would be confusing).
+  const toggleInspectorTab = useCallback(
+    (target: "workspace" | "agents" | "experts") => {
+      const current: "workspace" | "agents" | "experts" =
+        inspectorTab === "agents"
+          ? "agents"
+          : inspectorTab === "experts"
+          ? "experts"
+          : "workspace";
+      if (inspector && current === target) {
+        closeInspector();
+        return;
+      }
+      if (isDesktopLayout === false) setSidebar(null);
+      // Workspace is the default tab (URL param unset), so we clear rather
+      // than write "workspace" to keep the URL clean when it's active.
+      setInspectorTab(target === "workspace" ? null : target);
+      setInspector("1");
+    },
+    [
+      closeInspector,
+      inspector,
+      inspectorTab,
+      isDesktopLayout,
+      setInspector,
+      setInspectorTab,
+      setSidebar,
+    ]
+  );
   const sidebarToggleLabel = view
     ? sidebar
       ? "Hide navigation"
@@ -193,12 +228,19 @@ function HomePageInner({
     : sidebar
     ? "Hide research"
     : "Show research";
+  const { value: autoOpenExpertsOnNewChat } = useAutoOpenExpertsOnNewChat();
   const startNewChat = useCallback(() => {
     setThreadAutoApprove(null, false);
     setThreadId(null);
     setView(null);
     setChatSessionRevision((revision) => revision + 1);
-  }, [setThreadId, setView]);
+    // Nudge discovery of the Experts gallery on fresh chats. The user can
+    // disable this in Settings if it gets in the way. Gated behind the
+    // preference so power users aren't reminded on every new chat.
+    if (autoOpenExpertsOnNewChat) {
+      showExpertsInspector();
+    }
+  }, [setThreadId, setView, autoOpenExpertsOnNewChat, showExpertsInspector]);
   const handleDashboardNav = useCallback(
     (
       target:
@@ -479,12 +521,12 @@ function HomePageInner({
                     assistant={assistant}
                     onShowAgents={showAgentsInspector}
                     onShowExperts={showExpertsInspector}
+                    onToggleInspector={toggleInspectorTab}
+                    inspectorOpen={Boolean(inspector)}
+                    inspectorTab={inspectorTab}
                     onNotifyReady={(fn) => setNotifyMainChat(() => fn)}
                     onNavigate={handleDashboardNav}
                     onOpenThread={selectThread}
-                    workspaceOpen={Boolean(
-                      inspector && inspectorTab !== "agents"
-                    )}
                   />
                 </div>
                 {view === "skills" && <SkillsMarketplace />}

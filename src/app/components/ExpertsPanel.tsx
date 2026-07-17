@@ -163,7 +163,7 @@ function TeamCard({
               : "bg-[var(--brand-solid)] text-[var(--brand-foreground)] hover:opacity-90"
           )}
         >
-          {isActive ? "Unsummon" : "Summon"}
+          {isActive ? "Dismiss" : "Invite"}
         </button>
       </div>
     </div>
