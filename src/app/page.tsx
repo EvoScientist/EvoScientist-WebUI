@@ -32,6 +32,7 @@ import { HealthIndicator } from "@/app/components/HealthIndicator";
 import { InspectorPanel } from "@/app/components/InspectorPanel";
 import { setThreadAutoApprove } from "@/lib/autoApprove";
 import type { MainChatReporter } from "@/lib/asyncAgents";
+import { useAutoOpenExpertsOnNewChat } from "@/lib/uiSettings";
 import { cn } from "@/lib/utils";
 
 interface HomePageInnerProps {
@@ -179,6 +180,46 @@ function HomePageInner({
     if (isDesktopLayout === false) setSidebar(null);
     setInspector("1");
   }, [isDesktopLayout, setInspector, setSidebar, setInspectorTab]);
+  // Open the inspector straight on its Experts tab (active-team chip click).
+  const showExpertsInspector = useCallback(() => {
+    setInspectorTab("experts");
+    if (isDesktopLayout === false) setSidebar(null);
+    setInspector("1");
+  }, [isDesktopLayout, setInspector, setSidebar, setInspectorTab]);
+  // Toggle the inspector on a specific tab (composer toolbar buttons).
+  // Clicking the button for the CURRENTLY-open tab closes the inspector;
+  // clicking a different tab switches to it (opening the inspector if
+  // closed). Contrast with `showAgentsInspector` / `showExpertsInspector`
+  // above, which are open-only (used by the composer pulse and the active-
+  // team chip where second-click-close would be confusing).
+  const toggleInspectorTab = useCallback(
+    (target: "workspace" | "agents" | "experts") => {
+      const current: "workspace" | "agents" | "experts" =
+        inspectorTab === "agents"
+          ? "agents"
+          : inspectorTab === "experts"
+          ? "experts"
+          : "workspace";
+      if (inspector && current === target) {
+        closeInspector();
+        return;
+      }
+      if (isDesktopLayout === false) setSidebar(null);
+      // Workspace is the default tab (URL param unset), so we clear rather
+      // than write "workspace" to keep the URL clean when it's active.
+      setInspectorTab(target === "workspace" ? null : target);
+      setInspector("1");
+    },
+    [
+      closeInspector,
+      inspector,
+      inspectorTab,
+      isDesktopLayout,
+      setInspector,
+      setInspectorTab,
+      setSidebar,
+    ]
+  );
   const sidebarToggleLabel = view
     ? sidebar
       ? "Hide navigation"
@@ -186,12 +227,19 @@ function HomePageInner({
     : sidebar
     ? "Hide research"
     : "Show research";
+  const { value: autoOpenExpertsOnNewChat } = useAutoOpenExpertsOnNewChat();
   const startNewChat = useCallback(() => {
     setThreadAutoApprove(null, false);
     setThreadId(null);
     setView(null);
     setChatSessionRevision((revision) => revision + 1);
-  }, [setThreadId, setView]);
+    // Nudge discovery of the Experts gallery on fresh chats. The user can
+    // disable this in Settings if it gets in the way. Gated behind the
+    // preference so power users aren't reminded on every new chat.
+    if (autoOpenExpertsOnNewChat) {
+      showExpertsInspector();
+    }
+  }, [setThreadId, setView, autoOpenExpertsOnNewChat, showExpertsInspector]);
   const handleDashboardNav = useCallback(
     (
       target:
@@ -368,144 +416,154 @@ function HomePageInner({
         </header>
 
         <div className="relative flex-1 overflow-hidden">
-          {sidebar && isDesktopLayout === false && (
-            <div className="absolute inset-0 z-40 flex md:hidden">
-              <button
-                type="button"
-                aria-label="Close research"
-                className="absolute inset-0 bg-black/40"
-                onClick={closeSidebar}
-              />
-              <aside
-                aria-label={view ? "Navigation" : "Research navigation"}
-                className="relative z-10 h-full w-[min(19rem,calc(100vw-2.25rem))] bg-background shadow-xl"
-              >
-                <ThreadList
-                  onClose={closeSidebar}
-                  onNewChat={startNewChat}
-                  onThreadSelect={async (id) => {
-                    await selectThread(id);
-                    closeSidebar();
-                  }}
-                  onMutateReady={(fn) => setMutateThreads(() => fn)}
-                  onInterruptCountChange={setInterruptCount}
-                />
-              </aside>
-            </div>
-          )}
-          {inspector && isDesktopLayout === false && (
-            <div className="absolute inset-0 z-40 flex justify-end md:hidden">
-              <button
-                type="button"
-                aria-label="Close inspector"
-                className="absolute inset-0 bg-black/40"
-                onClick={closeInspector}
-              />
-              <aside
-                aria-label="Inspector"
-                className="relative z-10 h-full w-[min(22rem,calc(100vw-2.25rem))] bg-background shadow-xl"
-              >
-                <InspectorPanel
-                  onClose={closeInspector}
-                  onReportToMainChat={notifyMainChat}
-                />
-              </aside>
-            </div>
-          )}
-          <ResizablePanelGroup
-            direction="horizontal"
-            autoSaveId="evoscientist-chat"
+          {/* ChatProvider wraps the whole main-content subtree (both mobile
+              drawers + the ResizablePanelGroup) so InspectorPanel — which
+              lives OUTSIDE the ResizablePanel that holds ChatInterface — can
+              also read/write per-thread chat state via useChatContext (e.g.
+              the Experts tab needs activeTeams / setActiveTeams). The
+              `key={chatSessionRevision}` bump on thread change re-mounts this
+              subtree defensively; ThreadList and InspectorPanel re-render but
+              their real state is URL-backed or SWR-cached, so cost is minor. */}
+          <ChatProvider
+            key={chatSessionRevision}
+            activeAssistant={assistant}
+            onHistoryRevalidate={() => mutateThreads?.()}
           >
-            {sidebar && isDesktopLayout && (
-              <>
-                <ResizablePanel
-                  id="thread-history"
-                  order={1}
-                  defaultSize={23}
-                  minSize={18}
-                  className="relative min-w-[260px]"
+            {sidebar && isDesktopLayout === false && (
+              <div className="absolute inset-0 z-40 flex md:hidden">
+                <button
+                  type="button"
+                  aria-label="Close research"
+                  className="absolute inset-0 bg-black/40"
+                  onClick={closeSidebar}
+                />
+                <aside
+                  aria-label={view ? "Navigation" : "Research navigation"}
+                  className="relative z-10 h-full w-[min(19rem,calc(100vw-2.25rem))] bg-background shadow-xl"
                 >
                   <ThreadList
+                    onClose={closeSidebar}
                     onNewChat={startNewChat}
-                    onThreadSelect={selectThread}
+                    onThreadSelect={async (id) => {
+                      await selectThread(id);
+                      closeSidebar();
+                    }}
                     onMutateReady={(fn) => setMutateThreads(() => fn)}
                     onInterruptCountChange={setInterruptCount}
                   />
-                </ResizablePanel>
-                <ResizableHandle />
-              </>
-            )}
-
-            <ResizablePanel
-              id="chat"
-              className="relative flex flex-col"
-              order={2}
-            >
-              {/* Chat stays mounted across view switches. We hide it via
-                  `display:none` (rather than unmounting) so flipping to
-                  Skills/Memory and back is instant — no thread re-fetch, no
-                  message-list rebuild, and any in-flight run keeps streaming
-                  in the background. Cost is bounded: only the *current*
-                  thread's state is held; no accumulation per switch. */}
-              <div
-                className={cn(
-                  "flex h-full min-h-0 flex-1 flex-col",
-                  view !== null && "hidden"
-                )}
-              >
-                <ChatProvider
-                  key={chatSessionRevision}
-                  activeAssistant={assistant}
-                  onHistoryRevalidate={() => mutateThreads?.()}
-                >
-                  <ChatInterface
-                    assistant={assistant}
-                    onShowAgents={showAgentsInspector}
-                    onNotifyReady={(fn) => setNotifyMainChat(() => fn)}
-                    onNavigate={handleDashboardNav}
-                    onOpenThread={selectThread}
-                    workspaceOpen={Boolean(
-                      inspector && inspectorTab !== "agents"
-                    )}
-                  />
-                </ChatProvider>
+                </aside>
               </div>
-              {view === "skills" && <SkillsMarketplace />}
-              {view === "memory" && (
-                <MemoryPanel
-                  initialTab={
-                    memoryTab as
-                      | "identity"
-                      | "knowledge"
-                      | "history"
-                      | null
-                      | undefined
-                  }
-                  initialObsId={memoryObs}
-                  initialExecId={memoryExec}
+            )}
+            {inspector && isDesktopLayout === false && (
+              <div className="absolute inset-0 z-40 flex justify-end md:hidden">
+                <button
+                  type="button"
+                  aria-label="Close inspector"
+                  className="absolute inset-0 bg-black/40"
+                  onClick={closeInspector}
                 />
-              )}
-              {view === "schedule" && <ScheduledTasksPanel />}
-            </ResizablePanel>
-
-            {inspector && isDesktopLayout && (
-              <>
-                <ResizableHandle />
-                <ResizablePanel
-                  id="inspector"
-                  order={3}
-                  defaultSize={26}
-                  minSize={20}
-                  className="relative min-w-[300px]"
+                <aside
+                  aria-label="Inspector"
+                  className="relative z-10 h-full w-[min(22rem,calc(100vw-2.25rem))] bg-background shadow-xl"
                 >
                   <InspectorPanel
                     onClose={closeInspector}
                     onReportToMainChat={notifyMainChat}
                   />
-                </ResizablePanel>
-              </>
+                </aside>
+              </div>
             )}
-          </ResizablePanelGroup>
+            <ResizablePanelGroup
+              direction="horizontal"
+              autoSaveId="evoscientist-chat"
+            >
+              {sidebar && isDesktopLayout && (
+                <>
+                  <ResizablePanel
+                    id="thread-history"
+                    order={1}
+                    defaultSize={23}
+                    minSize={18}
+                    className="relative min-w-[260px]"
+                  >
+                    <ThreadList
+                      onNewChat={startNewChat}
+                      onThreadSelect={selectThread}
+                      onMutateReady={(fn) => setMutateThreads(() => fn)}
+                      onInterruptCountChange={setInterruptCount}
+                    />
+                  </ResizablePanel>
+                  <ResizableHandle />
+                </>
+              )}
+
+              <ResizablePanel
+                id="chat"
+                className="relative flex flex-col"
+                order={2}
+              >
+                {/* Chat stays mounted across view switches. We hide it via
+                  `display:none` (rather than unmounting) so flipping to
+                  Skills/Memory/Spark and back is instant — no thread re-fetch,
+                  no message-list rebuild, and any in-flight run keeps
+                  streaming in the background. Cost is bounded: only the
+                  *current* thread's state is held; no accumulation per
+                  switch. */}
+                <div
+                  className={cn(
+                    "flex h-full min-h-0 flex-1 flex-col",
+                    view !== null && "hidden"
+                  )}
+                >
+                  <ChatInterface
+                    assistant={assistant}
+                    onShowAgents={showAgentsInspector}
+                    onShowExperts={showExpertsInspector}
+                    onToggleInspector={toggleInspectorTab}
+                    inspectorOpen={Boolean(inspector)}
+                    inspectorTab={inspectorTab}
+                    onNotifyReady={(fn) => setNotifyMainChat(() => fn)}
+                    onNavigate={handleDashboardNav}
+                    onOpenThread={selectThread}
+                  />
+                </div>
+                {view === "skills" && <SkillsMarketplace />}
+                {view === "memory" && (
+                  <MemoryPanel
+                    initialTab={
+                      memoryTab as
+                        | "identity"
+                        | "knowledge"
+                        | "history"
+                        | null
+                        | undefined
+                    }
+                    initialObsId={memoryObs}
+                    initialExecId={memoryExec}
+                  />
+                )}
+                {view === "schedule" && <ScheduledTasksPanel />}
+              </ResizablePanel>
+
+              {inspector && isDesktopLayout && (
+                <>
+                  <ResizableHandle />
+                  <ResizablePanel
+                    id="inspector"
+                    order={3}
+                    defaultSize={26}
+                    minSize={20}
+                    className="relative min-w-[300px]"
+                  >
+                    <InspectorPanel
+                      onClose={closeInspector}
+                      onReportToMainChat={notifyMainChat}
+                    />
+                  </ResizablePanel>
+                </>
+              )}
+            </ResizablePanelGroup>
+          </ChatProvider>
         </div>
       </div>
     </>
