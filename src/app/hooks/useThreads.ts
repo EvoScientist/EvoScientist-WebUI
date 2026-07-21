@@ -3,6 +3,10 @@ import type { Thread } from "@langchain/langgraph-sdk";
 import { Client } from "@langchain/langgraph-sdk";
 import { getConfig } from "@/lib/config";
 import { patchClientStreamModes } from "@/lib/streamMode";
+import {
+  buildThreadLabelPatch,
+  needsThreadLabelBackfill,
+} from "@/lib/threadLabels";
 
 export interface ThreadItem {
   id: string;
@@ -20,6 +24,37 @@ export interface ThreadItem {
 }
 
 const DEFAULT_PAGE_SIZE = 20;
+
+const labelBackfillAttempted = new Map<string, string>();
+
+async function backfillThreadLabels(
+  client: Client,
+  id: string,
+  attemptKey: string,
+  attemptedState: string
+): Promise<{ autoTitle: string | null; preview: string | null } | null> {
+  try {
+    const thread = await client.threads.get(id);
+    const values = thread.values as { messages?: unknown } | undefined;
+    const derived = deriveThreadMetadata(values?.messages);
+    const current = (thread.metadata ?? {}) as Record<string, unknown>;
+    const stateUpdatedAt =
+      (thread as { state_updated_at?: string | null }).state_updated_at ||
+      thread.updated_at;
+    const patch = buildThreadLabelPatch(current, derived, stateUpdatedAt);
+    if (Object.keys(patch).length > 0) {
+      await client.threads.update(id, { metadata: { ...current, ...patch } });
+    }
+    return derived;
+  } catch {
+    // Do not clear a newer attempt if this older request fails after the
+    // thread has already advanced again.
+    if (labelBackfillAttempted.get(attemptKey) === attemptedState) {
+      labelBackfillAttempted.delete(attemptKey);
+    }
+    return null;
+  }
+}
 
 export function useThreads(props: {
   status?: Thread["status"];
@@ -94,97 +129,145 @@ export function useThreads(props: {
         ? { assistant_id: assistantId }
         : { graph_id: assistantId };
 
-      const threads = await client.threads.search({
+      // Sort by state_updated_at (last checkpoint write, i.e. last actual
+      // chat activity) rather than updated_at. Any metadata patch
+      // (rename/pin/preview writeback/backfill script) bumps updated_at,
+      // which would resurface stale threads at the top of the list.
+      // state_updated_at only advances on genuine graph state changes.
+      //
+      // Sidebar payload minimization: never fetch `values` (full message
+      // history, easily tens of MB across a page). Title and description
+      // come from precomputed keys in `metadata` that `useChat` writes back
+      // after each turn (`auto_title`, `preview`), plus the user rename
+      // (`title`) and pinned flag already stored there. Threads missing both
+      // keys (pre-fix threads, or threads created by CLI/TUI surfaces) are
+      // self-healed below: fetched individually once, derived, written back.
+      //
+      // Backends too old to know `select` / `state_updated_at` may reject the
+      // request — fall back to the legacy query (full values, updated_at
+      // sort) and derive labels inline so the sidebar still renders.
+      const baseSearch = {
         limit: pageSize,
         offset: pageIndex * pageSize,
-        // Sort by state_updated_at (last checkpoint write, i.e. last actual
-        // chat activity) rather than updated_at. Any metadata patch
-        // (rename/pin/preview writeback/backfill script) bumps updated_at,
-        // which would resurface stale threads at the top of the list.
-        // state_updated_at only advances on genuine graph state changes.
-        sortBy: "state_updated_at" as const,
         sortOrder: "desc" as const,
         status,
         metadata,
-        // Sidebar payload minimization: never fetch `values` (full message
-        // history, easily tens of MB across a page). Title and description
-        // come from precomputed keys in `metadata` that `useChat` writes back
-        // after each turn (`auto_title`, `preview`), plus the user rename
-        // (`title`) and pinned flag already stored there. Existing pre-fix
-        // threads get seeded once by `scripts/backfill-thread-previews.mjs`.
-        select: [
-          "thread_id",
-          "updated_at",
-          "state_updated_at",
-          "status",
-          "metadata",
-          "interrupts",
-        ],
-      });
+      };
+      let threads: Awaited<ReturnType<typeof client.threads.search>>;
+      let legacySearch = false;
+      try {
+        threads = await client.threads.search({
+          ...baseSearch,
+          sortBy: "state_updated_at" as const,
+          select: [
+            "thread_id",
+            "updated_at",
+            "state_updated_at",
+            "status",
+            "metadata",
+            "interrupts",
+          ],
+        });
+      } catch {
+        legacySearch = true;
+        threads = await client.threads.search({
+          ...baseSearch,
+          sortBy: "updated_at" as const,
+        });
+      }
 
-      return threads.map((thread): ThreadItem => {
-        const md = (thread.metadata ?? {}) as Record<string, unknown>;
-        // A user rename (stored under `title`) always wins over the derived
-        // auto-title so the sidebar reflects what the user typed.
-        const customTitle = typeof md.title === "string" ? md.title.trim() : "";
-        const autoTitle =
-          typeof md.auto_title === "string" ? md.auto_title.trim() : "";
-        const preview = typeof md.preview === "string" ? md.preview.trim() : "";
+      const items = await Promise.all(
+        threads.map(async (thread): Promise<ThreadItem> => {
+          const md = (thread.metadata ?? {}) as Record<string, unknown>;
+          // A user rename (stored under `title`) always wins over the derived
+          // auto-title so the sidebar reflects what the user typed.
+          const customTitle =
+            typeof md.title === "string" ? md.title.trim() : "";
+          let autoTitle =
+            typeof md.auto_title === "string" ? md.auto_title.trim() : "";
+          let preview = typeof md.preview === "string" ? md.preview.trim() : "";
+          // Prefer state_updated_at (real chat activity) but fall back to
+          // updated_at for very old threads that predate the field.
+          const activityTs =
+            (thread as { state_updated_at?: string | null }).state_updated_at ||
+            thread.updated_at;
 
-        // Title falls back to the first-human autoTitle, then to the AI preview
-        // (rare edge case: attachment-only human message with no text), then to
-        // a bare thread-id label so nothing renders as "Untitled Thread".
-        let title = customTitle || autoTitle;
-        if (!title && preview) title = preview;
-        if (!title) title = `Thread ${thread.thread_id.slice(0, 8)}`;
-        if (title.length > 50) title = title.slice(0, 50) + "…";
-
-        const description =
-          preview.length > 100 ? preview.slice(0, 100) : preview;
-
-        // Pinned state is stored in thread metadata (like the custom title),
-        // so it persists across reloads/devices via the backend store.
-        const pinned = md.pinned === true;
-
-        // Walk `thread.interrupts` (Record<task_id, Interrupt[]>) and flag any
-        // value with `type: "ask_user"`. The auto-approver can't resolve those,
-        // so the sidebar should keep the row in "Requiring Attention" even when
-        // auto-approve is on for the thread.
-        let needsUserInput = false;
-        const interrupts = thread.interrupts as
-          | Record<string, Array<{ value?: unknown }>>
-          | undefined;
-        if (interrupts && typeof interrupts === "object") {
-          for (const list of Object.values(interrupts)) {
-            if (!Array.isArray(list)) continue;
-            for (const ir of list) {
-              const value = ir?.value as { type?: unknown } | undefined;
-              if (value && value.type === "ask_user") {
-                needsUserInput = true;
-                break;
+          if (needsThreadLabelBackfill(md, activityTs)) {
+            if (legacySearch) {
+              const derived = deriveThreadMetadata(
+                (thread.values as { messages?: unknown } | undefined)?.messages
+              );
+              autoTitle = autoTitle || (derived.autoTitle ?? "");
+              preview = preview || (derived.preview ?? "");
+            } else {
+              const attemptKey = `${deploymentUrl}\u0000${thread.thread_id}`;
+              if (labelBackfillAttempted.get(attemptKey) !== activityTs) {
+                labelBackfillAttempted.set(attemptKey, activityTs);
+                const derived = await backfillThreadLabels(
+                  client,
+                  thread.thread_id,
+                  attemptKey,
+                  activityTs
+                );
+                if (derived) {
+                  autoTitle = autoTitle || (derived.autoTitle ?? "");
+                  preview = preview || (derived.preview ?? "");
+                }
               }
             }
-            if (needsUserInput) break;
           }
-        }
 
-        // Prefer state_updated_at (real chat activity) but fall back to
-        // updated_at for very old threads that predate the field.
-        const activityTs =
-          (thread as { state_updated_at?: string | null }).state_updated_at ||
-          thread.updated_at;
+          // Title falls back to the first-human autoTitle, then to the AI
+          // preview (rare edge case: attachment-only human message with no
+          // text), then to a bare thread-id label so nothing renders as
+          // "Untitled Thread".
+          let title = customTitle || autoTitle;
+          if (!title && preview) title = preview;
+          if (!title) title = `Thread ${thread.thread_id.slice(0, 8)}`;
+          if (title.length > 50) title = title.slice(0, 50) + "…";
 
-        return {
-          id: thread.thread_id,
-          updatedAt: new Date(activityTs),
-          status: thread.status,
-          title,
-          description,
-          assistantId,
-          pinned,
-          needsUserInput,
-        };
-      });
+          const description =
+            preview.length > 100 ? preview.slice(0, 100) : preview;
+
+          // Pinned state is stored in thread metadata (like the custom title),
+          // so it persists across reloads/devices via the backend store.
+          const pinned = md.pinned === true;
+
+          // Walk `thread.interrupts` (Record<task_id, Interrupt[]>) and flag
+          // any value with `type: "ask_user"`. The auto-approver can't resolve
+          // those, so the sidebar should keep the row in "Requiring Attention"
+          // even when auto-approve is on for the thread.
+          let needsUserInput = false;
+          const interrupts = thread.interrupts as
+            | Record<string, Array<{ value?: unknown }>>
+            | undefined;
+          if (interrupts && typeof interrupts === "object") {
+            for (const list of Object.values(interrupts)) {
+              if (!Array.isArray(list)) continue;
+              for (const ir of list) {
+                const value = ir?.value as { type?: unknown } | undefined;
+                if (value && value.type === "ask_user") {
+                  needsUserInput = true;
+                  break;
+                }
+              }
+              if (needsUserInput) break;
+            }
+          }
+
+          return {
+            id: thread.thread_id,
+            updatedAt: new Date(activityTs),
+            status: thread.status,
+            title,
+            description,
+            assistantId,
+            pinned,
+            needsUserInput,
+          };
+        })
+      );
+      return items;
     },
     {
       revalidateFirstPage: true,
@@ -330,13 +413,10 @@ export async function persistThreadDerivedMetadata(
   if (!client) return;
   const thread = await client.threads.get(id);
   const current = (thread.metadata ?? {}) as Record<string, unknown>;
-  const patch: Record<string, unknown> = {};
-  if (next.autoTitle && current.auto_title !== next.autoTitle) {
-    patch.auto_title = next.autoTitle;
-  }
-  if (next.preview && current.preview !== next.preview) {
-    patch.preview = next.preview;
-  }
+  const stateUpdatedAt =
+    (thread as { state_updated_at?: string | null }).state_updated_at ||
+    thread.updated_at;
+  const patch = buildThreadLabelPatch(current, next, stateUpdatedAt);
   if (Object.keys(patch).length === 0) return;
   await client.threads.update(id, { metadata: { ...current, ...patch } });
 }

@@ -31,7 +31,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { formatTime, formatFullTime } from "@/lib/time";
+import { formatTime, formatFullTime, timeBucketFor } from "@/lib/time";
 import type { ThreadItem } from "@/app/hooks/useThreads";
 import {
   useThreads,
@@ -265,18 +265,7 @@ export function ThreadList({
         return;
       }
 
-      const diff = now.getTime() - thread.updatedAt.getTime();
-      const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-
-      if (days === 0) {
-        groups.today.push(thread);
-      } else if (days === 1) {
-        groups.yesterday.push(thread);
-      } else if (days < 7) {
-        groups.week.push(thread);
-      } else {
-        groups.older.push(thread);
-      }
+      groups[timeBucketFor(thread.updatedAt, now)].push(thread);
     });
 
     return groups;

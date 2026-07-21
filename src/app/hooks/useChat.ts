@@ -704,9 +704,11 @@ export function useChat({
   // in this session. The persist call itself also compares against server
   // metadata before writing, so this is safe across tabs/reloads too.
   //
-  // Pre-existing threads (with neither metadata key set) get seeded by
-  // `scripts/backfill-thread-previews.mjs` once, so switching to them shows
-  // the right labels immediately even before they get a new turn.
+  // Pre-existing threads (with neither metadata key set) are self-healed by
+  // the sidebar fetcher in `useThreads` (fetched once, derived, written
+  // back), so they show the right labels even before they get a new turn.
+  // `scripts/backfill-thread-previews.mjs` remains as an optional bulk
+  // migration for repo checkouts.
   const prevLoadingRef = useRef(false);
   const lastWrittenRef = useRef<{
     threadId: string;
@@ -728,11 +730,16 @@ export function useChat({
     ) {
       return;
     }
-    lastWrittenRef.current = { threadId, ...derived };
     void persistThreadDerivedMetadata(threadId, derived)
-      .then(() => onHistoryRevalidate?.())
+      .then(() => {
+        // Mark as written only on success so a transient failure retries on
+        // the next idle transition (the derived values rarely change, so a
+        // pre-write mark would suppress retries for the whole session).
+        lastWrittenRef.current = { threadId, ...derived };
+        onHistoryRevalidate?.();
+      })
       .catch(() => {
-        // Non-critical: sidebar label just stays stale until the next turn.
+        // Non-critical: sidebar label stays stale; retried next turn.
       });
   }, [stream.isLoading, threadId, messages, onHistoryRevalidate]);
 
