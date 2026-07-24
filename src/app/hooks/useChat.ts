@@ -715,10 +715,38 @@ export function useChat({
     autoTitle: string | null;
     preview: string | null;
   } | null>(null);
+  // Records the `threadId` seen at the moment `isLoading` last rose (a run
+  // starting). We only persist derived labels for a completed run when the
+  // starting-threadId still matches the current one. This closes a race
+  // during sidebar navigation: when the user clicks a different thread mid-
+  // life-of-this-hook, `selectThread` in `page.tsx` schedules `setThreadId`
+  // and `setChatSessionRevision(+1)` back-to-back. The revision bump
+  // remounts `ChatProvider`, which normally wipes this hook's state — but
+  // `setThreadId` (a nuqs `useQueryState` setter) commits FIRST, so we get
+  // one transitional render where this same `useChat` instance already sees
+  // the NEW threadId while `stream.messages` still holds the previous
+  // thread's messages. Without this guard, an `isLoading` toggle in that
+  // window (e.g. the SDK's `fetchStateHistory` on thread switch) writes the
+  // previous thread's `auto_title` / `preview` onto the new thread's
+  // metadata. See `39c2e87` (where this effect was introduced) for the
+  // original race, and the async-expert testing session where the swap was
+  // observed reliably (expert thread ends up with a "Howdy" preview from a
+  // new-chat detour). `null` sentinel means "started with no thread" — the
+  // new-chat first-turn case, where the run legitimately begins pre-thread
+  // and finishes on a real id; we still allow that write.
+  const runStartThreadIdRef = useRef<string | null>(null);
   useEffect(() => {
+    // Rising edge of isLoading: capture the threadId that owns this run.
+    if (stream.isLoading && !prevLoadingRef.current) {
+      runStartThreadIdRef.current = threadId;
+    }
     const wasLoading = prevLoadingRef.current;
     prevLoadingRef.current = stream.isLoading;
     if (!wasLoading || stream.isLoading || !threadId) return;
+    // Guard against the mid-transition race. Allow the new-chat first-turn
+    // case (run started with null and ended with a real id).
+    const start = runStartThreadIdRef.current;
+    if (start !== null && start !== threadId) return;
     const derived = deriveThreadMetadata(messages);
     if (!derived.autoTitle && !derived.preview) return;
     const last = lastWrittenRef.current;
