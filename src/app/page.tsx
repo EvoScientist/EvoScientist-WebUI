@@ -240,22 +240,12 @@ function HomePageInner({
       setThreadAutoApprove(null, false);
       setView(null);
       const sameThread = threadId === id;
-      // Bump revision BEFORE `setThreadId` so `ChatProvider` remounts on the
-      // same React commit as `setView(null)` — this happens synchronously,
-      // whereas `await setThreadId(id)` yields the microtask queue and
-      // commits the URL update in a LATER render. If revision bumped after
-      // the URL update, the still-alive `useChat` instance would see the
-      // new `threadId` while `stream.messages` was still the previous
-      // thread's, and its `persistThreadDerivedMetadata` effect could
-      // corrupt the target thread's `auto_title` on the `fetchStateHistory`
-      // isLoading toggle. Revision-first ensures the stale instance is
-      // torn down before the URL flips.
-      //
-      // Only force a fresh ChatProvider mount when the thread actually
-      // changes. Clicking the active thread row (e.g. to return to chat from
-      // the Memory view) used to bump the revision unconditionally, which
-      // tore down ChatInterface and forced useStream to re-fetch the full
-      // thread `/history` — defeating the keep-chat-mounted layout.
+      // Bump revision before the awaited URL update: the remount tears down
+      // the stale `useChat` instance before `threadId` flips, so its persist
+      // effect can't write the previous thread's labels onto the target
+      // thread. Only bump when the thread actually changes — clicking the
+      // active row (e.g. returning from the Memory view) must not tear down
+      // ChatInterface and re-fetch the full `/history`.
       if (!sameThread) {
         setChatSessionRevision((revision) => revision + 1);
       }
