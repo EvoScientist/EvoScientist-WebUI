@@ -14,6 +14,7 @@ import {
   Search,
   SquarePen,
   Trash2,
+  Users,
   X,
 } from "lucide-react";
 import { useQueryState } from "nuqs";
@@ -607,6 +608,28 @@ export function ThreadList({
           aria-hidden="true"
         />
         Research Skills
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          if (view === "experts") {
+            setView(null);
+            onClose?.();
+            return;
+          }
+          setView("experts");
+          onClose?.();
+        }}
+        className={cn(
+          "flex flex-shrink-0 items-center gap-2.5 border-b border-border px-3 py-3 text-left text-sm font-medium transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+          view === "experts" && "bg-accent"
+        )}
+      >
+        <Users
+          className="size-4"
+          aria-hidden="true"
+        />
+        Experts
       </button>
       <button
         type="button"

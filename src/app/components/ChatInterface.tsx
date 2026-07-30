@@ -22,6 +22,7 @@ import {
   Sparkles,
   TriangleAlert,
   Paperclip,
+  Users,
   X,
   Pencil,
   CornerDownRight,
@@ -111,6 +112,7 @@ import {
   parseModelCommand,
   type ModelOverride,
 } from "@/lib/modelCommand";
+import { formatTeamName } from "@/lib/teams";
 import { useAvailableModels } from "@/app/hooks/useAvailableModels";
 
 type DashboardNavTarget =
@@ -127,6 +129,10 @@ interface ChatInterfaceProps {
   assistant: Assistant | null;
   // Open the right inspector on its Agents tab (composer "agents running" pulse).
   onShowAgents?: () => void;
+  // Open the Experts marketplace as a full-panel view. Composer's active-team
+  // chip routes here; label click on the chip is a "manage summoned expert"
+  // affordance.
+  onShowExperts?: () => void;
   // Navigate to a memory tab / the schedule view from the empty-state dashboard.
   onNavigate?: (target: DashboardNavTarget) => void;
   // Open a pinned thread from the empty-state dashboard.
@@ -273,6 +279,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
   ({
     assistant,
     onShowAgents,
+    onShowExperts,
     onNotifyReady,
     onNavigate,
     onOpenThread,
@@ -422,6 +429,8 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       summarizationEvent,
       modelOverride,
       setModelOverride,
+      activeTeams,
+      setActiveTeams,
     } = useChatContext();
 
     // Count of background async sub-agents (writing / data-analysis) still
@@ -2081,7 +2090,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                 </button>
               </div>
             )}
-            {(currentModel || runningAgents > 0) && (
+            {(currentModel || runningAgents > 0 || activeTeams.length > 0) && (
               <div className="flex items-center gap-1.5 border-t border-border px-3 py-1.5 text-xs text-muted-foreground">
                 {currentModel && (
                   <button
@@ -2102,6 +2111,41 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                       <span>· {currentModel.provider}</span>
                     )}
                   </button>
+                )}
+                {activeTeams.length > 0 && (
+                  // v1 UX is single-active — render only the first (and only)
+                  // entry. When the primitive goes multi-select later, this
+                  // becomes a .map with a shared unsummon-all affordance or
+                  // per-chip X.
+                  <div className="flex items-center gap-0.5">
+                    <button
+                      type="button"
+                      onClick={() => onShowExperts?.()}
+                      title="Manage summoned expert"
+                      aria-label="Manage summoned expert"
+                      className="flex items-center gap-1.5 rounded px-1 py-0.5 transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    >
+                      <Users
+                        className="size-3.5 shrink-0 text-[var(--brand)]"
+                        aria-hidden="true"
+                      />
+                      <span className="font-medium text-foreground">
+                        {formatTeamName(activeTeams[0])}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void setActiveTeams([])}
+                      title="Dismiss"
+                      aria-label="Dismiss current expert"
+                      className="inline-flex size-5 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    >
+                      <X
+                        className="size-3.5"
+                        aria-hidden="true"
+                      />
+                    </button>
+                  </div>
                 )}
                 {runningAgents > 0 && (
                   <button

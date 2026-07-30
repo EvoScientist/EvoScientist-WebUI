@@ -25,6 +25,7 @@ import { ThreadList } from "@/app/components/ThreadList";
 import { ChatProvider } from "@/providers/ChatProvider";
 import { ChatInterface } from "@/app/components/ChatInterface";
 import { SkillsMarketplace } from "@/app/components/SkillsMarketplace";
+import { ExpertsMarketplace } from "@/app/components/ExpertsMarketplace";
 import { MemoryPanel } from "@/app/components/MemoryPanel";
 import { ScheduledTasksPanel } from "@/app/components/ScheduledTasksPanel";
 import { ThemeToggle } from "@/app/components/ThemeToggle";
@@ -179,6 +180,13 @@ function HomePageInner({
     if (isDesktopLayout === false) setSidebar(null);
     setInspector("1");
   }, [isDesktopLayout, setInspector, setSidebar, setInspectorTab]);
+  // Open the Experts marketplace as a full-panel view. Composer's active-team
+  // chip and the rail's Experts entry both route here. Closes the sidebar on
+  // narrow viewports so the marketplace has the full width.
+  const showExperts = useCallback(() => {
+    if (isDesktopLayout === false) setSidebar(null);
+    setView("experts");
+  }, [isDesktopLayout, setSidebar, setView]);
   const sidebarToggleLabel = view
     ? sidebar
       ? "Hide navigation"
@@ -448,20 +456,27 @@ function HomePageInner({
                   message-list rebuild, and any in-flight run keeps streaming
                   in the background. Cost is bounded: only the *current*
                   thread's state is held; no accumulation per switch. */}
-              <div
-                className={cn(
-                  "flex h-full min-h-0 flex-1 flex-col",
-                  view !== null && "hidden"
-                )}
+              {/* ChatProvider hoisted to wrap ALL view branches so any view
+                  can read/write per-thread chat state via useChatContext
+                  (e.g. ExpertsMarketplace needs activeTeams / setActiveTeams).
+                  ChatInterface still stays mounted across view switches via
+                  display:none — the view-swap panels are siblings inside the
+                  same provider. */}
+              <ChatProvider
+                key={chatSessionRevision}
+                activeAssistant={assistant}
+                onHistoryRevalidate={() => mutateThreads?.()}
               >
-                <ChatProvider
-                  key={chatSessionRevision}
-                  activeAssistant={assistant}
-                  onHistoryRevalidate={() => mutateThreads?.()}
+                <div
+                  className={cn(
+                    "flex h-full min-h-0 flex-1 flex-col",
+                    view !== null && "hidden"
+                  )}
                 >
                   <ChatInterface
                     assistant={assistant}
                     onShowAgents={showAgentsInspector}
+                    onShowExperts={showExperts}
                     onNotifyReady={(fn) => setNotifyMainChat(() => fn)}
                     onNavigate={handleDashboardNav}
                     onOpenThread={selectThread}
@@ -469,26 +484,29 @@ function HomePageInner({
                       inspector && inspectorTab !== "agents"
                     )}
                   />
-                </ChatProvider>
-              </div>
-              {view === "skills" && <SkillsMarketplace />}
-              {view === "memory" && (
-                <MemoryPanel
-                  initialTab={
-                    memoryTab as
-                      | "identity"
-                      | "knowledge"
-                      | "history"
-                      | null
-                      | undefined
-                  }
-                  initialObsId={memoryObs}
-                  initialExecId={memoryExec}
-                />
-              )}
-              {view === "schedule" && (
-                <ScheduledTasksPanel onOpenThread={selectThread} />
-              )}
+                </div>
+                {view === "skills" && <SkillsMarketplace />}
+                {view === "experts" && (
+                  <ExpertsMarketplace onSummoned={() => setView(null)} />
+                )}
+                {view === "memory" && (
+                  <MemoryPanel
+                    initialTab={
+                      memoryTab as
+                        | "identity"
+                        | "knowledge"
+                        | "history"
+                        | null
+                        | undefined
+                    }
+                    initialObsId={memoryObs}
+                    initialExecId={memoryExec}
+                  />
+                )}
+                {view === "schedule" && (
+                  <ScheduledTasksPanel onOpenThread={selectThread} />
+                )}
+              </ChatProvider>
             </ResizablePanel>
 
             {inspector && isDesktopLayout && (
