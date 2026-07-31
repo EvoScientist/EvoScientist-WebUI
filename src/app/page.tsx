@@ -8,14 +8,7 @@ import { ConfigDialog } from "@/app/components/ConfigDialog";
 import { Button } from "@/components/ui/button";
 import { Assistant } from "@langchain/langgraph-sdk";
 import { ClientProvider, useClient } from "@/providers/ClientProvider";
-import {
-  Settings,
-  SquarePen,
-  PanelLeft,
-  PanelLeftClose,
-  PanelRight,
-  PanelRightClose,
-} from "lucide-react";
+import { SquarePen, PanelLeft, PanelLeftClose } from "lucide-react";
 import {
   ResizableHandle,
   ResizablePanel,
@@ -28,7 +21,6 @@ import { SkillsMarketplace } from "@/app/components/SkillsMarketplace";
 import { ExpertsMarketplace } from "@/app/components/ExpertsMarketplace";
 import { MemoryPanel } from "@/app/components/MemoryPanel";
 import { ScheduledTasksPanel } from "@/app/components/ScheduledTasksPanel";
-import { ThemeToggle } from "@/app/components/ThemeToggle";
 import { HealthIndicator } from "@/app/components/HealthIndicator";
 import { InspectorPanel } from "@/app/components/InspectorPanel";
 import { setThreadAutoApprove } from "@/lib/autoApprove";
@@ -57,6 +49,11 @@ function HomePageInner({
   const [memoryExec, setMemoryExec] = useQueryState("memoryExec");
   const [inspector, setInspector] = useQueryState("inspector");
   const [inspectorTab, setInspectorTab] = useQueryState("inspectorTab");
+  // Owned by ChatInterface (persona focus view), but page.tsx also needs to
+  // clear it at thread-switch / new-chat time — ChatInterface fully remounts
+  // via `chatSessionRevision`, so an in-component clear runs too late and the
+  // param survives into the remounted view.
+  const [, setFocusedAgent] = useQueryState("focusedAgent");
 
   const [mutateThreads, setMutateThreads] = useState<(() => void) | null>(null);
   const [interruptCount, setInterruptCount] = useState(0);
@@ -194,12 +191,18 @@ function HomePageInner({
     : sidebar
     ? "Hide research"
     : "Show research";
-  const startNewChat = useCallback(() => {
+  const startNewChat = useCallback(async () => {
     setThreadAutoApprove(null, false);
     setThreadId(null);
     setView(null);
+    // Await BEFORE bumping the remount key: nuqs 2.x defers the optimistic
+    // URL-state update via `startTransition`, so a fire-and-forget setter
+    // loses the race against the sync `setChatSessionRevision` below — the
+    // remounted ChatInterface would read the stale `focusedAgent` param and
+    // shadow the fresh chat. Awaiting flushes the transition first.
+    await setFocusedAgent(null);
     setChatSessionRevision((revision) => revision + 1);
-  }, [setThreadId, setView]);
+  }, [setThreadId, setView, setFocusedAgent]);
   const handleDashboardNav = useCallback(
     (
       target:
@@ -255,11 +258,17 @@ function HomePageInner({
       // active row (e.g. returning from the Memory view) must not tear down
       // ChatInterface and re-fetch the full `/history`.
       if (!sameThread) {
+        // Same reason as `startNewChat`: await the nuqs setter so its
+        // deferred `startTransition` update lands before the sync remount
+        // triggered by `setChatSessionRevision`. Without the await, the
+        // remounted ChatInterface reads the stale focus id from URL/state
+        // and the persona-focus overlay shadows the newly selected thread.
+        await setFocusedAgent(null);
         setChatSessionRevision((revision) => revision + 1);
       }
       await setThreadId(id);
     },
-    [setThreadId, setView, threadId]
+    [setThreadId, setView, threadId, setFocusedAgent]
   );
 
   return (
@@ -339,40 +348,6 @@ function HomePageInner({
                 handleSaveConfig({ ...config, deploymentUrl: url })
               }
             />
-            <ThemeToggle />
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={toggleInspector}
-              aria-label={inspector ? "Hide inspector" : "Show workspace"}
-              title={inspector ? "Hide inspector" : "Show workspace"}
-              className="size-8"
-            >
-              {inspector ? (
-                <PanelRightClose
-                  className="size-5"
-                  aria-hidden="true"
-                />
-              ) : (
-                <PanelRight
-                  className="size-5"
-                  aria-hidden="true"
-                />
-              )}
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => setConfigDialogOpen(true)}
-              aria-label="Settings"
-              title="Settings"
-              className="size-8"
-            >
-              <Settings
-                className="size-5"
-                aria-hidden="true"
-              />
-            </Button>
           </div>
         </header>
 
@@ -398,6 +373,12 @@ function HomePageInner({
                   }}
                   onMutateReady={(fn) => setMutateThreads(() => fn)}
                   onInterruptCountChange={setInterruptCount}
+                  onOpenSettings={() => setConfigDialogOpen(true)}
+                  onToggleInspector={toggleInspector}
+                  inspectorOpen={inspector !== null}
+                  onOpenWorkspace={() =>
+                    handleDashboardNav({ view: "workspace" })
+                  }
                 />
               </aside>
             </div>
@@ -439,6 +420,12 @@ function HomePageInner({
                     onThreadSelect={selectThread}
                     onMutateReady={(fn) => setMutateThreads(() => fn)}
                     onInterruptCountChange={setInterruptCount}
+                    onOpenSettings={() => setConfigDialogOpen(true)}
+                    onToggleInspector={toggleInspector}
+                    inspectorOpen={inspector !== null}
+                    onOpenWorkspace={() =>
+                      handleDashboardNav({ view: "workspace" })
+                    }
                   />
                 </ResizablePanel>
                 <ResizableHandle />
