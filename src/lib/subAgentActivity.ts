@@ -177,3 +177,41 @@ export function lastTextOf(steps: SubAgentStep[]): string {
   }
   return "";
 }
+
+export type FoldGroup =
+  | {
+      kind: "text";
+      step: Extract<SubAgentStep, { kind: "text" }>;
+      originalIndex: number;
+    }
+  | { kind: "actions"; steps: SubAgentStep[]; startIndex: number };
+
+/** Walk the flat step list and group consecutive non-text steps (tool_call +
+ *  tool_result) between text boundaries into one action-run group. Text steps
+ *  break the group and become their own item. `dropIndex >= 0` skips exactly
+ *  that step (used by `SubAgentSteps` for `hideFinalText`). */
+export function groupStepsForFold(
+  steps: SubAgentStep[],
+  dropIndex: number = -1
+): FoldGroup[] {
+  const out: FoldGroup[] = [];
+  let pending: { steps: SubAgentStep[]; startIndex: number } | null = null;
+  const flush = () => {
+    if (pending && pending.steps.length > 0) {
+      out.push({ kind: "actions", ...pending });
+    }
+    pending = null;
+  };
+  steps.forEach((s, i) => {
+    if (i === dropIndex) return;
+    if (s.kind === "text") {
+      flush();
+      out.push({ kind: "text", step: s, originalIndex: i });
+    } else {
+      if (!pending) pending = { steps: [], startIndex: i };
+      pending.steps.push(s);
+    }
+  });
+  flush();
+  return out;
+}
