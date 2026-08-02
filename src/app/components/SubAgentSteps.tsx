@@ -50,7 +50,7 @@ export function SubAgentSteps({
           };
           return (
             <ToolCallBox
-              key={s.id || `tc-${i}`}
+              key={`${s.id || "tc"}-${i}`}
               toolCall={toolCall}
               compact={compact}
             />

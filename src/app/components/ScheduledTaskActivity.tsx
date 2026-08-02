@@ -1,7 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, Loader2 } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  Loader2,
+  MessageCircleQuestion,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { makeClient, type ScheduledTask } from "@/app/hooks/useScheduledTasks";
 import { useScheduledTaskRuns } from "@/app/hooks/useScheduledTaskRuns";
@@ -49,7 +54,13 @@ function statusLabel(record: ScheduledRunRecord, now: number): string {
   return [when, duration].filter(Boolean).join(" · ") + failed;
 }
 
-export function ScheduledTaskActivity({ task }: { task: ScheduledTask }) {
+export function ScheduledTaskActivity({
+  task,
+  onOpenThread,
+}: {
+  task: ScheduledTask;
+  onOpenThread?: (id: string) => void | Promise<void>;
+}) {
   const { runs, loaded, error } = useScheduledTaskRuns(task);
   const [now, setNow] = useState(() => Date.now());
   const [expandedThreadId, setExpandedThreadId] = useState<string | null>(null);
@@ -210,6 +221,19 @@ export function ScheduledTaskActivity({ task }: { task: ScheduledTask }) {
                   </button>
                   {expanded && (
                     <div className="border-t border-border/60 px-3 py-2">
+                      {record.status === "interrupted" && onOpenThread && (
+                        <button
+                          type="button"
+                          onClick={() => void onOpenThread(record.thread_id)}
+                          className="mb-2 inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs text-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        >
+                          <MessageCircleQuestion
+                            className="size-3.5"
+                            aria-hidden="true"
+                          />
+                          Open conversation to respond
+                        </button>
+                      )}
                       {stepsError ? (
                         <p
                           className="text-xs text-destructive"

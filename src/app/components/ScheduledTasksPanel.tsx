@@ -552,9 +552,16 @@ interface TaskDetailProps {
   onBack: () => void;
   onEdit: () => void;
   onDeleted: () => void;
+  onOpenThread?: (id: string) => void | Promise<void>;
 }
 
-function TaskDetail({ task, onBack, onEdit, onDeleted }: TaskDetailProps) {
+function TaskDetail({
+  task,
+  onBack,
+  onEdit,
+  onDeleted,
+  onOpenThread,
+}: TaskDetailProps) {
   const [running, setRunning] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -678,7 +685,10 @@ function TaskDetail({ task, onBack, onEdit, onDeleted }: TaskDetailProps) {
               </div>
             </section>
 
-            <ScheduledTaskActivity task={task} />
+            <ScheduledTaskActivity
+              task={task}
+              onOpenThread={onOpenThread}
+            />
           </div>
         </ScrollArea>
 
@@ -804,7 +814,11 @@ type RightPane =
   | { kind: "edit"; task: ScheduledTask; editId: number }
   | { kind: "detail"; task: ScheduledTask };
 
-export function ScheduledTasksPanel() {
+export function ScheduledTasksPanel({
+  onOpenThread,
+}: {
+  onOpenThread?: (id: string) => void | Promise<void>;
+}) {
   const { tasks, loading, error, refresh } = useScheduledTasks();
   const [right, setRight] = useState<RightPane>({ kind: "empty" });
   const [query, setQuery] = useState("");
@@ -1130,6 +1144,7 @@ export function ScheduledTasksPanel() {
               onBack={() => setRight({ kind: "empty" })}
               onEdit={() => openEdit(right.task)}
               onDeleted={handleDeleted}
+              onOpenThread={onOpenThread}
             />
           )}
         </section>

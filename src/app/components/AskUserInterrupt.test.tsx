@@ -96,7 +96,11 @@ describe("AskUserInterrupt", () => {
         onCancel={vi.fn()}
       />
     );
-    fireEvent.click(screen.getByRole("button", { name: "red" }));
+    const red = screen.getByRole("button", { name: "red" });
+    const blue = screen.getByRole("button", { name: "blue" });
+    fireEvent.click(red);
+    expect(red.getAttribute("aria-pressed")).toBe("true");
+    expect(blue.getAttribute("aria-pressed")).toBe("false");
     fireEvent.click(screen.getByRole("button", { name: /^submit$/i }));
     expect(onSubmit).toHaveBeenCalledWith(["red"]);
   });
@@ -149,6 +153,28 @@ describe("AskUserInterrupt", () => {
     fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
     expect(onCancel).toHaveBeenCalledTimes(1);
     expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("allows Submit with an unpicked optional multiple-choice question, submitting an empty string", () => {
+    const onSubmit = vi.fn();
+    render(
+      <AskUserInterrupt
+        questions={[
+          {
+            question: "Pick one?",
+            type: "multiple_choice",
+            choices: [{ value: "a" }],
+            required: false,
+          },
+        ]}
+        onSubmit={onSubmit}
+        onCancel={vi.fn()}
+      />
+    );
+    const submit = screen.getByRole("button", { name: /^submit$/i });
+    expect(submit.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(submit);
+    expect(onSubmit).toHaveBeenCalledWith([""]);
   });
 
   it("disables all controls and shows the loading label while isLoading is true", () => {

@@ -15,6 +15,7 @@ import {
   getApproveButton,
   getEditButton,
   getRejectButton,
+  getSaveApproveButton,
   setEditedArg,
   typeRejectionMessage,
 } from "@/test/interactions/approvalCard";
@@ -42,6 +43,22 @@ describe("ToolApprovalInterrupt", () => {
       />
     );
     expect(screen.getByText(/save the draft to the workspace/i)).toBeDefined();
+  });
+
+  it("hides backend descriptions that only repeat the tool name and args", () => {
+    const { container } = render(
+      <ToolApprovalInterrupt
+        actionRequest={{
+          name: "execute",
+          args: { command: "pwd" },
+          description:
+            "Tool execution requires approval Tool: execute Args: {'command': 'pwd'}",
+        }}
+        onResume={vi.fn()}
+      />
+    );
+    expect(container.textContent).not.toContain("Tool execution requires");
+    expect(container.textContent).toContain("pwd");
   });
 
   it("Approve fires onResume with an approve decision", () => {
@@ -154,6 +171,39 @@ describe("ToolApprovalInterrupt", () => {
           edited_action: {
             name: "execute",
             args: { command: "echo hi" },
+          },
+        },
+      ],
+    });
+  });
+
+  it("preserves non-string argument types and blocks invalid JSON edits", () => {
+    const onResume = vi.fn();
+    const { container } = render(
+      <ToolApprovalInterrupt
+        actionRequest={{
+          name: "custom_tool",
+          args: { count: 1, enabled: true },
+        }}
+        onResume={onResume}
+      />
+    );
+    clickEdit(container);
+
+    setEditedArg(container, "count", "not-json");
+    expect(screen.getByText(/enter valid json/i)).toBeDefined();
+    expect(getSaveApproveButton(container).hasAttribute("disabled")).toBe(true);
+
+    setEditedArg(container, "count", "2");
+    setEditedArg(container, "enabled", "false");
+    clickSaveApprove(container);
+    expect(onResume).toHaveBeenCalledWith({
+      decisions: [
+        {
+          type: "edit",
+          edited_action: {
+            name: "custom_tool",
+            args: { count: 2, enabled: false },
           },
         },
       ],

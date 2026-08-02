@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { MessageCircleQuestion } from "lucide-react";
@@ -32,6 +32,7 @@ export function AskUserInterrupt({
   onCancel,
   isLoading,
 }: AskUserInterruptProps) {
+  const questionIdPrefix = useId();
   // answers[i] = final answer string; picked[i] = selected choice value or
   // OTHER for multiple_choice (null for free-text questions).
   const [answers, setAnswers] = useState<string[]>(() =>
@@ -46,15 +47,17 @@ export function AskUserInterrupt({
   const setPick = (i: number, value: string | null) =>
     setPicked((prev) => prev.map((p, idx) => (idx === i ? value : p)));
 
-  const isOptional = (q: AskUserQuestion) =>
-    q.type === "text" && q.required === false;
+  const isOptional = (q: AskUserQuestion) => q.required === false;
 
   const canSubmit = questions.every(
     (q, i) => isOptional(q) || answers[i].trim() !== ""
   );
 
   return (
-    <div className="w-full rounded-lg border border-border bg-muted/30 p-4">
+    <section
+      aria-label="EvoScientist needs your input"
+      className="w-full rounded-lg border border-border bg-muted/30 p-4"
+    >
       <div className="mb-3 flex items-center gap-2 text-foreground">
         <MessageCircleQuestion
           size={16}
@@ -69,15 +72,31 @@ export function AskUserInterrupt({
       <div className="space-y-5">
         {questions.map((q, i) => (
           <div key={i}>
-            <p className="mb-2 text-sm font-medium text-foreground">
+            <p
+              id={`${questionIdPrefix}-question-${i}`}
+              className="mb-2 text-sm font-medium text-foreground"
+            >
               {q.question}
               {!isOptional(q) && (
-                <span className="ml-1 text-destructive">*</span>
+                <>
+                  <span
+                    className="ml-1 text-destructive"
+                    aria-hidden="true"
+                  >
+                    *
+                  </span>
+                  <span className="sr-only"> (required)</span>
+                </>
               )}
+              {isOptional(q) && <span className="sr-only"> (optional)</span>}
             </p>
 
             {q.type === "multiple_choice" ? (
-              <div className="flex flex-col gap-2">
+              <div
+                className="flex flex-col gap-2"
+                role="group"
+                aria-labelledby={`${questionIdPrefix}-question-${i}`}
+              >
                 {q.choices?.map((choice) => {
                   const selected = picked[i] === choice.value;
                   return (
@@ -85,6 +104,7 @@ export function AskUserInterrupt({
                       key={choice.value}
                       type="button"
                       disabled={isLoading}
+                      aria-pressed={selected}
                       onClick={() => {
                         setPick(i, choice.value);
                         setAnswer(i, choice.value);
@@ -103,6 +123,7 @@ export function AskUserInterrupt({
                 <button
                   type="button"
                   disabled={isLoading}
+                  aria-pressed={picked[i] === OTHER}
                   onClick={() => {
                     setPick(i, OTHER);
                     setAnswer(i, "");
@@ -120,6 +141,7 @@ export function AskUserInterrupt({
                   <Textarea
                     value={answers[i]}
                     onChange={(e) => setAnswer(i, e.target.value)}
+                    aria-label={`Other answer for ${q.question}`}
                     placeholder="Type your answer…"
                     className="text-sm"
                     rows={2}
@@ -131,6 +153,7 @@ export function AskUserInterrupt({
               <Textarea
                 value={answers[i]}
                 onChange={(e) => setAnswer(i, e.target.value)}
+                aria-labelledby={`${questionIdPrefix}-question-${i}`}
                 placeholder={
                   isOptional(q)
                     ? "Type your answer… (optional)"
@@ -163,6 +186,6 @@ export function AskUserInterrupt({
           {isLoading ? "Submitting…" : "Submit"}
         </Button>
       </div>
-    </div>
+    </section>
   );
 }

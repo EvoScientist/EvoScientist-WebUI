@@ -14,10 +14,7 @@ import type { UseStreamThread } from "@langchain/langgraph-sdk/react";
 import type { TodoItem } from "@/app/types/types";
 import { useClient } from "@/providers/ClientProvider";
 import { useQueryState } from "nuqs";
-import {
-  extractSubAgentSteps,
-  type SubAgentStep,
-} from "@/lib/subAgentActivity";
+import { pickThreadMessages } from "@/lib/threadMessages";
 import { parseSummarizationEvent } from "@/lib/summarization";
 import {
   applySubagentEvent,
@@ -121,6 +118,10 @@ function totalTextLength(msgs: Message[]): number {
  * skip legitimate re-approvals. Object identity alone can't be trusted
  * because the SDK's getter re-derives the object per render.
  */
+function coerceInterrupt(i: unknown): unknown {
+  return Array.isArray(i) ? i[i.length - 1] : i;
+}
+
 export function interruptValueKey(i: unknown): string | null {
   if (!i || typeof i !== "object") return null;
   const asObj = i as { id?: unknown; value?: unknown };
@@ -145,12 +146,16 @@ function hasActionableInterrupt(i: unknown): boolean {
   );
 }
 
-function latestTaskInterrupt(
-  tasks: Array<{ interrupts?: unknown[] }> | undefined
+export function latestTaskInterrupt(
+  tasks:
+    | Array<{ interrupts?: unknown[]; result?: unknown; error?: unknown }>
+    | undefined
 ): unknown {
   if (!Array.isArray(tasks)) return undefined;
   for (let i = tasks.length - 1; i >= 0; i--) {
-    const interrupts = tasks[i]?.interrupts;
+    const task = tasks[i];
+    if (!task || task.result != null || task.error != null) continue;
+    const interrupts = task.interrupts;
     if (Array.isArray(interrupts) && interrupts.length > 0) {
       return interrupts[interrupts.length - 1];
     }
@@ -158,19 +163,38 @@ function latestTaskInterrupt(
   return undefined;
 }
 
-// Build a human-readable summary from the SDK's `onError` payload, which can
-// be a plain Error, a StreamError (structured `{ name, error, message }`),
-// or a raw string. We try in order: structured `name: message`, plain
-// `message`, JSON-of-`.error`, the raw string, finally a generic fallback.
-// Capped at 300 chars so a giant stack trace doesn't blow up the toast; the
-// full text is still available in the thread JSON via the export affordance.
-function formatStreamError(error: unknown): string {
+export function formatStreamError(error: unknown): string {
   const cap = (s: string) => (s.length > 300 ? s.slice(0, 297) + "..." : s);
   if (typeof error === "string" && error.trim()) return cap(error.trim());
   if (error && typeof error === "object") {
-    const e = error as { name?: unknown; message?: unknown; error?: unknown };
-    const name = typeof e.name === "string" ? e.name.trim() : null;
+    const e = error as {
+      name?: unknown;
+      message?: unknown;
+      error?: unknown;
+      provider?: unknown;
+      status_code?: unknown;
+      code?: unknown;
+      request_id?: unknown;
+    };
     const msg = typeof e.message === "string" ? e.message.trim() : null;
+    if (typeof e.provider === "string" && e.provider && msg) {
+      const label =
+        typeof e.error === "string" && e.error.trim() ? e.error.trim() : null;
+      const details = [
+        e.provider,
+        typeof e.status_code === "number" ? String(e.status_code) : null,
+        typeof e.code === "string" && e.code ? e.code : null,
+      ]
+        .filter(Boolean)
+        .join(" · ");
+      const requestId =
+        typeof e.request_id === "string" && e.request_id
+          ? ` [${e.request_id}]`
+          : "";
+      const head = label ? `${label}: ${msg}` : msg;
+      return cap(`${head} (${details})${requestId}`);
+    }
+    const name = typeof e.name === "string" ? e.name.trim() : null;
     let inner: string | null = null;
     if (typeof e.error === "string" && e.error.trim()) {
       inner = e.error.trim();
@@ -199,13 +223,6 @@ export function useChat({
 }) {
   const [threadId, setThreadId] = useQueryState("threadId");
   const client = useClient();
-
-  // Live sub-agent activity captured from subgraph stream events, keyed by the
-  // subgraph namespace (e.g. "tools:<id>"). Ephemeral: it resets when the chat
-  // session remounts on thread switch, and is not persisted (lost on reload).
-  const [subAgentActivity, setSubAgentActivity] = useState<
-    Record<string, SubAgentStep[]>
-  >({});
 
   const [dynamicWorkflows, setDynamicWorkflows] = useState<WorkflowMap>({});
   const workflowThreadIdRef = useRef(threadId);
@@ -241,20 +258,6 @@ export function useChat({
       toast.error(formatStreamError(error));
     },
     onCreated: onHistoryRevalidate,
-    // Capture sub-agent (subgraph) node outputs as they stream. `namespace` is
-    // non-empty (e.g. ["tools:<id>"]) for subgraphs and empty for the main graph,
-    // which we skip.
-    onUpdateEvent: (data, options) => {
-      const ns = options?.namespace;
-      if (!ns || ns.length === 0) return;
-      const steps = extractSubAgentSteps(data);
-      if (steps.length === 0) return;
-      const key = ns.join("|");
-      setSubAgentActivity((prev) => ({
-        ...prev,
-        [key]: [...(prev[key] ?? []), ...steps],
-      }));
-    },
     onCustomEvent: (data, options) => {
       if (options?.namespace && options.namespace.length > 0) return;
       const event = parseSubagentEvent(data);
@@ -475,12 +478,6 @@ export function useChat({
     const attempt = async () => {
       tries += 1;
       try {
-        // `getState` returns the GRAPH CHECKPOINT state — which the backend
-        // windows/compacts for memory, so its `values.messages` is only the
-        // recent slice. `threads.get` returns the persisted THREAD RECORD with
-        // the full message history. We need both: state for run status
-        // (`next` / `tasks` / `interrupts`), record for the messages the UI
-        // displays. Done in parallel to keep the round trip tight.
         const [state, threadRecord] = await Promise.all([
           client.threads.getState(threadId) as Promise<{
             tasks?: Array<{ interrupts?: unknown[] }>;
@@ -492,7 +489,10 @@ export function useChat({
           }>,
         ]);
         if (cancelled || recoveryRunRef.current !== recoveryRunId) return;
-        const msgs = threadRecord.values?.messages;
+        const msgs = pickThreadMessages(
+          state.values?.messages,
+          threadRecord.values?.messages
+        );
         const pending = latestTaskInterrupt(state.tasks);
         const stillPending = Array.isArray(state.next) && state.next.length > 0;
         const safePending = normalizePendingInterrupt(pending);
@@ -522,7 +522,9 @@ export function useChat({
           // live interrupt's identity so the getter suppresses ONLY that one
           // (composer unlocks after approving) — a new interrupt still shows.
           setFetchedInterrupt(undefined);
-          setResolvedInterruptKey(interruptValueKey(stream.interrupt));
+          setResolvedInterruptKey(
+            interruptValueKey(coerceInterrupt(stream.interrupt))
+          );
           if (Array.isArray(msgs)) {
             setFetchedThreadId(threadId);
             setFetchedMessages(msgs);
@@ -554,17 +556,16 @@ export function useChat({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [threadId, stream.interrupt, stream.isLoading, client]);
 
-  // Show the live interrupt unless it's the exact one the server told us was
-  // resolved (then fall through to the fetched one, usually undefined → composer
-  // unlocks). A new live interrupt has a different key, so it's never suppressed.
-  const liveInterrupt = stream.interrupt;
+  const liveInterrupt = coerceInterrupt(
+    stream.interrupt
+  ) as typeof stream.interrupt;
   const interrupt =
-    liveInterrupt &&
-    (resolvedInterruptKey === null ||
-      interruptValueKey(liveInterrupt) !== resolvedInterruptKey)
+    fetchedThreadId === threadId && fetchedInterrupt
+      ? fetchedInterrupt
+      : liveInterrupt &&
+        (resolvedInterruptKey === null ||
+          interruptValueKey(liveInterrupt) !== resolvedInterruptKey)
       ? liveInterrupt
-      : fetchedThreadId === threadId
-      ? fetchedInterrupt ?? undefined
       : undefined;
   // Prefer the backfilled snapshot when it is "ahead" of the live stream — i.e.
   // the stream ended early and dropped the tail. "Ahead" means either MORE
@@ -772,7 +773,6 @@ export function useChat({
     sendMessage,
     stopStream,
     resumeInterrupt,
-    subAgentActivity,
     dynamicWorkflows,
     modelOverride,
     setModelOverride,

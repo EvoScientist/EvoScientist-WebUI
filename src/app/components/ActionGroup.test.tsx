@@ -3,9 +3,8 @@
 // ActionGroup's job is to bundle a run of tool-call messages under a
 // collapsible header. The interesting bit for us is the `hasPendingApproval`
 // logic — it gates a collapsed-approval preview so the user can act without
-// expanding the timeline. When auto-approve is on the preview is SKIPPED
-// on purpose (each interrupt is auto-resumed within a single render tick,
-// so surfacing the preview would flicker the section open per tool call).
+// expanding the timeline. When auto-approve can decide an interrupt the preview
+// is skipped; always-prompt tools still surface their controls.
 
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent, within } from "@testing-library/react";
@@ -40,7 +39,8 @@ vi.mock("./CompactionSummary", () => ({
 
 const makeItem = (
   id: string,
-  toolNames: string[] = ["execute"]
+  toolNames: string[] = ["execute"],
+  status: "pending" | "interrupted" = "pending"
 ): GroupedActionItem => ({
   message: {
     id,
@@ -56,7 +56,7 @@ const makeItem = (
     id: `${id}c${i}`,
     name,
     args: {},
-    status: "pending" as const,
+    status,
   })),
 });
 
@@ -79,7 +79,6 @@ const defaultProps = (
   graphId: "EvoScientist",
   onEditMessage: vi.fn(),
   autoApprove: false,
-  subAgentSteps: {},
   ui: undefined,
   compactionAnchorId: null,
   summarizationEvent: null,
@@ -160,11 +159,12 @@ describe("ActionGroup default open/collapsed state", () => {
 describe("ActionGroup hasPendingApproval (auto-approve gate)", () => {
   const req = executeActionRequest();
 
-  it("shows a collapsed-preview when actionRequests non-empty and lastMessageId is in this group", () => {
+  it("shows a collapsed-preview when actionRequests bind to this group's interrupted tool calls", () => {
     render(
       <ActionGroup
         {...defaultProps({
           defaultCollapsed: true,
+          items: [makeItem("m1", ["execute"], "interrupted")],
           actionRequests: [req],
           lastMessageId: "m1",
           autoApprove: false,
@@ -190,6 +190,40 @@ describe("ActionGroup hasPendingApproval (auto-approve gate)", () => {
       />
     );
     // No preview — the auto-approve effect will handle the interrupt.
+    expect(screen.queryAllByTestId("chat-message")).toHaveLength(0);
+  });
+
+  it("still shows an always-prompt schedule_task while autoApprove is on", () => {
+    render(
+      <ActionGroup
+        {...defaultProps({
+          defaultCollapsed: true,
+          items: [makeItem("m1", ["schedule_task"], "interrupted")],
+          actionRequests: [
+            { name: "schedule_task", args: { cron: "0 9 * * *" } },
+          ],
+          lastMessageId: "m1",
+          autoApprove: true,
+        })}
+      />
+    );
+    const previews = screen.getAllByTestId("chat-message");
+    expect(previews).toHaveLength(1);
+    expect(previews[0].getAttribute("data-action-request-count")).toBe("1");
+  });
+
+  it("does NOT show a collapsed-preview for a sub-agent approval (requests don't bind to the task call)", () => {
+    render(
+      <ActionGroup
+        {...defaultProps({
+          defaultCollapsed: true,
+          items: [makeItem("m1", ["task"])],
+          actionRequests: [req],
+          lastMessageId: "m1",
+          autoApprove: false,
+        })}
+      />
+    );
     expect(screen.queryAllByTestId("chat-message")).toHaveLength(0);
   });
 

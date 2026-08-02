@@ -4,9 +4,10 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronRight, ChevronUp, Loader2 } from "lucide-react";
 import type { Message } from "@langchain/langgraph-sdk";
 import type { ActionRequest, ReviewConfig, ToolCall } from "@/app/types/types";
-import type { SubAgentStep } from "@/lib/subAgentActivity";
 import { ChatMessage } from "./ChatMessage";
 import { CompactionSummary } from "./CompactionSummary";
+import { autoApproveDecisions } from "@/lib/hitlPolicy";
+import { bindActionRequestsToToolCalls } from "@/lib/hitl";
 import { cn } from "@/lib/utils";
 
 export interface GroupedActionItem {
@@ -39,7 +40,6 @@ interface ActionGroupProps {
   graphId?: string;
   onEditMessage: (content: string) => void;
   autoApprove: boolean;
-  subAgentSteps: Record<string, SubAgentStep[]>;
   ui: any[] | undefined;
   // CompactionSummary anchoring: rendered before the matching item inside the group.
   compactionAnchorId: string | null;
@@ -71,7 +71,6 @@ export const ActionGroup = React.memo<ActionGroupProps>(function ActionGroup({
   graphId,
   onEditMessage,
   autoApprove,
-  subAgentSteps,
   ui,
   compactionAnchorId,
   summarizationEvent,
@@ -81,17 +80,18 @@ export const ActionGroup = React.memo<ActionGroupProps>(function ActionGroup({
   // assistant message — so if `lastMessageId` belongs to this group AND there
   // are pending action requests, the user needs to see them.
   //
-  // Skip entirely when auto-approve is on: in that mode each interrupt is
-  // observed for one render tick before the auto-approval effect fires, so
-  // `actionRequests` is briefly non-empty per tool call. A force-open per flash
-  // would yank the section open dozens of times in a single turn — defeating
-  // the whole "don't bother me" intent of auto-approve.
+  // Skip the preview only when auto-approve can actually decide the whole
+  // batch. An always-prompt tool such as schedule_task still needs a visible
+  // card even while auto-approve is on; otherwise the composer locks behind a
+  // collapsed group with no obvious way to continue.
   const hasPendingApproval = useMemo(() => {
-    if (autoApprove) return false;
     if (actionRequests.length === 0) return false;
+    if (autoApprove && autoApproveDecisions(actionRequests) !== null) {
+      return false;
+    }
     if (lastMessageId === undefined) return false;
     return items.some((item) => item.message.id === lastMessageId);
-  }, [autoApprove, actionRequests.length, lastMessageId, items]);
+  }, [autoApprove, actionRequests, lastMessageId, items]);
 
   const [open, setOpen] = useState<boolean>(() => !defaultCollapsed);
   const wasStreamingRef = useRef(isStreaming);
@@ -171,6 +171,12 @@ export const ActionGroup = React.memo<ActionGroupProps>(function ActionGroup({
           return null;
         const previewItem = items.find((i) => i.message.id === lastMessageId);
         if (!previewItem) return null;
+        if (
+          bindActionRequestsToToolCalls(previewItem.toolCalls, actionRequests)
+            .size === 0
+        ) {
+          return null;
+        }
         const messageUi = ui?.filter(
           (u) => u.metadata?.message_id === previewItem.message.id
         );
@@ -191,7 +197,6 @@ export const ActionGroup = React.memo<ActionGroupProps>(function ActionGroup({
               graphId={graphId}
               onEditMessage={onEditMessage}
               autoApprove={autoApprove}
-              subAgentSteps={subAgentSteps}
             />
           </div>
         );
@@ -229,7 +234,6 @@ export const ActionGroup = React.memo<ActionGroupProps>(function ActionGroup({
                   graphId={graphId}
                   onEditMessage={onEditMessage}
                   autoApprove={autoApprove}
-                  subAgentSteps={subAgentSteps}
                 />
               </React.Fragment>
             );

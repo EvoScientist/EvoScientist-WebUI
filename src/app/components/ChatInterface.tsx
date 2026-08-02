@@ -44,6 +44,12 @@ import {
 import { isSummarizationMessage } from "@/lib/summarization";
 import { useCollapseAgentActions } from "@/lib/uiSettings";
 import {
+  bindActionRequestsToToolCalls,
+  buildToolApprovalResume,
+  interruptIdOf,
+} from "@/lib/hitl";
+import { InterruptApprovalFallback } from "@/app/components/InterruptApprovalFallback";
+import {
   AskUserInterrupt,
   type AskUserQuestion,
 } from "@/app/components/AskUserInterrupt";
@@ -54,7 +60,10 @@ import type {
   ReviewConfig,
 } from "@/app/types/types";
 import { Assistant, Message } from "@langchain/langgraph-sdk";
-import { extractStringFromMessageContent } from "@/app/utils/utils";
+import {
+  extractStringFromMessageContent,
+  stringifyUnknown,
+} from "@/app/utils/utils";
 import { useChatContext } from "@/providers/ChatProvider";
 import { cn } from "@/lib/utils";
 import { formatModel } from "@/lib/model";
@@ -82,7 +91,6 @@ import {
   isThreadAutoNotifyInitialized,
   markThreadAutoNotifyReported,
 } from "@/lib/autoNotify";
-import { lastTextOf, type SubAgentStep } from "@/lib/subAgentActivity";
 import { useStickToBottom } from "use-stick-to-bottom";
 import { FilesPopover } from "@/app/components/TasksFilesSidebar";
 import {
@@ -409,7 +417,6 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       sendMessage,
       stopStream,
       resumeInterrupt,
-      subAgentActivity,
       dynamicWorkflows,
       asyncTasks,
       summarizationEvent,
@@ -616,56 +623,6 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       assistant?.config,
       modelRegistry.defaultEntry,
     ]);
-
-    // Bind captured sub-agent activity (keyed by subgraph namespace) to each task
-    // tool call → its live steps. B': match a finished sub-agent to a task by its
-    // final text == the task's result; assign still-running sub-agents to the
-    // remaining task calls in order. Returns { taskToolCallId: SubAgentStep[] }.
-    const subAgentSteps = useMemo(() => {
-      const out: Record<string, SubAgentStep[]> = {};
-      const nsKeys = Object.keys(subAgentActivity);
-      if (nsKeys.length === 0) return out;
-
-      const taskIds: string[] = [];
-      const results: Record<string, string> = {};
-      for (const m of messages) {
-        if (m.type === "ai") {
-          const tcs = (m as { tool_calls?: { id?: string; name?: string }[] })
-            .tool_calls;
-          for (const tc of tcs ?? []) {
-            if (tc.name === "task" && tc.id) taskIds.push(tc.id);
-          }
-        } else if (m.type === "tool") {
-          const id = (m as { tool_call_id?: string }).tool_call_id;
-          if (id) results[id] = extractStringFromMessageContent(m);
-        }
-      }
-
-      const norm = (s: string) => s.replace(/\s+/g, " ").trim();
-      const claimed = new Set<string>();
-      // 1) Finished tasks: match by output text.
-      for (const id of taskIds) {
-        const r = norm(results[id] ?? "");
-        if (!r) continue;
-        const key = nsKeys.find((k) => {
-          if (claimed.has(k)) return false;
-          const last = norm(lastTextOf(subAgentActivity[k]));
-          return last !== "" && (r.includes(last) || last.includes(r));
-        });
-        if (key) {
-          out[id] = subAgentActivity[key];
-          claimed.add(key);
-        }
-      }
-      // 2) Running tasks (no result yet): take remaining namespaces in order.
-      const remaining = nsKeys.filter((k) => !claimed.has(k));
-      let ri = 0;
-      for (const id of taskIds) {
-        if (out[id] || results[id]) continue;
-        if (ri < remaining.length) out[id] = subAgentActivity[remaining[ri++]];
-      }
-      return out;
-    }, [messages, subAgentActivity]);
 
     // While the agent waits on an *actionable* interrupt (approval or ask_user),
     // lock the composer so the user answers via the in-message controls — a free
@@ -1058,6 +1015,15 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       return Array.isArray(raw) ? (raw as ActionRequest[]) : [];
     }, [interrupt]);
 
+    const interruptId = useMemo(() => interruptIdOf(interrupt), [interrupt]);
+
+    const resumeToolApproval = useCallback(
+      (value: any) => {
+        resumeInterrupt(buildToolApprovalResume(interruptId, value));
+      },
+      [resumeInterrupt, interruptId]
+    );
+
     // TODO: can we make this part of the hook?
     const processedMessages = useMemo(() => {
       /*
@@ -1312,6 +1278,32 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       return new Map<string, ReviewConfig>(entries);
     }, [interrupt]);
 
+    const lastAiToolCalls = useMemo(() => {
+      for (let i = processedMessages.length - 1; i >= 0; i--) {
+        const entry = processedMessages[i];
+        if (entry.message.type === "ai") return entry.toolCalls;
+      }
+      return [] as ToolCall[];
+    }, [processedMessages]);
+
+    const hasUnboundActionRequests = useMemo(() => {
+      if (actionRequests.length === 0) return false;
+      return (
+        bindActionRequestsToToolCalls(lastAiToolCalls, actionRequests).size ===
+        0
+      );
+    }, [actionRequests, lastAiToolCalls]);
+
+    const subAgentRequester = useMemo(() => {
+      const types = new Set(
+        lastAiToolCalls
+          .filter((tc) => tc.name === "task" && tc.status !== "completed")
+          .map((tc) => tc.args["subagent_type"])
+          .filter((t): t is string => typeof t === "string" && t.length > 0)
+      );
+      return types.size === 1 ? [...types][0] : null;
+    }, [lastAiToolCalls]);
+
     return (
       <div className="flex flex-1 flex-col overflow-hidden">
         <Dialog
@@ -1322,9 +1314,10 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
             <DialogHeader>
               <DialogTitle>Enable Auto-approve?</DialogTitle>
               <DialogDescription>
-                EvoScientist will run tool actions in this research without
-                asking you to review each one. Turn this on only when you trust
-                the current task and deployment.
+                EvoScientist will run routine tool actions in this research
+                without asking. Dangerous shell commands (piping downloads into
+                an interpreter or network tool) are auto-rejected, delete is
+                auto-approved, and schedule_task always asks first.
               </DialogDescription>
             </DialogHeader>
             <div className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
@@ -1333,9 +1326,9 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                 aria-hidden="true"
               />
               <p>
-                Auto-approve stays on for this research only — it follows this
-                conversation across views and reloads, and other research keeps
-                its own setting. Turn it off here anytime.
+                Auto-approve stays on for this research only and follows it
+                across views and reloads. Delete is included; scheduled tasks
+                still show an approval card here.
               </p>
             </div>
             <DialogFooter>
@@ -1576,11 +1569,10 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                         onActionRequestSubmitted={markActionRequestSubmitted}
                         reviewConfigsMap={reviewConfigsMap}
                         stream={stream}
-                        onResumeInterrupt={resumeInterrupt}
+                        onResumeInterrupt={resumeToolApproval}
                         graphId={assistant?.graph_id}
                         onEditMessage={handleEditMessage}
                         autoApprove={autoApprove}
-                        subAgentSteps={subAgentSteps}
                         ui={ui}
                         compactionAnchorId={compactionAnchorId}
                         summarizationEvent={summarizationEvent ?? null}
@@ -1618,11 +1610,10 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                         }
                         ui={messageUi}
                         stream={stream}
-                        onResumeInterrupt={resumeInterrupt}
+                        onResumeInterrupt={resumeToolApproval}
                         graphId={assistant?.graph_id}
                         onEditMessage={handleEditMessage}
                         autoApprove={autoApprove}
-                        subAgentSteps={subAgentSteps}
                       />
                     </React.Fragment>
                   );
@@ -1633,9 +1624,22 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                     summarizedCount={summarizationEvent.cutoffIndex}
                   />
                 )}
+                {hasUnboundActionRequests && (
+                  <InterruptApprovalFallback
+                    actionRequests={actionRequests}
+                    reviewConfigsMap={reviewConfigsMap ?? new Map()}
+                    requestedBy={subAgentRequester}
+                    interruptKey={interruptId}
+                    onResume={resumeToolApproval}
+                    isLoading={isLoading}
+                  />
+                )}
                 {askUserQuestions && (
                   <div className="mt-4">
                     <AskUserInterrupt
+                      key={`ask-user-${
+                        interruptId ?? stringifyUnknown(askUserQuestions, 0)
+                      }`}
                       questions={askUserQuestions}
                       onSubmit={handleAskUserSubmit}
                       onCancel={handleAskUserCancel}
@@ -2064,11 +2068,13 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                     className="size-3.5 shrink-0"
                     aria-hidden="true"
                   />
-                  Tool actions will run without review.
+                  Tool actions auto-run, including delete. Dangerous commands
+                  are blocked; scheduled tasks still ask.
                 </span>
                 <button
                   type="button"
                   onClick={turnOffAutoApprove}
+                  aria-label="Turn off auto-approve"
                   className="shrink-0 rounded px-2 py-1 font-semibold transition-colors hover:bg-amber-200 focus-visible:ring-2 focus-visible:ring-amber-700 dark:hover:bg-amber-900"
                 >
                   Turn Off

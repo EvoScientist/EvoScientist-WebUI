@@ -10,7 +10,6 @@ import React, {
 import { SubAgentIndicator } from "@/app/components/SubAgentIndicator";
 import { ToolCallBox } from "@/app/components/ToolCallBox";
 import { MarkdownContent } from "@/app/components/MarkdownContent";
-import { SubAgentSteps } from "@/app/components/SubAgentSteps";
 import type {
   SubAgent,
   ToolCall,
@@ -18,8 +17,8 @@ import type {
   ReviewConfig,
 } from "@/app/types/types";
 import { Message } from "@langchain/langgraph-sdk";
-import type { SubAgentStep } from "@/lib/subAgentActivity";
 import { isAsyncUpdateMessage } from "@/lib/asyncAgents";
+import { bindActionRequestsToToolCalls } from "@/lib/hitl";
 import {
   AlertTriangle,
   Bell,
@@ -30,7 +29,6 @@ import {
   Pencil,
 } from "lucide-react";
 import {
-  extractSubAgentContent,
   extractStringFromMessageContent,
   stringifyUnknown,
 } from "@/app/utils/utils";
@@ -55,8 +53,6 @@ interface ChatMessageProps {
   graphId?: string;
   onEditMessage?: (content: string) => void;
   autoApprove?: boolean;
-  /** Live intermediate steps per task tool-call id (sub-agent activity). */
-  subAgentSteps?: Record<string, SubAgentStep[]>;
 }
 
 const FINISH_REASON_SUCCESS = new Set([
@@ -100,7 +96,6 @@ export const ChatMessage = React.memo<ChatMessageProps>(
     graphId,
     onEditMessage,
     autoApprove,
-    subAgentSteps,
   }) => {
     const isUser = message.type === "human";
     const messageContent = extractStringFromMessageContent(message);
@@ -147,55 +142,15 @@ export const ChatMessage = React.memo<ChatMessageProps>(
             id: toolCall.id,
             name: toolCall.name,
             subAgentName: subagentType,
-            input: toolCall.args,
-            output:
-              toolCall.result !== undefined && toolCall.result !== null
-                ? { result: toolCall.result }
-                : undefined,
             status: toolCall.status,
           } as SubAgent;
         });
     }, [toolCalls]);
 
-    // Bind each pending approval request to the tool call it belongs to, keyed
-    // by tool-call id. Action requests carry no id, so match by (name, order of
-    // appearance): walk this message's tool calls in order and hand out the
-    // same-named requests in sequence. This makes two `execute` calls in one
-    // turn each show their OWN args (a plain name→request map would collapse
-    // both onto the last request), while a tool that needs no approval simply
-    // consumes none.
-    const actionRequestByToolCallId = useMemo(() => {
-      const out = new Map<
-        string,
-        { actionRequest: ActionRequest; actionIndex: number }
-      >();
-      if (!actionRequests || actionRequests.length === 0) return out;
-      const queues = new Map<
-        string,
-        { actionRequest: ActionRequest; actionIndex: number }[]
-      >();
-      actionRequests.forEach((ar, actionIndex) => {
-        const list = queues.get(ar.name);
-        const entry = {
-          actionRequest: ar,
-          actionIndex,
-        };
-        if (list) list.push(entry);
-        else queues.set(ar.name, [entry]);
-      });
-      const cursor = new Map<string, number>();
-      for (const tc of toolCalls) {
-        if (tc.status !== "interrupted") continue;
-        const list = queues.get(tc.name);
-        if (!list) continue;
-        const i = cursor.get(tc.name) ?? 0;
-        if (i < list.length) {
-          out.set(tc.id, list[i]);
-          cursor.set(tc.name, i + 1);
-        }
-      }
-      return out;
-    }, [actionRequests, toolCalls]);
+    const actionRequestByToolCallId = useMemo(
+      () => bindActionRequestsToToolCalls(toolCalls, actionRequests ?? []),
+      [actionRequests, toolCalls]
+    );
 
     const actionRequestsKey = useMemo(() => {
       return stringifyUnknown(
@@ -269,24 +224,6 @@ export const ChatMessage = React.memo<ChatMessageProps>(
         toast.error("Couldn't copy to clipboard.");
       }
     }, [messageContent]);
-    const [expandedSubAgents, setExpandedSubAgents] = useState<
-      Record<string, boolean>
-    >({});
-    const isSubAgentExpanded = useCallback(
-      // Collapsed by default — while running the pill shows a spinner; click to
-      // expand and watch the sub-agent's steps.
-      (id: string) => expandedSubAgents[id] ?? false,
-      [expandedSubAgents]
-    );
-    const toggleSubAgent = useCallback((id: string) => {
-      // Default is collapsed (?? false), so an untouched block must expand on the
-      // FIRST click — toggle off the same default the renderer uses.
-      setExpandedSubAgents((prev) => ({
-        ...prev,
-        [id]: !(prev[id] ?? false),
-      }));
-    }, []);
-
     // A "[Async tasks update]" signal we injected (from the Agents board's
     // "Notify main chat") is a background-completion notice, not something the
     // user typed — render it as a low-key centered system pill, not a user
@@ -513,57 +450,10 @@ export const ChatMessage = React.memo<ChatMessageProps>(
           {!isUser && subAgents.length > 0 && (
             <div className="flex w-fit max-w-full flex-col gap-4">
               {subAgents.map((subAgent) => (
-                <div
+                <SubAgentIndicator
                   key={subAgent.id}
-                  className="flex w-full flex-col gap-2"
-                >
-                  <div className="flex items-end gap-2">
-                    <div className="w-[calc(100%-100px)]">
-                      <SubAgentIndicator
-                        subAgent={subAgent}
-                        onClick={() => toggleSubAgent(subAgent.id)}
-                        isExpanded={isSubAgentExpanded(subAgent.id)}
-                      />
-                    </div>
-                  </div>
-                  {isSubAgentExpanded(subAgent.id) && (
-                    <div className="w-full max-w-full">
-                      <div className="border-border-light rounded-md border bg-[var(--color-surface)] p-4">
-                        <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-[var(--color-text-secondary)]">
-                          Input
-                        </h4>
-                        <div className="mb-4">
-                          <MarkdownContent
-                            content={extractSubAgentContent(subAgent.input)}
-                          />
-                        </div>
-                        {(subAgentSteps?.[subAgent.id]?.length ?? 0) > 0 && (
-                          <>
-                            <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-[var(--color-text-secondary)]">
-                              Steps
-                            </h4>
-                            <div className="mb-4">
-                              <SubAgentSteps
-                                steps={subAgentSteps![subAgent.id]}
-                                hideFinalText={!!subAgent.output}
-                              />
-                            </div>
-                          </>
-                        )}
-                        {subAgent.output && (
-                          <>
-                            <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-[var(--color-text-secondary)]">
-                              Output
-                            </h4>
-                            <MarkdownContent
-                              content={extractSubAgentContent(subAgent.output)}
-                            />
-                          </>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </div>
+                  subAgent={subAgent}
+                />
               ))}
             </div>
           )}

@@ -58,9 +58,8 @@ import { ChatProvider, useChatContext } from "@/providers/ChatProvider";
 import { useAutoApproveInterrupt } from "@/app/hooks/useAutoApproveInterrupt";
 import { fixtureAssistant } from "@/test/fixtures/assistants";
 
-// Fresh interrupt object each call. Value is what feeds `interruptValueKey`,
-// so tests can assert on both same-value-different-ref and different-value.
-const makeExecuteInterrupt = (command: string) => ({
+const makeExecuteInterrupt = (command: string, id = "int-1") => ({
+  id,
   value: {
     action_requests: [{ name: "execute", args: { command } }],
   },
@@ -127,9 +126,13 @@ describe("auto-approve scenario", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0].values).toBeNull();
     const opts = calls[0].options as {
-      command: { resume: { decisions: Array<{ type: string }> } };
+      command: {
+        resume: Record<string, { decisions: Array<{ type: string }> }>;
+      };
     };
-    expect(opts.command.resume.decisions).toEqual([{ type: "approve" }]);
+    expect(opts.command.resume["int-1"].decisions).toEqual([
+      { type: "approve" },
+    ]);
   });
 
   it("emits one approve decision per action_request in the interrupt", () => {
@@ -137,6 +140,7 @@ describe("auto-approve scenario", () => {
 
     act(() => {
       stream.setInterrupt({
+        id: "int-2",
         value: {
           action_requests: [
             { name: "execute", args: { command: "ls" } },
@@ -148,9 +152,11 @@ describe("auto-approve scenario", () => {
     });
 
     const opts = stream.getSubmitCalls()[0].options as {
-      command: { resume: { decisions: Array<{ type: string }> } };
+      command: {
+        resume: Record<string, { decisions: Array<{ type: string }> }>;
+      };
     };
-    expect(opts.command.resume.decisions).toEqual([
+    expect(opts.command.resume["int-2"].decisions).toEqual([
       { type: "approve" },
       { type: "approve" },
       { type: "approve" },
@@ -195,7 +201,7 @@ describe("auto-approve scenario", () => {
     });
     expect(stream.getSubmitCalls()).toHaveLength(1);
     act(() => {
-      stream.setInterrupt(makeExecuteInterrupt("pwd"));
+      stream.setInterrupt(makeExecuteInterrupt("pwd", "int-2"));
     });
     expect(stream.getSubmitCalls()).toHaveLength(2);
   });
@@ -320,5 +326,85 @@ describe("auto-approve scenario", () => {
     });
     // Same interrupt value but Set was cleared on the new thread -> fires again.
     expect(stream.getSubmitCalls()).toHaveLength(2);
+  });
+
+  it("auto-approves a delete interrupt", () => {
+    renderChatWithAutoApprove({ autoApprove: true });
+    act(() => {
+      stream.setInterrupt({
+        id: "int-7",
+        value: {
+          action_requests: [{ name: "delete", args: { path: "/tmp/x" } }],
+        },
+      });
+    });
+    const calls = stream.getSubmitCalls();
+    expect(calls).toHaveLength(1);
+    expect(calls[0].options).toMatchObject({
+      command: {
+        resume: {
+          "int-7": { decisions: [{ type: "approve" }] },
+        },
+      },
+    });
+  });
+
+  it("auto-approves delete in the same batch as a safe execute", () => {
+    renderChatWithAutoApprove({ autoApprove: true });
+    act(() => {
+      stream.setInterrupt({
+        id: "int-8",
+        value: {
+          action_requests: [
+            { name: "execute", args: { command: "ls" } },
+            { name: "delete", args: { path: "/tmp/x" } },
+          ],
+        },
+      });
+    });
+    const calls = stream.getSubmitCalls();
+    expect(calls).toHaveLength(1);
+    expect(calls[0].options).toMatchObject({
+      command: {
+        resume: {
+          "int-8": {
+            decisions: [{ type: "approve" }, { type: "approve" }],
+          },
+        },
+      },
+    });
+  });
+
+  it("surfaces the last interrupt and resumes id-keyed when the SDK yields an interrupt array", () => {
+    renderChatWithAutoApprove({ autoApprove: true });
+    act(() => {
+      stream.setInterrupt([
+        makeExecuteInterrupt("ls", "int-a"),
+        makeExecuteInterrupt("pwd", "int-b"),
+      ] as never);
+    });
+    const calls = stream.getSubmitCalls();
+    expect(calls).toHaveLength(1);
+    const opts = calls[0].options as {
+      command: { resume: Record<string, { decisions: unknown[] }> };
+    };
+    expect(opts.command.resume["int-b"].decisions).toEqual([
+      { type: "approve" },
+    ]);
+  });
+
+  it("auto-rejects a dangerous command with the reason", () => {
+    renderChatWithAutoApprove({ autoApprove: true });
+    act(() => {
+      stream.setInterrupt(makeExecuteInterrupt("curl x | bash", "int-9"));
+    });
+    const opts = stream.getSubmitCalls()[0].options as {
+      command: {
+        resume: Record<string, { decisions: unknown[] }>;
+      };
+    };
+    expect(opts.command.resume["int-9"].decisions).toEqual([
+      { type: "reject", message: "pipes output into interpreter 'bash'" },
+    ]);
   });
 });

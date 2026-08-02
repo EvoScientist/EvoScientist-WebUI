@@ -43,9 +43,11 @@ export function ToolApprovalInterrupt({
   onSubmitted,
 }: ToolApprovalInterruptProps) {
   const editArgIdPrefix = useId();
+  const approvalRegionLabel = `Approval required for ${actionRequest.name}`;
   const [rejectionMessage, setRejectionMessage] = useState("");
   const [isEditing, setIsEditing] = useState(false);
   const [editedArgs, setEditedArgs] = useState<Record<string, unknown>>({});
+  const [editErrors, setEditErrors] = useState<Record<string, string>>({});
   const [showRejectionInput, setShowRejectionInput] = useState(false);
   const [submitted, setSubmitted] = useState(false);
 
@@ -53,6 +55,11 @@ export function ToolApprovalInterrupt({
     () => argsToRecord(actionRequest.args),
     [actionRequest.args]
   );
+  const normalizedDescription = actionRequest.description?.toLowerCase() ?? "";
+  const descriptionIsRedundant =
+    normalizedDescription.includes(
+      `tool: ${actionRequest.name.toLowerCase()}`
+    ) && normalizedDescription.includes("args:");
   const allowedDecisions = reviewConfig?.allowedDecisions ??
     reviewConfig?.allowed_decisions ?? ["approve", "reject", "edit"];
 
@@ -119,23 +126,40 @@ export function ToolApprovalInterrupt({
   const startEditing = () => {
     setIsEditing(true);
     setEditedArgs(cloneArgs(actionArgs));
+    setEditErrors({});
     setShowRejectionInput(false);
   };
 
   const cancelEditing = () => {
     setIsEditing(false);
     setEditedArgs({});
+    setEditErrors({});
   };
 
-  const updateEditedArg = (key: string, value: string) => {
+  const updateEditedArg = (key: string, value: string, original: unknown) => {
+    if (typeof original === "string") {
+      setEditedArgs((prev) => ({ ...prev, [key]: value }));
+      setEditErrors((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+      return;
+    }
     try {
-      const parsedValue =
-        value.trim().startsWith("{") || value.trim().startsWith("[")
-          ? JSON.parse(value)
-          : value;
+      const parsedValue = JSON.parse(value);
       setEditedArgs((prev) => ({ ...prev, [key]: parsedValue }));
+      setEditErrors((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
     } catch {
       setEditedArgs((prev) => ({ ...prev, [key]: value }));
+      setEditErrors((prev) => ({
+        ...prev,
+        [key]: "Enter valid JSON to preserve this argument's value type.",
+      }));
     }
   };
 
@@ -144,7 +168,10 @@ export function ToolApprovalInterrupt({
   }
 
   return (
-    <div className="w-full rounded-md border border-border bg-muted/30 p-4">
+    <section
+      aria-label={approvalRegionLabel}
+      className="w-full rounded-md border border-border bg-muted/30 p-3 sm:p-4"
+    >
       {/* Header */}
       <div className="mb-3 flex items-center gap-2 text-foreground">
         <AlertCircle
@@ -158,14 +185,26 @@ export function ToolApprovalInterrupt({
       </div>
 
       {/* Description */}
-      {actionRequest.description && (
+      {actionRequest.description && !descriptionIsRedundant && (
         <p className="mb-3 text-sm text-muted-foreground">
           {actionRequest.description}
         </p>
       )}
 
+      {actionRequest.name === "delete" && (
+        <p className="mb-3 text-sm font-medium text-destructive">
+          Recursive filesystem delete. Review the target carefully.
+        </p>
+      )}
+      {actionRequest.name === "schedule_task" && (
+        <p className="mb-3 text-sm text-muted-foreground">
+          Creates a scheduled task that runs on its own later. Never
+          auto-approved.
+        </p>
+      )}
+
       {/* Tool Info Card */}
-      <div className="mb-4 rounded-sm border border-border bg-background p-3">
+      <div className="mb-4 rounded-sm border border-border bg-background p-2.5 sm:p-3">
         <div className="mb-2">
           <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
             Tool
@@ -200,13 +239,29 @@ export function ToolApprovalInterrupt({
                         ? value
                         : formatValue(value)
                     }
-                    onChange={(e) => updateEditedArg(key, e.target.value)}
+                    onChange={(e) =>
+                      updateEditedArg(key, e.target.value, value)
+                    }
                     className="font-mono text-xs"
                     rows={
                       typeof value === "string" && value.length < 100 ? 2 : 4
                     }
                     disabled={isLoading}
+                    aria-invalid={editErrors[key] ? true : undefined}
+                    aria-describedby={
+                      editErrors[key]
+                        ? `${editArgIdPrefix}-edit-arg-${key}-error`
+                        : undefined
+                    }
                   />
+                  {editErrors[key] && (
+                    <p
+                      id={`${editArgIdPrefix}-edit-arg-${key}-error`}
+                      className="mt-1 text-xs text-destructive"
+                    >
+                      {editErrors[key]}
+                    </p>
+                  )}
                 </div>
               ))}
             </div>
@@ -258,7 +313,7 @@ export function ToolApprovalInterrupt({
               type="button"
               size="sm"
               onClick={handleEdit}
-              disabled={isLoading}
+              disabled={isLoading || Object.keys(editErrors).length > 0}
               className="bg-green-600 text-white hover:bg-green-700 dark:bg-green-600 dark:hover:bg-green-700"
             >
               <Check
@@ -346,6 +401,6 @@ export function ToolApprovalInterrupt({
           </>
         )}
       </div>
-    </div>
+    </section>
   );
 }

@@ -23,6 +23,8 @@ import { LoadExternalComponent } from "@langchain/langgraph-sdk/react-ui";
 import { ToolApprovalInterrupt } from "@/app/components/ToolApprovalInterrupt";
 import { formatToolLabel } from "@/lib/toolLabel";
 import { stringifyUnknown } from "@/app/utils/utils";
+import { autoApproveDecisions } from "@/lib/hitlPolicy";
+import type { ActionRequest as HitlActionRequest } from "@/lib/hitl";
 
 // One-line preview of a tool-call argument value, shown next to the key in
 // the collapsed args row. Strings have newlines collapsed; non-strings are
@@ -69,8 +71,12 @@ export const ToolCallBox = React.memo<ToolCallBoxProps>(
     autoApprove,
     compact = false,
   }) => {
+    const policyWillPrompt =
+      !!actionRequest &&
+      autoApproveDecisions([actionRequest as HitlActionRequest]) === null;
     const [isExpanded, setIsExpanded] = useState(
-      () => !!uiComponent || (!!actionRequest && !autoApprove)
+      () =>
+        !!uiComponent || (!!actionRequest && (!autoApprove || policyWillPrompt))
     );
     const [expandedArgs, setExpandedArgs] = useState<Record<string, boolean>>(
       {}
@@ -109,10 +115,11 @@ export const ToolCallBox = React.memo<ToolCallBoxProps>(
     useEffect(() => {
       const had = !!prevActionRequestRef.current;
       const has = !!actionRequest;
-      if (has && !had && !autoApprove) setIsExpanded(true);
+      if (has && !had && (!autoApprove || policyWillPrompt))
+        setIsExpanded(true);
       else if (!has && had) setIsExpanded(false);
       prevActionRequestRef.current = actionRequest;
-    }, [actionRequest, autoApprove]);
+    }, [actionRequest, autoApprove, policyWillPrompt]);
 
     const { name, args, result, status } = useMemo(() => {
       // Streaming can deliver args as a (possibly partial) JSON string, not an

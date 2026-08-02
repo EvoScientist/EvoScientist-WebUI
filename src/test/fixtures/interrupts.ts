@@ -9,13 +9,15 @@ import {
   spawnAgentActionRequest,
 } from "./actionRequests";
 
-export const executeInterrupt = (command = "ls") => ({
+export const executeInterrupt = (command = "ls", id = "int-1") => ({
+  id,
   value: {
     action_requests: [executeActionRequest(command)],
   },
 });
 
-export const spawnAgentInterrupt = () => ({
+export const spawnAgentInterrupt = (id = "int-1") => ({
+  id,
   value: {
     action_requests: [spawnAgentActionRequest()],
   },
@@ -25,8 +27,10 @@ export const multiActionInterrupt = (
   requests: ActionRequest[] = [
     executeActionRequest("ls"),
     executeActionRequest("pwd"),
-  ]
+  ],
+  id = "int-1"
 ) => ({
+  id,
   value: {
     action_requests: requests,
   },
@@ -39,7 +43,8 @@ export const askUserInterrupt = (question = "what next?") => ({
   },
 });
 
-export const emptyActionsInterrupt = () => ({
+export const emptyActionsInterrupt = (id = "int-1") => ({
+  id,
   value: {
     action_requests: [],
   },

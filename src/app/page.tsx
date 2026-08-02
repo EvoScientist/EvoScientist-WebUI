@@ -486,7 +486,9 @@ function HomePageInner({
                   initialExecId={memoryExec}
                 />
               )}
-              {view === "schedule" && <ScheduledTasksPanel />}
+              {view === "schedule" && (
+                <ScheduledTasksPanel onOpenThread={selectThread} />
+              )}
             </ResizablePanel>
 
             {inspector && isDesktopLayout && (

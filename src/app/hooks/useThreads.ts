@@ -7,6 +7,7 @@ import {
   buildThreadLabelPatch,
   needsThreadLabelBackfill,
 } from "@/lib/threadLabels";
+import { cancelActiveRuns, type RunCancelClient } from "@/lib/threadLifecycle";
 
 export interface ThreadItem {
   id: string;
@@ -295,6 +296,7 @@ function makeThreadsClient(): Client | null {
 export async function deleteThread(id: string): Promise<void> {
   const client = makeThreadsClient();
   if (!client) throw new Error("No EvoScientist deployment configured.");
+  await cancelActiveRuns(client as unknown as RunCancelClient, id);
   await client.threads.delete(id);
 }
 

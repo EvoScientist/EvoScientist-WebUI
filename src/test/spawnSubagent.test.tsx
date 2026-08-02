@@ -166,7 +166,7 @@ describe("spawn-subagent scenario", () => {
     });
   });
 
-  it("propagates an edit decision (edited args ride along)", () => {
+  it("propagates an edit decision (edited action rides along)", () => {
     const { result } = renderChat({ activeAssistant: fixtureAssistant });
     act(() => {
       stream.setInterrupt(spawnInterrupt);
@@ -176,7 +176,10 @@ describe("spawn-subagent scenario", () => {
         decisions: [
           {
             type: "edit",
-            args: { agent: "writing-agent", input: "draft the CONCLUSION" },
+            edited_action: {
+              name: "spawn_agent",
+              args: { agent: "writing-agent", input: "draft the CONCLUSION" },
+            },
           },
         ],
       });
@@ -184,14 +187,17 @@ describe("spawn-subagent scenario", () => {
     const opts = stream.getSubmitCalls()[0].options as {
       command: {
         resume: {
-          decisions: Array<{ type: string; args?: Record<string, unknown> }>;
+          decisions: Array<{
+            type: string;
+            edited_action?: { name: string; args: Record<string, unknown> };
+          }>;
         };
       };
     };
     expect(opts.command.resume.decisions[0].type).toBe("edit");
-    expect(opts.command.resume.decisions[0].args).toEqual({
-      agent: "writing-agent",
-      input: "draft the CONCLUSION",
+    expect(opts.command.resume.decisions[0].edited_action).toEqual({
+      name: "spawn_agent",
+      args: { agent: "writing-agent", input: "draft the CONCLUSION" },
     });
   });
 
