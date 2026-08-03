@@ -83,17 +83,6 @@ export interface AsyncTaskReportTarget {
   status: string;
 }
 
-export type MainChatReportResult =
-  | "sent"
-  | "busy"
-  | "duplicate"
-  | "wrong-thread";
-
-export type MainChatReporter = (
-  task: AsyncTaskReportTarget,
-  expectedThreadId: string
-) => MainChatReportResult;
-
 interface ParsedAsyncUpdate {
   taskId: string;
   runId?: string;

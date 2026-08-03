@@ -12,8 +12,8 @@ import { cn } from "@/lib/utils";
 
 /** Render a sub-agent's steps as a vertical timeline of tool-call boxes (args +
  *  result + status) interleaved with the sub-agent's own text, reusing the SAME
- *  ToolCallBox + MarkdownContent the main agent uses. Shared by the inline
- *  sub-agent block (ChatMessage) and the background Agents board (AgentsPanel).
+ *  ToolCallBox + MarkdownContent the main agent uses. Used by the inline
+ *  sub-agent block (ChatMessage) and by the persona focus view (Pass 3).
  *
  *  Opt-in `foldable`: groups consecutive tool activity between text boundaries
  *  into a collapsible block, mirroring `<ActionGroup>` in the main chat. When

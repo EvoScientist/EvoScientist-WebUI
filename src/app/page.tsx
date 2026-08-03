@@ -24,7 +24,6 @@ import { ScheduledTasksPanel } from "@/app/components/ScheduledTasksPanel";
 import { HealthIndicator } from "@/app/components/HealthIndicator";
 import { InspectorPanel } from "@/app/components/InspectorPanel";
 import { setThreadAutoApprove } from "@/lib/autoApprove";
-import type { MainChatReporter } from "@/lib/asyncAgents";
 import { cn } from "@/lib/utils";
 
 interface HomePageInnerProps {
@@ -48,7 +47,6 @@ function HomePageInner({
   const [memoryObs, setMemoryObs] = useQueryState("memoryObs");
   const [memoryExec, setMemoryExec] = useQueryState("memoryExec");
   const [inspector, setInspector] = useQueryState("inspector");
-  const [inspectorTab, setInspectorTab] = useQueryState("inspectorTab");
   // Owned by ChatInterface (persona focus view), but page.tsx also needs to
   // clear it at thread-switch / new-chat time — ChatInterface fully remounts
   // via `chatSessionRevision`, so an in-component clear runs too late and the
@@ -60,12 +58,6 @@ function HomePageInner({
   const [assistant, setAssistant] = useState<Assistant | null>(null);
   const [isDesktopLayout, setIsDesktopLayout] = useState<boolean | null>(null);
   const [chatSessionRevision, setChatSessionRevision] = useState(0);
-  // "Submit a message on the main thread" — registered by ChatInterface (only
-  // while it's mounted, i.e. on the chat view), used by the Agents board to loop
-  // an async result back to the main agent. Null when not on the chat view.
-  const [notifyMainChat, setNotifyMainChat] = useState<MainChatReporter | null>(
-    null
-  );
 
   const fetchAssistant = useCallback(async () => {
     const isUUID =
@@ -145,8 +137,7 @@ function HomePageInner({
   const closeSidebar = useCallback(() => setSidebar(null), [setSidebar]);
   const closeInspector = useCallback(() => {
     setInspector(null);
-    setInspectorTab(null);
-  }, [setInspector, setInspectorTab]);
+  }, [setInspector]);
   const toggleSidebar = useCallback(() => {
     if (sidebar) {
       setSidebar(null);
@@ -161,22 +152,14 @@ function HomePageInner({
       return;
     }
     if (isDesktopLayout === false) setSidebar(null);
-    setInspectorTab(null);
     setInspector("1");
   }, [
     closeInspector,
     inspector,
     isDesktopLayout,
     setInspector,
-    setInspectorTab,
     setSidebar,
   ]);
-  // Open the inspector straight on its Agents tab (composer pulse → board).
-  const showAgentsInspector = useCallback(() => {
-    setInspectorTab("agents");
-    if (isDesktopLayout === false) setSidebar(null);
-    setInspector("1");
-  }, [isDesktopLayout, setInspector, setSidebar, setInspectorTab]);
   // Open the Experts marketplace as a full-panel view. Composer's active-team
   // chip and the rail's Experts entry both route here. Closes the sidebar on
   // narrow viewports so the marketplace has the full width.
@@ -223,22 +206,19 @@ function HomePageInner({
       } else if (target.view === "schedule") {
         setView("schedule");
       } else {
-        if (inspector && inspectorTab !== "agents") {
+        if (inspector) {
           closeInspector();
           return;
         }
         if (isDesktopLayout === false) setSidebar(null);
-        setInspectorTab(null);
         setInspector("1");
       }
     },
     [
       closeInspector,
       inspector,
-      inspectorTab,
       isDesktopLayout,
       setInspector,
-      setInspectorTab,
       setMemoryExec,
       setMemoryObs,
       setMemoryTab,
@@ -395,10 +375,7 @@ function HomePageInner({
                 aria-label="Inspector"
                 className="relative z-10 h-full w-[min(22rem,calc(100vw-2.25rem))] bg-background shadow-xl"
               >
-                <InspectorPanel
-                  onClose={closeInspector}
-                  onReportToMainChat={notifyMainChat}
-                />
+                <InspectorPanel onClose={closeInspector} />
               </aside>
             </div>
           )}
@@ -462,14 +439,10 @@ function HomePageInner({
                 >
                   <ChatInterface
                     assistant={assistant}
-                    onShowAgents={showAgentsInspector}
                     onShowExperts={showExperts}
-                    onNotifyReady={(fn) => setNotifyMainChat(() => fn)}
                     onNavigate={handleDashboardNav}
                     onOpenThread={selectThread}
-                    workspaceOpen={Boolean(
-                      inspector && inspectorTab !== "agents"
-                    )}
+                    workspaceOpen={Boolean(inspector)}
                   />
                 </div>
                 {view === "skills" && <SkillsMarketplace />}
@@ -506,10 +479,7 @@ function HomePageInner({
                   minSize={20}
                   className="relative min-w-[300px]"
                 >
-                  <InspectorPanel
-                    onClose={closeInspector}
-                    onReportToMainChat={notifyMainChat}
-                  />
+                  <InspectorPanel onClose={closeInspector} />
                 </ResizablePanel>
               </>
             )}

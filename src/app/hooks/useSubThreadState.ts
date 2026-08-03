@@ -51,8 +51,6 @@ const DEFAULT_INTERVAL_MS = 2500;
  * Live streaming (a second `useStream` per focused sub-thread) would give
  * lower latency, but a 2.5s poll is imperceptibly different for the phased
  * task-list card + sub-thread step list and avoids the socket overhead.
- * `AgentsPanel.tsx:271` already uses the same one-shot getState pattern
- * without complaints.
  */
 export function useSubThreadState(
   subThreadId: string | null,
