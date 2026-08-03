@@ -269,13 +269,7 @@ const getStatusIcon = (status: TodoItem["status"], className?: string) => {
 };
 
 export const ChatInterface = React.memo<ChatInterfaceProps>(
-  ({
-    assistant,
-    onShowExperts,
-    onNavigate,
-    onOpenThread,
-    workspaceOpen,
-  }) => {
+  ({ assistant, onShowExperts, onNavigate, onOpenThread, workspaceOpen }) => {
     const [metaOpen, setMetaOpen] = useState<
       "tasks" | "files" | "workflow" | null
     >(null);
@@ -1656,8 +1650,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                     <div className="mt-4">
                       <AskUserInterrupt
                         key={`ask-user-${
-                          interruptId ??
-                          stringifyUnknown(askUserQuestions, 0)
+                          interruptId ?? stringifyUnknown(askUserQuestions, 0)
                         }`}
                         questions={askUserQuestions}
                         onSubmit={handleAskUserSubmit}

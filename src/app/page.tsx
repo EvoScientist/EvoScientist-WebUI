@@ -153,13 +153,7 @@ function HomePageInner({
     }
     if (isDesktopLayout === false) setSidebar(null);
     setInspector("1");
-  }, [
-    closeInspector,
-    inspector,
-    isDesktopLayout,
-    setInspector,
-    setSidebar,
-  ]);
+  }, [closeInspector, inspector, isDesktopLayout, setInspector, setSidebar]);
   // Open the Experts marketplace as a full-panel view. Composer's active-team
   // chip and the rail's Experts entry both route here. Closes the sidebar on
   // narrow viewports so the marketplace has the full width.
