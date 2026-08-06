@@ -24,6 +24,11 @@ import {
   type WorkflowMap,
 } from "@/lib/dynamicWorkflow";
 import { loadThreadWorkflows, saveThreadWorkflows } from "@/lib/workflowStore";
+import {
+  addAbandonedInterruptKey,
+  clearAbandonedInterrupts,
+  getAbandonedInterruptKeys,
+} from "@/lib/abandonedInterrupts";
 import { toast } from "sonner";
 import {
   MODEL_OVERRIDE_METADATA_KEY,
@@ -370,6 +375,38 @@ export function useChat({
   // getter. They are always set/reset together.
   const userAbortedRef = useRef(false);
   const [userAborted, setUserAborted] = useState(false);
+  // Persisted per-thread set of abandoned interrupt keys — the durable half of
+  // the abort flag. `userAborted` suppresses the aborted run in-session; this set
+  // remembers the specific interrupt across reload so the recovery poll /
+  // `reconnectOnMount` can't re-surface a card the user already dismissed. Ref
+  // mirror for the poll's async closure; state for the reactive getter.
+  const [abandonedKeys, setAbandonedKeys] = useState<Set<string>>(() =>
+    getAbandonedInterruptKeys(threadId)
+  );
+  const abandonedKeysRef = useRef(abandonedKeys);
+  abandonedKeysRef.current = abandonedKeys;
+  // Reload the persisted set when switching threads (state initializer only runs
+  // once, at mount).
+  useEffect(() => {
+    setAbandonedKeys(getAbandonedInterruptKeys(threadId));
+  }, [threadId]);
+  const markAbandoned = useCallback(
+    (key: string | null | undefined) => {
+      if (!key) return;
+      addAbandonedInterruptKey(threadId, key);
+      setAbandonedKeys((prev) => {
+        if (prev.has(key)) return prev;
+        const next = new Set(prev);
+        next.add(key);
+        return next;
+      });
+    },
+    [threadId]
+  );
+  const clearAbandoned = useCallback(() => {
+    clearAbandonedInterrupts(threadId);
+    setAbandonedKeys((prev) => (prev.size === 0 ? prev : new Set()));
+  }, [threadId]);
 
   // Per-thread model override. When set, gets folded into
   // `configurable.model` on every `stream.submit` — the backend's
@@ -510,15 +547,20 @@ export function useChat({
         const stillPending = Array.isArray(state.next) && state.next.length > 0;
         const safePending = normalizePendingInterrupt(pending);
         if (safePending && hasActionableInterrupt(safePending)) {
-          if (userAbortedRef.current) {
-            // The user hit Stop/Reject on this run: treat it as a real
-            // interruption. Don't re-surface the approval the run paused on —
-            // mark it resolved so neither the fetched nor the live path renders
-            // the card, backfill messages, and stop polling.
+          const pendingKey = interruptValueKey(coerceInterrupt(safePending));
+          if (
+            userAbortedRef.current ||
+            (pendingKey !== null && abandonedKeysRef.current.has(pendingKey))
+          ) {
+            // The user abandoned this run — in this session (Stop/Reject) or in a
+            // prior one (persisted key, re-read after reload). Treat it as a real
+            // interruption: don't re-surface the approval. Record the key so the
+            // suppression is durable (the Stop case only learns the key here, once
+            // the aborted run pauses), mark it resolved so neither the fetched nor
+            // the live path renders the card, backfill messages, stop polling.
+            markAbandoned(pendingKey);
             setFetchedInterrupt(undefined);
-            setResolvedInterruptKey(
-              interruptValueKey(coerceInterrupt(safePending))
-            );
+            setResolvedInterruptKey(pendingKey);
             if (Array.isArray(msgs)) {
               setFetchedThreadId(threadId);
               setFetchedMessages(msgs);
@@ -587,7 +629,7 @@ export function useChat({
   const liveInterrupt = coerceInterrupt(
     stream.interrupt
   ) as typeof stream.interrupt;
-  const interrupt = userAborted
+  const interruptCandidate = userAborted
     ? undefined
     : fetchedThreadId === threadId && fetchedInterrupt
     ? fetchedInterrupt
@@ -596,6 +638,24 @@ export function useChat({
         interruptValueKey(liveInterrupt) !== resolvedInterruptKey)
     ? liveInterrupt
     : undefined;
+  // Suppress an approval the user abandoned in a PRIOR session — the durable
+  // half of the abort flag. On reload `userAborted` is false but the persisted
+  // key set is re-read, so a card dismissed before the reload stays gone until
+  // the user moves forward (which clears the set).
+  const candidateKey = interruptCandidate
+    ? interruptValueKey(coerceInterrupt(interruptCandidate))
+    : null;
+  const interrupt =
+    candidateKey !== null && abandonedKeys.has(candidateKey)
+      ? undefined
+      : interruptCandidate;
+  // Key of whatever approval is on screen right now, for `abortRun` to record in
+  // the Reject case (the run is paused and the card is visible, so the key is
+  // known immediately — unlike Stop, where the poll learns it post-abort).
+  const currentInterruptKeyRef = useRef<string | null>(null);
+  currentInterruptKeyRef.current = interrupt
+    ? interruptValueKey(coerceInterrupt(interrupt))
+    : null;
   // Prefer the backfilled snapshot when it is "ahead" of the live stream — i.e.
   // the stream ended early and dropped the tail. "Ahead" means either MORE
   // messages, or (once settled) the SAME number of messages but MORE total text:
@@ -670,6 +730,9 @@ export function useChat({
       setResolvedInterruptKey(null);
       userAbortedRef.current = false;
       setUserAborted(false);
+      // Moving forward supersedes the abandoned run — forget its keys so a later
+      // recurrence of the same tool call can surface normally.
+      clearAbandoned();
       recoveryRunRef.current += 1;
       const newMessage: Message = { id: uuidv4(), type: "human", content };
       streamRef.current.submit(
@@ -688,7 +751,7 @@ export function useChat({
       // Update thread list immediately when sending a message
       onHistoryRevalidate?.();
     },
-    [buildRunConfig, onHistoryRevalidate]
+    [buildRunConfig, onHistoryRevalidate, clearAbandoned]
   );
 
   const setFiles = useCallback(
@@ -712,6 +775,9 @@ export function useChat({
       setResolvedInterruptKey(null);
       userAbortedRef.current = false;
       setUserAborted(false);
+      // Moving forward supersedes the abandoned run — forget its keys so a later
+      // recurrence of the same tool call can surface normally.
+      clearAbandoned();
       recoveryRunRef.current += 1;
       streamRef.current.submit(null, {
         command: { resume: value },
@@ -724,7 +790,7 @@ export function useChat({
       // Update thread list when resuming from interrupt
       onHistoryRevalidate?.();
     },
-    [buildRunConfig, onHistoryRevalidate]
+    [buildRunConfig, onHistoryRevalidate, clearAbandoned]
   );
 
   // Abandon the current run/interrupt and hand control back to the composer —
@@ -743,8 +809,12 @@ export function useChat({
   const abortRun = useCallback(() => {
     userAbortedRef.current = true;
     setUserAborted(true);
+    // Reject case: the card is visible, so persist its key now so the abandon
+    // survives reload. Stop case: no card yet — the recovery poll records the
+    // key once the aborted run pauses on its interrupt.
+    markAbandoned(currentInterruptKeyRef.current);
     streamRef.current.stop();
-  }, []);
+  }, [markAbandoned]);
 
   // Precompute the sidebar labels ("auto_title" + "preview") into thread
   // metadata whenever a run settles, so the sidebar can render off metadata
