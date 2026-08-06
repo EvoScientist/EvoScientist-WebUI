@@ -218,7 +218,7 @@ describe("simple chat scenario", () => {
     expect(historyRevalidate).toHaveBeenCalled();
   });
 
-  it("stopStream during an active run records a stop call and clears loading on next tick", () => {
+  it("abortRun during an active run records a stop call and clears loading on next tick", () => {
     const { result } = renderChat({ activeAssistant: fixtureAssistant });
     // Start a run and confirm we're loading.
     act(() => {
@@ -229,7 +229,7 @@ describe("simple chat scenario", () => {
 
     // User hits Stop.
     act(() => {
-      result.current.stopStream();
+      result.current.abortRun();
     });
     expect(stream.getStopCallCount()).toBe(1);
 
@@ -240,7 +240,7 @@ describe("simple chat scenario", () => {
     expect(result.current.isLoading).toBe(false);
   });
 
-  it("stopStream while an interrupt is pending still records a stop call (no crash)", () => {
+  it("abortRun while an interrupt is pending stops the run and suppresses the card", () => {
     const { result } = renderChat({ activeAssistant: fixtureAssistant });
     act(() => {
       result.current.sendMessage("hi");
@@ -250,13 +250,60 @@ describe("simple chat scenario", () => {
     });
     expect(result.current.interrupt).toBeDefined();
 
-    // User bails out mid-approval.
+    // User bails out mid-approval: abandon the interrupt and hand control back.
     act(() => {
-      result.current.stopStream();
+      result.current.abortRun();
     });
     expect(stream.getStopCallCount()).toBe(1);
-    // Interrupt state is still there until the SDK clears it — stopStream
-    // doesn't manipulate our fetchedInterrupt / resolvedInterruptKey state.
+    // The on-screen approval is suppressed immediately so the composer unlocks —
+    // abortRun marks it resolved rather than waiting on the SDK.
+    expect(result.current.interrupt).toBeUndefined();
+  });
+
+  it("Stop after Approve does not bounce back to the next tool call's approval", () => {
+    // Regression: approve one execute, the agent proposes the NEXT one (its
+    // approval arrives via the live stream.interrupt path), then the user hits
+    // Stop. The next approval must stay suppressed for the rest of the aborted
+    // run — earlier the live-path interrupt slipped past the recovery-poll guard
+    // and dropped the user right back onto a fresh approval card.
+    const approval = (name: string, id: string) => ({
+      id,
+      value: { action_requests: [{ name, args: {} }] },
+    });
+    const { result } = renderChat({ activeAssistant: fixtureAssistant });
+
+    // First approval shows; user approves; the run resumes.
+    act(() => {
+      stream.setInterrupt(approval("execute", "int-1"));
+    });
+    expect(result.current.interrupt).toBeDefined();
+    act(() => {
+      result.current.resumeInterrupt({ decisions: [{ type: "approve" }] });
+      stream.setLoading(true);
+    });
+
+    // Agent proposes the next tool call — its approval surfaces live.
+    act(() => {
+      stream.setInterrupt(approval("execute", "int-2"));
+    });
+    expect(result.current.interrupt).toBeDefined();
+
+    // User hits Stop: the second approval must disappear and stay gone even if
+    // the aborted run emits yet another interrupt before it winds down.
+    act(() => {
+      result.current.abortRun();
+    });
+    expect(result.current.interrupt).toBeUndefined();
+    act(() => {
+      stream.setInterrupt(approval("execute", "int-3"));
+    });
+    expect(result.current.interrupt).toBeUndefined();
+
+    // A genuinely new turn clears the abandon and lets fresh approvals through.
+    act(() => {
+      result.current.sendMessage("do it differently");
+      stream.setInterrupt(approval("execute", "int-4"));
+    });
     expect(result.current.interrupt).toBeDefined();
   });
 });

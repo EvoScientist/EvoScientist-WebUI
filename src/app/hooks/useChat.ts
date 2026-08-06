@@ -380,6 +380,19 @@ export function useChat({
   );
   const [fetchedThreadId, setFetchedThreadId] = useState<string | null>(null);
   const recoveryRunRef = useRef(0);
+  // Set when the user explicitly abandons the current run via the Stop button.
+  // While set, the exposed `interrupt` is forced to `undefined` so NO approval
+  // surfaces - not the one on screen, not the next one the aborted run pauses
+  // on, whether it arrives via the live `stream.interrupt` or the recovery
+  // poll below. Without this, approving one tool call and then hitting Stop
+  // drops the user back onto the *next* tool call's approval. Reset when a
+  // genuinely new turn starts (`sendMessage` / `resumeInterrupt`).
+  //
+  // Two forms of the same flag: the ref is read inside the poll's async closure
+  // (state would be stale there); the state drives the reactive `interrupt`
+  // getter. They are always set/reset together.
+  const userAbortedRef = useRef(false);
+  const [userAborted, setUserAborted] = useState(false);
 
   // Per-thread model override. When set, gets folded into
   // `configurable.model` on every `stream.submit` — the backend's
@@ -520,6 +533,21 @@ export function useChat({
         const stillPending = Array.isArray(state.next) && state.next.length > 0;
         const safePending = normalizePendingInterrupt(pending);
         if (safePending && hasActionableInterrupt(safePending)) {
+          if (userAbortedRef.current) {
+            // The user hit Stop/Reject on this run: treat it as a real
+            // interruption. Don't re-surface the approval the run paused on —
+            // mark it resolved so neither the fetched nor the live path renders
+            // the card, backfill messages, and stop polling.
+            setFetchedInterrupt(undefined);
+            setResolvedInterruptKey(
+              interruptValueKey(coerceInterrupt(safePending))
+            );
+            if (Array.isArray(msgs)) {
+              setFetchedThreadId(threadId);
+              setFetchedMessages(msgs);
+            }
+            return;
+          }
           // Tool-approval interrupt reached — surface it and its matching message
           // snapshot together. Mixing live messages with fetched interrupts is the
           // race that hides approval cards for repeated execute calls.
@@ -582,14 +610,15 @@ export function useChat({
   const liveInterrupt = coerceInterrupt(
     stream.interrupt
   ) as typeof stream.interrupt;
-  const interrupt =
-    fetchedThreadId === threadId && fetchedInterrupt
-      ? fetchedInterrupt
-      : liveInterrupt &&
-        (resolvedInterruptKey === null ||
-          interruptValueKey(liveInterrupt) !== resolvedInterruptKey)
-      ? liveInterrupt
-      : undefined;
+  const interrupt = userAborted
+    ? undefined
+    : fetchedThreadId === threadId && fetchedInterrupt
+    ? fetchedInterrupt
+    : liveInterrupt &&
+      (resolvedInterruptKey === null ||
+        interruptValueKey(liveInterrupt) !== resolvedInterruptKey)
+    ? liveInterrupt
+    : undefined;
   // Prefer the backfilled snapshot when it is "ahead" of the live stream — i.e.
   // the stream ended early and dropped the tail. "Ahead" means either MORE
   // messages, or (once settled) the SAME number of messages but MORE total text:
@@ -662,6 +691,8 @@ export function useChat({
       setFetchedMessages(null);
       setFetchedThreadId(null);
       setResolvedInterruptKey(null);
+      userAbortedRef.current = false;
+      setUserAborted(false);
       recoveryRunRef.current += 1;
       const newMessage: Message = { id: uuidv4(), type: "human", content };
       streamRef.current.submit(
@@ -702,6 +733,8 @@ export function useChat({
       setFetchedMessages(null);
       setFetchedThreadId(null);
       setResolvedInterruptKey(null);
+      userAbortedRef.current = false;
+      setUserAborted(false);
       recoveryRunRef.current += 1;
       streamRef.current.submit(null, {
         command: { resume: value },
@@ -717,7 +750,15 @@ export function useChat({
     [buildRunConfig, onHistoryRevalidate]
   );
 
-  const stopStream = useCallback(() => {
+  // Abandon the current run when the user hits Stop and hand control back to
+  // the composer. `stream.stop()` cancels the run server-side
+  // (`action="interrupt"`) and aborts the local reader. The `userAbortedRef`
+  // guard in the recovery poll keeps the interrupt the run paused on from
+  // being re-surfaced - without it, approving one tool call and then hitting
+  // Stop drops the user back onto the next tool call's approval.
+  const abortRun = useCallback(() => {
+    userAbortedRef.current = true;
+    setUserAborted(true);
     streamRef.current.stop();
   }, []);
 
@@ -794,7 +835,7 @@ export function useChat({
     isThreadLoading: stream.isThreadLoading,
     interrupt,
     sendMessage,
-    stopStream,
+    abortRun,
     resumeInterrupt,
     subAgentActivity,
     dynamicWorkflows,
