@@ -13,6 +13,14 @@ interface ToolApprovalInterruptProps {
   actionRequest: ActionRequest;
   reviewConfig?: ReviewConfig;
   onResume: (value: any) => void;
+  /**
+   * Abandon the whole run — the Reject path. Unlike Approve/Edit (which submit a
+   * decision through `onResume`), rejecting no longer sends a `{type:"reject"}`
+   * decision: that produced a `ToolMessage` the agent misread as tool stdout.
+   * Instead it stops the run and hands control back to the composer, matching the
+   * TUI. A whole-run action, so no per-decision payload.
+   */
+  onAbort?: () => void;
   isLoading?: boolean;
   onSubmitted?: () => void;
 }
@@ -39,16 +47,15 @@ export function ToolApprovalInterrupt({
   actionRequest,
   reviewConfig,
   onResume,
+  onAbort,
   isLoading,
   onSubmitted,
 }: ToolApprovalInterruptProps) {
   const editArgIdPrefix = useId();
   const approvalRegionLabel = `Approval required for ${actionRequest.name}`;
-  const [rejectionMessage, setRejectionMessage] = useState("");
   const [isEditing, setIsEditing] = useState(false);
   const [editedArgs, setEditedArgs] = useState<Record<string, unknown>>({});
   const [editErrors, setEditErrors] = useState<Record<string, string>>({});
-  const [showRejectionInput, setShowRejectionInput] = useState(false);
   const [submitted, setSubmitted] = useState(false);
 
   const actionArgs = useMemo(
@@ -80,29 +87,15 @@ export function ToolApprovalInterrupt({
   };
 
   const handleReject = () => {
-    if (showRejectionInput) {
-      submitDecision({
-        decisions: [
-          {
-            type: "reject",
-            message: rejectionMessage.trim(),
-          },
-        ],
-      });
-    } else {
-      setShowRejectionInput(true);
-    }
-  };
-
-  const handleRejectConfirm = () => {
-    submitDecision({
-      decisions: [
-        {
-          type: "reject",
-          message: rejectionMessage.trim(),
-        },
-      ],
+    // Abandon the run instead of submitting a reject decision. Hide the card the
+    // same way submitDecision does (so it can't be clicked twice), then abort.
+    flushSync(() => {
+      setSubmitted(true);
+      if (onSubmitted) {
+        onSubmitted();
+      }
     });
+    onAbort?.();
   };
 
   const handleEdit = () => {
@@ -127,7 +120,6 @@ export function ToolApprovalInterrupt({
     setIsEditing(true);
     setEditedArgs(cloneArgs(actionArgs));
     setEditErrors({});
-    setShowRejectionInput(false);
   };
 
   const cancelEditing = () => {
@@ -278,24 +270,6 @@ export function ToolApprovalInterrupt({
         )}
       </div>
 
-      {/* Rejection Message Input */}
-      {showRejectionInput && !isEditing && (
-        <div className="mb-4">
-          <label className="mb-2 block text-xs font-medium text-foreground">
-            Rejection Message (optional)
-          </label>
-          <Textarea
-            aria-label="Rejection message"
-            value={rejectionMessage}
-            onChange={(e) => setRejectionMessage(e.target.value)}
-            placeholder="Explain why you're rejecting this action…"
-            className="text-sm"
-            rows={2}
-            disabled={isLoading}
-          />
-        </div>
-      )}
-
       {/* Actions */}
       <div className="flex flex-wrap gap-2">
         {isEditing ? (
@@ -321,30 +295,6 @@ export function ToolApprovalInterrupt({
                 aria-hidden="true"
               />
               {isLoading ? "Saving…" : "Save & Approve"}
-            </Button>
-          </>
-        ) : showRejectionInput ? (
-          <>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                setShowRejectionInput(false);
-                setRejectionMessage("");
-              }}
-              disabled={isLoading}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              variant="destructive"
-              size="sm"
-              onClick={handleRejectConfirm}
-              disabled={isLoading}
-            >
-              {isLoading ? "Rejecting…" : "Confirm Reject"}
             </Button>
           </>
         ) : (

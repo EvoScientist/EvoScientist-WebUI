@@ -50,6 +50,8 @@ interface ChatMessageProps {
   ui?: any[];
   stream?: any;
   onResumeInterrupt?: (value: any) => void;
+  /** Abandon the run — the Reject path. See ToolApprovalInterrupt.onAbort. */
+  onAbortInterrupt?: () => void;
   graphId?: string;
   onEditMessage?: (content: string) => void;
   autoApprove?: boolean;
@@ -93,6 +95,7 @@ export const ChatMessage = React.memo<ChatMessageProps>(
     ui,
     stream,
     onResumeInterrupt,
+    onAbortInterrupt,
     graphId,
     onEditMessage,
     autoApprove,
@@ -440,6 +443,7 @@ export const ChatMessage = React.memo<ChatMessageProps>(
                             )
                         : onResumeInterrupt
                     }
+                    onAbort={onAbortInterrupt}
                     isLoading={isLoading}
                     autoApprove={autoApprove}
                   />

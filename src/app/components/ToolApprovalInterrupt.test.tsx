@@ -11,13 +11,11 @@ import {
   clickEdit,
   clickReject,
   clickSaveApprove,
-  confirmReject,
   getApproveButton,
   getEditButton,
   getRejectButton,
   getSaveApproveButton,
   setEditedArg,
-  typeRejectionMessage,
 } from "@/test/interactions/approvalCard";
 
 describe("ToolApprovalInterrupt", () => {
@@ -76,42 +74,34 @@ describe("ToolApprovalInterrupt", () => {
     });
   });
 
-  it("Reject first click reveals the rejection message input, second confirms", () => {
+  it("Reject abandons the run in one click and submits no decision", () => {
     const onResume = vi.fn();
+    const onAbort = vi.fn();
     const { container } = render(
       <ToolApprovalInterrupt
         actionRequest={executeActionRequest()}
         onResume={onResume}
+        onAbort={onAbort}
       />
     );
     clickReject(container);
-    // Now the confirm-reject button + textarea are visible.
+    // No reject decision is sent — rejecting is an abandon, not a ToolMessage.
     expect(onResume).not.toHaveBeenCalled();
-    expect(
-      screen.getByPlaceholderText(/explain why you're rejecting/i)
-    ).toBeDefined();
-
-    typeRejectionMessage(container, "not now");
-    confirmReject(container);
-
-    expect(onResume).toHaveBeenCalledWith({
-      decisions: [{ type: "reject", message: "not now" }],
-    });
+    expect(onAbort).toHaveBeenCalledTimes(1);
   });
 
-  it("Reject with an empty message still fires a reject decision (trimmed)", () => {
-    const onResume = vi.fn();
+  it("Reject offers no rejection-message input (single-click abandon)", () => {
     const { container } = render(
       <ToolApprovalInterrupt
         actionRequest={executeActionRequest()}
-        onResume={onResume}
+        onResume={vi.fn()}
+        onAbort={vi.fn()}
       />
     );
     clickReject(container);
-    confirmReject(container);
-    expect(onResume).toHaveBeenCalledWith({
-      decisions: [{ type: "reject", message: "" }],
-    });
+    expect(screen.queryByPlaceholderText(/explain why you're rejecting/i)).toBe(
+      null
+    );
   });
 
   it("Edit reveals arg textareas; Save & Approve fires an edit decision with new args", () => {

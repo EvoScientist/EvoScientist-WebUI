@@ -24,6 +24,25 @@ describe("InterruptApprovalFallback", () => {
     expect(screen.getAllByText("Approval Required")).toHaveLength(2);
   });
 
+  it("Reject on any card abandons the whole run once, submits no decision", () => {
+    const onResume = vi.fn();
+    const onAbort = vi.fn();
+    render(
+      <InterruptApprovalFallback
+        actionRequests={requests}
+        reviewConfigsMap={new Map()}
+        onResume={onResume}
+        onAbort={onAbort}
+      />
+    );
+    // Rejecting is a whole-run abandon — one click on any card is enough, and no
+    // per-request decision aggregation happens.
+    const rejectButtons = screen.getAllByRole("button", { name: /^Reject/ });
+    fireEvent.click(rejectButtons[0]);
+    expect(onResume).not.toHaveBeenCalled();
+    expect(onAbort).toHaveBeenCalledTimes(1);
+  });
+
   it("aggregates one decision per request before resuming once", () => {
     const onResume = vi.fn();
     render(

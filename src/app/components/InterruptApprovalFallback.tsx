@@ -13,6 +13,8 @@ interface InterruptApprovalFallbackProps {
   requestedBy?: string | null;
   interruptKey?: string;
   onResume: (value: { decisions: Decision[] }) => void;
+  /** Abandon the run — the Reject path. See ToolApprovalInterrupt.onAbort. */
+  onAbort?: () => void;
   isLoading?: boolean;
 }
 
@@ -22,6 +24,7 @@ export function InterruptApprovalFallback({
   requestedBy,
   interruptKey,
   onResume,
+  onAbort,
   isLoading,
 }: InterruptApprovalFallbackProps) {
   const pendingDecisionsRef = useRef<Record<number, Decision>>({});
@@ -79,6 +82,7 @@ export function InterruptApprovalFallback({
           actionRequest={actionRequest}
           reviewConfig={reviewConfigsMap.get(actionRequest.name)}
           onResume={(value) => handleResume(index, value)}
+          onAbort={onAbort}
           isLoading={isLoading}
         />
       ))}

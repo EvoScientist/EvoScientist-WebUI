@@ -1570,6 +1570,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                         reviewConfigsMap={reviewConfigsMap}
                         stream={stream}
                         onResumeInterrupt={resumeToolApproval}
+                        onAbortInterrupt={abortRun}
                         graphId={assistant?.graph_id}
                         onEditMessage={handleEditMessage}
                         autoApprove={autoApprove}
@@ -1611,6 +1612,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                         ui={messageUi}
                         stream={stream}
                         onResumeInterrupt={resumeToolApproval}
+                        onAbortInterrupt={abortRun}
                         graphId={assistant?.graph_id}
                         onEditMessage={handleEditMessage}
                         autoApprove={autoApprove}
@@ -1631,6 +1633,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                     requestedBy={subAgentRequester}
                     interruptKey={interruptId}
                     onResume={resumeToolApproval}
+                    onAbort={abortRun}
                     isLoading={isLoading}
                   />
                 )}

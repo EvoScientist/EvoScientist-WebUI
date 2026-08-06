@@ -37,6 +37,8 @@ interface ActionGroupProps {
   reviewConfigsMap: Map<string, ReviewConfig> | null;
   stream: unknown;
   onResumeInterrupt: (value: unknown) => void;
+  /** Abandon the run — the Reject path. See ToolApprovalInterrupt.onAbort. */
+  onAbortInterrupt?: () => void;
   graphId?: string;
   onEditMessage: (content: string) => void;
   autoApprove: boolean;
@@ -68,6 +70,7 @@ export const ActionGroup = React.memo<ActionGroupProps>(function ActionGroup({
   reviewConfigsMap,
   stream,
   onResumeInterrupt,
+  onAbortInterrupt,
   graphId,
   onEditMessage,
   autoApprove,
@@ -194,6 +197,7 @@ export const ActionGroup = React.memo<ActionGroupProps>(function ActionGroup({
               ui={messageUi}
               stream={stream}
               onResumeInterrupt={onResumeInterrupt}
+              onAbortInterrupt={onAbortInterrupt}
               graphId={graphId}
               onEditMessage={onEditMessage}
               autoApprove={autoApprove}
@@ -231,6 +235,7 @@ export const ActionGroup = React.memo<ActionGroupProps>(function ActionGroup({
                   ui={messageUi}
                   stream={stream}
                   onResumeInterrupt={onResumeInterrupt}
+                  onAbortInterrupt={onAbortInterrupt}
                   graphId={graphId}
                   onEditMessage={onEditMessage}
                   autoApprove={autoApprove}

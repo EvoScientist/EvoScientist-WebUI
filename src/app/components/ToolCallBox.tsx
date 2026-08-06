@@ -50,6 +50,8 @@ interface ToolCallBoxProps {
   onActionRequestSubmitted?: (key: string) => void;
   reviewConfig?: ReviewConfig;
   onResume?: (value: any) => void;
+  /** Abandon the run — the Reject path. See ToolApprovalInterrupt.onAbort. */
+  onAbort?: () => void;
   isLoading?: boolean;
   autoApprove?: boolean;
   compact?: boolean;
@@ -67,6 +69,7 @@ export const ToolCallBox = React.memo<ToolCallBoxProps>(
     onActionRequestSubmitted,
     reviewConfig,
     onResume,
+    onAbort,
     isLoading,
     autoApprove,
     compact = false,
@@ -259,6 +262,7 @@ export const ToolCallBox = React.memo<ToolCallBoxProps>(
                   actionRequest={actionRequest}
                   reviewConfig={reviewConfig}
                   onResume={onResume}
+                  onAbort={onAbort}
                   isLoading={isLoading}
                   onSubmitted={() => {
                     setSubmittedActionRequestKey(actionRequestKey);
