@@ -1083,7 +1083,23 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       }
       visibleMessages.forEach((message: Message) => {
         if (message.type === "ai") {
+          // Drop duplicate tool_call ids within a single AI message before they
+          // reach the render. LangChain's streaming merge can leave the same
+          // tool_call twice (the duplicated-SSE-chunk artifact behind the
+          // "stopstop" finish_reason handling), and aborting a run mid-tool-call
+          // makes it more likely. Downstream keys derive from `toolCall.id`
+          // (ChatMessage tool grid + subAgents), so a repeat throws React's
+          // "two children with the same key" and duplicates the box. Dedupe only
+          // real string-id collisions; id-less calls get unique index-based
+          // fallbacks below and must be kept.
+          const seenToolCallIds = new Set<string>();
           const toolCallsWithStatus = getMessageToolCalls(message)
+            .filter((toolCall) => {
+              if (typeof toolCall.id !== "string" || !toolCall.id) return true;
+              if (seenToolCallIds.has(toolCall.id)) return false;
+              seenToolCallIds.add(toolCall.id);
+              return true;
+            })
             // The auxiliary tool-selector's internal `ToolSelectionResponse` call
             // has no result and isn't HITL-gated. Surface it only as a transient
             // spinner WHILE the run is actively selecting; hide it once the run
