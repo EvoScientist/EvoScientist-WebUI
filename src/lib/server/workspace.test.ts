@@ -43,7 +43,9 @@ describe("isCrossOrigin", () => {
   });
 
   it.each(["same-site", "none"])("allows Sec-Fetch-Site: %s", (site) => {
-    expect(isCrossOrigin(req({ "sec-fetch-site": site }))).toBe(false);
+    expect(
+      isCrossOrigin(req({ "sec-fetch-site": site, host: "localhost:4716" }))
+    ).toBe(false);
   });
 
   it("rejects Sec-Fetch-Site: cross-site even when Origin matches Host", () => {
@@ -74,5 +76,13 @@ describe("isCrossOrigin", () => {
     expect(isCrossOrigin(req({ host: "localhost:4716", origin: "null" }))).toBe(
       true
     );
+  });
+
+  it("rejects a missing Host even when Sec-Fetch-Site claims same-origin", () => {
+    expect(isCrossOrigin(req({ "sec-fetch-site": "same-origin" }))).toBe(true);
+  });
+
+  it("rejects a request with no Host header at all", () => {
+    expect(isCrossOrigin(req({}))).toBe(true);
   });
 });
