@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { installSkill } from "@/lib/server/skills";
+import { isCrossOrigin } from "@/lib/server/workspace";
 
 export const runtime = "nodejs";
 
 export async function POST(request: NextRequest) {
   try {
     // Same-origin guard (browsers always send Origin on POST).
-    const origin = request.headers.get("origin");
-    if (origin && origin !== request.nextUrl.origin) {
+    if (isCrossOrigin(request)) {
       return NextResponse.json(
         { error: "Cross-origin installs are not allowed." },
         { status: 403 }

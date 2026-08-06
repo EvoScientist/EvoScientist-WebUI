@@ -217,20 +217,32 @@ export async function safeResolve(
 /**
  * Reject cross-site requests to the workspace APIs. Browsers omit `Origin` on
  * same-origin GETs and on direct navigations (open-in-tab / downloads), so we
- * lean on `Sec-Fetch-Site` when present and fall back to an Origin check.
+ * trust `Sec-Fetch-Site` when present and otherwise compare `Origin` against
+ * the request's own `Host`. Requests without a `Host` header are rejected
+ * outright — HTTP/1.1 requires it, so only hand-crafted clients omit it.
+ * Never compare against `nextUrl.origin`: the standalone server derives it
+ * from the configured HOSTNAME, not from the address the browser used, so it
+ * can never match when binding a wildcard (#35 — with HOSTNAME=0.0.0.0 every
+ * write from every page was rejected).
  */
 export function isCrossOrigin(request: NextRequest): boolean {
+  const host = request.headers.get("host");
+  if (!host) {
+    return true;
+  }
   const site = request.headers.get("sec-fetch-site");
-  if (
-    site &&
-    site !== "same-origin" &&
-    site !== "same-site" &&
-    site !== "none"
-  ) {
-    return true; // explicit cross-site request
+  if (site) {
+    return site !== "same-origin" && site !== "same-site" && site !== "none";
   }
   const origin = request.headers.get("origin");
-  return !!origin && origin !== request.nextUrl.origin;
+  if (!origin) {
+    return false;
+  }
+  try {
+    return new URL(origin).host !== host;
+  } catch {
+    return true; // malformed or opaque ("null") Origin — treat as cross-site
+  }
 }
 
 // ---------------------------------------------------------------------------
