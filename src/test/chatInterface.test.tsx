@@ -106,6 +106,7 @@ import {
   resetComponentSpy,
 } from "@/test/mocks/chatInterfaceStubs";
 import { humanTurn, aiTurn, aiToolCallTurn } from "@/test/fixtures/messages";
+import type { Message } from "@langchain/langgraph-sdk";
 import { executeInterrupt, askUserInterrupt } from "@/test/fixtures/interrupts";
 import { setThreadAutoApprove } from "@/lib/autoApprove";
 
@@ -283,5 +284,34 @@ describe("ChatInterface composition", () => {
     expect(passes.length).toBeGreaterThan(0);
     // The prop that ActionGroup ends up seeing reflects the seeded storage.
     expect(passes[passes.length - 1].autoApprove).toBe(true);
+  });
+
+  it("dedupes duplicate tool_call ids within one AI message (no duplicate keys)", () => {
+    // Regression: LangChain's streaming merge (made likelier by aborting a run
+    // mid-tool-call) can leave the same tool_call twice in one AI message. The
+    // render keys off tool_call.id, so a repeat threw React's "two children with
+    // the same key" and duplicated the box. processedMessages must collapse it.
+    renderChatInterface();
+    act(() => {
+      stream.setMessages([
+        {
+          id: "a1",
+          type: "ai",
+          content: "",
+          tool_calls: [
+            { id: "dup1", name: "execute", args: { command: "ls" } },
+            { id: "dup1", name: "execute", args: { command: "ls" } },
+          ],
+        } as unknown as Message,
+      ]);
+    });
+    const groups = getAllProps<{
+      items: Array<{ toolCalls: Array<{ id: string }> }>;
+    }>("ActionGroup");
+    expect(groups.length).toBeGreaterThan(0);
+    const ids = groups[groups.length - 1].items.flatMap((item) =>
+      item.toolCalls.map((tc) => tc.id)
+    );
+    expect(ids).toEqual(["dup1"]);
   });
 });
