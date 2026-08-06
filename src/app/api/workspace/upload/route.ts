@@ -1,7 +1,11 @@
 import { promises as fs } from "fs";
 import { basename, dirname, resolve } from "path";
 import { NextRequest, NextResponse } from "next/server";
-import { getWorkspaceDir, hasControlChar } from "@/lib/server/workspace";
+import {
+  getWorkspaceDir,
+  hasControlChar,
+  isCrossOrigin,
+} from "@/lib/server/workspace";
 
 export const runtime = "nodejs";
 
@@ -53,8 +57,7 @@ async function writeUniqueFile(
 
 export async function POST(request: NextRequest) {
   try {
-    const origin = request.headers.get("origin");
-    if (origin && origin !== request.nextUrl.origin) {
+    if (isCrossOrigin(request)) {
       return NextResponse.json(
         { error: "Cross-origin workspace uploads are not allowed." },
         { status: 403 }
