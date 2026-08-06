@@ -415,7 +415,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       isThreadLoading,
       interrupt,
       sendMessage,
-      stopStream,
+      abortRun,
       resumeInterrupt,
       dynamicWorkflows,
       asyncTasks,
@@ -2260,7 +2260,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                   <Button
                     type={isLoading ? "button" : "submit"}
                     variant={isLoading ? "destructive" : "default"}
-                    onClick={isLoading ? stopStream : handleSubmit}
+                    onClick={isLoading ? abortRun : handleSubmit}
                     disabled={
                       !isLoading &&
                       (submitDisabled || isUploadingFiles || !input.trim())

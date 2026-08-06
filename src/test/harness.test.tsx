@@ -97,10 +97,10 @@ describe("chat harness — smoke", () => {
     expect(submitted.messages[0].content).toBe("hi");
   });
 
-  it("records a stop call when stopStream is invoked", () => {
+  it("records a stop call when abortRun is invoked", () => {
     const { result } = renderChat();
     act(() => {
-      result.current.stopStream();
+      result.current.abortRun();
     });
     expect(stream.getStopCallCount()).toBe(1);
   });
