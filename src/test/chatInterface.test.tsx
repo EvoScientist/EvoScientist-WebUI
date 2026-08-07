@@ -49,10 +49,6 @@ vi.mock("@/app/hooks/useAsyncAgents", async () => {
   const m = await import("@/test/mocks/chatInterfaceStubs");
   return { useAsyncAgents: m.useAsyncAgentsMock };
 });
-vi.mock("@/app/hooks/useAutoNotify", async () => {
-  const m = await import("@/test/mocks/chatInterfaceStubs");
-  return { useAutoNotify: m.useAutoNotifyMock };
-});
 vi.mock("@/app/hooks/useAvailableModels", async () => {
   const m = await import("@/test/mocks/chatInterfaceStubs");
   return { useAvailableModels: m.useAvailableModelsMock };

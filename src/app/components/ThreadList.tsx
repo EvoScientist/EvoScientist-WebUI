@@ -5,6 +5,7 @@ import {
   BrainCircuit,
   Clock,
   Download,
+  FolderOpen,
   Loader2,
   MessageSquare,
   Pencil,
@@ -14,6 +15,7 @@ import {
   Search,
   SquarePen,
   Trash2,
+  Users,
   X,
 } from "lucide-react";
 import { useQueryState } from "nuqs";
@@ -42,6 +44,8 @@ import {
 } from "@/app/hooks/useThreads";
 import { useMemoryActivity } from "@/app/hooks/useMemoryActivity";
 import { getThreadAutoApprove } from "@/lib/autoApprove";
+import { RailNavItem } from "@/app/components/RailNavItem";
+import { RailFooter } from "@/app/components/RailFooter";
 import {
   Dialog,
   DialogContent,
@@ -145,6 +149,15 @@ interface ThreadListProps {
   onNewChat?: () => void;
   onMutateReady?: (mutate: () => void) => void;
   onInterruptCountChange?: (count: number) => void;
+  // Rail-footer wiring (Pass 2). These migrated from the page-level header —
+  // the rail owns the settings gear + inspector toggle now, but the actual
+  // state (dialog open, inspector open) still lives up in `page.tsx`.
+  onOpenSettings?: () => void;
+  onToggleInspector?: () => void;
+  inspectorOpen?: boolean;
+  // Opens the right inspector on its Workspace tab — reuses the existing
+  // `handleDashboardNav({view:"workspace"})` helper from page.tsx.
+  onOpenWorkspace?: () => void;
 }
 
 export function ThreadList({
@@ -153,6 +166,10 @@ export function ThreadList({
   onNewChat,
   onMutateReady,
   onInterruptCountChange,
+  onOpenSettings,
+  onToggleInspector,
+  inspectorOpen = false,
+  onOpenWorkspace,
 }: ThreadListProps) {
   const [currentThreadId, setThreadId] = useQueryState("threadId");
   const [view, setView] = useQueryState("view");
@@ -170,7 +187,6 @@ export function ThreadList({
   const [exportBusyIds, setExportBusyIds] = useState<Set<string>>(
     () => new Set()
   );
-
   const threads = useThreads({
     status: statusFilter === "all" ? undefined : statusFilter,
     limit: 20,
@@ -566,9 +582,14 @@ export function ThreadList({
 
   return (
     <div className="absolute inset-0 flex flex-col">
-      <button
+      {/* Primary nav strip — all destinations visible at once (no "More"
+          drawer). `newChatRef` attaches to the New chat RailNavItem (button)
+          for post-delete focus recovery — see the delete-dialog effect below. */}
+      <RailNavItem
         ref={newChatRef}
-        type="button"
+        icon={SquarePen}
+        label="New chat"
+        active={false}
         onClick={() => {
           if (onNewChat) {
             onNewChat();
@@ -578,16 +599,48 @@ export function ThreadList({
           }
           onClose?.();
         }}
-        className="flex flex-shrink-0 items-center gap-2.5 border-b border-border px-3 py-3 text-left text-sm font-medium transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-      >
-        <SquarePen
-          className="size-4"
-          aria-hidden="true"
-        />
-        New Chat
-      </button>
-      <button
-        type="button"
+      />
+      <RailNavItem
+        icon={MessageSquare}
+        label="Assistant"
+        active={view === null}
+        onClick={() => {
+          setView(null);
+          onClose?.();
+        }}
+      />
+      <RailNavItem
+        icon={Users}
+        label="Experts"
+        active={view === "experts"}
+        onClick={() => {
+          if (view === "experts") {
+            setView(null);
+            onClose?.();
+            return;
+          }
+          setView("experts");
+          onClose?.();
+        }}
+      />
+      <RailNavItem
+        icon={Clock}
+        label="Automation"
+        active={view === "schedule"}
+        onClick={() => {
+          if (view === "schedule") {
+            setView(null);
+            onClose?.();
+            return;
+          }
+          setView("schedule");
+          onClose?.();
+        }}
+      />
+      <RailNavItem
+        icon={Puzzle}
+        label="Research Skills"
+        active={view === "skills"}
         onClick={() => {
           if (view === "skills") {
             setView(null);
@@ -597,19 +650,12 @@ export function ThreadList({
           setView("skills");
           onClose?.();
         }}
-        className={cn(
-          "flex flex-shrink-0 items-center gap-2.5 border-b border-border px-3 py-3 text-left text-sm font-medium transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
-          view === "skills" && "bg-accent"
-        )}
-      >
-        <Puzzle
-          className="size-4"
-          aria-hidden="true"
-        />
-        Research Skills
-      </button>
-      <button
-        type="button"
+      />
+      <RailNavItem
+        icon={BrainCircuit}
+        label="EvoMemory"
+        active={view === "memory"}
+        badge={view !== "memory" ? memoryUnseen : undefined}
         onClick={() => {
           if (view === "memory") {
             setView(null);
@@ -620,50 +666,16 @@ export function ThreadList({
           setView("memory");
           onClose?.();
         }}
-        className={cn(
-          "flex flex-shrink-0 items-center gap-2.5 border-b border-border px-3 py-3 text-left text-sm font-medium transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
-          view === "memory" && "bg-accent"
-        )}
-      >
-        <BrainCircuit
-          className="size-4"
-          aria-hidden="true"
-        />
-        EvoMemory
-        {view !== "memory" && memoryUnseen > 0 && (
-          <span
-            className="ml-auto inline-flex min-w-4 items-center justify-center rounded-full bg-[var(--brand-solid)] px-1 text-[10px] font-bold leading-none text-[var(--brand-foreground)]"
-            title={`${memoryUnseen} memory file${
-              memoryUnseen === 1 ? "" : "s"
-            } updated since you last looked`}
-            aria-label={`${memoryUnseen} memory updates`}
-          >
-            {memoryUnseen}
-          </span>
-        )}
-      </button>
-      <button
-        type="button"
+      />
+      <RailNavItem
+        icon={FolderOpen}
+        label="Workspace"
+        active={false}
         onClick={() => {
-          if (view === "schedule") {
-            setView(null);
-            onClose?.();
-            return;
-          }
-          setView("schedule");
+          onOpenWorkspace?.();
           onClose?.();
         }}
-        className={cn(
-          "flex flex-shrink-0 items-center gap-2.5 border-b border-border px-3 py-3 text-left text-sm font-medium transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
-          view === "schedule" && "bg-accent"
-        )}
-      >
-        <Clock
-          className="size-4"
-          aria-hidden="true"
-        />
-        Scheduled
-      </button>
+      />
       <div className="flex-shrink-0 border-b border-border p-2.5">
         <div className="relative">
           <Search
@@ -838,6 +850,12 @@ export function ThreadList({
           </div>
         )}
       </ScrollArea>
+
+      <RailFooter
+        onOpenSettings={() => onOpenSettings?.()}
+        onToggleInspector={() => onToggleInspector?.()}
+        inspectorOpen={inspectorOpen}
+      />
 
       {/* Rename dialog */}
       <Dialog

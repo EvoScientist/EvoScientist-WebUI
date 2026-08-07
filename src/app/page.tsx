@@ -8,14 +8,7 @@ import { ConfigDialog } from "@/app/components/ConfigDialog";
 import { Button } from "@/components/ui/button";
 import { Assistant } from "@langchain/langgraph-sdk";
 import { ClientProvider, useClient } from "@/providers/ClientProvider";
-import {
-  Settings,
-  SquarePen,
-  PanelLeft,
-  PanelLeftClose,
-  PanelRight,
-  PanelRightClose,
-} from "lucide-react";
+import { SquarePen, PanelLeft, PanelLeftClose } from "lucide-react";
 import {
   ResizableHandle,
   ResizablePanel,
@@ -25,13 +18,12 @@ import { ThreadList } from "@/app/components/ThreadList";
 import { ChatProvider } from "@/providers/ChatProvider";
 import { ChatInterface } from "@/app/components/ChatInterface";
 import { SkillsMarketplace } from "@/app/components/SkillsMarketplace";
+import { ExpertsMarketplace } from "@/app/components/ExpertsMarketplace";
 import { MemoryPanel } from "@/app/components/MemoryPanel";
 import { ScheduledTasksPanel } from "@/app/components/ScheduledTasksPanel";
-import { ThemeToggle } from "@/app/components/ThemeToggle";
 import { HealthIndicator } from "@/app/components/HealthIndicator";
 import { InspectorPanel } from "@/app/components/InspectorPanel";
 import { setThreadAutoApprove } from "@/lib/autoApprove";
-import type { MainChatReporter } from "@/lib/asyncAgents";
 import { cn } from "@/lib/utils";
 
 interface HomePageInnerProps {
@@ -55,19 +47,17 @@ function HomePageInner({
   const [memoryObs, setMemoryObs] = useQueryState("memoryObs");
   const [memoryExec, setMemoryExec] = useQueryState("memoryExec");
   const [inspector, setInspector] = useQueryState("inspector");
-  const [inspectorTab, setInspectorTab] = useQueryState("inspectorTab");
+  // Owned by ChatInterface (persona focus view), but page.tsx also needs to
+  // clear it at thread-switch / new-chat time — ChatInterface fully remounts
+  // via `chatSessionRevision`, so an in-component clear runs too late and the
+  // param survives into the remounted view.
+  const [, setFocusedAgent] = useQueryState("focusedAgent");
 
   const [mutateThreads, setMutateThreads] = useState<(() => void) | null>(null);
   const [interruptCount, setInterruptCount] = useState(0);
   const [assistant, setAssistant] = useState<Assistant | null>(null);
   const [isDesktopLayout, setIsDesktopLayout] = useState<boolean | null>(null);
   const [chatSessionRevision, setChatSessionRevision] = useState(0);
-  // "Submit a message on the main thread" — registered by ChatInterface (only
-  // while it's mounted, i.e. on the chat view), used by the Agents board to loop
-  // an async result back to the main agent. Null when not on the chat view.
-  const [notifyMainChat, setNotifyMainChat] = useState<MainChatReporter | null>(
-    null
-  );
 
   const fetchAssistant = useCallback(async () => {
     const isUUID =
@@ -147,8 +137,7 @@ function HomePageInner({
   const closeSidebar = useCallback(() => setSidebar(null), [setSidebar]);
   const closeInspector = useCallback(() => {
     setInspector(null);
-    setInspectorTab(null);
-  }, [setInspector, setInspectorTab]);
+  }, [setInspector]);
   const toggleSidebar = useCallback(() => {
     if (sidebar) {
       setSidebar(null);
@@ -163,22 +152,15 @@ function HomePageInner({
       return;
     }
     if (isDesktopLayout === false) setSidebar(null);
-    setInspectorTab(null);
     setInspector("1");
-  }, [
-    closeInspector,
-    inspector,
-    isDesktopLayout,
-    setInspector,
-    setInspectorTab,
-    setSidebar,
-  ]);
-  // Open the inspector straight on its Agents tab (composer pulse → board).
-  const showAgentsInspector = useCallback(() => {
-    setInspectorTab("agents");
+  }, [closeInspector, inspector, isDesktopLayout, setInspector, setSidebar]);
+  // Open the Experts marketplace as a full-panel view. Composer's active-team
+  // chip and the rail's Experts entry both route here. Closes the sidebar on
+  // narrow viewports so the marketplace has the full width.
+  const showExperts = useCallback(() => {
     if (isDesktopLayout === false) setSidebar(null);
-    setInspector("1");
-  }, [isDesktopLayout, setInspector, setSidebar, setInspectorTab]);
+    setView("experts");
+  }, [isDesktopLayout, setSidebar, setView]);
   const sidebarToggleLabel = view
     ? sidebar
       ? "Hide navigation"
@@ -186,12 +168,18 @@ function HomePageInner({
     : sidebar
     ? "Hide research"
     : "Show research";
-  const startNewChat = useCallback(() => {
+  const startNewChat = useCallback(async () => {
     setThreadAutoApprove(null, false);
     setThreadId(null);
     setView(null);
+    // Await BEFORE bumping the remount key: nuqs 2.x defers the optimistic
+    // URL-state update via `startTransition`, so a fire-and-forget setter
+    // loses the race against the sync `setChatSessionRevision` below — the
+    // remounted ChatInterface would read the stale `focusedAgent` param and
+    // shadow the fresh chat. Awaiting flushes the transition first.
+    await setFocusedAgent(null);
     setChatSessionRevision((revision) => revision + 1);
-  }, [setThreadId, setView]);
+  }, [setThreadId, setView, setFocusedAgent]);
   const handleDashboardNav = useCallback(
     (
       target:
@@ -212,22 +200,19 @@ function HomePageInner({
       } else if (target.view === "schedule") {
         setView("schedule");
       } else {
-        if (inspector && inspectorTab !== "agents") {
+        if (inspector) {
           closeInspector();
           return;
         }
         if (isDesktopLayout === false) setSidebar(null);
-        setInspectorTab(null);
         setInspector("1");
       }
     },
     [
       closeInspector,
       inspector,
-      inspectorTab,
       isDesktopLayout,
       setInspector,
-      setInspectorTab,
       setMemoryExec,
       setMemoryObs,
       setMemoryTab,
@@ -247,11 +232,17 @@ function HomePageInner({
       // active row (e.g. returning from the Memory view) must not tear down
       // ChatInterface and re-fetch the full `/history`.
       if (!sameThread) {
+        // Same reason as `startNewChat`: await the nuqs setter so its
+        // deferred `startTransition` update lands before the sync remount
+        // triggered by `setChatSessionRevision`. Without the await, the
+        // remounted ChatInterface reads the stale focus id from URL/state
+        // and the persona-focus overlay shadows the newly selected thread.
+        await setFocusedAgent(null);
         setChatSessionRevision((revision) => revision + 1);
       }
       await setThreadId(id);
     },
-    [setThreadId, setView, threadId]
+    [setThreadId, setView, threadId, setFocusedAgent]
   );
 
   return (
@@ -331,40 +322,6 @@ function HomePageInner({
                 handleSaveConfig({ ...config, deploymentUrl: url })
               }
             />
-            <ThemeToggle />
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={toggleInspector}
-              aria-label={inspector ? "Hide inspector" : "Show workspace"}
-              title={inspector ? "Hide inspector" : "Show workspace"}
-              className="size-8"
-            >
-              {inspector ? (
-                <PanelRightClose
-                  className="size-5"
-                  aria-hidden="true"
-                />
-              ) : (
-                <PanelRight
-                  className="size-5"
-                  aria-hidden="true"
-                />
-              )}
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => setConfigDialogOpen(true)}
-              aria-label="Settings"
-              title="Settings"
-              className="size-8"
-            >
-              <Settings
-                className="size-5"
-                aria-hidden="true"
-              />
-            </Button>
           </div>
         </header>
 
@@ -390,6 +347,12 @@ function HomePageInner({
                   }}
                   onMutateReady={(fn) => setMutateThreads(() => fn)}
                   onInterruptCountChange={setInterruptCount}
+                  onOpenSettings={() => setConfigDialogOpen(true)}
+                  onToggleInspector={toggleInspector}
+                  inspectorOpen={inspector !== null}
+                  onOpenWorkspace={() =>
+                    handleDashboardNav({ view: "workspace" })
+                  }
                 />
               </aside>
             </div>
@@ -406,10 +369,7 @@ function HomePageInner({
                 aria-label="Inspector"
                 className="relative z-10 h-full w-[min(22rem,calc(100vw-2.25rem))] bg-background shadow-xl"
               >
-                <InspectorPanel
-                  onClose={closeInspector}
-                  onReportToMainChat={notifyMainChat}
-                />
+                <InspectorPanel onClose={closeInspector} />
               </aside>
             </div>
           )}
@@ -431,6 +391,12 @@ function HomePageInner({
                     onThreadSelect={selectThread}
                     onMutateReady={(fn) => setMutateThreads(() => fn)}
                     onInterruptCountChange={setInterruptCount}
+                    onOpenSettings={() => setConfigDialogOpen(true)}
+                    onToggleInspector={toggleInspector}
+                    inspectorOpen={inspector !== null}
+                    onOpenWorkspace={() =>
+                      handleDashboardNav({ view: "workspace" })
+                    }
                   />
                 </ResizablePanel>
                 <ResizableHandle />
@@ -448,47 +414,53 @@ function HomePageInner({
                   message-list rebuild, and any in-flight run keeps streaming
                   in the background. Cost is bounded: only the *current*
                   thread's state is held; no accumulation per switch. */}
-              <div
-                className={cn(
-                  "flex h-full min-h-0 flex-1 flex-col",
-                  view !== null && "hidden"
-                )}
+              {/* ChatProvider hoisted to wrap ALL view branches so any view
+                  can read/write per-thread chat state via useChatContext
+                  (e.g. ExpertsMarketplace needs activeTeams / setActiveTeams).
+                  ChatInterface still stays mounted across view switches via
+                  display:none — the view-swap panels are siblings inside the
+                  same provider. */}
+              <ChatProvider
+                key={chatSessionRevision}
+                activeAssistant={assistant}
+                onHistoryRevalidate={() => mutateThreads?.()}
               >
-                <ChatProvider
-                  key={chatSessionRevision}
-                  activeAssistant={assistant}
-                  onHistoryRevalidate={() => mutateThreads?.()}
+                <div
+                  className={cn(
+                    "flex h-full min-h-0 flex-1 flex-col",
+                    view !== null && "hidden"
+                  )}
                 >
                   <ChatInterface
                     assistant={assistant}
-                    onShowAgents={showAgentsInspector}
-                    onNotifyReady={(fn) => setNotifyMainChat(() => fn)}
+                    onShowExperts={showExperts}
                     onNavigate={handleDashboardNav}
                     onOpenThread={selectThread}
-                    workspaceOpen={Boolean(
-                      inspector && inspectorTab !== "agents"
-                    )}
+                    workspaceOpen={Boolean(inspector)}
                   />
-                </ChatProvider>
-              </div>
-              {view === "skills" && <SkillsMarketplace />}
-              {view === "memory" && (
-                <MemoryPanel
-                  initialTab={
-                    memoryTab as
-                      | "identity"
-                      | "knowledge"
-                      | "history"
-                      | null
-                      | undefined
-                  }
-                  initialObsId={memoryObs}
-                  initialExecId={memoryExec}
-                />
-              )}
-              {view === "schedule" && (
-                <ScheduledTasksPanel onOpenThread={selectThread} />
-              )}
+                </div>
+                {view === "skills" && <SkillsMarketplace />}
+                {view === "experts" && (
+                  <ExpertsMarketplace onSummoned={() => setView(null)} />
+                )}
+                {view === "memory" && (
+                  <MemoryPanel
+                    initialTab={
+                      memoryTab as
+                        | "identity"
+                        | "knowledge"
+                        | "history"
+                        | null
+                        | undefined
+                    }
+                    initialObsId={memoryObs}
+                    initialExecId={memoryExec}
+                  />
+                )}
+                {view === "schedule" && (
+                  <ScheduledTasksPanel onOpenThread={selectThread} />
+                )}
+              </ChatProvider>
             </ResizablePanel>
 
             {inspector && isDesktopLayout && (
@@ -501,10 +473,7 @@ function HomePageInner({
                   minSize={20}
                   className="relative min-w-[300px]"
                 >
-                  <InspectorPanel
-                    onClose={closeInspector}
-                    onReportToMainChat={notifyMainChat}
-                  />
+                  <InspectorPanel onClose={closeInspector} />
                 </ResizablePanel>
               </>
             )}

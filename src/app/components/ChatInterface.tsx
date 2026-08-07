@@ -25,6 +25,7 @@ import {
   X,
   Pencil,
   CornerDownRight,
+  CornerUpLeft,
   Trash2,
   GripVertical,
   Ellipsis,
@@ -77,13 +78,11 @@ import {
   asyncTaskReportKey,
   asyncUpdateMatchesTask,
   asyncUpdateMessageKey,
-  countRunning,
   formatAsyncUpdateMessage,
   isTerminalStatus,
-  type MainChatReporter,
+  normalizeAsyncStatus,
 } from "@/lib/asyncAgents";
 import { useAsyncAgents } from "@/app/hooks/useAsyncAgents";
-import { useAutoNotify } from "@/app/hooks/useAutoNotify";
 import { useAutoApproveInterrupt } from "@/app/hooks/useAutoApproveInterrupt";
 import {
   getThreadAutoNotifyReportedKeys,
@@ -111,6 +110,8 @@ import {
   parseModelCommand,
   type ModelOverride,
 } from "@/lib/modelCommand";
+import { PersonaChipStrip } from "@/app/components/PersonaChipStrip";
+import { PersonaFocusView } from "@/app/components/PersonaFocusView";
 import { useAvailableModels } from "@/app/hooks/useAvailableModels";
 
 type DashboardNavTarget =
@@ -125,18 +126,16 @@ type DashboardNavTarget =
 
 interface ChatInterfaceProps {
   assistant: Assistant | null;
-  // Open the right inspector on its Agents tab (composer "agents running" pulse).
-  onShowAgents?: () => void;
+  // Open the Experts marketplace as a full-panel view. Composer's active-team
+  // chip routes here; label click on the chip is a "manage summoned expert"
+  // affordance.
+  onShowExperts?: () => void;
   // Navigate to a memory tab / the schedule view from the empty-state dashboard.
   onNavigate?: (target: DashboardNavTarget) => void;
   // Open a pinned thread from the empty-state dashboard.
   onOpenThread?: (id: string) => void;
   // Whether the workspace inspector is currently visible.
   workspaceOpen?: boolean;
-  // Register a "submit a message on THIS (main) thread" function up to page so
-  // the Agents board can loop an async result back to the main agent. Returns
-  // false if the main chat is mid-run (can't take a turn). Cleared on unmount.
-  onNotifyReady?: (notify: MainChatReporter | null) => void;
 }
 
 const SUGGESTED_PROMPTS = [
@@ -270,14 +269,7 @@ const getStatusIcon = (status: TodoItem["status"], className?: string) => {
 };
 
 export const ChatInterface = React.memo<ChatInterfaceProps>(
-  ({
-    assistant,
-    onShowAgents,
-    onNotifyReady,
-    onNavigate,
-    onOpenThread,
-    workspaceOpen,
-  }) => {
+  ({ assistant, onShowExperts, onNavigate, onOpenThread, workspaceOpen }) => {
     const [metaOpen, setMetaOpen] = useState<
       "tasks" | "files" | "workflow" | null
     >(null);
@@ -314,6 +306,29 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     const queueIdRef = useRef(0);
     const draggedQueuedMessageIdRef = useRef<number | null>(null);
     const [threadId] = useQueryState("threadId");
+    // Focused persona sub-thread (Pass 3). When set, the messages area swaps to
+    // `<PersonaFocusView>` and the composer is disabled — user must click the
+    // "Return to main conversation" pill to send again.
+    const [focusedAgentThreadId, setFocusedAgentThreadId] =
+      useQueryState("focusedAgent");
+    // Clear the focused persona whenever the main thread genuinely changes
+    // (rail click) — a sub-thread id from thread A is meaningless in thread B
+    // and would overlay the wrong conversation. Skip the initial mount, and
+    // skip the null→value hydration transition nuqs performs on client boot;
+    // otherwise a hard refresh with ?focusedAgent=... in the URL would wipe
+    // the param before the user sees the focused view.
+    const prevThreadIdRef = useRef<string | null | undefined>(undefined);
+    useEffect(() => {
+      const prev = prevThreadIdRef.current;
+      prevThreadIdRef.current = threadId;
+      if (prev === undefined) return; // first render — just record.
+      if (prev === null) return; // URL hydration null → value.
+      if (prev === threadId) return; // no-op.
+      if (focusedAgentThreadId !== null) {
+        void setFocusedAgentThreadId(null);
+      }
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [threadId]);
     // Inline file paths in agent messages are rendered as click-to-open links
     // by MarkdownContent. They dispatch a window event with the resolved
     // workspace / memory path; we open the matching modal over the chat so
@@ -422,6 +437,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       summarizationEvent,
       modelOverride,
       setModelOverride,
+      activeTeams,
     } = useChatContext();
 
     // Count of background async sub-agents (writing / data-analysis) still
@@ -433,18 +449,24 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     const { tasks: liveAgentTasks } = useAsyncAgents(threadId, {
       enabled: hasAsyncTasks,
     });
-    const runningAgents = useMemo(
-      () => countRunning(liveAgentTasks),
-      [liveAgentTasks]
-    );
+
+    // Task backing the currently-focused persona view (null when off or when
+    // the id doesn't resolve — e.g. the task was cleaned up server-side).
+    const focusedTask = useMemo(() => {
+      if (!focusedAgentThreadId) return null;
+      return (
+        liveAgentTasks.find((t) => t.thread_id === focusedAgentThreadId) ?? null
+      );
+    }, [focusedAgentThreadId, liveAgentTasks]);
+    const focusedTaskRunning = focusedTask
+      ? normalizeAsyncStatus(focusedTask.liveStatus) === "running"
+      : false;
 
     // Auto-report: when on for this thread, a sub-agent that FINISHES while we're
-    // watching is looped back to the main agent automatically (same signal as the
-    // manual "Notify main chat" button — rendered as a system pill). We baseline
-    // tasks already terminal at mount / when the toggle is switched on so we never
-    // replay old completions, and only inject while the main chat is idle (one at
-    // a time; isLoading gates the rest until the agent finishes the turn).
-    const [autoNotify] = useAutoNotify(threadId);
+    // watching is looped back to the main agent automatically. We baseline tasks
+    // already terminal at mount so we never replay old completions, and only
+    // inject while the main chat is idle (one at a time; isLoading gates the
+    // rest until the agent finishes the turn).
     // Latch covering the gap between submitting an auto-report and `isLoading`
     // flipping true — without it a poll in that window could fire a SECOND report
     // and collide on the main thread. Cleared once the run is confirmed running.
@@ -463,7 +485,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
 
     useEffect(() => {
       if (!liveAgentTasks || liveAgentTasks.length === 0) return;
-      if (!threadId || !autoNotify) return;
+      if (!threadId) return;
       // One-time migration/baseline: existing terminal tasks predate the setting
       // and must not replay when this feature first appears or is restored.
       if (!isThreadAutoNotifyInitialized(threadId)) {
@@ -512,7 +534,6 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       }
     }, [
       liveAgentTasks,
-      autoNotify,
       isLoading,
       input,
       messages,
@@ -528,47 +549,6 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     useEffect(() => {
       if (isLoading) void scrollToBottom();
     }, [isLoading, scrollToBottom]);
-
-    // Register a "notify the main agent" hook up to page (Agents board → "Notify
-    // main chat" loops an async result back here). A ref keeps the latest
-    // sendMessage/isLoading so the once-registered closure always reads current
-    // values. Returns false if a run is in flight (the agent can't take a turn).
-    const notifyStateRef = useRef({
-      sendMessage,
-      isLoading,
-      messages,
-      threadId,
-    });
-    notifyStateRef.current = { sendMessage, isLoading, messages, threadId };
-    const onNotifyReadyRef = useRef(onNotifyReady);
-    onNotifyReadyRef.current = onNotifyReady;
-    useEffect(() => {
-      const notify: MainChatReporter = (task, expectedThreadId) => {
-        const current = notifyStateRef.current;
-        if (current.threadId !== expectedThreadId) return "wrong-thread";
-        if (current.isLoading) return "busy";
-        if (
-          current.messages.some(
-            (message) =>
-              message.type === "human" &&
-              asyncUpdateMatchesTask(
-                extractStringFromMessageContent(message),
-                task
-              )
-          )
-        ) {
-          return "duplicate";
-        }
-        markThreadAutoNotifyReported(
-          expectedThreadId,
-          asyncTaskReportKey(task)
-        );
-        current.sendMessage(formatAsyncUpdateMessage(task));
-        return "sent";
-      };
-      onNotifyReadyRef.current?.(notify);
-      return () => onNotifyReadyRef.current?.(null);
-    }, []);
 
     // What model will the next turn use? The pill is forward-looking — it
     // updates the moment the user changes (or clears) the override, instead
@@ -635,7 +615,13 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       interruptValue?.type === "ask_user" ||
       (Array.isArray(interruptValue?.action_requests) &&
         interruptValue.action_requests.length > 0);
-    const submitDisabled = isLoading || !assistant || hasPendingInterrupt;
+    // While a persona is focused, the composer is a display-only chrome —
+    // user must click "Return to main conversation" to send.
+    const submitDisabled =
+      isLoading ||
+      !assistant ||
+      hasPendingInterrupt ||
+      focusedAgentThreadId !== null;
 
     // Drain the user-message queue: when the thread goes idle (and no interrupt is
     // pending), send the head as the next turn. One per idle window — the
@@ -819,6 +805,9 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         // Can't compose with no assistant, a pending interrupt, or files still
         // uploading. (Unlike before, isLoading is NOT a blocker — see below.)
         if (!assistant || hasPendingInterrupt || isUploadingFiles) return;
+        // A focused persona view is display-only — the user returns to the
+        // main conversation first via the pill above the composer.
+        if (focusedAgentThreadId) return;
         // Agent busy → queue it. The queue drains and sends
         // automatically once this turn finishes (or is stopped); the message is
         // appended as the next turn — it never replaces what's already running.
@@ -853,6 +842,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         pendingFiles,
         sendMessage,
         threadId,
+        focusedAgentThreadId,
       ]
     );
 
@@ -1506,150 +1496,173 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
           className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain"
           ref={scrollRef}
         >
-          <div
-            className="mx-auto w-full max-w-[960px] px-4 pb-4 pt-3 sm:px-5"
-            ref={contentRef}
-          >
-            {isThreadLoading ? (
-              <div className="flex items-center justify-center p-8">
-                <p className="text-muted-foreground">Loading…</p>
-              </div>
-            ) : (
-              <>
-                {processedMessages.length === 0 && !isLoading && (
-                  <div className="flex min-h-[42vh] flex-col items-center justify-center px-3 pt-12 text-center sm:pt-16">
-                    <h2 className="text-pretty text-lg font-semibold sm:text-xl">
-                      Where research evolves
-                    </h2>
-                    <p className="mt-2 max-w-lg text-sm text-muted-foreground">
-                      Your self-evolving lab partner — reads the literature,
-                      runs experiments, and remembers what matters.
-                    </p>
-                    <div className="mt-4 flex max-w-2xl flex-wrap justify-center gap-2">
-                      {SUGGESTED_PROMPTS.map((prompt) => (
-                        <button
-                          key={prompt}
-                          type="button"
-                          onClick={() => handleSuggestedPrompt(prompt)}
-                          className="max-w-full rounded-full border border-border bg-card px-2.5 py-1.5 text-xs text-foreground shadow-sm transition-colors hover:border-[var(--color-border)] hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring sm:text-sm"
-                        >
-                          {prompt}
-                        </button>
-                      ))}
-                    </div>
-                    {onNavigate && onOpenThread && (
-                      <ResearchDashboard
-                        onNavigate={onNavigate}
-                        onOpenThread={onOpenThread}
-                      />
-                    )}
-                  </div>
-                )}
-                {renderedItems.map((item, index) => {
-                  if (item.kind === "action-group") {
-                    // A group is "streaming" when its last item is the last
-                    // overall AND the run is in flight — drives the spinner +
-                    // auto-collapse-on-settle behavior inside ActionGroup.
-                    const groupLastId =
-                      item.items[item.items.length - 1].message.id;
-                    const isLastGroup = index === renderedItems.length - 1;
-                    const groupIsStreaming =
-                      isLoading && isLastGroup && groupLastId === lastMessageId;
-                    return (
-                      <ActionGroup
-                        key={`action-group-${item.items[0].message.id}`}
-                        items={item.items}
-                        isStreaming={groupIsStreaming}
-                        defaultCollapsed={collapseAgentActions}
-                        isAtBottom={isAtBottom}
-                        lastMessageId={lastMessageId}
-                        isLoading={isLoading}
-                        actionRequests={actionRequests}
-                        submittedActionRequestKeys={submittedActionRequestKeys}
-                        onActionRequestSubmitted={markActionRequestSubmitted}
-                        reviewConfigsMap={reviewConfigsMap}
-                        stream={stream}
-                        onResumeInterrupt={resumeToolApproval}
-                        graphId={assistant?.graph_id}
-                        onEditMessage={handleEditMessage}
-                        autoApprove={autoApprove}
-                        ui={ui}
-                        compactionAnchorId={compactionAnchorId}
-                        summarizationEvent={summarizationEvent ?? null}
-                      />
-                    );
-                  }
-                  const data = item.data;
-                  const messageUi = ui?.filter(
-                    (u: any) => u.metadata?.message_id === data.message.id
-                  );
-                  const isLastMessage = index === renderedItems.length - 1;
-                  const isAssistant = data.message.type !== "human";
-                  const showCompactionBefore =
-                    compactionAnchorId === data.message.id;
-                  return (
-                    <React.Fragment key={data.message.id}>
-                      {showCompactionBefore && summarizationEvent && (
-                        <CompactionSummary
-                          content={summarizationEvent.content}
-                          summarizedCount={summarizationEvent.cutoffIndex}
+          {focusedAgentThreadId ? (
+            <PersonaFocusView
+              subThreadId={focusedAgentThreadId}
+              agentName={focusedTask?.agent_name ?? focusedAgentThreadId}
+              statusLabel={
+                focusedTask
+                  ? focusedTaskRunning
+                    ? "Running…"
+                    : "Completed current work"
+                  : null
+              }
+              running={focusedTaskRunning}
+            />
+          ) : (
+            <div
+              className="mx-auto w-full max-w-[960px] px-4 pb-4 pt-3 sm:px-5"
+              ref={contentRef}
+            >
+              {isThreadLoading ? (
+                <div className="flex items-center justify-center p-8">
+                  <p className="text-muted-foreground">Loading…</p>
+                </div>
+              ) : (
+                <>
+                  {processedMessages.length === 0 && !isLoading && (
+                    <div className="flex min-h-[42vh] flex-col items-center justify-center px-3 pt-12 text-center sm:pt-16">
+                      <h2 className="text-pretty text-lg font-semibold sm:text-xl">
+                        Where research evolves
+                      </h2>
+                      <p className="mt-2 max-w-lg text-sm text-muted-foreground">
+                        Your self-evolving lab partner — reads the literature,
+                        runs experiments, and remembers what matters.
+                      </p>
+                      <div className="mt-4 flex max-w-2xl flex-wrap justify-center gap-2">
+                        {SUGGESTED_PROMPTS.map((prompt) => (
+                          <button
+                            key={prompt}
+                            type="button"
+                            onClick={() => handleSuggestedPrompt(prompt)}
+                            className="max-w-full rounded-full border border-border bg-card px-2.5 py-1.5 text-xs text-foreground shadow-sm transition-colors hover:border-[var(--color-border)] hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring sm:text-sm"
+                          >
+                            {prompt}
+                          </button>
+                        ))}
+                      </div>
+                      {onNavigate && onOpenThread && (
+                        <ResearchDashboard
+                          onNavigate={onNavigate}
+                          onOpenThread={onOpenThread}
                         />
                       )}
-                      <ChatMessage
-                        message={data.message}
-                        toolCalls={data.toolCalls}
-                        isLoading={isLoading}
-                        isStreaming={isLoading && isLastMessage && isAssistant}
-                        actionRequests={
-                          isLastMessage ? actionRequests : undefined
-                        }
-                        submittedActionRequestKeys={submittedActionRequestKeys}
-                        onActionRequestSubmitted={markActionRequestSubmitted}
-                        reviewConfigsMap={
-                          isLastMessage ? reviewConfigsMap : undefined
-                        }
-                        ui={messageUi}
-                        stream={stream}
-                        onResumeInterrupt={resumeToolApproval}
-                        graphId={assistant?.graph_id}
-                        onEditMessage={handleEditMessage}
-                        autoApprove={autoApprove}
-                      />
-                    </React.Fragment>
-                  );
-                })}
-                {summarizationEvent && !compactionAnchorId && (
-                  <CompactionSummary
-                    content={summarizationEvent.content}
-                    summarizedCount={summarizationEvent.cutoffIndex}
-                  />
-                )}
-                {hasUnboundActionRequests && (
-                  <InterruptApprovalFallback
-                    actionRequests={actionRequests}
-                    reviewConfigsMap={reviewConfigsMap ?? new Map()}
-                    requestedBy={subAgentRequester}
-                    interruptKey={interruptId}
-                    onResume={resumeToolApproval}
-                    isLoading={isLoading}
-                  />
-                )}
-                {askUserQuestions && (
-                  <div className="mt-4">
-                    <AskUserInterrupt
-                      key={`ask-user-${
-                        interruptId ?? stringifyUnknown(askUserQuestions, 0)
-                      }`}
-                      questions={askUserQuestions}
-                      onSubmit={handleAskUserSubmit}
-                      onCancel={handleAskUserCancel}
+                    </div>
+                  )}
+                  {renderedItems.map((item, index) => {
+                    if (item.kind === "action-group") {
+                      // A group is "streaming" when its last item is the last
+                      // overall AND the run is in flight — drives the spinner +
+                      // auto-collapse-on-settle behavior inside ActionGroup.
+                      const groupLastId =
+                        item.items[item.items.length - 1].message.id;
+                      const isLastGroup = index === renderedItems.length - 1;
+                      const groupIsStreaming =
+                        isLoading &&
+                        isLastGroup &&
+                        groupLastId === lastMessageId;
+                      return (
+                        <ActionGroup
+                          key={`action-group-${item.items[0].message.id}`}
+                          items={item.items}
+                          isStreaming={groupIsStreaming}
+                          defaultCollapsed={collapseAgentActions}
+                          isAtBottom={isAtBottom}
+                          lastMessageId={lastMessageId}
+                          isLoading={isLoading}
+                          actionRequests={actionRequests}
+                          submittedActionRequestKeys={
+                            submittedActionRequestKeys
+                          }
+                          onActionRequestSubmitted={markActionRequestSubmitted}
+                          reviewConfigsMap={reviewConfigsMap}
+                          stream={stream}
+                          onResumeInterrupt={resumeToolApproval}
+                          graphId={assistant?.graph_id}
+                          onEditMessage={handleEditMessage}
+                          autoApprove={autoApprove}
+                          ui={ui}
+                          compactionAnchorId={compactionAnchorId}
+                          summarizationEvent={summarizationEvent ?? null}
+                        />
+                      );
+                    }
+                    const data = item.data;
+                    const messageUi = ui?.filter(
+                      (u: any) => u.metadata?.message_id === data.message.id
+                    );
+                    const isLastMessage = index === renderedItems.length - 1;
+                    const isAssistant = data.message.type !== "human";
+                    const showCompactionBefore =
+                      compactionAnchorId === data.message.id;
+                    return (
+                      <React.Fragment key={data.message.id}>
+                        {showCompactionBefore && summarizationEvent && (
+                          <CompactionSummary
+                            content={summarizationEvent.content}
+                            summarizedCount={summarizationEvent.cutoffIndex}
+                          />
+                        )}
+                        <ChatMessage
+                          message={data.message}
+                          toolCalls={data.toolCalls}
+                          isLoading={isLoading}
+                          isStreaming={
+                            isLoading && isLastMessage && isAssistant
+                          }
+                          actionRequests={
+                            isLastMessage ? actionRequests : undefined
+                          }
+                          submittedActionRequestKeys={
+                            submittedActionRequestKeys
+                          }
+                          onActionRequestSubmitted={markActionRequestSubmitted}
+                          reviewConfigsMap={
+                            isLastMessage ? reviewConfigsMap : undefined
+                          }
+                          ui={messageUi}
+                          stream={stream}
+                          onResumeInterrupt={resumeToolApproval}
+                          graphId={assistant?.graph_id}
+                          onEditMessage={handleEditMessage}
+                          autoApprove={autoApprove}
+                        />
+                      </React.Fragment>
+                    );
+                  })}
+                  {summarizationEvent && !compactionAnchorId && (
+                    <CompactionSummary
+                      content={summarizationEvent.content}
+                      summarizedCount={summarizationEvent.cutoffIndex}
+                    />
+                  )}
+                  {hasUnboundActionRequests && (
+                    <InterruptApprovalFallback
+                      actionRequests={actionRequests}
+                      reviewConfigsMap={reviewConfigsMap ?? new Map()}
+                      requestedBy={subAgentRequester}
+                      interruptKey={interruptId}
+                      onResume={resumeToolApproval}
                       isLoading={isLoading}
                     />
-                  </div>
-                )}
-              </>
-            )}
-          </div>
+                  )}
+                  {askUserQuestions && (
+                    <div className="mt-4">
+                      <AskUserInterrupt
+                        key={`ask-user-${
+                          interruptId ?? stringifyUnknown(askUserQuestions, 0)
+                        }`}
+                        questions={askUserQuestions}
+                        onSubmit={handleAskUserSubmit}
+                        onCancel={handleAskUserCancel}
+                        isLoading={isLoading}
+                      />
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="flex-shrink-0 bg-background">
@@ -2081,7 +2094,35 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                 </button>
               </div>
             )}
-            {(currentModel || runningAgents > 0) && (
+            {/* Pass-3 persona chip strip. Renders a chip per union entry of
+                `activeTeams` (invited) and `liveAgentTasks` (dispatched).
+                Superseded the Pass-1 composer active-team chip: showing the
+                same team twice when it's invited was noisy. */}
+            <PersonaChipStrip
+              activeTeams={activeTeams}
+              tasks={liveAgentTasks}
+              focusedAgentThreadId={focusedAgentThreadId}
+              onFocus={(subThreadId) =>
+                void setFocusedAgentThreadId(subThreadId)
+              }
+              onManage={() => onShowExperts?.()}
+            />
+            {focusedAgentThreadId && (
+              <div className="flex items-center justify-center border-t border-border px-3 py-2">
+                <button
+                  type="button"
+                  onClick={() => void setFocusedAgentThreadId(null)}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1 text-xs font-medium text-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <CornerUpLeft
+                    className="size-3.5"
+                    aria-hidden="true"
+                  />
+                  Return to main conversation
+                </button>
+              </div>
+            )}
+            {currentModel && (
               <div className="flex items-center gap-1.5 border-t border-border px-3 py-1.5 text-xs text-muted-foreground">
                 {currentModel && (
                   <button
@@ -2101,25 +2142,6 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                     {currentModel.provider && (
                       <span>· {currentModel.provider}</span>
                     )}
-                  </button>
-                )}
-                {runningAgents > 0 && (
-                  <button
-                    type="button"
-                    onClick={onShowAgents}
-                    title={`${runningAgents} background agent${
-                      runningAgents === 1 ? "" : "s"
-                    } running — click to view`}
-                    aria-label={`${runningAgents} background agent${
-                      runningAgents === 1 ? "" : "s"
-                    } running — view`}
-                    className="ml-auto flex shrink-0 items-center gap-1.5 rounded px-1.5 py-0.5 font-medium text-[var(--brand)] transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  >
-                    <span
-                      className="size-2 animate-pulse rounded-full bg-[var(--color-warning)]"
-                      aria-hidden="true"
-                    />
-                    {runningAgents} agent{runningAgents === 1 ? "" : "s"}
                   </button>
                 )}
               </div>
@@ -2170,9 +2192,11 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
                 aria-label="Message"
-                disabled={hasPendingInterrupt}
+                disabled={hasPendingInterrupt || focusedAgentThreadId !== null}
                 placeholder={
-                  hasPendingInterrupt
+                  focusedAgentThreadId
+                    ? "Return to the main conversation to send a message…"
+                    : hasPendingInterrupt
                     ? "Respond to the request above to continue…"
                     : isLoading
                     ? "Queue a follow-up — sends when this turn finishes…"

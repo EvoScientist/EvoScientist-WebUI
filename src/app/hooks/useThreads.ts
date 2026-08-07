@@ -353,6 +353,24 @@ export async function setThreadModelOverride(
 }
 
 /**
+ * Persist the per-thread "summoned experts" list. `useChat` seeds local
+ * `activeTeams` from this key on thread switch and folds it into every
+ * `stream.submit()` under `configurable.active_teams` — the backend's
+ * `ActiveTeamMiddleware` reads it there.
+ *
+ * Mirrors `setThreadModelOverride` — same rationale (thread metadata over
+ * localStorage: the choice follows the conversation, not the browser tab).
+ */
+export async function setThreadActiveTeams(
+  id: string,
+  teams: string[]
+): Promise<void> {
+  const client = makeThreadsClient();
+  if (!client) throw new Error("No EvoScientist deployment configured.");
+  await updateThreadMetadata(client, id, { active_teams: teams });
+}
+
+/**
  * Derive the two thread-sidebar labels — a "auto_title" from the first human
  * message and a "preview" from the first AI message with actual text — off a
  * message list. Same textOf shape as the original `useThreads` mapping (string

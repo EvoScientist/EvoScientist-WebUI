@@ -1,78 +1,17 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
-  getThreadAutoNotify,
   getThreadAutoNotifyReportedKeys,
   initializeThreadAutoNotifyReports,
   isThreadAutoNotifyInitialized,
   markThreadAutoNotifyReported,
-  setThreadAutoNotify,
-  subscribeAutoNotify,
 } from "./autoNotify";
 
-const STORAGE_KEY = "evoscientist-auto-notify";
 const REPORTED_STORAGE_KEY = "evoscientist-auto-notify-reported";
-
-function readStorage(): Record<string, boolean> {
-  const raw = localStorage.getItem(STORAGE_KEY);
-  return raw ? (JSON.parse(raw) as Record<string, boolean>) : {};
-}
 
 describe("autoNotify", () => {
   beforeEach(() => {
     localStorage.clear();
-  });
-
-  describe("getThreadAutoNotify", () => {
-    it("defaults to true for real thread ids with no entry", () => {
-      expect(getThreadAutoNotify("t1")).toBe(true);
-    });
-
-    it("defaults to false for null (pending new chat)", () => {
-      expect(getThreadAutoNotify(null)).toBe(false);
-    });
-
-    it("returns false only when explicitly stored as false", () => {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ t1: false }));
-      expect(getThreadAutoNotify("t1")).toBe(false);
-    });
-
-    it("recovers from corrupt payloads", () => {
-      localStorage.setItem(STORAGE_KEY, "not json");
-      expect(getThreadAutoNotify("t1")).toBe(true);
-    });
-  });
-
-  describe("setThreadAutoNotify", () => {
-    it("stores only explicit off entries (on is the default)", () => {
-      setThreadAutoNotify("t1", false);
-      expect(readStorage()).toEqual({ t1: false });
-      expect(getThreadAutoNotify("t1")).toBe(false);
-    });
-
-    it("turning back on removes the entry", () => {
-      setThreadAutoNotify("t1", false);
-      setThreadAutoNotify("t1", true);
-      expect(readStorage()).toEqual({});
-      expect(getThreadAutoNotify("t1")).toBe(true);
-    });
-
-    it("is a no-op for a null thread id", () => {
-      setThreadAutoNotify(null, false);
-      expect(readStorage()).toEqual({});
-    });
-
-    it("dispatches the change event so in-page subscribers fire", () => {
-      const listener = vi.fn();
-      const unsubscribe = subscribeAutoNotify(listener);
-      setThreadAutoNotify("t1", false);
-      expect(listener).toHaveBeenCalledTimes(1);
-      setThreadAutoNotify("t1", true);
-      expect(listener).toHaveBeenCalledTimes(2);
-      unsubscribe();
-      setThreadAutoNotify("t1", false);
-      expect(listener).toHaveBeenCalledTimes(2);
-    });
   });
 
   describe("reported keys", () => {
