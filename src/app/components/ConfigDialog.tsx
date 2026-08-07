@@ -13,7 +13,10 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { DEFAULT_ASSISTANT_ID, DeploymentConfig } from "@/lib/config";
-import { useCollapseAgentActions } from "@/lib/uiSettings";
+import {
+  useAutoOpenExpertsOnNewChat,
+  useCollapseAgentActions,
+} from "@/lib/uiSettings";
 
 interface ConfigDialogProps {
   open: boolean;
@@ -37,6 +40,10 @@ export function ConfigDialog({
   // owns the localStorage round-trip; we read once and write on toggle.
   const { value: collapseAgentActions, setValue: setCollapseAgentActions } =
     useCollapseAgentActions();
+  const {
+    value: autoOpenExpertsOnNewChat,
+    setValue: setAutoOpenExpertsOnNewChat,
+  } = useAutoOpenExpertsOnNewChat();
 
   useEffect(() => {
     if (!open) return;
@@ -152,6 +159,30 @@ export function ConfigDialog({
               >
                 Keeps tool-call sequences folded while running and after
                 completion. Approval controls remain visible.
+              </span>
+            </Label>
+          </div>
+          <div className="flex items-start gap-2">
+            <input
+              id="autoOpenExpertsOnNewChat"
+              type="checkbox"
+              checked={autoOpenExpertsOnNewChat}
+              onChange={(e) => setAutoOpenExpertsOnNewChat(e.target.checked)}
+              aria-label="Open Experts panel on new chat"
+              aria-describedby="autoOpenExpertsOnNewChat-description"
+              className="mt-1 size-4 rounded border-border accent-[var(--brand)]"
+            />
+            <Label
+              htmlFor="autoOpenExpertsOnNewChat"
+              className="text-sm font-normal leading-snug"
+            >
+              Open Experts panel on new chat
+              <span
+                id="autoOpenExpertsOnNewChat-description"
+                className="block text-xs text-muted-foreground"
+              >
+                Nudges expert selection when starting a fresh chat. Turn off if
+                you usually start writing right away.
               </span>
             </Label>
           </div>

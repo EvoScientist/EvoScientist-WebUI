@@ -29,6 +29,8 @@ import {
   GripVertical,
   Ellipsis,
   ListX,
+  Users,
+  Bot,
 } from "lucide-react";
 import { ChatMessage } from "@/app/components/ChatMessage";
 import {
@@ -42,6 +44,7 @@ import {
   DynamicWorkflowTrigger,
 } from "@/app/components/DynamicWorkflowPanel";
 import { isSummarizationMessage } from "@/lib/summarization";
+import { formatTeamName } from "@/lib/teams";
 import { useCollapseAgentActions } from "@/lib/uiSettings";
 import {
   bindActionRequestsToToolCalls,
@@ -112,6 +115,12 @@ import {
   type ModelOverride,
 } from "@/lib/modelCommand";
 import { useAvailableModels } from "@/app/hooks/useAvailableModels";
+import { useClient } from "@/providers/ClientProvider";
+import {
+  SPARK_PREFILL_EVENT,
+  SPARK_PREFILL_STORAGE_PREFIX,
+  type SparkPrefillEventDetail,
+} from "@/lib/sparkTypes";
 
 type DashboardNavTarget =
   | {
@@ -126,13 +135,23 @@ type DashboardNavTarget =
 interface ChatInterfaceProps {
   assistant: Assistant | null;
   // Open the right inspector on its Agents tab (composer "agents running" pulse).
+  // Kept alongside `onToggleInspector` because the pulse is "always open"
+  // semantics — never close on second click — whereas the toolbar buttons toggle.
   onShowAgents?: () => void;
+  // Open the right inspector on its Experts tab (active-team chip click).
+  onShowExperts?: () => void;
+  // Toggle the right inspector on a specific tab. Powers the composer toolbar
+  // buttons (Workspace / Agents / Experts) that let the user open OR close the
+  // panel with the same click.
+  onToggleInspector?: (tab: "workspace" | "agents" | "experts") => void;
+  // Current inspector state, used by the toolbar buttons to render pressed /
+  // active styling and pick the right "Open" vs "Close" tooltip.
+  inspectorOpen?: boolean;
+  inspectorTab?: string | null;
   // Navigate to a memory tab / the schedule view from the empty-state dashboard.
   onNavigate?: (target: DashboardNavTarget) => void;
   // Open a pinned thread from the empty-state dashboard.
   onOpenThread?: (id: string) => void;
-  // Whether the workspace inspector is currently visible.
-  workspaceOpen?: boolean;
   // Register a "submit a message on THIS (main) thread" function up to page so
   // the Agents board can loop an async result back to the main agent. Returns
   // false if the main chat is mid-run (can't take a turn). Cleared on unmount.
@@ -273,10 +292,13 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
   ({
     assistant,
     onShowAgents,
+    onShowExperts,
+    onToggleInspector,
+    inspectorOpen,
+    inspectorTab,
     onNotifyReady,
     onNavigate,
     onOpenThread,
-    workspaceOpen,
   }) => {
     const [metaOpen, setMetaOpen] = useState<
       "tasks" | "files" | "workflow" | null
@@ -314,6 +336,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     const queueIdRef = useRef(0);
     const draggedQueuedMessageIdRef = useRef<number | null>(null);
     const [threadId] = useQueryState("threadId");
+    const client = useClient();
     // Inline file paths in agent messages are rendered as click-to-open links
     // by MarkdownContent. They dispatch a window event with the resolved
     // workspace / memory path; we open the matching modal over the chat so
@@ -335,6 +358,89 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       window.addEventListener(FILE_LINK_EVENT, onOpenFile);
       return () => window.removeEventListener(FILE_LINK_EVENT, onOpenFile);
     }, []);
+    // Composer prefill handshake from `SparkNodeDetail` (e.g. the Elaborate
+    // next action button). Two paths cover both fresh navigations and
+    // same-thread elaborates:
+    //   (1) threadId-change effect — if the user lands on a thread that
+    //       already has a prefill waiting in localStorage (e.g. they
+    //       refreshed mid-flight), consume it on arrival. Ref-guarded so
+    //       re-renders don't re-fire on the same thread.
+    //   (2) window event — SparkNodeDetail dispatches
+    //       `SPARK_PREFILL_EVENT` after writing. We consume regardless of
+    //       ref state because the user just clicked. Required since
+    //       chat now stays mounted across view switches: a same-thread
+    //       elaborate doesn't change threadId, so (1) wouldn't fire on
+    //       its own.
+    const consumeSparkPrefill = useCallback((targetThreadId: string) => {
+      if (typeof window === "undefined") return;
+      const key = `${SPARK_PREFILL_STORAGE_PREFIX}${targetThreadId}`;
+      const seed = window.localStorage.getItem(key);
+      if (!seed) return;
+      setInput(seed);
+      window.localStorage.removeItem(key);
+    }, []);
+    const prefillCheckedThreadRef = useRef<string | null>(null);
+    useEffect(() => {
+      if (!threadId) return;
+      if (prefillCheckedThreadRef.current === threadId) return;
+      prefillCheckedThreadRef.current = threadId;
+      consumeSparkPrefill(threadId);
+    }, [threadId, consumeSparkPrefill]);
+    useEffect(() => {
+      const handler = (e: Event) => {
+        const detail = (e as CustomEvent<SparkPrefillEventDetail>).detail;
+        if (!detail?.threadId) return;
+        consumeSparkPrefill(detail.threadId);
+      };
+      window.addEventListener(SPARK_PREFILL_EVENT, handler);
+      return () => window.removeEventListener(SPARK_PREFILL_EVENT, handler);
+    }, [consumeSparkPrefill]);
+    // Empty-state context for threads created from an idea-spark node — read
+    // out of thread metadata so the placeholder can orient the user instead of
+    // showing the generic "Start Research" copy. Cleared when threadId changes.
+    const [sparkContext, setSparkContext] = useState<{
+      threadId: string;
+      nodeTitle: string;
+      graphId: string;
+    } | null>(null);
+    useEffect(() => {
+      if (!threadId) {
+        setSparkContext(null);
+        return;
+      }
+      let cancelled = false;
+      void (async () => {
+        try {
+          const t = (await client.threads.get(threadId)) as {
+            metadata?: {
+              idea_spark_graph_id?: unknown;
+              idea_spark_node_snapshot?: { title?: unknown } | null;
+            };
+          };
+          if (cancelled) return;
+          const meta = t.metadata ?? {};
+          const graphId =
+            typeof meta.idea_spark_graph_id === "string"
+              ? meta.idea_spark_graph_id
+              : null;
+          const nodeTitle =
+            meta.idea_spark_node_snapshot &&
+            typeof meta.idea_spark_node_snapshot.title === "string"
+              ? meta.idea_spark_node_snapshot.title
+              : null;
+          if (graphId && nodeTitle) {
+            setSparkContext({ threadId, nodeTitle, graphId });
+          } else {
+            setSparkContext(null);
+          }
+        } catch {
+          if (!cancelled) setSparkContext(null);
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }, [client, threadId]);
     // Auto-approve is per-thread and persisted (see lib/autoApprove): it follows
     // the conversation across view switches (Skills/Memory unmount this), thread
     // switches, and reloads. Seed from storage for whatever thread is active on
@@ -422,6 +528,8 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       summarizationEvent,
       modelOverride,
       setModelOverride,
+      activeTeams,
+      setActiveTeams,
     } = useChatContext();
 
     // Count of background async sub-agents (writing / data-analysis) still
@@ -1519,11 +1627,14 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                 {processedMessages.length === 0 && !isLoading && (
                   <div className="flex min-h-[42vh] flex-col items-center justify-center px-3 pt-12 text-center sm:pt-16">
                     <h2 className="text-pretty text-lg font-semibold sm:text-xl">
-                      Where research evolves
+                      {sparkContext && sparkContext.threadId === threadId
+                        ? `Continuation of "${sparkContext.nodeTitle}"`
+                        : "Where research evolves"}
                     </h2>
                     <p className="mt-2 max-w-lg text-sm text-muted-foreground">
-                      Your self-evolving lab partner — reads the literature,
-                      runs experiments, and remembers what matters.
+                      {sparkContext && sparkContext.threadId === threadId
+                        ? `from spark graph ${sparkContext.graphId}`
+                        : "Your self-evolving lab partner — reads the literature, runs experiments, and remembers what matters."}
                     </p>
                     <div className="mt-4 flex max-w-2xl flex-wrap justify-center gap-2">
                       {SUGGESTED_PROMPTS.map((prompt) => (
@@ -2081,7 +2192,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                 </button>
               </div>
             )}
-            {(currentModel || runningAgents > 0) && (
+            {(currentModel || runningAgents > 0 || activeTeams.length > 0) && (
               <div className="flex items-center gap-1.5 border-t border-border px-3 py-1.5 text-xs text-muted-foreground">
                 {currentModel && (
                   <button
@@ -2102,6 +2213,41 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                       <span>· {currentModel.provider}</span>
                     )}
                   </button>
+                )}
+                {activeTeams.length > 0 && (
+                  // v1 UX is single-active — render only the first (and only)
+                  // entry. When the primitive goes multi-select later, this
+                  // becomes a .map with a shared unsummon-all affordance or
+                  // per-chip X.
+                  <div className="flex items-center gap-0.5">
+                    <button
+                      type="button"
+                      onClick={() => onShowExperts?.()}
+                      title="Manage summoned experts"
+                      aria-label="Manage summoned experts"
+                      className="flex items-center gap-1.5 rounded px-1 py-0.5 transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    >
+                      <Users
+                        className="size-3.5 shrink-0 text-[var(--brand)]"
+                        aria-hidden="true"
+                      />
+                      <span className="font-medium text-foreground">
+                        {formatTeamName(activeTeams[0])}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void setActiveTeams([])}
+                      title="Dismiss"
+                      aria-label="Dismiss current expert"
+                      className="inline-flex size-5 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    >
+                      <X
+                        className="size-3.5"
+                        aria-hidden="true"
+                      />
+                    </button>
+                  </div>
                 )}
                 {runningAgents > 0 && (
                   <button
@@ -2232,29 +2378,104 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                       {autoApprove ? "Auto-approve On" : "Auto-approve"}
                     </span>
                   </button>
-                  {onNavigate && workspaceDir && (
-                    <button
-                      type="button"
-                      onClick={() => onNavigate({ view: "workspace" })}
-                      title={`${
-                        workspaceOpen ? "Close" : "Open"
-                      } workspace: ${workspaceDir}`}
-                      aria-label={`${
-                        workspaceOpen ? "Close" : "Open"
-                      } workspace: ${workspaceDir}`}
-                      aria-pressed={Boolean(workspaceOpen)}
-                      className="inline-flex min-w-0 items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-                    >
-                      <FolderOpen
-                        className="size-3.5 flex-shrink-0"
-                        aria-hidden="true"
-                      />
-                      <span className="hidden max-w-[140px] truncate font-mono sm:inline lg:max-w-[220px]">
-                        {workspaceDir.split("/").filter(Boolean).pop() ||
-                          workspaceDir}
-                      </span>
-                    </button>
-                  )}
+                  {onToggleInspector &&
+                    (() => {
+                      // Derived pressed states for the three toolbar buttons.
+                      // Workspace is the DEFAULT tab (null / unset), so we
+                      // treat any inspectorTab that isn't "agents" or
+                      // "experts" as "workspace" for pressed styling.
+                      const workspaceActive =
+                        !!inspectorOpen &&
+                        inspectorTab !== "agents" &&
+                        inspectorTab !== "experts";
+                      const agentsActive =
+                        !!inspectorOpen && inspectorTab === "agents";
+                      const expertsActive =
+                        !!inspectorOpen && inspectorTab === "experts";
+                      const tabButton = (
+                        active: boolean,
+                        onClick: () => void,
+                        icon: React.ReactNode,
+                        label: React.ReactNode,
+                        titleLabel: string
+                      ) => (
+                        <button
+                          type="button"
+                          onClick={onClick}
+                          aria-pressed={active}
+                          title={
+                            active
+                              ? `Close ${titleLabel}`
+                              : `Open ${titleLabel}`
+                          }
+                          aria-label={
+                            active
+                              ? `Close ${titleLabel}`
+                              : `Open ${titleLabel}`
+                          }
+                          className={cn(
+                            "inline-flex min-w-0 items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+                            active
+                              ? "bg-accent text-foreground"
+                              : "text-muted-foreground hover:bg-accent hover:text-foreground"
+                          )}
+                        >
+                          {icon}
+                          {label}
+                        </button>
+                      );
+                      return (
+                        <>
+                          {tabButton(
+                            workspaceActive,
+                            () => onToggleInspector("workspace"),
+                            <FolderOpen
+                              className="size-3.5 flex-shrink-0"
+                              aria-hidden="true"
+                            />,
+                            workspaceDir ? (
+                              <span className="hidden max-w-[140px] truncate font-mono sm:inline lg:max-w-[220px]">
+                                {workspaceDir
+                                  .split("/")
+                                  .filter(Boolean)
+                                  .pop() || workspaceDir}
+                              </span>
+                            ) : (
+                              <span className="hidden min-[360px]:inline">
+                                Workspace
+                              </span>
+                            ),
+                            workspaceDir
+                              ? `workspace: ${workspaceDir}`
+                              : "Workspace"
+                          )}
+                          {tabButton(
+                            agentsActive,
+                            () => onToggleInspector("agents"),
+                            <Bot
+                              className="size-3.5 flex-shrink-0"
+                              aria-hidden="true"
+                            />,
+                            <span className="hidden min-[360px]:inline">
+                              Agents
+                            </span>,
+                            "Agents"
+                          )}
+                          {tabButton(
+                            expertsActive,
+                            () => onToggleInspector("experts"),
+                            <Sparkles
+                              className="size-3.5 flex-shrink-0"
+                              aria-hidden="true"
+                            />,
+                            <span className="hidden min-[360px]:inline">
+                              Experts
+                            </span>,
+                            "Experts"
+                          )}
+                        </>
+                      );
+                    })()}
                 </div>
                 <div className="flex justify-end gap-2">
                   <Button
