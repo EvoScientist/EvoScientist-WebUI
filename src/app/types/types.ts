@@ -10,6 +10,8 @@ export interface SubAgent {
   id: string;
   name: string;
   subAgentName: string;
+  input: Record<string, unknown>;
+  output?: unknown;
   status: "pending" | "active" | "completed" | "error";
 }
 

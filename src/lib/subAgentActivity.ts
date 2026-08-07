@@ -1,13 +1,6 @@
-// Live sub-agent activity captured from subgraph stream events.
-//
-// With `streamSubgraphs: true`, useStream's `onUpdateEvent(data, { namespace })`
-// fires for sub-agent (subgraph) node outputs. `namespace` looks like
-// ["tools:<id>"]; `data` is `{ <nodeName>: { messages: [...] } }`. We turn those
-// node outputs into a flat list of steps to render inside the sub-agent block.
-//
-// This data is LIVE-ONLY: it isn't persisted to thread state, so it's gone after
-// a page reload (the block falls back to its INPUT/OUTPUT). Async sub-agents that
-// run as separate deployed graphs aren't subgraphs of this run and won't appear.
+// Shared normalization for synchronous sub-agent traces and persisted async
+// agent transcripts. The LangGraph SDK owns live namespace/tool-call binding;
+// this module only converts its message streams into renderable steps.
 
 export type SubAgentStep =
   | {
@@ -31,49 +24,6 @@ function extractText(content: unknown): string {
       .join("");
   }
   return "";
-}
-
-/** Parse one subgraph update payload into renderable steps (empty nodes skipped). */
-export function extractSubAgentSteps(data: unknown): SubAgentStep[] {
-  const steps: SubAgentStep[] = [];
-  if (!data || typeof data !== "object") return steps;
-  for (const node of Object.values(data as Record<string, unknown>)) {
-    const msgs = (node as { messages?: unknown })?.messages;
-    if (!Array.isArray(msgs)) continue;
-    for (const raw of msgs) {
-      const m = raw as {
-        type?: string;
-        content?: unknown;
-        name?: string;
-        tool_call_id?: string;
-        tool_calls?: { id?: string; name?: string; args?: unknown }[];
-      };
-      if (m.type === "ai" && m.tool_calls && m.tool_calls.length > 0) {
-        for (const tc of m.tool_calls) {
-          steps.push({
-            kind: "tool_call",
-            id: tc.id ?? "",
-            name: tc.name ?? "tool",
-            args:
-              tc.args && typeof tc.args === "object"
-                ? (tc.args as Record<string, unknown>)
-                : {},
-          });
-        }
-      } else if (m.type === "ai") {
-        const text = extractText(m.content).trim();
-        if (text) steps.push({ kind: "text", text });
-      } else if (m.type === "tool") {
-        steps.push({
-          kind: "tool_result",
-          toolCallId: m.tool_call_id ?? "",
-          name: m.name ?? "tool",
-          text: extractText(m.content).trim(),
-        });
-      }
-    }
-  }
-  return steps;
 }
 
 /** Normalize a single AI message's tool calls (top-level `tool_calls` or the
@@ -131,6 +81,7 @@ function normalizeToolCalls(m: {
 export function messagesToSubAgentSteps(messages: unknown[]): SubAgentStep[] {
   const steps: SubAgentStep[] = [];
   for (const raw of messages) {
+    if (!raw || typeof raw !== "object") continue;
     const m = raw as {
       type?: string;
       content?: unknown;
@@ -169,11 +120,19 @@ export function messagesToSubAgentSteps(messages: unknown[]): SubAgentStep[] {
   return steps;
 }
 
-/** The last assistant text a sub-agent produced — used to bind it to a task block. */
-export function lastTextOf(steps: SubAgentStep[]): string {
-  for (let i = steps.length - 1; i >= 0; i--) {
-    const s = steps[i];
-    if (s.kind === "text") return s.text;
+/**
+ * Convert SDK sub-agent streams into a task-tool-call keyed lookup. The SDK's
+ * map key is already the public `task` tool-call id, so parallel sub-agents do
+ * not need output-text or array-position heuristics to find their UI block.
+ */
+export function subAgentStreamsToSteps(
+  subagents: ReadonlyMap<string, { messages: unknown[] }>
+): Record<string, SubAgentStep[]> {
+  const out: Record<string, SubAgentStep[]> = {};
+  for (const [toolCallId, subagent] of subagents) {
+    if (!Array.isArray(subagent.messages)) continue;
+    const steps = messagesToSubAgentSteps(subagent.messages);
+    if (steps.length > 0) out[toolCallId] = steps;
   }
-  return "";
+  return out;
 }
