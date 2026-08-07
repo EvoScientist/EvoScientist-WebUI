@@ -287,9 +287,9 @@ export function useChat({
   const subAgentActivity = subAgentStreamsToSteps(
     (
       stream as typeof stream & {
-        subagents: ReadonlyMap<string, { messages: unknown[] }>;
+        subagents?: ReadonlyMap<string, { messages: unknown[] }>;
       }
-    ).subagents
+    ).subagents ?? new Map()
   );
 
   // `stream` is a NEW object every render of `useStream` — depending on it in a

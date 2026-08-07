@@ -516,11 +516,11 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       threadId: null as string | null,
       map: {} as Record<string, SubAgentStep[]>,
     });
-    subAgentStepsFlushRef.current = {
-      threadId,
-      map: persistableSubAgentSteps,
-    };
     useEffect(() => {
+      subAgentStepsFlushRef.current = {
+        threadId,
+        map: persistableSubAgentSteps,
+      };
       if (!threadId || Object.keys(persistableSubAgentSteps).length === 0)
         return;
       const timer = window.setTimeout(() => {

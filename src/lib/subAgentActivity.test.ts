@@ -161,4 +161,25 @@ describe("subAgentStreamsToSteps", () => {
       )
     ).toEqual({});
   });
+
+  it("skips null and non-object messages without throwing", () => {
+    expect(
+      subAgentStreamsToSteps(
+        new Map([
+          [
+            "task-1",
+            {
+              messages: [
+                null,
+                undefined,
+                "stray string",
+                42,
+                { type: "ai", content: "still works" },
+              ],
+            },
+          ],
+        ])
+      )
+    ).toEqual({ "task-1": [{ kind: "text", text: "still works" }] });
+  });
 });

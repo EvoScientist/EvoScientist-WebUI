@@ -7,6 +7,7 @@ const MAX_THREADS = 20;
 const MAX_STEPS_PER_TASK = 200;
 const MAX_TEXT_LENGTH = 10_000;
 const MAX_ARG_STRING_LENGTH = 5_000;
+const MAX_ARG_DEPTH = 8;
 const TRUNCATION_SUFFIX = "…[truncated]";
 
 interface StoredThreadSteps {
@@ -80,16 +81,28 @@ function truncate(text: string, max: number): string {
   return text.length > max ? text.slice(0, max) + TRUNCATION_SUFFIX : text;
 }
 
+function capArgValue(value: unknown, depth: number): unknown {
+  if (typeof value === "string") {
+    return truncate(value, MAX_ARG_STRING_LENGTH);
+  }
+  if (!value || typeof value !== "object") return value;
+  if (depth >= MAX_ARG_DEPTH) return TRUNCATION_SUFFIX;
+  if (Array.isArray(value)) {
+    return value.map((item) => capArgValue(item, depth + 1));
+  }
+  const out: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value)) {
+    out[key] = capArgValue(item, depth + 1);
+  }
+  return out;
+}
+
 function capStep(step: SubAgentStep): SubAgentStep {
   if (step.kind === "tool_call") {
-    let args = step.args;
-    for (const [key, value] of Object.entries(args)) {
-      if (typeof value === "string" && value.length > MAX_ARG_STRING_LENGTH) {
-        if (args === step.args) args = { ...args };
-        args[key] = truncate(value, MAX_ARG_STRING_LENGTH);
-      }
-    }
-    return args === step.args ? step : { ...step, args };
+    return {
+      ...step,
+      args: capArgValue(step.args, 0) as Record<string, unknown>,
+    };
   }
   if (step.text.length <= MAX_TEXT_LENGTH) return step;
   return { ...step, text: truncate(step.text, MAX_TEXT_LENGTH) };

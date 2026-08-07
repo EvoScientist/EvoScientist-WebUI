@@ -52,6 +52,41 @@ describe("subAgentStepsStore", () => {
     );
   });
 
+  it("caps long strings nested inside tool-call args", () => {
+    const long = "y".repeat(12_000);
+    saveThreadSubAgentSteps("t1", {
+      task_a: [
+        {
+          kind: "tool_call",
+          id: "tc",
+          name: "write_file",
+          args: {
+            files: [{ path: "/a.txt", content: long }],
+            meta: { inner: { note: long } },
+          },
+        },
+      ],
+    });
+    const stored = loadThreadSubAgentSteps("t1").task_a;
+    const args = (stored[0] as { args: Record<string, unknown> }).args;
+    const files = args.files as Array<{ path: string; content: string }>;
+    expect(files[0].path).toBe("/a.txt");
+    expect(files[0].content.length).toBeLessThan(5_100);
+    expect(files[0].content.endsWith("…[truncated]")).toBe(true);
+    const meta = args.meta as { inner: { note: string } };
+    expect(meta.inner.note.endsWith("…[truncated]")).toBe(true);
+  });
+
+  it("replaces branches beyond the arg depth limit", () => {
+    let deep: Record<string, unknown> = { leaf: "x".repeat(6_000) };
+    for (let i = 0; i < 12; i++) deep = { nested: deep };
+    saveThreadSubAgentSteps("t1", {
+      task_a: [{ kind: "tool_call", id: "tc", name: "n", args: deep }],
+    });
+    const stored = loadThreadSubAgentSteps("t1").task_a;
+    expect(JSON.stringify(stored).includes("x".repeat(6_000))).toBe(false);
+  });
+
   it("evicts the least recently updated thread beyond 20", () => {
     for (let index = 0; index < 21; index++) {
       saveThreadSubAgentSteps(`t${index}`, { task: steps });

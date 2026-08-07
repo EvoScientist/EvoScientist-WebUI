@@ -81,6 +81,7 @@ function normalizeToolCalls(m: {
 export function messagesToSubAgentSteps(messages: unknown[]): SubAgentStep[] {
   const steps: SubAgentStep[] = [];
   for (const raw of messages) {
+    if (!raw || typeof raw !== "object") continue;
     const m = raw as {
       type?: string;
       content?: unknown;
