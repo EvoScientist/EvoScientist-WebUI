@@ -83,6 +83,63 @@ describe("spawn-subagent scenario", () => {
     vi.mocked(toast.error).mockClear();
   });
 
+  it("enables the SDK's native subagent message routing", () => {
+    renderChat({ activeAssistant: fixtureAssistant });
+    expect(stream.getOptions()?.filterSubagentMessages).toBe(true);
+  });
+
+  it("exposes SDK-bound trace steps under the parent task tool-call id", () => {
+    const { result } = renderChat({ activeAssistant: fixtureAssistant });
+    act(() => {
+      stream.setSubagents(
+        new Map([
+          [
+            "task-call-1",
+            {
+              messages: [
+                { type: "human", content: "run pwd" },
+                {
+                  type: "ai",
+                  content: "",
+                  tool_calls: [
+                    {
+                      id: "execute-call-1",
+                      name: "execute",
+                      args: { command: "pwd" },
+                    },
+                  ],
+                },
+                {
+                  type: "tool",
+                  tool_call_id: "execute-call-1",
+                  name: "execute",
+                  content: "/workspace",
+                },
+                { type: "ai", content: "done" },
+              ],
+            },
+          ],
+        ])
+      );
+    });
+
+    expect(result.current.subAgentActivity["task-call-1"]).toEqual([
+      {
+        kind: "tool_call",
+        id: "execute-call-1",
+        name: "execute",
+        args: { command: "pwd" },
+      },
+      {
+        kind: "tool_result",
+        toolCallId: "execute-call-1",
+        name: "execute",
+        text: "/workspace",
+      },
+      { kind: "text", text: "done" },
+    ]);
+  });
+
   it("surfaces an action-requests interrupt to the chat context", () => {
     const { result } = renderChat({ activeAssistant: fixtureAssistant });
     act(() => {

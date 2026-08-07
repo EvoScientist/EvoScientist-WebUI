@@ -7,10 +7,13 @@ import {
   useRef,
   useState,
 } from "react";
-import { useStream } from "@langchain/langgraph-sdk/react";
+import {
+  useStream,
+  type UseStreamOptions,
+  type UseStreamThread,
+} from "@langchain/langgraph-sdk/react";
 import { type Message, type Assistant } from "@langchain/langgraph-sdk";
 import { v4 as uuidv4 } from "uuid";
-import type { UseStreamThread } from "@langchain/langgraph-sdk/react";
 import type { TodoItem } from "@/app/types/types";
 import { useClient } from "@/providers/ClientProvider";
 import { useQueryState } from "nuqs";
@@ -24,6 +27,7 @@ import {
   type WorkflowMap,
 } from "@/lib/dynamicWorkflow";
 import { loadThreadWorkflows, saveThreadWorkflows } from "@/lib/workflowStore";
+import { subAgentStreamsToSteps } from "@/lib/subAgentActivity";
 import { toast } from "sonner";
 import {
   MODEL_OVERRIDE_METADATA_KEY,
@@ -227,7 +231,9 @@ export function useChat({
   const [dynamicWorkflows, setDynamicWorkflows] = useState<WorkflowMap>({});
   const workflowThreadIdRef = useRef(threadId);
 
-  const stream = useStream<StateType>({
+  const streamOptions: UseStreamOptions<StateType> & {
+    filterSubagentMessages: boolean;
+  } = {
     assistantId: activeAssistant?.assistant_id || "",
     client: client ?? undefined,
     reconnectOnMount: true,
@@ -247,6 +253,10 @@ export function useChat({
     // window - so we don't need the option here.
     // Enable fetching state history when switching to existing threads
     fetchStateHistory: true,
+    // Keep synchronous DeepAgent messages out of the root transcript and let
+    // the SDK bind them to their exact parent `task` tool-call id. The same
+    // option enables SDK checkpoint hydration after refresh/thread switches.
+    filterSubagentMessages: true,
     // Revalidate thread list when stream finishes, errors, or creates new
     // thread. Errors additionally surface a toast with the SDK's payload -
     // without this the user only sees React's generic "An internal error
@@ -267,7 +277,20 @@ export function useChat({
       );
     },
     thread,
-  });
+  };
+  const stream = useStream<StateType>(streamOptions);
+
+  // `filterSubagentMessages` is a DeepAgent-only option in the SDK's public
+  // type inference, but remote graph clients cannot import the backend agent's
+  // phantom TypeScript type. The runtime stream still exposes the documented
+  // subagents map, keyed by the parent task tool-call id.
+  const subAgentActivity = subAgentStreamsToSteps(
+    (
+      stream as typeof stream & {
+        subagents: ReadonlyMap<string, { messages: unknown[] }>;
+      }
+    ).subagents
+  );
 
   // `stream` is a NEW object every render of `useStream` — depending on it in a
   // `useCallback` makes the callback churn on every stream notification (which
@@ -773,6 +796,7 @@ export function useChat({
     sendMessage,
     stopStream,
     resumeInterrupt,
+    subAgentActivity,
     dynamicWorkflows,
     modelOverride,
     setModelOverride,

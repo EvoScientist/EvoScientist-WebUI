@@ -25,6 +25,7 @@ interface MockStreamSnapshot<S> {
   isThreadLoading: boolean;
   interrupt: unknown | undefined;
   error: unknown;
+  subagents: ReadonlyMap<string, { messages: unknown[] }>;
 }
 
 export interface SubmitCall {
@@ -40,6 +41,7 @@ function defaultSnapshot<S>(): MockStreamSnapshot<S> {
     isThreadLoading: false,
     interrupt: undefined,
     error: undefined,
+    subagents: new Map(),
   };
 }
 
@@ -100,6 +102,10 @@ export class MockStreamStore<
     this.update({ error });
   }
 
+  setSubagents(subagents: ReadonlyMap<string, { messages: unknown[] }>): void {
+    this.update({ subagents });
+  }
+
   // Fire the callbacks that useChat registered via useStream(options).
   emitUpdateEvent(data: unknown, namespace: string[] = []): void {
     const cb = this.lastOptions?.onUpdateEvent as
@@ -138,6 +144,10 @@ export class MockStreamStore<
   getStopCallCount(): number {
     return this.stopCallCount;
   }
+
+  getOptions(): Record<string, unknown> | null {
+    return this.lastOptions;
+  }
 }
 
 let activeStore: MockStreamStore | null = null;
@@ -175,6 +185,7 @@ export function useMockStreamHook(options: Record<string, unknown>) {
     isThreadLoading: snap.isThreadLoading,
     interrupt: snap.interrupt,
     error: snap.error,
+    subagents: snap.subagents,
     submit: store.submit,
     stop: store.stop,
     // Fill-in stubs for UseStream fields useChat doesn't consume.

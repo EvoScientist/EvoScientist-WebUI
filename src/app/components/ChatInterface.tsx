@@ -84,6 +84,11 @@ import {
 } from "@/lib/asyncAgents";
 import { useAsyncAgents } from "@/app/hooks/useAsyncAgents";
 import { useAutoNotify } from "@/app/hooks/useAutoNotify";
+import type { SubAgentStep } from "@/lib/subAgentActivity";
+import {
+  loadThreadSubAgentSteps,
+  saveThreadSubAgentSteps,
+} from "@/lib/subAgentStepsStore";
 import { useAutoApproveInterrupt } from "@/app/hooks/useAutoApproveInterrupt";
 import {
   getThreadAutoNotifyReportedKeys,
@@ -417,6 +422,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       sendMessage,
       stopStream,
       resumeInterrupt,
+      subAgentActivity,
       dynamicWorkflows,
       asyncTasks,
       summarizationEvent,
@@ -436,6 +442,100 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     const runningAgents = useMemo(
       () => countRunning(liveAgentTasks),
       [liveAgentTasks]
+    );
+
+    const taskToolCallIds = useMemo(() => {
+      const ids = new Set<string>();
+      for (const message of messages) {
+        if (message.type !== "ai") continue;
+        const toolCalls = (
+          message as { tool_calls?: Array<{ id?: string; name?: string }> }
+        ).tool_calls;
+        for (const toolCall of toolCalls ?? []) {
+          if (toolCall.name === "task" && toolCall.id) ids.add(toolCall.id);
+        }
+      }
+      return ids;
+    }, [messages]);
+
+    const completedTaskToolCallIds = useMemo(() => {
+      const ids = new Set<string>();
+      for (const message of messages) {
+        if (message.type !== "tool") continue;
+        const id = (message as { tool_call_id?: string }).tool_call_id;
+        if (id && taskToolCallIds.has(id)) ids.add(id);
+      }
+      return ids;
+    }, [messages, taskToolCallIds]);
+
+    const storedSubAgentSteps = useMemo(
+      () => (threadId ? loadThreadSubAgentSteps(threadId) : {}),
+      [threadId]
+    );
+
+    const relevantStoredSubAgentSteps = useMemo(() => {
+      const out: Record<string, SubAgentStep[]> = {};
+      for (const [id, steps] of Object.entries(storedSubAgentSteps)) {
+        if (taskToolCallIds.has(id)) out[id] = steps;
+      }
+      return out;
+    }, [storedSubAgentSteps, taskToolCallIds]);
+
+    // The SDK map is already keyed by the exact parent task tool-call id. Keep
+    // only ids that occur in this transcript, then fall back to the bounded
+    // local cache when the current backend cannot hydrate subgraph checkpoints.
+    const liveSubAgentSteps = useMemo(() => {
+      const out: Record<string, SubAgentStep[]> = {};
+      for (const [id, steps] of Object.entries(subAgentActivity)) {
+        if (taskToolCallIds.has(id)) out[id] = steps;
+      }
+      return out;
+    }, [subAgentActivity, taskToolCallIds]);
+    const subAgentSteps = useMemo(
+      () => ({ ...relevantStoredSubAgentSteps, ...liveSubAgentSteps }),
+      [relevantStoredSubAgentSteps, liveSubAgentSteps]
+    );
+
+    const persistableSubAgentSteps = useMemo(() => {
+      const out: Record<string, SubAgentStep[]> = {
+        ...relevantStoredSubAgentSteps,
+      };
+      for (const [id, steps] of Object.entries(liveSubAgentSteps)) {
+        if (completedTaskToolCallIds.has(id) && steps.length > 0) {
+          out[id] = steps;
+        }
+      }
+      return out;
+    }, [
+      completedTaskToolCallIds,
+      liveSubAgentSteps,
+      relevantStoredSubAgentSteps,
+    ]);
+
+    const subAgentStepsFlushRef = useRef({
+      threadId: null as string | null,
+      map: {} as Record<string, SubAgentStep[]>,
+    });
+    subAgentStepsFlushRef.current = {
+      threadId,
+      map: persistableSubAgentSteps,
+    };
+    useEffect(() => {
+      if (!threadId || Object.keys(persistableSubAgentSteps).length === 0)
+        return;
+      const timer = window.setTimeout(() => {
+        saveThreadSubAgentSteps(threadId, persistableSubAgentSteps);
+      }, 750);
+      return () => window.clearTimeout(timer);
+    }, [threadId, persistableSubAgentSteps]);
+    useEffect(
+      () => () => {
+        const { threadId: lastThreadId, map } = subAgentStepsFlushRef.current;
+        if (lastThreadId && Object.keys(map).length > 0) {
+          saveThreadSubAgentSteps(lastThreadId, map);
+        }
+      },
+      []
     );
 
     // Auto-report: when on for this thread, a sub-agent that FINISHES while we're
@@ -1573,6 +1673,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                         graphId={assistant?.graph_id}
                         onEditMessage={handleEditMessage}
                         autoApprove={autoApprove}
+                        subAgentSteps={subAgentSteps}
                         ui={ui}
                         compactionAnchorId={compactionAnchorId}
                         summarizationEvent={summarizationEvent ?? null}
@@ -1614,6 +1715,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                         graphId={assistant?.graph_id}
                         onEditMessage={handleEditMessage}
                         autoApprove={autoApprove}
+                        subAgentSteps={subAgentSteps}
                       />
                     </React.Fragment>
                   );

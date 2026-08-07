@@ -3,6 +3,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronRight, ChevronUp, Loader2 } from "lucide-react";
 import type { Message } from "@langchain/langgraph-sdk";
+import type { SubAgentStep } from "@/lib/subAgentActivity";
 import type { ActionRequest, ReviewConfig, ToolCall } from "@/app/types/types";
 import { ChatMessage } from "./ChatMessage";
 import { CompactionSummary } from "./CompactionSummary";
@@ -40,6 +41,7 @@ interface ActionGroupProps {
   graphId?: string;
   onEditMessage: (content: string) => void;
   autoApprove: boolean;
+  subAgentSteps?: Record<string, SubAgentStep[]>;
   ui: any[] | undefined;
   // CompactionSummary anchoring: rendered before the matching item inside the group.
   compactionAnchorId: string | null;
@@ -71,6 +73,7 @@ export const ActionGroup = React.memo<ActionGroupProps>(function ActionGroup({
   graphId,
   onEditMessage,
   autoApprove,
+  subAgentSteps,
   ui,
   compactionAnchorId,
   summarizationEvent,
@@ -197,6 +200,7 @@ export const ActionGroup = React.memo<ActionGroupProps>(function ActionGroup({
               graphId={graphId}
               onEditMessage={onEditMessage}
               autoApprove={autoApprove}
+              subAgentSteps={subAgentSteps}
             />
           </div>
         );
@@ -234,6 +238,7 @@ export const ActionGroup = React.memo<ActionGroupProps>(function ActionGroup({
                   graphId={graphId}
                   onEditMessage={onEditMessage}
                   autoApprove={autoApprove}
+                  subAgentSteps={subAgentSteps}
                 />
               </React.Fragment>
             );

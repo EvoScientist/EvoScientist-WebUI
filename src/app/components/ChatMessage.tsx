@@ -10,6 +10,7 @@ import React, {
 import { SubAgentIndicator } from "@/app/components/SubAgentIndicator";
 import { ToolCallBox } from "@/app/components/ToolCallBox";
 import { MarkdownContent } from "@/app/components/MarkdownContent";
+import { SubAgentSteps } from "@/app/components/SubAgentSteps";
 import type {
   SubAgent,
   ToolCall,
@@ -17,6 +18,7 @@ import type {
   ReviewConfig,
 } from "@/app/types/types";
 import { Message } from "@langchain/langgraph-sdk";
+import type { SubAgentStep } from "@/lib/subAgentActivity";
 import { isAsyncUpdateMessage } from "@/lib/asyncAgents";
 import { bindActionRequestsToToolCalls } from "@/lib/hitl";
 import {
@@ -30,6 +32,7 @@ import {
 } from "lucide-react";
 import {
   extractStringFromMessageContent,
+  extractSubAgentContent,
   stringifyUnknown,
 } from "@/app/utils/utils";
 import { cn } from "@/lib/utils";
@@ -53,6 +56,7 @@ interface ChatMessageProps {
   graphId?: string;
   onEditMessage?: (content: string) => void;
   autoApprove?: boolean;
+  subAgentSteps?: Record<string, SubAgentStep[]>;
 }
 
 const FINISH_REASON_SUCCESS = new Set([
@@ -96,6 +100,7 @@ export const ChatMessage = React.memo<ChatMessageProps>(
     graphId,
     onEditMessage,
     autoApprove,
+    subAgentSteps,
   }) => {
     const isUser = message.type === "human";
     const messageContent = extractStringFromMessageContent(message);
@@ -138,12 +143,25 @@ export const ChatMessage = React.memo<ChatMessageProps>(
           const subagentType = (toolCall.args as Record<string, unknown>)[
             "subagent_type"
           ] as string;
+          const status: SubAgent["status"] =
+            toolCall.status === "completed"
+              ? "completed"
+              : toolCall.status === "error"
+              ? "error"
+              : toolCall.status === "pending"
+              ? "pending"
+              : "active";
           return {
             id: toolCall.id,
             name: toolCall.name,
             subAgentName: subagentType,
-            status: toolCall.status,
-          } as SubAgent;
+            input: toolCall.args,
+            output:
+              toolCall.result !== undefined && toolCall.result !== null
+                ? toolCall.result
+                : undefined,
+            status,
+          } satisfies SubAgent;
         });
     }, [toolCalls]);
 
@@ -224,6 +242,19 @@ export const ChatMessage = React.memo<ChatMessageProps>(
         toast.error("Couldn't copy to clipboard.");
       }
     }, [messageContent]);
+    const [expandedSubAgents, setExpandedSubAgents] = useState<
+      Record<string, boolean>
+    >({});
+    const isSubAgentExpanded = useCallback(
+      (id: string) => expandedSubAgents[id] ?? false,
+      [expandedSubAgents]
+    );
+    const toggleSubAgent = useCallback((id: string) => {
+      setExpandedSubAgents((prev) => ({
+        ...prev,
+        [id]: !(prev[id] ?? false),
+      }));
+    }, []);
     // A "[Async tasks update]" signal we injected (from the Agents board's
     // "Notify main chat") is a background-completion notice, not something the
     // user typed — render it as a low-key centered system pill, not a user
@@ -450,10 +481,59 @@ export const ChatMessage = React.memo<ChatMessageProps>(
           {!isUser && subAgents.length > 0 && (
             <div className="flex w-fit max-w-full flex-col gap-4">
               {subAgents.map((subAgent) => (
-                <SubAgentIndicator
+                <div
                   key={subAgent.id}
-                  subAgent={subAgent}
-                />
+                  className="flex w-full flex-col gap-2"
+                >
+                  <SubAgentIndicator
+                    subAgent={subAgent}
+                    onToggle={toggleSubAgent}
+                    isExpanded={isSubAgentExpanded(subAgent.id)}
+                  />
+                  {isSubAgentExpanded(subAgent.id) && (
+                    <div className="w-full max-w-full">
+                      <div className="border-border-light rounded-md border bg-[var(--color-surface)] p-4">
+                        <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-[var(--color-text-secondary)]">
+                          Input
+                        </h4>
+                        <div className="mb-4">
+                          <MarkdownContent
+                            content={extractSubAgentContent(subAgent.input)}
+                          />
+                        </div>
+                        {(subAgentSteps?.[subAgent.id]?.length ?? 0) > 0 && (
+                          <>
+                            <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-[var(--color-text-secondary)]">
+                              Steps
+                            </h4>
+                            <div className="mb-4">
+                              <SubAgentSteps
+                                steps={subAgentSteps![subAgent.id]}
+                                hideFinalText={
+                                  subAgent.output !== undefined &&
+                                  subAgent.output !== null
+                                }
+                              />
+                            </div>
+                          </>
+                        )}
+                        {subAgent.output !== undefined &&
+                          subAgent.output !== null && (
+                            <>
+                              <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-[var(--color-text-secondary)]">
+                                Output
+                              </h4>
+                              <MarkdownContent
+                                content={extractSubAgentContent(
+                                  subAgent.output
+                                )}
+                              />
+                            </>
+                          )}
+                      </div>
+                    </div>
+                  )}
+                </div>
               ))}
             </div>
           )}
