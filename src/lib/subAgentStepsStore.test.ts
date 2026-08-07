@@ -78,13 +78,13 @@ describe("subAgentStepsStore", () => {
   });
 
   it("replaces branches beyond the arg depth limit", () => {
-    let deep: Record<string, unknown> = { leaf: "x".repeat(6_000) };
+    let deep: Record<string, unknown> = { leaf: "depth-sentinel" };
     for (let i = 0; i < 12; i++) deep = { nested: deep };
     saveThreadSubAgentSteps("t1", {
       task_a: [{ kind: "tool_call", id: "tc", name: "n", args: deep }],
     });
     const stored = loadThreadSubAgentSteps("t1").task_a;
-    expect(JSON.stringify(stored).includes("x".repeat(6_000))).toBe(false);
+    expect(JSON.stringify(stored)).not.toContain("depth-sentinel");
   });
 
   it("evicts the least recently updated thread beyond 20", () => {
