@@ -1183,7 +1183,43 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       }
       visibleMessages.forEach((message: Message) => {
         if (message.type === "ai") {
+          // Collapse duplicate tool_call ids within a single AI message before
+          // they reach the render. LangChain's streaming merge can leave the
+          // same tool_call twice (the duplicated-SSE-chunk artifact behind the
+          // "stopstop" finish_reason handling), and aborting a run mid-tool-call
+          // makes it more likely. Downstream keys derive from `toolCall.id`
+          // (ChatMessage tool grid + subAgents), so a repeat throws React's
+          // "two children with the same key" and duplicates the box. Only real
+          // string-id collisions collapse; id-less calls get unique fallbacks
+          // below and must be kept. The same merge can also split a call's data
+          // across the copies, so a dropped duplicate donates its args/name to
+          // the kept copy instead of losing them (an args-less `task` survivor
+          // would otherwise vanish from the render entirely).
+          const seenToolCalls = new Map<
+            string,
+            ReturnType<typeof getMessageToolCalls>[number]
+          >();
           const toolCallsWithStatus = getMessageToolCalls(message)
+            // Fallback keys for id-less calls use the pre-filter index so that
+            // collapsing a duplicate (or the transient selector call below)
+            // never renumbers — and remounts — the boxes after it.
+            .map((toolCall, sourceIndex) => ({ toolCall, sourceIndex }))
+            .filter(({ toolCall }) => {
+              if (typeof toolCall.id !== "string" || !toolCall.id) return true;
+              const kept = seenToolCalls.get(toolCall.id);
+              if (kept) {
+                if (
+                  Object.keys(kept.args).length === 0 &&
+                  Object.keys(toolCall.args).length > 0
+                ) {
+                  kept.args = toolCall.args;
+                }
+                if (!kept.name && toolCall.name) kept.name = toolCall.name;
+                return false;
+              }
+              seenToolCalls.set(toolCall.id, toolCall);
+              return true;
+            })
             // The auxiliary tool-selector's internal `ToolSelectionResponse` call
             // has no result and isn't HITL-gated. Surface it only as a transient
             // spinner WHILE the run is actively selecting; hide it once the run
@@ -1191,15 +1227,15 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
             // "interrupted" icon leaks onto it (it never gets a result to clear)
             // and it lingers instead of disappearing.
             .filter(
-              (toolCall) =>
+              ({ toolCall }) =>
                 toolCall.name !== "ToolSelectionResponse" ||
                 (isLoading && !interrupt)
             )
-            .map((toolCall, toolCallIndex) => {
+            .map(({ toolCall, sourceIndex }) => {
               const name = toolCall.name || "unknown";
               const id =
                 toolCall.id ||
-                `${message.id ?? "ai-message"}-tool-${toolCallIndex}-${name}`;
+                `${message.id ?? "ai-message"}-tool-${sourceIndex}-${name}`;
               const pendingCount = pendingActionCounts.get(name) ?? 0;
               const hasPendingAction =
                 pendingCount > 0 && !completedToolCallIds.has(id);
