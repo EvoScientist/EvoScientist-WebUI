@@ -314,4 +314,79 @@ describe("ChatInterface composition", () => {
     );
     expect(ids).toEqual(["dup1"]);
   });
+
+  it("keeps a dropped duplicate's args and stable fallback keys for id-less calls", () => {
+    // The streaming merge can also split a call's data across the duplicate
+    // copies (kept copy args-less, repeat carrying the real args) — the kept
+    // copy must adopt them, or an args-less `task` survivor vanishes from the
+    // render. An id-less call after the collapsed duplicate keeps its
+    // pre-filter fallback key, so the collapse doesn't remount its box.
+    renderChatInterface();
+    act(() => {
+      stream.setMessages([
+        {
+          id: "a1",
+          type: "ai",
+          content: "",
+          tool_calls: [
+            { id: "dup1", name: "execute", args: {} },
+            { id: "dup1", name: "execute", args: { command: "ls" } },
+            { name: "execute", args: { command: "pwd" } },
+          ],
+        } as unknown as Message,
+      ]);
+    });
+    const groups = getAllProps<{
+      items: Array<{
+        toolCalls: Array<{ id: string; args: Record<string, unknown> }>;
+      }>;
+    }>("ActionGroup");
+    expect(groups.length).toBeGreaterThan(0);
+    const calls = groups[groups.length - 1].items.flatMap(
+      (item) => item.toolCalls
+    );
+    expect(calls.map((tc) => tc.id)).toEqual(["dup1", "a1-tool-2-execute"]);
+    expect(calls[0].args).toEqual({ command: "ls" });
+    expect(calls[1].args).toEqual({ command: "pwd" });
+  });
+
+  it("donates the duplicate's name to an empty-name kept copy", () => {
+    // Only the additional_kwargs path can normalize to an empty name (the
+    // top-level tool_calls path filters those out). An undonated name renders
+    // as "unknown" and breaks pending-action matching for the real call.
+    renderChatInterface();
+    act(() => {
+      stream.setMessages([
+        {
+          id: "a2",
+          type: "ai",
+          content: "",
+          additional_kwargs: {
+            tool_calls: [
+              { id: "dup2", function: { name: "", arguments: "{}" } },
+              {
+                id: "dup2",
+                function: { name: "execute", arguments: '{"command":"ls"}' },
+              },
+            ],
+          },
+        } as unknown as Message,
+      ]);
+    });
+    const groups = getAllProps<{
+      items: Array<{
+        toolCalls: Array<{
+          id: string;
+          name: string;
+          args: Record<string, unknown>;
+        }>;
+      }>;
+    }>("ActionGroup");
+    expect(groups.length).toBeGreaterThan(0);
+    const calls = groups[groups.length - 1].items.flatMap(
+      (item) => item.toolCalls
+    );
+    expect(calls.map((tc) => [tc.id, tc.name])).toEqual([["dup2", "execute"]]);
+    expect(calls[0].args).toEqual({ command: "ls" });
+  });
 });
