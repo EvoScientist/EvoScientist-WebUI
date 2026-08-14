@@ -10,58 +10,12 @@ import {
 } from "@/components/ui/dialog";
 import { RotateCcw, ZoomIn, ZoomOut } from "lucide-react";
 import { useTheme } from "@/providers/ThemeProvider";
+import { renderMermaid, type MermaidTheme } from "@/lib/mermaidRenderer";
 
 interface MermaidDiagramProps {
   code: string;
   /** While true, skip rendering — fall back to the source view. */
   isStreaming?: boolean;
-}
-
-// Mermaid is a singleton with shared internal DOM state. Concurrent render()
-// calls clobber each other and silently drop SVGs, so we serialize every
-// call through this promise chain. Also caches the mermaid import + the
-// one-time initialize() so they don't run per-diagram.
-type MermaidModule = typeof import("mermaid").default;
-type MermaidTheme = "default" | "dark";
-let mermaidLoader: Promise<MermaidModule> | null = null;
-let renderChain: Promise<unknown> = Promise.resolve();
-
-function loadMermaid(): Promise<MermaidModule> {
-  if (!mermaidLoader) {
-    mermaidLoader = import("mermaid").then((mod) => mod.default);
-  }
-  return mermaidLoader;
-}
-
-function initializeMermaid(mermaid: MermaidModule, theme: MermaidTheme) {
-  mermaid.initialize({
-    startOnLoad: false,
-    theme,
-    // "strict" forbids raw HTML in node labels — safer for AI-generated
-    // diagram source rendered alongside user content.
-    securityLevel: "strict",
-  });
-}
-
-async function renderMermaid(
-  id: string,
-  code: string,
-  theme: MermaidTheme
-): Promise<string | null> {
-  const next = renderChain.then(async () => {
-    const mermaid = await loadMermaid();
-    initializeMermaid(mermaid, theme);
-    // parse() with suppressErrors gives a boolean instead of the "red bomb"
-    // error-SVG that render() produces on bad input.
-    const parsed = await mermaid.parse(code, { suppressErrors: true });
-    if (!parsed) return null;
-    const { svg } = await mermaid.render(id, code);
-    return svg;
-  });
-  // Keep the chain alive even if this link throws — otherwise one bad
-  // diagram would freeze every subsequent render call.
-  renderChain = next.catch(() => undefined);
-  return next;
 }
 
 export const MermaidDiagram = React.memo<MermaidDiagramProps>(
