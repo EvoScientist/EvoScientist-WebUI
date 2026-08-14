@@ -393,6 +393,18 @@ export function useChat({
   // getter. They are always set/reset together.
   const userAbortedRef = useRef(false);
   const [userAborted, setUserAborted] = useState(false);
+  // The abandon is scoped to the thread Stop was pressed on. ChatProvider is
+  // remounted on thread switches today (chatSessionRevision), so this reset is
+  // belt-and-braces for any future path that swaps `threadId` inside a mounted
+  // instance — without it the recovery poll would mark the next thread's
+  // genuine interrupt resolved. `resolvedInterruptKey` is the other half of
+  // the same suppression mechanism and the interrupt getter reads it with no
+  // threadId guard of its own, so it resets here too.
+  useEffect(() => {
+    userAbortedRef.current = false;
+    setUserAborted(false);
+    setResolvedInterruptKey(null);
+  }, [threadId]);
 
   // Per-thread model override. When set, gets folded into
   // `configurable.model` on every `stream.submit` — the backend's
