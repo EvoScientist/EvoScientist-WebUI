@@ -21,8 +21,8 @@ describe("buildClientHeaders", () => {
 
 describe("buildClientOptions", () => {
   it("disables the SDK's environment-variable API-key fallback", () => {
-    expect(buildClientOptions("http://127.0.0.1:6274", "")).toMatchObject({
-      apiUrl: "http://127.0.0.1:6274",
+    expect(buildClientOptions("http://127.0.0.1:6174", "")).toMatchObject({
+      apiUrl: "http://127.0.0.1:6174",
       apiKey: null,
       defaultHeaders: { "Content-Type": "application/json" },
     });

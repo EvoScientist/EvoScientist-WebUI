@@ -4,11 +4,11 @@ import { getConfig, isLoopbackDeployment } from "./config";
 
 describe("isLoopbackDeployment", () => {
   it.each([
-    "http://localhost:6274",
-    "http://127.0.0.1:6274",
-    "http://127.1.2.3:6274",
-    "http://0.0.0.0:6274",
-    "http://[::1]:6274",
+    "http://localhost:6174",
+    "http://127.0.0.1:6174",
+    "http://127.1.2.3:6174",
+    "http://0.0.0.0:6174",
+    "http://[::1]:6174",
   ])("recognizes %s as local", (deploymentUrl) => {
     expect(isLoopbackDeployment(deploymentUrl)).toBe(true);
   });
@@ -25,14 +25,14 @@ describe("getConfig", () => {
     localStorage.setItem(
       "evoscientist-config",
       JSON.stringify({
-        deploymentUrl: "http://127.0.0.1:6274",
+        deploymentUrl: "http://127.0.0.1:6174",
         assistantId: "old-assistant",
         langsmithApiKey: "legacy-key",
       })
     );
 
     expect(getConfig()).toEqual({
-      deploymentUrl: "http://127.0.0.1:6274",
+      deploymentUrl: "http://127.0.0.1:6174",
       assistantId: "EvoScientist",
     });
   });
