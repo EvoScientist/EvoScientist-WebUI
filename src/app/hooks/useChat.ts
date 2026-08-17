@@ -38,6 +38,7 @@ import {
   persistThreadDerivedMetadata,
   setThreadModelOverride,
 } from "@/app/hooks/useThreads";
+import { DEFAULT_ASSISTANT_ID } from "@/lib/config";
 
 export type StateType = {
   messages: Message[];
@@ -216,6 +217,41 @@ export function formatStreamError(error: unknown): string {
   return "Run failed.";
 }
 
+function getHttpStatus(error: unknown): number | undefined {
+  if (!error || typeof error !== "object") return undefined;
+  const value = error as {
+    status?: unknown;
+    statusCode?: unknown;
+    status_code?: unknown;
+    response?: { status?: unknown };
+  };
+  const candidates = [
+    value.status,
+    value.statusCode,
+    value.status_code,
+    value.response?.status,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === "number") return candidate;
+    if (typeof candidate === "string" && /^\d{3}$/.test(candidate)) {
+      return Number(candidate);
+    }
+  }
+  return undefined;
+}
+
+export function isMissingThreadOrAssistantError(error: unknown): boolean {
+  const message = formatStreamError(error).toLowerCase();
+  const is404 = getHttpStatus(error) === 404 || /\bhttp\s*404\b/.test(message);
+  if (!is404) return false;
+
+  return (
+    message.includes("thread or assistant not found") ||
+    (message.includes("thread with id") && message.includes("not found")) ||
+    (message.includes("assistant with id") && message.includes("not found"))
+  );
+}
+
 export function useChat({
   activeAssistant,
   onHistoryRevalidate,
@@ -234,7 +270,10 @@ export function useChat({
   const streamOptions: UseStreamOptions<StateType> & {
     filterSubagentMessages: boolean;
   } = {
-    assistantId: activeAssistant?.assistant_id || "",
+    // Assistant discovery resolves asynchronously during startup. The local
+    // graph id remains a valid SDK target until the deployed assistant UUID
+    // arrives, so never reconnect an existing thread with an empty id.
+    assistantId: activeAssistant?.assistant_id || DEFAULT_ASSISTANT_ID,
     client: client ?? undefined,
     reconnectOnMount: true,
     threadId: threadId ?? null,
@@ -265,6 +304,13 @@ export function useChat({
     onFinish: onHistoryRevalidate,
     onError: (error) => {
       onHistoryRevalidate?.();
+      if (threadId && isMissingThreadOrAssistantError(error)) {
+        void setThreadId(null);
+        toast.error(
+          "This conversation is no longer available. Started a new chat."
+        );
+        return;
+      }
       toast.error(formatStreamError(error));
     },
     onCreated: onHistoryRevalidate,
