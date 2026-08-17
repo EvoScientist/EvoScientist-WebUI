@@ -137,6 +137,11 @@ describe("ChatInterface composition", () => {
     expect(screen.queryAllByTestId("stub-AskUserInterrupt")).toHaveLength(0);
   });
 
+  it("does not force LangSmith authentication on local streams", () => {
+    renderChatInterface();
+    expect(stream.getOptions()?.defaultHeaders).toBeUndefined();
+  });
+
   it("passes plain messages (no tool calls) through as ChatMessage stubs, not ActionGroup", () => {
     renderChatInterface();
     act(() => {

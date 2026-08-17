@@ -11,6 +11,21 @@ export const DEFAULT_ASSISTANT_ID = "EvoScientist";
 
 const CONFIG_KEY = "evoscientist-config";
 
+export function isLoopbackDeployment(deploymentUrl: string): boolean {
+  try {
+    const hostname = new URL(deploymentUrl).hostname.toLowerCase();
+    return (
+      hostname === "localhost" ||
+      hostname === "0.0.0.0" ||
+      hostname === "::1" ||
+      hostname === "[::1]" ||
+      /^127(?:\.\d{1,3}){3}$/.test(hostname)
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function getConfig(): DeploymentConfig | null {
   if (typeof window === "undefined") return null;
 
@@ -23,8 +38,18 @@ export function getConfig(): DeploymentConfig | null {
     // requests to the app's own origin (404s). Treat it as unconfigured so
     // the config dialog reappears instead.
     if (!parsed.deploymentUrl?.trim()) return null;
-    // Always pin the assistant to the EvoScientist main agent.
-    return { ...parsed, assistantId: DEFAULT_ASSISTANT_ID };
+    // Older WebUI releases could persist a LangSmith key in this object. A
+    // stale value makes the SDK send X-Api-Key to local LangGraph dev, which
+    // rejects the request with `UnauthorizedResponseError: User not found`.
+    // Local deployments do not need LangSmith authentication, so discard the
+    // legacy field while preserving it for authenticated remote deployments.
+    return {
+      deploymentUrl: parsed.deploymentUrl,
+      assistantId: DEFAULT_ASSISTANT_ID,
+      ...(!isLoopbackDeployment(parsed.deploymentUrl) && parsed.langsmithApiKey
+        ? { langsmithApiKey: parsed.langsmithApiKey }
+        : {}),
+    };
   } catch {
     return null;
   }

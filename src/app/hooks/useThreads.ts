@@ -109,6 +109,7 @@ export function useThreads(props: {
       const client = patchClientStreamModes(
         new Client({
           apiUrl: deploymentUrl,
+          apiKey: null,
           defaultHeaders: apiKey ? { "X-Api-Key": apiKey } : {},
         })
       );
@@ -287,6 +288,7 @@ function makeThreadsClient(): Client | null {
   return patchClientStreamModes(
     new Client({
       apiUrl: config.deploymentUrl,
+      apiKey: null,
       defaultHeaders: apiKey ? { "X-Api-Key": apiKey } : {},
     })
   );

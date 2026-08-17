@@ -239,7 +239,6 @@ export function useChat({
     reconnectOnMount: true,
     threadId: threadId ?? null,
     onThreadId: setThreadId,
-    defaultHeaders: { "x-auth-scheme": "langsmith" },
     // NOTE: do NOT set `throttle: <ms>` here. The SDK's `throttle` option
     // (from 1.1.0) is implemented as a debounce in `dist/ui/manager.js` -
     // each notification cancels the previous timer and restarts it. Under

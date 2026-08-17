@@ -17,6 +17,7 @@ export function makeClient(): Client | null {
   return patchClientStreamModes(
     new Client({
       apiUrl: config.deploymentUrl,
+      apiKey: null,
       defaultHeaders: apiKey ? { "X-Api-Key": apiKey } : {},
     })
   );

@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useMemo, ReactNode } from "react";
 import { Client } from "@langchain/langgraph-sdk";
+import { buildClientOptions } from "@/lib/clientAuth";
 import { makeClient } from "@/lib/streamMode";
 
 interface ClientContextValue {
@@ -22,13 +23,7 @@ export function ClientProvider({
   apiKey,
 }: ClientProviderProps) {
   const client = useMemo(() => {
-    return makeClient({
-      apiUrl: deploymentUrl,
-      defaultHeaders: {
-        "Content-Type": "application/json",
-        "X-Api-Key": apiKey,
-      },
-    });
+    return makeClient(buildClientOptions(deploymentUrl, apiKey));
   }, [deploymentUrl, apiKey]);
 
   const value = useMemo(() => ({ client }), [client]);
