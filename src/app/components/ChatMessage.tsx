@@ -39,6 +39,8 @@ import {
 } from "@/app/utils/utils";
 import { cn } from "@/lib/utils";
 import { copyText } from "@/lib/clipboard";
+import { getMessageTimestamp, formatTimestamp } from "@/lib/messageTimestamp";
+import { formatFullTime } from "@/lib/time";
 import { toast } from "sonner";
 
 interface ChatMessageProps {
@@ -442,6 +444,17 @@ export const ChatMessage = React.memo<ChatMessageProps>(
                     : model.name}
                 </span>
               )}
+              {(() => {
+                const ts = getMessageTimestamp(message);
+                return ts !== null ? (
+                  <span
+                    className="shrink-0 text-[10px] text-muted-foreground/50"
+                    title={formatFullTime(ts)}
+                  >
+                    {formatTimestamp(ts)}
+                  </span>
+                ) : null;
+              })()}
             </div>
           )}
           {terminalError && terminalError.variant === "partial" && (
@@ -460,36 +473,49 @@ export const ChatMessage = React.memo<ChatMessageProps>(
             </div>
           )}
           {isUser && hasContent && (
-            <div className="mt-1 flex justify-end gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
-              <button
-                type="button"
-                onClick={handleCopy}
-                aria-label={copied ? "Copied" : "Copy message"}
-                className="inline-flex items-center rounded p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                {copied ? (
-                  <Check
+            <div className="mt-1 flex items-center justify-end gap-1">
+              {(() => {
+                const ts = getMessageTimestamp(message);
+                return ts !== null ? (
+                  <span
+                    className="text-[10px] text-muted-foreground/50"
+                    title={formatFullTime(ts)}
+                  >
+                    {formatTimestamp(ts)}
+                  </span>
+                ) : null;
+              })()}
+              <div className="flex gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+                <button
+                  type="button"
+                  onClick={handleCopy}
+                  aria-label={copied ? "Copied" : "Copy message"}
+                  className="inline-flex items-center rounded p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  {copied ? (
+                    <Check
+                      className="h-4 w-4"
+                      aria-hidden="true"
+                    />
+                  ) : (
+                    <Copy
+                      className="h-4 w-4"
+                      aria-hidden="true"
+                    />
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onEditMessage?.(messageContent)}
+                  aria-label="Edit message"
+                  className="inline-flex items-center rounded p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <Pencil
                     className="h-4 w-4"
                     aria-hidden="true"
                   />
-                ) : (
-                  <Copy
-                    className="h-4 w-4"
-                    aria-hidden="true"
-                  />
-                )}
-              </button>
-              <button
-                type="button"
-                onClick={() => onEditMessage?.(messageContent)}
-                aria-label="Edit message"
-                className="inline-flex items-center rounded p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <Pencil
-                  className="h-4 w-4"
-                  aria-hidden="true"
-                />
-              </button>
+                </button>
+              </div>
             </div>
           )}
           {hasToolCalls && (
