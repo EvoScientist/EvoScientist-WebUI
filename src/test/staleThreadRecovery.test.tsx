@@ -55,7 +55,11 @@ vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
 }));
 
-import { isMissingThreadOrAssistantError } from "@/app/hooks/useChat";
+import type { Message } from "@langchain/langgraph-sdk";
+import {
+  isMissingThreadOrAssistantError,
+  missingThreadIdFromError,
+} from "@/app/hooks/useChat";
 import { renderChat } from "@/test/renderChat";
 
 describe("stale thread recovery", () => {
@@ -96,6 +100,91 @@ describe("stale thread recovery", () => {
     );
   });
 
+  it("hands recovery to onThreadUnavailable when the page provides it", () => {
+    const onThreadUnavailable = vi.fn();
+    renderChat({ activeAssistant: null, onThreadUnavailable });
+
+    act(() => {
+      stream.emitError(
+        new Error('HTTP 404: {"detail":"Thread or assistant not found."}')
+      );
+    });
+
+    expect(onThreadUnavailable).toHaveBeenCalledWith({
+      threadId: "5f2c8e6a-9b1d-4c3e-8a7f-1d2e3c4b5a69",
+      unsentMessage: null,
+    });
+    expect(queryState.setThreadId).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalledWith(
+      "This conversation is no longer available. Started a new chat."
+    );
+  });
+
+  it("reports the just-sent message as unsent when the submit itself 404s", () => {
+    const onThreadUnavailable = vi.fn();
+    const { result } = renderChat({
+      activeAssistant: null,
+      onThreadUnavailable,
+    });
+
+    act(() => {
+      result.current.sendMessage("hello there");
+    });
+    const sent = stream.getSubmitCalls()[0]?.values as {
+      messages: Message[];
+    };
+    act(() => {
+      stream.setMessages([...sent.messages]);
+    });
+    act(() => {
+      stream.emitError(
+        new Error('HTTP 404: {"detail":"Thread or assistant not found."}')
+      );
+    });
+
+    expect(onThreadUnavailable).toHaveBeenCalledWith({
+      threadId: "5f2c8e6a-9b1d-4c3e-8a7f-1d2e3c4b5a69",
+      unsentMessage: "hello there",
+    });
+    expect(toast.error).toHaveBeenCalledWith(
+      "This conversation is no longer available. Started a new chat; your unsent message is back in the composer."
+    );
+  });
+
+  it("stays quiet when the page rejects the report as stale", () => {
+    const onThreadUnavailable = vi.fn(() => false);
+    renderChat({ activeAssistant: null, onThreadUnavailable });
+
+    act(() => {
+      stream.emitError(
+        new Error('HTTP 404: {"detail":"Thread or assistant not found."}')
+      );
+    });
+
+    expect(onThreadUnavailable).toHaveBeenCalledTimes(1);
+    expect(queryState.setThreadId).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("ignores a 404 that lands after the hook instance unmounted", () => {
+    const onThreadUnavailable = vi.fn();
+    const { unmount } = renderChat({
+      activeAssistant: null,
+      onThreadUnavailable,
+    });
+    unmount();
+
+    act(() => {
+      stream.emitError(
+        new Error('HTTP 404: {"detail":"Thread or assistant not found."}')
+      );
+    });
+
+    expect(onThreadUnavailable).not.toHaveBeenCalled();
+    expect(queryState.setThreadId).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
   it("does not clear the URL for unrelated errors", () => {
     renderChat({ activeAssistant: null });
 
@@ -108,6 +197,41 @@ describe("stale thread recovery", () => {
 
     expect(queryState.setThreadId).not.toHaveBeenCalled();
     expect(toast.error).toHaveBeenCalledTimes(2);
+  });
+
+  it("ignores a history 404 that names a thread other than the open one", () => {
+    const onThreadUnavailable = vi.fn();
+    renderChat({ activeAssistant: null, onThreadUnavailable });
+
+    act(() => {
+      stream.emitError(
+        new Error(
+          'HTTP 404: {"detail":"Thread with ID 0b7e1c2d-3f4a-4b5c-8d6e-7f8091a2b3c4 not found"}'
+        )
+      );
+    });
+
+    expect(onThreadUnavailable).not.toHaveBeenCalled();
+    expect(queryState.setThreadId).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("drops a late history 404 once the URL has no thread", () => {
+    queryState.initialThreadId = null;
+    const onThreadUnavailable = vi.fn();
+    renderChat({ activeAssistant: null, onThreadUnavailable });
+
+    act(() => {
+      stream.emitError(
+        new Error(
+          'HTTP 404: {"detail":"Thread with ID 5f2c8e6a-9b1d-4c3e-8a7f-1d2e3c4b5a69 not found"}'
+        )
+      );
+    });
+
+    expect(onThreadUnavailable).not.toHaveBeenCalled();
+    expect(queryState.setThreadId).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
   });
 
   it("does not reset an already-new conversation", () => {
@@ -156,5 +280,29 @@ describe("isMissingThreadOrAssistantError", () => {
     expect(
       isMissingThreadOrAssistantError(new Error("HTTP 404: Model not found"))
     ).toBe(false);
+  });
+});
+
+describe("missingThreadIdFromError", () => {
+  it("extracts the id from history-style 404s and nothing from run-style ones", () => {
+    expect(
+      missingThreadIdFromError(
+        new Error(
+          'HTTP 404: {"detail":"Thread with ID 5f2c8e6a-9b1d-4c3e-8a7f-1d2e3c4b5a69 not found"}'
+        )
+      )
+    ).toBe("5f2c8e6a-9b1d-4c3e-8a7f-1d2e3c4b5a69");
+    expect(
+      missingThreadIdFromError(
+        new Error(
+          'HTTP 404: {"detail":"Thread with ID \'5f2c8e6a-9b1d-4c3e-8a7f-1d2e3c4b5a69\' not found. Please verify the ID is correct and the thread hasn\'t been deleted or expired."}'
+        )
+      )
+    ).toBe("5f2c8e6a-9b1d-4c3e-8a7f-1d2e3c4b5a69");
+    expect(
+      missingThreadIdFromError(
+        new Error('HTTP 404: {"detail":"Thread or assistant not found."}')
+      )
+    ).toBeNull();
   });
 });
