@@ -267,12 +267,22 @@ export function useChat({
   const [dynamicWorkflows, setDynamicWorkflows] = useState<WorkflowMap>({});
   const workflowThreadIdRef = useRef(threadId);
 
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
   const streamOptions: UseStreamOptions<StateType> & {
     filterSubagentMessages: boolean;
   } = {
-    // Assistant discovery resolves asynchronously during startup. The local
-    // graph id remains a valid SDK target until the deployed assistant UUID
-    // arrives, so never reconnect an existing thread with an empty id.
+    // Assistant discovery resolves asynchronously during startup. useStream
+    // only reads this id at submit time and the composer stays disabled until
+    // `assistant` resolves, so this covers the non-composer submitters (queue
+    // drain, async auto-report) racing discovery: the graph id is a valid
+    // target until the deployed assistant UUID arrives.
     assistantId: activeAssistant?.assistant_id || DEFAULT_ASSISTANT_ID,
     client: client ?? undefined,
     reconnectOnMount: true,
@@ -304,7 +314,11 @@ export function useChat({
     onFinish: onHistoryRevalidate,
     onError: (error) => {
       onHistoryRevalidate?.();
-      if (threadId && isMissingThreadOrAssistantError(error)) {
+      if (
+        threadId &&
+        mountedRef.current &&
+        isMissingThreadOrAssistantError(error)
+      ) {
         void setThreadId(null);
         toast.error(
           "This conversation is no longer available. Started a new chat."

@@ -17,7 +17,7 @@ import {
 } from "@/test/mockClient";
 
 const queryState = vi.hoisted(() => ({
-  initialThreadId: "stale-thread" as string | null,
+  initialThreadId: "5f2c8e6a-9b1d-4c3e-8a7f-1d2e3c4b5a69" as string | null,
   setThreadId: vi.fn(),
 }));
 
@@ -62,7 +62,7 @@ describe("stale thread recovery", () => {
   let stream: MockStreamStore;
 
   beforeEach(() => {
-    queryState.initialThreadId = "stale-thread";
+    queryState.initialThreadId = "5f2c8e6a-9b1d-4c3e-8a7f-1d2e3c4b5a69";
     queryState.setThreadId.mockReset();
     vi.mocked(toast.error).mockReset();
     stream = new MockStreamStore();
@@ -135,6 +135,16 @@ describe("isMissingThreadOrAssistantError", () => {
     };
 
     expect(isMissingThreadOrAssistantError(error)).toBe(true);
+    expect(
+      isMissingThreadOrAssistantError(
+        Object.assign(
+          new Error(
+            'HTTP 404: {"detail":"Thread with ID 5f2c8e6a-9b1d-4c3e-8a7f-1d2e3c4b5a69 not found"}'
+          ),
+          { status: 404 }
+        )
+      )
+    ).toBe(true);
   });
 
   it("requires both a 404 and a missing thread or assistant detail", () => {
