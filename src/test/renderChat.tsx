@@ -33,23 +33,30 @@ import { renderHook, type RenderHookResult } from "@testing-library/react";
 import type { ReactNode } from "react";
 import type { Assistant } from "@langchain/langgraph-sdk";
 import { ChatProvider, useChatContext } from "@/providers/ChatProvider";
+import type { ThreadUnavailableInfo } from "@/app/hooks/useChat";
 
 export type ChatContextValue = ReturnType<typeof useChatContext>;
 
 interface RenderChatOptions {
   activeAssistant?: Assistant | null;
   onHistoryRevalidate?: () => void;
+  onThreadUnavailable?: (info: ThreadUnavailableInfo) => void;
 }
 
 export function renderChat(
   opts: RenderChatOptions = {}
 ): RenderHookResult<ChatContextValue, unknown> {
-  const { activeAssistant = null, onHistoryRevalidate } = opts;
+  const {
+    activeAssistant = null,
+    onHistoryRevalidate,
+    onThreadUnavailable,
+  } = opts;
   return renderHook(() => useChatContext(), {
     wrapper: ({ children }: { children: ReactNode }) => (
       <ChatProvider
         activeAssistant={activeAssistant}
         onHistoryRevalidate={onHistoryRevalidate}
+        onThreadUnavailable={onThreadUnavailable}
       >
         {children}
       </ChatProvider>

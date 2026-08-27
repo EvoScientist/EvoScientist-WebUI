@@ -142,6 +142,16 @@ interface ChatInterfaceProps {
   // the Agents board can loop an async result back to the main agent. Returns
   // false if the main chat is mid-run (can't take a turn). Cleared on unmount.
   onNotifyReady?: (notify: MainChatReporter | null) => void;
+  // Pre-fill for a freshly mounted composer — the message that was in flight
+  // (plus any draft/queue) when its thread turned out to be gone (see page.tsx
+  // `handleThreadUnavailable`). Only ever seeds an empty composer.
+  draftSeed?: ComposerSnapshot | null;
+  // Register a getter for the current unsent composer state (draft + queue +
+  // attachments) up to the page, so it can be carried across a session
+  // remount. Cleared on unmount.
+  onComposerSnapshotReady?: (
+    getSnapshot: (() => ComposerSnapshot) | null
+  ) => void;
 }
 
 const SUGGESTED_PROMPTS = [
@@ -150,7 +160,7 @@ const SUGGESTED_PROMPTS = [
   "Analyze workspace files",
 ];
 
-interface UploadedWorkspaceFile {
+export interface UploadedWorkspaceFile {
   name: string;
   path: string;
   size: number;
@@ -164,6 +174,15 @@ interface QueuedMessage {
   text: string;
   files: UploadedWorkspaceFile[];
   threadId: string | null;
+}
+
+// Everything the user has typed but not yet sent: the composer draft plus any
+// queued follow-ups (flattened), with their attachments. Captured by the page
+// right before it tears the chat session down for a vanished thread, so a
+// remount cannot lose it.
+export interface ComposerSnapshot {
+  text: string;
+  files: UploadedWorkspaceFile[];
 }
 
 // Build the message body sent to the backend, appending the same workspace-file
@@ -282,6 +301,8 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     onNavigate,
     onOpenThread,
     workspaceOpen,
+    draftSeed,
+    onComposerSnapshotReady,
   }) => {
     const [metaOpen, setMetaOpen] = useState<
       "tasks" | "files" | "workflow" | null
@@ -294,6 +315,21 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     const [pendingFiles, setPendingFiles] = useState<UploadedWorkspaceFile[]>(
       []
     );
+    useEffect(() => {
+      if (!draftSeed) return;
+      const { text, files } = draftSeed;
+      if (text) setInput((current) => (current.trim() ? current : text));
+      if (files.length > 0) {
+        setPendingFiles((current) => (current.length > 0 ? current : files));
+      }
+      requestAnimationFrame(() => {
+        const el = textareaRef.current;
+        if (el) {
+          el.focus();
+          el.setSelectionRange(text.length, text.length);
+        }
+      });
+    }, [draftSeed]);
     const [isUploadingFiles, setIsUploadingFiles] = useState(false);
     const [workspaceDir, setWorkspaceDir] = useState<string | null>(null);
 
@@ -316,6 +352,28 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     const [queuedMessages, setQueuedMessages] = useState<QueuedMessage[]>([]);
     const queuedMessagesRef = useRef<QueuedMessage[]>(queuedMessages);
     queuedMessagesRef.current = queuedMessages;
+    const composerStateRef = useRef({ input, pendingFiles });
+    composerStateRef.current = { input, pendingFiles };
+    const onComposerSnapshotReadyRef = useRef(onComposerSnapshotReady);
+    onComposerSnapshotReadyRef.current = onComposerSnapshotReady;
+    useEffect(() => {
+      const getSnapshot = (): ComposerSnapshot => {
+        const { input: draft, pendingFiles: attached } =
+          composerStateRef.current;
+        const queued = queuedMessagesRef.current;
+        const text = [...queued.map((m) => m.text), draft]
+          .map((t) => t.trim())
+          .filter(Boolean)
+          .join("\n\n");
+        const seen = new Set<string>();
+        const files = [...queued.flatMap((m) => m.files), ...attached].filter(
+          (f) => !seen.has(f.path) && seen.add(f.path)
+        );
+        return { text, files };
+      };
+      onComposerSnapshotReadyRef.current?.(getSnapshot);
+      return () => onComposerSnapshotReadyRef.current?.(null);
+    }, []);
     const queueIdRef = useRef(0);
     const draggedQueuedMessageIdRef = useRef<number | null>(null);
     const [threadId] = useQueryState("threadId");

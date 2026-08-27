@@ -38,6 +38,8 @@ import {
   persistThreadDerivedMetadata,
   setThreadModelOverride,
 } from "@/app/hooks/useThreads";
+import { DEFAULT_ASSISTANT_ID } from "@/lib/config";
+import { extractStringFromMessageContent } from "@/app/utils/utils";
 
 export type StateType = {
   messages: Message[];
@@ -216,25 +218,114 @@ export function formatStreamError(error: unknown): string {
   return "Run failed.";
 }
 
+function getHttpStatus(error: unknown): number | undefined {
+  if (!error || typeof error !== "object") return undefined;
+  const value = error as {
+    status?: unknown;
+    statusCode?: unknown;
+    status_code?: unknown;
+    response?: { status?: unknown };
+  };
+  const candidates = [
+    value.status,
+    value.statusCode,
+    value.status_code,
+    value.response?.status,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === "number") return candidate;
+    if (typeof candidate === "string" && /^\d{3}$/.test(candidate)) {
+      return Number(candidate);
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The thread id named by a history-style 404 (`Thread with ID <id> not
+ * found`), or null when the error doesn't name one (run-path
+ * `Thread or assistant not found.`). Lets the recovery path check the report
+ * is about the thread that is still open — the SDK invokes the newest
+ * `onError` for a history fetch even when that fetch belonged to a thread the
+ * URL has since left (browser back/forward switches threads in place).
+ */
+export function missingThreadIdFromError(error: unknown): string | null {
+  const match = /thread with id '?([0-9a-f-]{8,})'?/i.exec(
+    formatStreamError(error)
+  );
+  return match ? match[1] : null;
+}
+
+export function isMissingThreadOrAssistantError(error: unknown): boolean {
+  const message = formatStreamError(error).toLowerCase();
+  const is404 = getHttpStatus(error) === 404 || /\bhttp\s*404\b/.test(message);
+  if (!is404) return false;
+
+  return (
+    message.includes("thread or assistant not found") ||
+    (message.includes("thread with id") && message.includes("not found")) ||
+    (message.includes("assistant with id") && message.includes("not found"))
+  );
+}
+
+/** Payload handed to `onThreadUnavailable` when the open thread is gone. */
+export interface ThreadUnavailableInfo {
+  /** The thread the URL pointed at when the backend reported it missing. */
+  threadId: string;
+  /**
+   * Text of the message whose submit triggered the 404 (the thread vanished
+   * between page load and send), or null when the 404 came from the initial
+   * history fetch and nothing was pending.
+   */
+  unsentMessage: string | null;
+}
+
 export function useChat({
   activeAssistant,
   onHistoryRevalidate,
+  onThreadUnavailable,
   thread,
 }: {
   activeAssistant: Assistant | null;
   onHistoryRevalidate?: () => void;
+  /**
+   * Called instead of the local `setThreadId(null)` fallback when the
+   * backend says the open thread/assistant no longer exists. The page uses it
+   * to route through its regular New-Chat reset (auto-approve sentinel,
+   * view, ChatProvider remount) and to re-seed the composer with any unsent
+   * message. Return `false` to reject the report (it was about a thread the
+   * user has already left) — nothing is reset or toasted then.
+   */
+  onThreadUnavailable?: (info: ThreadUnavailableInfo) => boolean | void;
   thread?: UseStreamThread<StateType>;
 }) {
   const [threadId, setThreadId] = useQueryState("threadId");
   const client = useClient();
+  // Id of the human message the most recent `sendMessage` submitted. If the
+  // submit fails with a thread-gone 404, this is the message that never made
+  // it and should be handed back to the user.
+  const lastSubmittedHumanIdRef = useRef<string | null>(null);
 
   const [dynamicWorkflows, setDynamicWorkflows] = useState<WorkflowMap>({});
   const workflowThreadIdRef = useRef(threadId);
 
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
   const streamOptions: UseStreamOptions<StateType> & {
     filterSubagentMessages: boolean;
   } = {
-    assistantId: activeAssistant?.assistant_id || "",
+    // Assistant discovery resolves asynchronously during startup. useStream
+    // only reads this id at submit time and the composer stays disabled until
+    // `assistant` resolves, so this covers the non-composer submitters (queue
+    // drain, async auto-report) racing discovery: the graph id is a valid
+    // target until the deployed assistant UUID arrives.
+    assistantId: activeAssistant?.assistant_id || DEFAULT_ASSISTANT_ID,
     client: client ?? undefined,
     reconnectOnMount: true,
     threadId: threadId ?? null,
@@ -262,9 +353,53 @@ export function useChat({
     // without this the user only sees React's generic "An internal error
     // occurred" and has to dig into the server log to learn that, e.g., a
     // model provider returned a quota error.
-    onFinish: onHistoryRevalidate,
-    onError: (error) => {
+    onFinish: () => {
+      lastSubmittedHumanIdRef.current = null;
       onHistoryRevalidate?.();
+    },
+    onError: (error) => {
+      // A history fetch or run can reject after this hook instance was torn
+      // down (the page remounts ChatProvider on thread switches and on New
+      // Chat); the user has moved on, so nothing here applies any more.
+      if (!mountedRef.current) return;
+      onHistoryRevalidate?.();
+      if (isMissingThreadOrAssistantError(error) && !threadId) {
+        // With no thread in the URL, a "Thread with ID … not found" can only
+        // be a late history-fetch rejection for a thread we already left
+        // (dev StrictMode double-fetches, slow backends) — drop it. A run-path
+        // "Thread or assistant not found." on a brand-new chat is a genuine
+        // assistant misconfiguration and still surfaces below.
+        if (/thread with id/i.test(formatStreamError(error))) return;
+      }
+      if (threadId && isMissingThreadOrAssistantError(error)) {
+        const reported = missingThreadIdFromError(error);
+        if (reported && reported !== threadId) return;
+        const last = streamRef.current.messages.at(-1);
+        const unsentMessage =
+          last &&
+          last.type === "human" &&
+          last.id != null &&
+          last.id === lastSubmittedHumanIdRef.current
+            ? extractStringFromMessageContent(last).trim() || null
+            : null;
+        lastSubmittedHumanIdRef.current = null;
+        if (onThreadUnavailable) {
+          if (onThreadUnavailable({ threadId, unsentMessage }) === false) {
+            return;
+          }
+        } else {
+          void setThreadId(null);
+        }
+        toast.error(
+          unsentMessage
+            ? onThreadUnavailable
+              ? "This conversation is no longer available. Started a new chat; your unsent message is back in the composer."
+              : "This conversation is no longer available. Started a new chat; your last message was not sent."
+            : "This conversation is no longer available. Started a new chat."
+        );
+        return;
+      }
+      lastSubmittedHumanIdRef.current = null;
       toast.error(formatStreamError(error));
     },
     onCreated: onHistoryRevalidate,
@@ -707,6 +842,7 @@ export function useChat({
       setUserAborted(false);
       recoveryRunRef.current += 1;
       const newMessage: Message = { id: uuidv4(), type: "human", content };
+      lastSubmittedHumanIdRef.current = newMessage.id ?? null;
       streamRef.current.submit(
         { messages: [newMessage] },
         {
@@ -748,6 +884,7 @@ export function useChat({
       userAbortedRef.current = false;
       setUserAborted(false);
       recoveryRunRef.current += 1;
+      lastSubmittedHumanIdRef.current = null;
       streamRef.current.submit(null, {
         command: { resume: value },
         config: buildRunConfig(),
@@ -771,6 +908,7 @@ export function useChat({
   const abortRun = useCallback(() => {
     userAbortedRef.current = true;
     setUserAborted(true);
+    lastSubmittedHumanIdRef.current = null;
     streamRef.current.stop();
   }, []);
 

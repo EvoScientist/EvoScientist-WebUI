@@ -7,6 +7,7 @@
 
 import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
 import { act, screen, within, fireEvent } from "@testing-library/react";
+import type { ComposerSnapshot } from "@/app/components/ChatInterface";
 import {
   MockStreamStore,
   clearMockStreamStore,
@@ -135,6 +136,31 @@ describe("ChatInterface composition", () => {
     expect(screen.queryAllByTestId("stub-ChatMessage")).toHaveLength(0);
     expect(screen.queryAllByTestId("stub-ActionGroup")).toHaveLength(0);
     expect(screen.queryAllByTestId("stub-AskUserInterrupt")).toHaveLength(0);
+  });
+
+  it("seeds the composer from draftSeed (message recovered from a vanished thread)", () => {
+    renderChatInterface({
+      draftSeed: { text: "draft that was never sent", files: [] },
+    });
+    const textarea = screen.getByRole("textbox") as HTMLTextAreaElement;
+    expect(textarea.value).toBe("draft that was never sent");
+  });
+
+  it("exposes the unsent composer state through onComposerSnapshotReady", () => {
+    let getSnapshot: (() => ComposerSnapshot) | null = null;
+    const { unmount } = renderChatInterface({
+      onComposerSnapshotReady: (fn) => {
+        getSnapshot = fn;
+      },
+    });
+    expect(getSnapshot).not.toBeNull();
+    const textarea = screen.getByRole("textbox") as HTMLTextAreaElement;
+    act(() => {
+      fireEvent.change(textarea, { target: { value: "typed but unsent" } });
+    });
+    expect(getSnapshot!()).toEqual({ text: "typed but unsent", files: [] });
+    unmount();
+    expect(getSnapshot).toBeNull();
   });
 
   it("passes plain messages (no tool calls) through as ChatMessage stubs, not ActionGroup", () => {

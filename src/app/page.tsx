@@ -1,6 +1,12 @@
 "use client";
 
-import React, { useState, useEffect, useCallback, Suspense } from "react";
+import React, {
+  useState,
+  useEffect,
+  useCallback,
+  useRef,
+  Suspense,
+} from "react";
 import Image from "next/image";
 import { useQueryState } from "nuqs";
 import { getConfig, saveConfig, DeploymentConfig } from "@/lib/config";
@@ -23,7 +29,11 @@ import {
 } from "@/components/ui/resizable";
 import { ThreadList } from "@/app/components/ThreadList";
 import { ChatProvider } from "@/providers/ChatProvider";
-import { ChatInterface } from "@/app/components/ChatInterface";
+import type { ThreadUnavailableInfo } from "@/app/hooks/useChat";
+import {
+  ChatInterface,
+  type ComposerSnapshot,
+} from "@/app/components/ChatInterface";
 import { SkillsMarketplace } from "@/app/components/SkillsMarketplace";
 import { MemoryPanel } from "@/app/components/MemoryPanel";
 import { ScheduledTasksPanel } from "@/app/components/ScheduledTasksPanel";
@@ -186,12 +196,49 @@ function HomePageInner({
     : sidebar
     ? "Hide research"
     : "Show research";
+  // Unsent composer state carried over when the open thread vanished; read
+  // once by the freshly mounted ChatInterface, cleared on any other
+  // navigation so it can't leak into an unrelated conversation.
+  const [composerSeed, setComposerSeed] = useState<ComposerSnapshot | null>(
+    null
+  );
+  const composerSnapshotRef = useRef<(() => ComposerSnapshot) | null>(null);
+  // Latest *intended* thread id, updated synchronously by the navigation
+  // handlers below (the nuqs value lags by a render). The stale-thread
+  // callback compares against this so a late 404 for a thread the user
+  // already left can't be mistaken for the open one.
+  const threadIdRef = useRef(threadId);
+  useEffect(() => {
+    threadIdRef.current = threadId;
+  }, [threadId]);
   const startNewChat = useCallback(() => {
     setThreadAutoApprove(null, false);
+    threadIdRef.current = null;
     setThreadId(null);
     setView(null);
+    setComposerSeed(null);
     setChatSessionRevision((revision) => revision + 1);
   }, [setThreadId, setView]);
+  // The backend reported the open thread (or its assistant) gone. Take the
+  // same reset path as New Chat, carrying the unsent message plus whatever
+  // was still in the composer/queue — but only if the report is about the
+  // thread that is still open: a 404 can land late, after the user already
+  // switched. Returns false to tell useChat the report was ignored.
+  const handleThreadUnavailable = useCallback(
+    ({ threadId: staleId, unsentMessage }: ThreadUnavailableInfo): boolean => {
+      if (staleId !== threadIdRef.current) return false;
+      const snapshot = composerSnapshotRef.current?.();
+      const text = [unsentMessage, snapshot?.text]
+        .map((t) => t?.trim() ?? "")
+        .filter(Boolean)
+        .join("\n\n");
+      const files = snapshot?.files ?? [];
+      startNewChat();
+      setComposerSeed(text || files.length > 0 ? { text, files } : null);
+      return true;
+    },
+    [startNewChat]
+  );
   const handleDashboardNav = useCallback(
     (
       target:
@@ -239,6 +286,8 @@ function HomePageInner({
     async (id: string) => {
       setThreadAutoApprove(null, false);
       setView(null);
+      setComposerSeed(null);
+      threadIdRef.current = id;
       const sameThread = threadId === id;
       // Bump revision before the awaited URL update: the remount tears down
       // the stale `useChat` instance before `threadId` flips, so its persist
@@ -458,9 +507,14 @@ function HomePageInner({
                   key={chatSessionRevision}
                   activeAssistant={assistant}
                   onHistoryRevalidate={() => mutateThreads?.()}
+                  onThreadUnavailable={handleThreadUnavailable}
                 >
                   <ChatInterface
                     assistant={assistant}
+                    draftSeed={composerSeed}
+                    onComposerSnapshotReady={(getSnapshot) => {
+                      composerSnapshotRef.current = getSnapshot;
+                    }}
                     onShowAgents={showAgentsInspector}
                     onNotifyReady={(fn) => setNotifyMainChat(() => fn)}
                     onNavigate={handleDashboardNav}

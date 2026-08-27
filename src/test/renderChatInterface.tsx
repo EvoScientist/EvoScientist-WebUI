@@ -90,12 +90,19 @@
 
 import { render, type RenderResult } from "@testing-library/react";
 import type { Assistant } from "@langchain/langgraph-sdk";
-import { ChatInterface } from "@/app/components/ChatInterface";
+import {
+  ChatInterface,
+  type ComposerSnapshot,
+} from "@/app/components/ChatInterface";
 import { ChatProvider } from "@/providers/ChatProvider";
 import { fixtureAssistant } from "@/test/fixtures/assistants";
 
 interface RenderChatInterfaceOptions {
   assistant?: Assistant | null;
+  draftSeed?: ComposerSnapshot | null;
+  onComposerSnapshotReady?: (
+    getSnapshot: (() => ComposerSnapshot) | null
+  ) => void;
 }
 
 export function renderChatInterface(
@@ -104,7 +111,11 @@ export function renderChatInterface(
   const assistant = opts.assistant ?? fixtureAssistant;
   return render(
     <ChatProvider activeAssistant={assistant}>
-      <ChatInterface assistant={assistant} />
+      <ChatInterface
+        assistant={assistant}
+        draftSeed={opts.draftSeed}
+        onComposerSnapshotReady={opts.onComposerSnapshotReady}
+      />
     </ChatProvider>
   );
 }
