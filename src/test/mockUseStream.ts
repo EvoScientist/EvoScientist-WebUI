@@ -160,6 +160,17 @@ export function clearMockStreamStore(): void {
   activeStore = null;
 }
 
+// The SDK's normalizeInterruptForClient creates a new object when an interrupt
+// has a value; mirror that so identity-keyed effects are exercised.
+export function freshInterruptIdentity(i: unknown): unknown {
+  if (Array.isArray(i)) {
+    return i.map((x) =>
+      x && typeof x === "object" ? { ...(x as object) } : x
+    );
+  }
+  return i && typeof i === "object" ? { ...(i as object) } : i;
+}
+
 /**
  * The hook body that `vi.mock` swaps in for the SDK's `useStream`. Dispatches
  * to whatever store the current test installed via `installMockStreamStore`.
@@ -183,7 +194,7 @@ export function useMockStreamHook(options: Record<string, unknown>) {
     messages: snap.messages,
     isLoading: snap.isLoading,
     isThreadLoading: snap.isThreadLoading,
-    interrupt: snap.interrupt,
+    interrupt: freshInterruptIdentity(snap.interrupt),
     error: snap.error,
     subagents: snap.subagents,
     submit: store.submit,

@@ -2285,17 +2285,19 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                     onClick={() => setModelPickerOpen(true)}
                     title="Click to change model for this chat"
                     aria-label="Change model for this chat"
-                    className="-mx-1 flex items-center gap-1.5 rounded px-1 py-0.5 transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    className="-mx-1 flex min-w-0 items-center gap-1.5 rounded px-1 py-0.5 transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   >
                     <Sparkles
                       className="size-3.5 shrink-0 text-[var(--brand)]"
                       aria-hidden="true"
                     />
-                    <span className="font-medium text-foreground">
+                    <span className="truncate font-medium text-foreground">
                       {currentModel.name}
                     </span>
                     {currentModel.provider && (
-                      <span>· {currentModel.provider}</span>
+                      <span className="hidden shrink-0 sm:inline">
+                        · {currentModel.provider}
+                      </span>
                     )}
                   </button>
                 )}
@@ -2322,7 +2324,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
             )}
             <form
               onSubmit={handleSubmit}
-              className="flex flex-col"
+              className="mobile-composer flex flex-col"
             >
               {pendingFiles.length > 0 && (
                 <div
@@ -2374,7 +2376,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                     ? "Queue a follow-up — sends when this turn finishes…"
                     : "Ask EvoScientist anything…"
                 }
-                className="font-inherit field-sizing-content flex-1 resize-none border-0 bg-transparent px-3.5 pb-2.5 pt-3 text-sm leading-6 text-primary outline-none placeholder:text-tertiary disabled:cursor-not-allowed sm:px-4"
+                className="font-inherit field-sizing-content max-h-[min(30dvh,12rem)] min-h-12 flex-1 resize-none overflow-y-auto border-0 bg-transparent px-3.5 pb-2.5 pt-3 text-sm leading-6 text-primary outline-none placeholder:text-tertiary disabled:cursor-not-allowed sm:px-4"
                 rows={1}
               />
               <div className="flex items-center justify-between gap-2 p-2 sm:p-2.5">
@@ -2412,6 +2414,9 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                         : setAutoApproveDialogOpen(true)
                     }
                     aria-pressed={autoApprove}
+                    aria-label={
+                      autoApprove ? "Turn off auto-approve" : "Auto-approve"
+                    }
                     title="Auto-approve all tool actions in this conversation"
                     className={cn(
                       "inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium transition-colors",

@@ -138,4 +138,71 @@ describe("recovery poll", () => {
     expect(client.threads.getState.mock.calls.length).toBe(settled);
     expect(result.current.interrupt).toBeUndefined();
   });
+
+  it.each([
+    ["with an ID", pendingApproval],
+    ["without an ID", { value: pendingApproval.value }],
+    ["as an array", [pendingApproval]],
+  ])(
+    "keeps the poll bounded when live interrupt identity churns %s",
+    async (_label, liveInterrupt) => {
+      // A live interrupt is present (e.g. the next parallel sub-agent re-raised
+      // after one approval) and the stream is idle. The SDK hands back a fresh
+      // interrupt object per render; unrelated store notifications must NOT
+      // re-run the recovery effect and re-issue getState/get.
+      const { result } = renderChat({ activeAssistant: fixtureAssistant });
+      act(() => {
+        stream.setInterrupt(liveInterrupt);
+      });
+      await waitFor(() => {
+        expect(result.current.interrupt).toBeDefined();
+      });
+      // Let the first poll settle.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const client = getActiveMockClient();
+      const settled = client.threads.getState.mock.calls.length;
+
+      // 30 unrelated notifications = 30 renders = 30 fresh interrupt objects.
+      for (let i = 0; i < 30; i++) {
+        act(() => {
+          stream.setMessages([...stream.getSnapshot().messages]);
+        });
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      expect(client.threads.getState.mock.calls.length).toBe(settled);
+      expect(result.current.interrupt).toBeDefined();
+    }
+  );
+
+  it("recovers a new approval ID even when the tool arguments are identical", async () => {
+    const { result } = renderChat({ activeAssistant: fixtureAssistant });
+    await waitFor(() => {
+      expect(result.current.interrupt).toEqual(pendingApproval);
+    });
+    const client = getActiveMockClient();
+    const settled = client.threads.getState.mock.calls.length;
+    const nextApproval = { ...pendingApproval, id: "int-srv-2" };
+    const nextMessages = [
+      ...serverMessages,
+      { id: "a2", type: "ai", content: "Second approval" },
+    ] as Message[];
+    client.setThreadState("t-1", {
+      next: ["tools"],
+      tasks: [{ interrupts: [nextApproval] }],
+      values: { messages: nextMessages },
+    });
+    act(() => {
+      stream.setInterrupt(nextApproval);
+    });
+    await waitFor(() => {
+      expect(result.current.interrupt).toEqual(nextApproval);
+      expect(result.current.messages.map((m) => m.id)).toEqual([
+        "h1",
+        "a1",
+        "a2",
+      ]);
+    });
+    expect(client.threads.getState.mock.calls.length).toBe(settled + 1);
+  });
 });
