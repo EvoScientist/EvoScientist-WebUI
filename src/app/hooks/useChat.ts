@@ -633,6 +633,10 @@ export function useChat({
     },
     [threadId]
   );
+  // `stream.interrupt` is a fresh object per access (SDK getter); key the
+  // recovery effect on its ID (or value fallback) so a pending interrupt doesn't
+  // re-run it per commit.
+  const liveInterruptKey = interruptValueKey(coerceInterrupt(stream.interrupt));
   useEffect(() => {
     if (!threadId) {
       setFetchedInterrupt(undefined);
@@ -749,10 +753,10 @@ export function useChat({
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-    // Precise deps on purpose: re-running on the whole `stream` object (new each
-    // render) would loop the getState fetch.
+    // Precise deps on purpose: the whole `stream` object (and `stream.interrupt`
+    // itself) is new each render and would loop the getState fetch.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [threadId, stream.interrupt, stream.isLoading, client]);
+  }, [threadId, liveInterruptKey, stream.isLoading, client]);
 
   const liveInterrupt = coerceInterrupt(
     stream.interrupt

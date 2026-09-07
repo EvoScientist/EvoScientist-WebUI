@@ -272,7 +272,10 @@ describe("ToolApprovalInterrupt", () => {
     );
     const approve = getApproveButton(container);
     expect(approve.hasAttribute("disabled")).toBe(true);
-    expect(approve.textContent?.toLowerCase()).toContain("approving");
+    // A fresh card mounting mid-stream has NOT been approved: it is waiting
+    // for the run to settle, so the label must not claim "Approving…".
+    expect(approve.textContent?.toLowerCase()).toContain("waiting for run");
+    expect(approve.textContent?.toLowerCase()).not.toContain("approving");
     expect(getRejectButton(container).hasAttribute("disabled")).toBe(true);
     expect(getEditButton(container).hasAttribute("disabled")).toBe(true);
   });

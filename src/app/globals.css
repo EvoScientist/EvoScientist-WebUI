@@ -443,3 +443,31 @@ button {
   text-decoration: line-through;
   text-decoration-color: #f85149;
 }
+
+/* The chat owns scrolling; account for mobile browser chrome and safe areas. */
+.app-shell {
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right)
+    env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+
+@media (max-width: 767px) {
+  .mobile-app-header button,
+  .mobile-composer button,
+  .mobile-approval-actions button {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  /* Keep text entry readable without focus-triggered zoom on mobile Safari. */
+  .app-shell :is(input, textarea, select),
+  [data-slot="dialog-content"] :is(input, textarea, select) {
+    font-size: 16px;
+  }
+}
+
+.mobile-composer textarea {
+  field-sizing: content;
+}

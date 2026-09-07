@@ -283,7 +283,7 @@ export const ChatMessage = React.memo<ChatMessageProps>(
         <div
           className={cn(
             "min-w-0 max-w-full",
-            isUser ? "max-w-[70%]" : "w-full"
+            isUser ? "max-w-[90%] sm:max-w-[70%]" : "w-full"
           )}
         >
           {!isUser && reasoning && (

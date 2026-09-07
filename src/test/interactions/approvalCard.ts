@@ -8,7 +8,7 @@ export const findCardHeader = (scope: HTMLElement) =>
   within(scope).findByText(/approval required/i);
 
 export const getApproveButton = (scope: HTMLElement) =>
-  within(scope).getByRole("button", { name: /^(approve|approving)/i });
+  within(scope).getByRole("button", { name: /^(approve|waiting for run)/i });
 
 export const getRejectButton = (scope: HTMLElement) =>
   within(scope).getByRole("button", { name: /^reject/i });

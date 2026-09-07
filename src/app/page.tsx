@@ -311,8 +311,8 @@ function HomePageInner({
         onSave={handleSaveConfig}
         initialConfig={config}
       />
-      <div className="flex h-screen flex-col">
-        <header className="flex h-14 items-center justify-between gap-2 border-b border-border px-2.5 sm:px-4">
+      <div className="app-shell flex flex-col">
+        <header className="mobile-app-header flex h-14 shrink-0 items-center justify-between gap-1 border-b border-border px-2 sm:gap-2 sm:px-4">
           <div className="flex min-w-0 items-center gap-2 sm:gap-3">
             <div className="flex min-w-0 items-center gap-2">
               <Image
@@ -327,7 +327,7 @@ function HomePageInner({
                   titles the panel). When collapsed, keep just the logo + the
                   toggle / new-chat icons for a compact header. */}
               {sidebar && (
-                <h1 className="truncate text-base font-semibold sm:text-lg">
+                <h1 className="hidden truncate text-base font-semibold sm:block sm:text-lg">
                   EvoScientist
                 </h1>
               )}
@@ -571,6 +571,7 @@ function HomePageInner({
 
 function HomePageContent() {
   const [config, setConfig] = useState<DeploymentConfig | null>(null);
+  const [configLoaded, setConfigLoaded] = useState(false);
   const [configDialogOpen, setConfigDialogOpen] = useState(false);
   const [assistantId, setAssistantId] = useQueryState("assistantId");
 
@@ -585,6 +586,7 @@ function HomePageContent() {
     } else {
       setConfigDialogOpen(true);
     }
+    setConfigLoaded(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -602,6 +604,21 @@ function HomePageContent() {
 
   const langsmithApiKey =
     config?.langsmithApiKey || process.env.NEXT_PUBLIC_LANGSMITH_API_KEY || "";
+
+  // Saved configuration is browser-only. Until it has been read, avoid flashing
+  // the first-time setup screen when reloading an existing conversation.
+  if (!configLoaded) {
+    return (
+      <div className="flex h-screen items-center justify-center">
+        <p
+          role="status"
+          className="text-muted-foreground"
+        >
+          Loading…
+        </p>
+      </div>
+    );
+  }
 
   if (!config) {
     return (

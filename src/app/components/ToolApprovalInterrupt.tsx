@@ -297,7 +297,7 @@ export function ToolApprovalInterrupt({
       )}
 
       {/* Actions */}
-      <div className="flex flex-wrap gap-2">
+      <div className="mobile-approval-actions flex flex-wrap gap-2">
         {isEditing ? (
           <>
             <Button
@@ -395,7 +395,7 @@ export function ToolApprovalInterrupt({
                   size={14}
                   aria-hidden="true"
                 />
-                {isLoading ? "Approving…" : "Approve"}
+                {isLoading ? "Waiting for run…" : "Approve"}
               </Button>
             )}
           </>
