@@ -234,6 +234,13 @@ export function isTerminalStatus(s: string | undefined): boolean {
   return n === "success" || n === "error" || n === "cancelled";
 }
 
+/** Whether a step without a result may still get one: not once the run has
+ *  ended or its thread is gone. An unknown status keeps the benefit of the
+ *  doubt (spinner), as before this distinction existed. */
+export function asyncAgentCanStillProduceSteps(s: string | undefined): boolean {
+  return !isTerminalStatus(s) && normalizeAsyncStatus(s) !== "expired";
+}
+
 export function countRunning(
   tasks: { liveStatus?: string; status: string }[]
 ): number {

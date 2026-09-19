@@ -16,7 +16,13 @@ export const SubAgentIndicator = React.memo<SubAgentIndicatorProps>(
     const running =
       subAgent.status === "pending" || subAgent.status === "active";
     const status =
-      subAgent.status === "error" ? "failed" : running ? "running" : "finished";
+      subAgent.status === "error"
+        ? "failed"
+        : subAgent.status === "stopped"
+        ? "stopped"
+        : running
+        ? "running"
+        : "finished";
     return (
       <div className="w-fit max-w-[70vw] overflow-hidden rounded-lg bg-card">
         <Button

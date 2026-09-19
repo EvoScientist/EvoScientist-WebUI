@@ -40,6 +40,13 @@ export function isActiveStatus(status: ScheduledRunStatus): boolean {
   return status === "pending" || status === "running";
 }
 
+/** Whether a step without a result may still get one. False only once the run
+ *  has clearly ended: an "interrupted" run may be paused on an approval the
+ *  user has yet to give, so its steps are not dead. */
+export function canStillProduceSteps(status: ScheduledRunStatus): boolean {
+  return status !== "success" && status !== "error" && status !== "timeout";
+}
+
 export function runMatchesTask(
   run: unknown,
   threadMetadata: unknown,

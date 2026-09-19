@@ -23,6 +23,7 @@ import {
   asyncTaskReportKey,
   countRunning,
   formatElapsed,
+  asyncAgentCanStillProduceSteps,
   isTerminalStatus,
   type MainChatReporter,
   normalizeAsyncStatus,
@@ -477,6 +478,9 @@ export function AgentsPanel({ onReportToMainChat }: AgentsPanelProps) {
                         ) : (
                           <SubAgentSteps
                             steps={detail.steps}
+                            running={asyncAgentCanStillProduceSteps(
+                              task.liveStatus
+                            )}
                             compact
                           />
                         )}

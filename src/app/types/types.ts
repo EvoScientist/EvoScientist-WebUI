@@ -3,7 +3,9 @@ export interface ToolCall {
   name: string;
   args: Record<string, unknown>;
   result?: string;
-  status: "pending" | "completed" | "error" | "interrupted";
+  // "stopped": the run ended without a result for this call (the user pressed
+  // Stop, or the run was cancelled) and nothing can produce one any more.
+  status: "pending" | "completed" | "error" | "interrupted" | "stopped";
 }
 
 export interface SubAgent {
@@ -12,7 +14,7 @@ export interface SubAgent {
   subAgentName: string;
   input: Record<string, unknown>;
   output?: unknown;
-  status: "pending" | "active" | "completed" | "error";
+  status: "pending" | "active" | "completed" | "error" | "stopped";
 }
 
 export interface FileItem {

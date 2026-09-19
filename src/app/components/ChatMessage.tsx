@@ -152,6 +152,8 @@ export const ChatMessage = React.memo<ChatMessageProps>(
               ? "error"
               : toolCall.status === "pending"
               ? "pending"
+              : toolCall.status === "stopped"
+              ? "stopped"
               : "active";
           return {
             id: toolCall.id,
@@ -512,6 +514,10 @@ export const ChatMessage = React.memo<ChatMessageProps>(
                             <div className="mb-4">
                               <SubAgentSteps
                                 steps={subAgentSteps![subAgent.id]}
+                                running={
+                                  subAgent.status === "pending" ||
+                                  subAgent.status === "active"
+                                }
                                 hideFinalText={
                                   subAgent.output !== undefined &&
                                   subAgent.output !== null

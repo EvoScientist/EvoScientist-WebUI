@@ -105,3 +105,20 @@ describe("ToolCallBox approval expansion", () => {
     expect(approvalCard()).not.toBeNull();
   });
 });
+
+describe("ToolCallBox status icon", () => {
+  it("spins while a result can still arrive", () => {
+    const { container } = render(
+      <ToolCallBox toolCall={{ ...toolCall, status: "pending" }} />
+    );
+    expect(container.querySelector(".animate-spin")).not.toBeNull();
+  });
+
+  it("stops spinning, and says so, once the run is over without a result", () => {
+    const { container } = render(
+      <ToolCallBox toolCall={{ ...toolCall, status: "stopped" }} />
+    );
+    expect(container.querySelector(".animate-spin")).toBeNull();
+    expect(screen.getByLabelText("Did not finish")).toBeTruthy();
+  });
+});
