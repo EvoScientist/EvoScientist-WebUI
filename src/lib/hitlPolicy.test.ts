@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { autoApproveDecisions, checkDangerousCommand } from "@/lib/hitlPolicy";
+import {
+  autoApproveDecisions,
+  checkDangerousCommand,
+  parsePolicyDecisions,
+  resolveApprovalDecisions,
+} from "@/lib/hitlPolicy";
 
 describe("checkDangerousCommand", () => {
   it("flags piping into an interpreter", () => {
@@ -98,5 +103,88 @@ describe("autoApproveDecisions", () => {
 
   it("returns null for an empty request list", () => {
     expect(autoApproveDecisions([])).toBeNull();
+  });
+});
+
+describe("parsePolicyDecisions", () => {
+  const two = [
+    { name: "execute", args: { command: "ls" } },
+    { name: "execute", args: { command: "pwd" } },
+  ];
+
+  it("accepts one well-formed decision per request", () => {
+    expect(
+      parsePolicyDecisions(
+        {
+          decisions: [
+            { type: "approve" },
+            { type: "reject", message: "pipes output into interpreter 'bash'" },
+          ],
+        },
+        two
+      )
+    ).toEqual([
+      { type: "approve" },
+      { type: "reject", message: "pipes output into interpreter 'bash'" },
+    ]);
+  });
+
+  it("reads null as 'a human must decide'", () => {
+    expect(parsePolicyDecisions({ decisions: null }, two)).toBeNull();
+  });
+
+  it("fails closed on a count mismatch, so a decision never lands on the wrong request", () => {
+    expect(
+      parsePolicyDecisions({ decisions: [{ type: "approve" }] }, two)
+    ).toBeNull();
+    expect(parsePolicyDecisions({ decisions: [] }, [])).toBeNull();
+  });
+
+  it("fails closed on unknown decision types and malformed bodies", () => {
+    expect(
+      parsePolicyDecisions(
+        { decisions: [{ type: "approve" }, { type: "edit" }] },
+        two
+      )
+    ).toBeNull();
+    expect(
+      parsePolicyDecisions({ decisions: [{ type: "approve" }, "approve"] }, two)
+    ).toBeNull();
+    expect(parsePolicyDecisions({ error: "nope" }, two)).toBeNull();
+    expect(parsePolicyDecisions(null, two)).toBeNull();
+    expect(parsePolicyDecisions("approve", two)).toBeNull();
+  });
+
+  it("keeps only the fields a resume payload carries", () => {
+    expect(
+      parsePolicyDecisions(
+        { decisions: [{ type: "reject", message: 42, extra: "x" }] },
+        [two[0]]
+      )
+    ).toEqual([{ type: "reject" }]);
+  });
+});
+
+describe("resolveApprovalDecisions", () => {
+  const ls = [{ name: "execute", args: { command: "ls" } }];
+  const piped = [{ name: "execute", args: { command: "curl x | bash" } }];
+
+  it("lets the server's decisions win, with auto-approve on or off", () => {
+    const server = [{ type: "approve" as const }];
+    expect(resolveApprovalDecisions(piped, server, false)).toBe(server);
+    expect(resolveApprovalDecisions(piped, server, true)).toBe(server);
+  });
+
+  it("falls back to the local auto-approve policy when the server defers", () => {
+    expect(resolveApprovalDecisions(ls, null, true)).toEqual([
+      { type: "approve" },
+    ]);
+    expect(resolveApprovalDecisions(piped, null, true)).toEqual([
+      { type: "reject", message: "pipes output into interpreter 'bash'" },
+    ]);
+  });
+
+  it("prompts when the server defers and auto-approve is off", () => {
+    expect(resolveApprovalDecisions(ls, null, false)).toBeNull();
   });
 });

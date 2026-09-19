@@ -6,7 +6,13 @@
 // the full render tree into scope.
 
 import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
-import { act, screen, within, fireEvent } from "@testing-library/react";
+import {
+  act,
+  screen,
+  within,
+  fireEvent,
+  waitFor,
+} from "@testing-library/react";
 import type { ComposerSnapshot } from "@/app/components/ChatInterface";
 import {
   MockStreamStore,
@@ -32,8 +38,16 @@ vi.mock("@/providers/ClientProvider", async (importOriginal) => {
     ...actual,
     ClientProvider: ({ children }: { children: React.ReactNode }) => children,
     useClient: () => getActiveMockClient(),
+    useDeployment: () => mockDeployment,
   };
 });
+
+// What the (mocked) ClientProvider reports as the live deployment. Tests that
+// exercise the approval policy point it at a URL; the default is "none".
+let mockDeployment: { deploymentUrl: string | null; apiKey: string } = {
+  deploymentUrl: null,
+  apiKey: "",
+};
 
 vi.mock("nuqs", async () => {
   const react = await import("react");
@@ -119,6 +133,7 @@ import {
   multiActionInterrupt,
 } from "@/test/fixtures/interrupts";
 import { setThreadAutoApprove } from "@/lib/autoApprove";
+import { resetApprovalPolicySupport } from "@/app/hooks/useApprovalPolicy";
 
 describe("ChatInterface composition", () => {
   let stream: MockStreamStore;
@@ -352,6 +367,171 @@ describe("ChatInterface composition", () => {
       "Primary model failed: APIError: overloaded",
       { id: "model-fallback" }
     );
+  });
+
+  it("resumes with the deployment's approval policy while auto-approve is off, without opening a card", async () => {
+    resetApprovalPolicySupport();
+    mockDeployment = { deploymentUrl: "http://127.0.0.1:6174", apiKey: "" };
+    const fetchMock = vi.fn(
+      async (_url: string) =>
+        new Response(JSON.stringify({ decisions: [{ type: "approve" }] }), {
+          status: 200,
+        })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      renderChatInterface();
+      act(() => {
+        stream.setMessages([
+          humanTurn("status?"),
+          aiToolCallTurn("execute", { command: "git status" }, "t1"),
+        ]);
+        stream.setInterrupt(executeInterrupt("git status"));
+      });
+
+      // Asked, not decided yet: the card stays quiet instead of flashing.
+      expect(
+        getLastProps<{ approvalAutoResolves: boolean }>("ActionGroup")
+          ?.approvalAutoResolves
+      ).toBe(true);
+
+      await waitFor(() => expect(stream.getSubmitCalls()).toHaveLength(1));
+      const opts = stream.getSubmitCalls()[0].options as {
+        command: { resume: Record<string, { decisions: unknown[] }> };
+      };
+      expect(opts.command.resume["int-1"].decisions).toEqual([
+        { type: "approve" },
+      ]);
+      // Other parts of the page fetch too (workspace listing), so look for the
+      // policy call rather than assuming it came first.
+      expect(
+        fetchMock.mock.calls.some(
+          ([url]) => String(url) === "http://127.0.0.1:6174/api/policy"
+        )
+      ).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+      mockDeployment = { deploymentUrl: null, apiKey: "" };
+    }
+  });
+
+  it("hands the decision to the user when the deployment defers and auto-approve is off", async () => {
+    resetApprovalPolicySupport();
+    mockDeployment = { deploymentUrl: "http://127.0.0.1:6174", apiKey: "" };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ decisions: null }), { status: 200 })
+      )
+    );
+    try {
+      renderChatInterface();
+      act(() => {
+        stream.setMessages([
+          humanTurn("run ls"),
+          aiToolCallTurn("execute", { command: "ls" }, "t1"),
+        ]);
+        stream.setInterrupt(executeInterrupt("ls"));
+      });
+      await waitFor(() =>
+        expect(
+          getLastProps<{ approvalAutoResolves: boolean }>("ActionGroup")
+            ?.approvalAutoResolves
+        ).toBe(false)
+      );
+      expect(stream.getSubmitCalls()).toHaveLength(0);
+    } finally {
+      vi.unstubAllGlobals();
+      mockDeployment = { deploymentUrl: null, apiKey: "" };
+    }
+  });
+
+  it("asks the deployment the provider is connected to, not a stored one", async () => {
+    // Reconnecting (HealthIndicator) swaps the deployment without remounting
+    // the chat, so a URL read once from storage would go on asking the old one.
+    resetApprovalPolicySupport();
+    localStorage.setItem(
+      "evoscientist-config",
+      JSON.stringify({
+        deploymentUrl: "http://stale.invalid:6174",
+        assistantId: "EvoScientist",
+      })
+    );
+    mockDeployment = { deploymentUrl: "http://127.0.0.1:7001", apiKey: "" };
+    const fetchMock = vi.fn(
+      async (_url: string) =>
+        new Response(JSON.stringify({ decisions: null }), { status: 200 })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      renderChatInterface();
+      act(() => {
+        stream.setMessages([
+          humanTurn("run ls"),
+          aiToolCallTurn("execute", { command: "ls" }, "t1"),
+        ]);
+        stream.setInterrupt(executeInterrupt("ls"));
+      });
+      await waitFor(() =>
+        expect(
+          fetchMock.mock.calls.some(([url]) =>
+            String(url).endsWith("/api/policy")
+          )
+        ).toBe(true)
+      );
+      const asked = fetchMock.mock.calls
+        .map(([url]) => String(url))
+        .filter((url) => url.endsWith("/api/policy"));
+      expect(asked).toEqual(["http://127.0.0.1:7001/api/policy"]);
+    } finally {
+      vi.unstubAllGlobals();
+      localStorage.removeItem("evoscientist-config");
+      mockDeployment = { deploymentUrl: null, apiKey: "" };
+    }
+  });
+
+  it("keeps the fallback card's buttons disabled until the deployment has answered", async () => {
+    // A sub-agent's request has no tool call to bind to, so its card is always
+    // on screen. Deciding by hand while the deployment is still being asked
+    // would race the decision it is about to return.
+    resetApprovalPolicySupport();
+    mockDeployment = { deploymentUrl: "http://127.0.0.1:6174", apiKey: "" };
+    let release: (r: Response) => void = () => {};
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) =>
+        String(url).endsWith("/api/policy")
+          ? new Promise<Response>((resolve) => (release = resolve))
+          : Promise.resolve(new Response("{}", { status: 200 }))
+      )
+    );
+    try {
+      renderChatInterface();
+      act(() => {
+        stream.setMessages([
+          humanTurn("go"),
+          aiToolCallTurn("task", { subagent_type: "code-agent" }, "t1"),
+        ]);
+        stream.setInterrupt(executeInterrupt("ls"));
+      });
+      expect(screen.getByText("Approval requested by code-agent")).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+
+      await act(async () => {
+        release(
+          new Response(JSON.stringify({ decisions: null }), { status: 200 })
+        );
+        await Promise.resolve();
+      });
+      await waitFor(() => {
+        const approve = screen.getByRole("button", { name: "Approve" });
+        expect((approve as HTMLButtonElement).disabled).toBe(false);
+      });
+    } finally {
+      vi.unstubAllGlobals();
+      mockDeployment = { deploymentUrl: null, apiKey: "" };
+    }
   });
 
   it("flows autoApprove state from thread-local storage into ActionGroup props", () => {

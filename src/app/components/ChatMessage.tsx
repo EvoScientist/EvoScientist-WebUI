@@ -56,6 +56,7 @@ interface ChatMessageProps {
   graphId?: string;
   onEditMessage?: (content: string) => void;
   autoApprove?: boolean;
+  approvalAutoResolves?: boolean;
   subAgentSteps?: Record<string, SubAgentStep[]>;
 }
 
@@ -100,6 +101,7 @@ export const ChatMessage = React.memo<ChatMessageProps>(
     graphId,
     onEditMessage,
     autoApprove,
+    approvalAutoResolves,
     subAgentSteps,
   }) => {
     const isUser = message.type === "human";
@@ -473,6 +475,7 @@ export const ChatMessage = React.memo<ChatMessageProps>(
                     }
                     isLoading={isLoading}
                     autoApprove={autoApprove}
+                    approvalAutoResolves={approvalAutoResolves}
                   />
                 );
               })}

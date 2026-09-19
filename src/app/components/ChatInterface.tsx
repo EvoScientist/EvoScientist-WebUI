@@ -90,6 +90,9 @@ import {
   saveThreadSubAgentSteps,
 } from "@/lib/subAgentStepsStore";
 import { useAutoApproveInterrupt } from "@/app/hooks/useAutoApproveInterrupt";
+import { useApprovalPolicy } from "@/app/hooks/useApprovalPolicy";
+import { useDeployment } from "@/providers/ClientProvider";
+import { resolveApprovalDecisions } from "@/lib/hitlPolicy";
 import {
   getThreadAutoNotifyReportedKeys,
   initializeThreadAutoNotifyReports,
@@ -1133,12 +1136,25 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     // for the rest of this conversation (each interrupt is handled once,
     // keyed by interruptValueKey; the isLoading gate avoids the SDK-swallowed
     // resume race documented in the hook).
+    //
+    // The deployment's own policy is asked first (`POST /api/policy`): it knows
+    // `shell_allow_list`, which the client-side policy cannot see, so an
+    // allow-listed command resumes without a prompt even with auto-approve off —
+    // exactly as in the TUI. Older deployments have no such route and fall back
+    // to the local policy.
+    const deployment = useDeployment();
+    const approvalPolicy = useApprovalPolicy({
+      interrupt,
+      deploymentUrl: deployment.deploymentUrl,
+      apiKey: deployment.apiKey,
+    });
     useAutoApproveInterrupt({
       autoApprove,
       interrupt,
       resumeInterrupt,
       isLoading,
       resetKey: threadId,
+      policy: approvalPolicy,
     });
 
     // ask_user: the agent is asking the user structured questions.
@@ -1176,6 +1192,17 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     }, [interrupt]);
 
     const interruptId = useMemo(() => interruptIdOf(interrupt), [interrupt]);
+
+    // True while the policy is being asked or the interrupt will resume on its
+    // own — the cards stay collapsed instead of flashing open for a moment.
+    const approvalAutoResolves =
+      actionRequests.length > 0 &&
+      (approvalPolicy.checking ||
+        resolveApprovalDecisions(
+          actionRequests as Parameters<typeof resolveApprovalDecisions>[0],
+          approvalPolicy.decisions,
+          autoApprove
+        ) !== null);
 
     const resumeToolApproval = useCallback(
       (value: any) => {
@@ -1772,6 +1799,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                         graphId={assistant?.graph_id}
                         onEditMessage={handleEditMessage}
                         autoApprove={autoApprove}
+                        approvalAutoResolves={approvalAutoResolves}
                         subAgentSteps={subAgentSteps}
                         ui={ui}
                         compactionAnchorId={compactionAnchorId}
@@ -1814,6 +1842,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                         graphId={assistant?.graph_id}
                         onEditMessage={handleEditMessage}
                         autoApprove={autoApprove}
+                        approvalAutoResolves={approvalAutoResolves}
                         subAgentSteps={subAgentSteps}
                       />
                     </React.Fragment>
@@ -1832,7 +1861,9 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                     requestedBy={subAgentRequester}
                     interruptKey={interruptId}
                     onResume={resumeToolApproval}
-                    isLoading={isLoading}
+                    // Deciding by hand while the deployment is still being
+                    // asked would race the decision it is about to return.
+                    isLoading={isLoading || approvalPolicy.checking}
                   />
                 )}
                 {askUserQuestions && (

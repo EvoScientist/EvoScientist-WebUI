@@ -52,6 +52,11 @@ interface ToolCallBoxProps {
   onResume?: (value: any) => void;
   isLoading?: boolean;
   autoApprove?: boolean;
+  /** Verdict for the whole pending interrupt, resolved by ChatInterface from
+   *  the deployment's policy and this thread's auto-approve: true while it is
+   *  being checked or will resume without the user. Omitted → decide locally
+   *  from `autoApprove`. */
+  approvalAutoResolves?: boolean;
   compact?: boolean;
 }
 
@@ -69,14 +74,17 @@ export const ToolCallBox = React.memo<ToolCallBoxProps>(
     onResume,
     isLoading,
     autoApprove,
+    approvalAutoResolves,
     compact = false,
   }) => {
     const policyWillPrompt =
       !!actionRequest &&
       autoApproveDecisions([actionRequest as HitlActionRequest]) === null;
+    const needsPrompt =
+      !!actionRequest &&
+      !(approvalAutoResolves ?? (!!autoApprove && !policyWillPrompt));
     const [isExpanded, setIsExpanded] = useState(
-      () =>
-        !!uiComponent || (!!actionRequest && (!autoApprove || policyWillPrompt))
+      () => !!uiComponent || needsPrompt
     );
     const [expandedArgs, setExpandedArgs] = useState<Record<string, boolean>>(
       {}
@@ -109,17 +117,21 @@ export const ToolCallBox = React.memo<ToolCallBoxProps>(
       if (uiComponent) setIsExpanded(true);
     }, [uiComponent]);
 
-    // Approval lifecycle: expand when an approval appears (skip if auto-approve
-    // is on), and collapse again once it's resolved.
+    // Approval lifecycle: expand when an approval starts needing the user, and
+    // collapse again once it's resolved. "Needing the user" can begin after the
+    // request is already on screen — the deployment's policy is asked first and
+    // may hand the decision back — so this watches `needsPrompt`, not just the
+    // request's arrival.
     const prevActionRequestRef = useRef(actionRequest);
+    const prevNeedsPromptRef = useRef(needsPrompt);
     useEffect(() => {
       const had = !!prevActionRequestRef.current;
       const has = !!actionRequest;
-      if (has && !had && (!autoApprove || policyWillPrompt))
-        setIsExpanded(true);
+      if (needsPrompt && !prevNeedsPromptRef.current) setIsExpanded(true);
       else if (!has && had) setIsExpanded(false);
       prevActionRequestRef.current = actionRequest;
-    }, [actionRequest, autoApprove, policyWillPrompt]);
+      prevNeedsPromptRef.current = needsPrompt;
+    }, [actionRequest, needsPrompt]);
 
     const { name, args, result, status } = useMemo(() => {
       // Streaming can deliver args as a (possibly partial) JSON string, not an

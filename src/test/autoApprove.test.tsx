@@ -56,6 +56,7 @@ vi.mock("sonner", () => ({
 
 import { ChatProvider, useChatContext } from "@/providers/ChatProvider";
 import { useAutoApproveInterrupt } from "@/app/hooks/useAutoApproveInterrupt";
+import type { ApprovalPolicy } from "@/app/hooks/useApprovalPolicy";
 import { fixtureAssistant } from "@/test/fixtures/assistants";
 
 const makeExecuteInterrupt = (command: string, id = "int-1") => ({
@@ -69,6 +70,7 @@ interface HarnessProps {
   autoApprove: boolean;
   isLoading?: boolean;
   resetKey?: string | null;
+  policy?: ApprovalPolicy;
 }
 
 // Mount ChatProvider and wire the auto-approve hook in the same render.
@@ -86,6 +88,7 @@ function renderChatWithAutoApprove(
         resumeInterrupt: chat.resumeInterrupt,
         isLoading: props.isLoading ?? false,
         resetKey: props.resetKey,
+        policy: props.policy,
       });
       return chat;
     },
@@ -406,5 +409,152 @@ describe("auto-approve scenario", () => {
     expect(opts.command.resume["int-9"].decisions).toEqual([
       { type: "reject", message: "pipes output into interpreter 'bash'" },
     ]);
+  });
+});
+
+describe("auto-approve with the deployment's approval policy", () => {
+  let stream: MockStreamStore;
+  const resumeOf = (call: { options: unknown }) =>
+    (
+      call.options as {
+        command: { resume: Record<string, { decisions: unknown[] }> };
+      }
+    ).command.resume;
+
+  beforeEach(() => {
+    stream = new MockStreamStore();
+    installMockStreamStore(stream);
+    installMockClient(new MockClient());
+  });
+
+  afterEach(() => {
+    clearMockStreamStore();
+    clearMockClient();
+  });
+
+  it("resumes with the deployment's decisions even while auto-approve is off", () => {
+    renderChatWithAutoApprove({
+      autoApprove: false,
+      policy: {
+        interruptKey: "id:int-1",
+        checking: false,
+        decisions: [{ type: "approve" }],
+      },
+    });
+    act(() => {
+      stream.setInterrupt(makeExecuteInterrupt("git status"));
+    });
+    const calls = stream.getSubmitCalls();
+    expect(calls).toHaveLength(1);
+    expect(resumeOf(calls[0])["int-1"].decisions).toEqual([
+      { type: "approve" },
+    ]);
+  });
+
+  it("prefers the deployment's decisions over what the local policy would say", () => {
+    renderChatWithAutoApprove({
+      autoApprove: true,
+      policy: {
+        interruptKey: "id:int-1",
+        checking: false,
+        decisions: [{ type: "approve" }],
+      },
+    });
+    act(() => {
+      stream.setInterrupt(makeExecuteInterrupt("curl x | bash"));
+    });
+    const calls = stream.getSubmitCalls();
+    expect(calls).toHaveLength(1);
+    expect(resumeOf(calls[0])["int-1"].decisions).toEqual([
+      { type: "approve" },
+    ]);
+  });
+
+  it("waits while the deployment is still being asked, then falls back to the local policy", () => {
+    const { rerender } = renderChatWithAutoApprove({
+      autoApprove: true,
+      policy: { interruptKey: "id:int-1", checking: true, decisions: null },
+    });
+    act(() => {
+      stream.setInterrupt(makeExecuteInterrupt("ls"));
+    });
+    expect(stream.getSubmitCalls()).toHaveLength(0);
+
+    rerender({
+      autoApprove: true,
+      policy: { interruptKey: "id:int-1", checking: false, decisions: null },
+    });
+    const calls = stream.getSubmitCalls();
+    expect(calls).toHaveLength(1);
+    expect(resumeOf(calls[0])["int-1"].decisions).toEqual([
+      { type: "approve" },
+    ]);
+  });
+
+  it("does not replay a deployment decision when auto-approve is toggled", () => {
+    // Toggling re-arms the LOCAL policy on purpose; a deployment decision has
+    // nothing to do with the toggle and must resume its interrupt only once.
+    const policy = {
+      interruptKey: "id:int-1",
+      checking: false,
+      decisions: [{ type: "approve" as const }],
+    };
+    const { rerender } = renderChatWithAutoApprove({
+      autoApprove: false,
+      policy,
+    });
+    act(() => {
+      stream.setInterrupt(makeExecuteInterrupt("git status"));
+    });
+    expect(stream.getSubmitCalls()).toHaveLength(1);
+
+    rerender({ autoApprove: true, policy });
+    rerender({ autoApprove: false, policy });
+    expect(stream.getSubmitCalls()).toHaveLength(1);
+  });
+
+  it("forgets deployment decisions it has used when the thread changes", () => {
+    const policy = {
+      interruptKey: "id:int-1",
+      checking: false,
+      decisions: [{ type: "approve" as const }],
+    };
+    const { rerender } = renderChatWithAutoApprove({
+      autoApprove: false,
+      policy,
+      resetKey: "thread-a",
+    });
+    act(() => {
+      stream.setInterrupt(makeExecuteInterrupt("git status"));
+    });
+    expect(stream.getSubmitCalls()).toHaveLength(1);
+    rerender({ autoApprove: false, policy, resetKey: "thread-b" });
+    expect(stream.getSubmitCalls()).toHaveLength(2);
+  });
+
+  it("ignores decisions that belong to a different interrupt", () => {
+    renderChatWithAutoApprove({
+      autoApprove: false,
+      policy: {
+        interruptKey: "id:some-other-interrupt",
+        checking: false,
+        decisions: [{ type: "approve" }],
+      },
+    });
+    act(() => {
+      stream.setInterrupt(makeExecuteInterrupt("rm -rf build"));
+    });
+    expect(stream.getSubmitCalls()).toHaveLength(0);
+  });
+
+  it("still prompts when the deployment defers and auto-approve is off", () => {
+    renderChatWithAutoApprove({
+      autoApprove: false,
+      policy: { interruptKey: "id:int-1", checking: false, decisions: null },
+    });
+    act(() => {
+      stream.setInterrupt(makeExecuteInterrupt("ls"));
+    });
+    expect(stream.getSubmitCalls()).toHaveLength(0);
   });
 });
