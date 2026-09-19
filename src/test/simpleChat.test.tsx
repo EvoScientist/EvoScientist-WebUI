@@ -124,6 +124,13 @@ describe("simple chat scenario", () => {
     expect(historyRevalidate).toHaveBeenCalledTimes(1);
   });
 
+  it("does not call a chat with no thread settled", () => {
+    // `runSettled` compares against the thread the server confirmed; with no
+    // thread at all that comparison must not come out true by accident.
+    const { result } = renderChat({ activeAssistant: fixtureAssistant });
+    expect(result.current.runSettled).toBe(false);
+  });
+
   it("reflects isLoading transitions from the SDK", () => {
     const { result } = renderChat({ activeAssistant: fixtureAssistant });
     expect(result.current.isLoading).toBe(false);

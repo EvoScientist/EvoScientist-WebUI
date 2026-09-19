@@ -14,10 +14,14 @@ export function SubAgentSteps({
   steps,
   hideFinalText,
   compact = false,
+  running = true,
 }: {
   steps: SubAgentStep[];
   hideFinalText?: boolean;
   compact?: boolean;
+  /** Whether the sub-agent can still produce results. Once it cannot, a step
+   *  without a result is shown as stopped instead of spinning forever. */
+  running?: boolean;
 }) {
   const resultByCallId = new Map<string, string>();
   for (const s of steps) {
@@ -46,7 +50,11 @@ export function SubAgentSteps({
             name: s.name,
             args: s.args,
             result: resultByCallId.get(s.id),
-            status: resultByCallId.has(s.id) ? "completed" : "pending",
+            status: resultByCallId.has(s.id)
+              ? "completed"
+              : running
+              ? "pending"
+              : "stopped",
           };
           return (
             <ToolCallBox

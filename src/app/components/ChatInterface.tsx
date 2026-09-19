@@ -480,6 +480,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       ui,
       setFiles,
       isLoading,
+      runSettled,
       isThreadLoading,
       interrupt,
       sendMessage,
@@ -1268,7 +1269,15 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
           (pendingActionCounts.get(ar.name) ?? 0) + 1
         );
       }
-      visibleMessages.forEach((message: Message) => {
+      // A tool call can only still get a result in the latest turn. Once a later
+      // human message exists the user has moved on and nothing will answer an
+      // earlier call — whatever the current run is doing.
+      let lastHumanIndex = -1;
+      visibleMessages.forEach((message: Message, index: number) => {
+        if (message.type === "human") lastHumanIndex = index;
+      });
+      visibleMessages.forEach((message: Message, messageIndex: number) => {
+        const inLatestTurn = messageIndex > lastHumanIndex;
         if (message.type === "ai") {
           // Collapse duplicate tool_call ids within a single AI message before
           // they reach the render. LangChain's streaming merge can leave the
@@ -1324,8 +1333,12 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                 toolCall.id ||
                 `${message.id ?? "ai-message"}-tool-${sourceIndex}-${name}`;
               const pendingCount = pendingActionCounts.get(name) ?? 0;
+              // An approval is always for the turn that is running, so an
+              // unanswered call left in an earlier turn cannot claim it.
               const hasPendingAction =
-                pendingCount > 0 && !completedToolCallIds.has(id);
+                pendingCount > 0 &&
+                inLatestTurn &&
+                !completedToolCallIds.has(id);
               if (hasPendingAction) {
                 pendingActionCounts.set(name, pendingCount - 1);
               }
@@ -1336,7 +1349,14 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                 // The selector call only survives the filter above while the run is
                 // actively selecting (!interrupt), so this resolves to a spinner for
                 // it without a special case.
-                status: hasPendingAction ? "interrupted" : ("pending" as const),
+                // No result and no approval pending: still running — unless
+                // the run is over, in which case nothing will ever answer it
+                // and a spinner would turn forever.
+                status: hasPendingAction
+                  ? "interrupted"
+                  : runSettled || !inLatestTurn
+                  ? "stopped"
+                  : ("pending" as const),
               } as ToolCall;
             });
           messageMap.set(message.id!, {
@@ -1378,7 +1398,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
           showAvatar: data.message.type !== prevMessage?.type,
         };
       });
-    }, [messages, actionRequests, interrupt, isLoading, stream]);
+    }, [messages, actionRequests, interrupt, isLoading, runSettled, stream]);
 
     const hasWorkflows = useMemo(
       () =>

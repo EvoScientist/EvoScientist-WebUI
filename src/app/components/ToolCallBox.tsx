@@ -12,6 +12,7 @@ import {
   ChevronUp,
   Terminal,
   AlertCircle,
+  CircleSlash,
   Loader2,
   CircleCheckBigIcon,
   StopCircle,
@@ -175,6 +176,14 @@ export const ToolCallBox = React.memo<ToolCallBoxProps>(
             <StopCircle
               size={14}
               className="text-orange-500"
+            />
+          );
+        case "stopped":
+          return (
+            <CircleSlash
+              size={14}
+              className="text-muted-foreground"
+              aria-label="Did not finish"
             />
           );
         default:

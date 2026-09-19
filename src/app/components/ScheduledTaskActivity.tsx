@@ -10,7 +10,11 @@ import {
 import { cn } from "@/lib/utils";
 import { makeClient, type ScheduledTask } from "@/app/hooks/useScheduledTasks";
 import { useScheduledTaskRuns } from "@/app/hooks/useScheduledTaskRuns";
-import { isActiveStatus, type ScheduledRunRecord } from "@/lib/scheduledRuns";
+import {
+  canStillProduceSteps,
+  isActiveStatus,
+  type ScheduledRunRecord,
+} from "@/lib/scheduledRuns";
 import { formatElapsed } from "@/lib/asyncAgents";
 import { nextRunLabel } from "@/lib/cronUtils";
 import { SubAgentSteps } from "@/app/components/SubAgentSteps";
@@ -259,6 +263,7 @@ export function ScheduledTaskActivity({
                       ) : (
                         <SubAgentSteps
                           steps={steps}
+                          running={canStillProduceSteps(record.status)}
                           compact
                         />
                       )}

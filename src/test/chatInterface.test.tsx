@@ -42,6 +42,9 @@ vi.mock("@/providers/ClientProvider", async (importOriginal) => {
   };
 });
 
+// The thread the (mocked) URL state opens on; null = a new chat.
+let mockThreadId: string | null = null;
+
 // What the (mocked) ClientProvider reports as the live deployment. Tests that
 // exercise the approval policy point it at a URL; the default is "none".
 let mockDeployment: { deploymentUrl: string | null; apiKey: string } = {
@@ -52,7 +55,8 @@ let mockDeployment: { deploymentUrl: string | null; apiKey: string } = {
 vi.mock("nuqs", async () => {
   const react = await import("react");
   return {
-    useQueryState: () => react.useState<string | null>(null),
+    // Only "threadId" is read through nuqs under ChatInterface/ChatProvider.
+    useQueryState: () => react.useState<string | null>(mockThreadId),
   };
 });
 
@@ -532,6 +536,104 @@ describe("ChatInterface composition", () => {
       vi.unstubAllGlobals();
       mockDeployment = { deploymentUrl: null, apiKey: "" };
     }
+  });
+
+  it.each([
+    ["interrupted", "stopped"],
+    ["busy", "pending"],
+  ])(
+    "marks an unanswered tool call on a %s thread as %s",
+    async (threadStatus, expected) => {
+      // A run that was stopped leaves a tool call with no result. It may only
+      // stop spinning once the server says nothing is working on the thread.
+      mockThreadId = "t-1";
+      const client = getActiveMockClient();
+      const messages = [
+        humanTurn("run it"),
+        aiToolCallTurn("execute", { command: "sleep 600" }, "t1"),
+      ];
+      client.setThreadState("t-1", {
+        next: ["tools"],
+        tasks: [],
+        values: { messages },
+      });
+      client.setThreadRecord("t-1", { status: threadStatus });
+      try {
+        renderChatInterface();
+        act(() => {
+          stream.setMessages(messages);
+        });
+        const statusOf = () =>
+          getLastProps<{
+            items: Array<{ toolCalls: Array<{ status: string }> }>;
+          }>("ActionGroup")?.items[0].toolCalls[0].status;
+        await waitFor(() =>
+          expect(client.threads.get.mock.calls.length).toBeGreaterThan(0)
+        );
+        await waitFor(() => expect(statusOf()).toBe(expected));
+      } finally {
+        mockThreadId = null;
+      }
+    }
+  );
+
+  it("keeps an earlier turn's unanswered tool call stopped while a new run streams", () => {
+    // Once the user has moved on to another turn nothing can answer the old
+    // call any more, whatever the current run is doing — it must not start
+    // spinning again just because something is loading.
+    renderChatInterface();
+    act(() => {
+      stream.setMessages([
+        humanTurn("run it", "h1"),
+        aiToolCallTurn("execute", { command: "sleep 600" }, "t1"),
+        humanTurn("never mind, do this instead", "h2"),
+        aiToolCallTurn("execute", { command: "ls" }, "t2"),
+      ]);
+      stream.setLoading(true);
+    });
+    const groups = getAllProps<{
+      items: Array<{
+        message: { id: string };
+        toolCalls: Array<{ status: string }>;
+      }>;
+    }>("ActionGroup");
+    const statusOf = (messageId: string) =>
+      [...groups]
+        .reverse()
+        .flatMap((g) => g.items)
+        .find((item) => item.message.id === messageId)?.toolCalls[0].status;
+    expect(statusOf("t1")).toBe("stopped");
+    expect(statusOf("t2")).toBe("pending");
+  });
+
+  it("gives a new turn's approval to its own tool call, not to a stopped one of the same name", () => {
+    // Statuses are dealt out by tool name, oldest message first. A dead
+    // `execute` left behind by Stop must not claim the next turn's approval.
+    renderChatInterface();
+    act(() => {
+      stream.setMessages([
+        humanTurn("run it", "h1"),
+        aiToolCallTurn("execute", { command: "sleep 600" }, "t1"),
+        humanTurn("list files instead", "h2"),
+        aiToolCallTurn("execute", { command: "ls" }, "t2"),
+      ]);
+      stream.setInterrupt(executeInterrupt("ls"));
+    });
+    const groups = getAllProps<{
+      items: Array<{
+        message: { id: string };
+        toolCalls: Array<{ status: string }>;
+      }>;
+    }>("ActionGroup");
+    const statusOf = (messageId: string) =>
+      [...groups]
+        .reverse()
+        .flatMap((g) => g.items)
+        .find((item) => item.message.id === messageId)?.toolCalls[0].status;
+    expect(statusOf("t1")).toBe("stopped");
+    expect(statusOf("t2")).toBe("interrupted");
+    // Bound inline, so it is not mislabelled as a sub-agent's request.
+    expect(screen.queryByText(/^Approval requested by/)).toBeNull();
   });
 
   it("flows autoApprove state from thread-local storage into ActionGroup props", () => {

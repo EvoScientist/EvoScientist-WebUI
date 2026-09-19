@@ -142,6 +142,18 @@ export function interruptValueKey(i: unknown): string | null {
   }
 }
 
+// Thread statuses under which no run can still be producing tool results.
+// "busy" is a run in flight; anything unlisted is a state we do not know.
+const SETTLED_THREAD_STATUSES = new Set(["idle", "interrupted", "error"]);
+
+function lastHumanMessageId(messages: readonly unknown[]): string | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i] as { type?: unknown; id?: unknown } | null;
+    if (m?.type === "human") return typeof m.id === "string" ? m.id : null;
+  }
+  return null;
+}
+
 function hasActionableInterrupt(i: unknown): boolean {
   if (!i || typeof i !== "object") return false;
   const value = (i as { value?: unknown }).value;
@@ -538,6 +550,13 @@ export function useChat({
   // getter. They are always set/reset together.
   const userAbortedRef = useRef(false);
   const [userAborted, setUserAborted] = useState(false);
+  // The turn Stop was pressed on (id of its human message). Stop abandons that
+  // run, not whatever runs on the thread afterwards: once the server shows a
+  // newer turn — another tab, a cron run — its approvals are not ours to hide.
+  const abortedTurnRef = useRef<string | null>(null);
+  // The thread the server last confirmed as "not busy, nothing pending" — see
+  // `runSettled` below.
+  const [settledThreadId, setSettledThreadId] = useState<string | null>(null);
   // The abandon is scoped to the thread Stop was pressed on. ChatProvider is
   // remounted on thread switches today (chatSessionRevision), so this reset is
   // belt-and-braces for any future path that swaps `threadId` inside a mounted
@@ -547,6 +566,7 @@ export function useChat({
   // threadId guard of its own, so it resets here too.
   useEffect(() => {
     userAbortedRef.current = false;
+    abortedTurnRef.current = null;
     setUserAborted(false);
     setResolvedInterruptKey(null);
   }, [threadId]);
@@ -653,12 +673,14 @@ export function useChat({
       setFetchedMessages(null);
       setFetchedThreadId(null);
       setResolvedInterruptKey(null);
+      setSettledThreadId(null);
       return;
     }
     if (stream.isLoading) {
       recoveryRunRef.current += 1;
       setFetchedInterrupt(undefined);
       setResolvedInterruptKey(null);
+      setSettledThreadId(null);
       return;
     }
     // The live stream count at the moment it settled. If the server's persisted
@@ -682,6 +704,7 @@ export function useChat({
             values?: { messages?: Message[] };
           }>,
           client.threads.get(threadId) as Promise<{
+            status?: string;
             values?: { messages?: Message[] };
           }>,
         ]);
@@ -693,7 +716,22 @@ export function useChat({
         const pending = latestTaskInterrupt(state.tasks);
         const stillPending = Array.isArray(state.next) && state.next.length > 0;
         const safePending = normalizePendingInterrupt(pending);
+        if (
+          userAbortedRef.current &&
+          abortedTurnRef.current !== null &&
+          Array.isArray(msgs)
+        ) {
+          const serverTurn = lastHumanMessageId(msgs);
+          if (serverTurn !== null && serverTurn !== abortedTurnRef.current) {
+            userAbortedRef.current = false;
+            abortedTurnRef.current = null;
+            setUserAborted(false);
+          }
+        }
         if (safePending && hasActionableInterrupt(safePending)) {
+          // Something is waiting on the user (or was abandoned by them, below):
+          // either way this poll says nothing about the calls being dead.
+          setSettledThreadId(null);
           if (userAbortedRef.current) {
             // The user hit Stop/Reject on this run: treat it as a real
             // interruption. Don't re-surface the approval the run paused on —
@@ -722,6 +760,19 @@ export function useChat({
           }
           return;
         }
+        // No approval is pending. If the server also says the thread is not
+        // busy, nothing can still produce a result for a tool call that has none
+        // (a cancelled run leaves `next` populated for good, so `next` alone
+        // cannot tell). "busy" means the stream merely settled early; a missing
+        // status means we don't know — both keep the spinners.
+        // Every poll answers afresh — a run started elsewhere can pick the
+        // thread up again — and only statuses known to mean "nothing is running"
+        // count, so a server with states of its own never reads as finished.
+        setSettledThreadId(
+          SETTLED_THREAD_STATUSES.has(threadRecord.status ?? "")
+            ? threadId
+            : null
+        );
         // Backfill only after the live stream is idle. During active streaming the
         // live message list owns rendering; this recovery loop is for dropped tail
         // state after the stream has settled.
@@ -853,6 +904,7 @@ export function useChat({
       setFetchedThreadId(null);
       setResolvedInterruptKey(null);
       userAbortedRef.current = false;
+      abortedTurnRef.current = null;
       setUserAborted(false);
       recoveryRunRef.current += 1;
       const newMessage: Message = { id: uuidv4(), type: "human", content };
@@ -896,6 +948,7 @@ export function useChat({
       setFetchedThreadId(null);
       setResolvedInterruptKey(null);
       userAbortedRef.current = false;
+      abortedTurnRef.current = null;
       setUserAborted(false);
       recoveryRunRef.current += 1;
       lastSubmittedHumanIdRef.current = null;
@@ -921,6 +974,7 @@ export function useChat({
   // Stop drops the user back onto the next tool call's approval.
   const abortRun = useCallback(() => {
     userAbortedRef.current = true;
+    abortedTurnRef.current = lastHumanMessageId(streamRef.current.messages);
     setUserAborted(true);
     lastSubmittedHumanIdRef.current = null;
     streamRef.current.stop();
@@ -996,6 +1050,13 @@ export function useChat({
     setFiles,
     messages,
     isLoading: stream.isLoading,
+    // Nothing can still produce a result for this thread's unanswered tool
+    // calls: the user pressed Stop, or the server confirmed the thread is not
+    // busy with no approval pending. Drives "stopped" instead of a spinner.
+    runSettled:
+      !!threadId &&
+      !stream.isLoading &&
+      (userAborted || settledThreadId === threadId),
     isThreadLoading: stream.isThreadLoading,
     interrupt,
     sendMessage,

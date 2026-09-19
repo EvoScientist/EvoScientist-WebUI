@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   ASYNC_UPDATE_MARKER,
+  asyncAgentCanStillProduceSteps,
   asyncTaskReportKey,
   asyncUpdateMatchesTask,
   asyncUpdateMessageKey,
@@ -340,5 +341,20 @@ describe("relTime", () => {
     expect(relTime(new Date(now - 2 * 86400_000).toISOString(), now)).toBe(
       "2d"
     );
+  });
+});
+
+describe("asyncAgentCanStillProduceSteps", () => {
+  it("is false once the run has ended or is gone", () => {
+    for (const status of ["success", "error", "cancelled", "expired"]) {
+      expect(asyncAgentCanStillProduceSteps(status)).toBe(false);
+    }
+  });
+
+  it("stays true while running or when the status is not known", () => {
+    expect(asyncAgentCanStillProduceSteps("running")).toBe(true);
+    expect(asyncAgentCanStillProduceSteps("pending")).toBe(true);
+    expect(asyncAgentCanStillProduceSteps(undefined)).toBe(true);
+    expect(asyncAgentCanStillProduceSteps("something-new")).toBe(true);
   });
 });

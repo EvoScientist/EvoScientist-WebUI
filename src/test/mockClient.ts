@@ -15,6 +15,8 @@ export interface MockThreadState {
 
 export interface MockThreadRecord {
   metadata?: Record<string, unknown>;
+  /** Server-side thread status: "idle" | "busy" | "interrupted" | "error". */
+  status?: string;
   values?: { messages?: Message[] };
 }
 
