@@ -164,3 +164,46 @@ export function autoApproveDecisions(
   }
   return decisions;
 }
+
+// The backend owns the approval policy (`POST /api/policy`): it knows the
+// deployment's `shell_allow_list`, which this client-side port cannot see. A
+// response is only trusted when it carries exactly one well-formed
+// approve/reject per request; anything else reads as "a human must decide", so a
+// bad payload can never approve a command or land a decision on the wrong
+// request.
+export function parsePolicyDecisions(
+  body: unknown,
+  actionRequests: ActionRequest[]
+): Decision[] | null {
+  if (!body || typeof body !== "object") return null;
+  const raw = (body as { decisions?: unknown }).decisions;
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  if (raw.length !== actionRequests.length) return null;
+  const decisions: Decision[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") return null;
+    const { type, message } = entry as { type?: unknown; message?: unknown };
+    if (type === "approve") decisions.push({ type: "approve" });
+    else if (type === "reject") {
+      decisions.push(
+        typeof message === "string"
+          ? { type: "reject", message }
+          : { type: "reject" }
+      );
+    } else return null;
+  }
+  return decisions;
+}
+
+// Server decisions win whether or not this thread's auto-approve is on: they
+// encode what the deployment already trusts (allow-listed commands never
+// prompt in the TUI either). When the server defers, the per-thread toggle —
+// which the server knows nothing about — falls back to the local policy.
+export function resolveApprovalDecisions(
+  actionRequests: ActionRequest[],
+  serverDecisions: Decision[] | null,
+  autoApprove: boolean
+): Decision[] | null {
+  if (serverDecisions !== null) return serverDecisions;
+  return autoApprove ? autoApproveDecisions(actionRequests) : null;
+}

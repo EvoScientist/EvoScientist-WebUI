@@ -6,6 +6,8 @@ import { makeClient } from "@/lib/streamMode";
 
 interface ClientContextValue {
   client: Client;
+  deploymentUrl: string;
+  apiKey: string;
 }
 
 const ClientContext = createContext<ClientContextValue | null>(null);
@@ -31,7 +33,10 @@ export function ClientProvider({
     });
   }, [deploymentUrl, apiKey]);
 
-  const value = useMemo(() => ({ client }), [client]);
+  const value = useMemo(
+    () => ({ client, deploymentUrl, apiKey }),
+    [client, deploymentUrl, apiKey]
+  );
 
   return (
     <ClientContext.Provider value={value}>{children}</ClientContext.Provider>
@@ -45,4 +50,19 @@ export function useClient(): Client {
     throw new Error("useClient must be used within a ClientProvider");
   }
   return context.client;
+}
+
+/**
+ * The deployment the SDK client is talking to right now. Anything that calls the
+ * deployment's own routes outside the SDK must read it from here rather than
+ * from stored config: reconnecting swaps the deployment without remounting the
+ * chat, so a value read once would go on addressing the old one.
+ */
+export function useDeployment(): { deploymentUrl: string; apiKey: string } {
+  const context = useContext(ClientContext);
+
+  if (!context) {
+    throw new Error("useDeployment must be used within a ClientProvider");
+  }
+  return { deploymentUrl: context.deploymentUrl, apiKey: context.apiKey };
 }
