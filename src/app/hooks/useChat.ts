@@ -29,6 +29,7 @@ import {
 import { loadThreadWorkflows, saveThreadWorkflows } from "@/lib/workflowStore";
 import { subAgentStreamsToSteps } from "@/lib/subAgentActivity";
 import { toast } from "sonner";
+import { parseFallbackNotice } from "@/lib/middlewareEvents";
 import {
   MODEL_OVERRIDE_METADATA_KEY,
   type ModelOverride,
@@ -404,6 +405,15 @@ export function useChat({
     },
     onCreated: onHistoryRevalidate,
     onCustomEvent: (data, options) => {
+      // A fallback chain emits several notices (failed → falling back →
+      // succeeded); one toast id lets each replace the last instead of
+      // stacking. Sub-agent fallbacks matter too, so this runs before the
+      // root-namespace gate below.
+      const notice = parseFallbackNotice(data);
+      if (notice) {
+        toast[notice.level](notice.text, { id: "model-fallback" });
+        return;
+      }
       if (options?.namespace && options.namespace.length > 0) return;
       const event = parseSubagentEvent(data);
       if (!event) return;

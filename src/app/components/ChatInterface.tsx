@@ -44,7 +44,7 @@ import {
 import { isSummarizationMessage } from "@/lib/summarization";
 import { useCollapseAgentActions } from "@/lib/uiSettings";
 import {
-  bindActionRequestsToToolCalls,
+  approvalSurface,
   buildToolApprovalResume,
   interruptIdOf,
 } from "@/lib/hitl";
@@ -153,6 +153,8 @@ interface ChatInterfaceProps {
     getSnapshot: (() => ComposerSnapshot) | null
   ) => void;
 }
+
+const NO_ACTION_REQUESTS: ActionRequest[] = [];
 
 const SUGGESTED_PROMPTS = [
   "Survey recent papers on a topic",
@@ -1480,13 +1482,16 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       return [] as ToolCall[];
     }, [processedMessages]);
 
-    const hasUnboundActionRequests = useMemo(() => {
-      if (actionRequests.length === 0) return false;
-      return (
-        bindActionRequestsToToolCalls(lastAiToolCalls, actionRequests).size ===
-        0
-      );
-    }, [actionRequests, lastAiToolCalls]);
+    // Anything short of a full binding goes to the fallback as a whole (see
+    // `approvalSurface`); the inline cards then get no requests, so a request
+    // is never offered — or waited on — in two places at once.
+    const hasUnboundActionRequests = useMemo(
+      () => approvalSurface(lastAiToolCalls, actionRequests) === "fallback",
+      [actionRequests, lastAiToolCalls]
+    );
+    const inlineActionRequests = hasUnboundActionRequests
+      ? NO_ACTION_REQUESTS
+      : actionRequests;
 
     const subAgentRequester = useMemo(() => {
       const types = new Set(
@@ -1758,7 +1763,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                         isAtBottom={isAtBottom}
                         lastMessageId={lastMessageId}
                         isLoading={isLoading}
-                        actionRequests={actionRequests}
+                        actionRequests={inlineActionRequests}
                         submittedActionRequestKeys={submittedActionRequestKeys}
                         onActionRequestSubmitted={markActionRequestSubmitted}
                         reviewConfigsMap={reviewConfigsMap}
@@ -1796,7 +1801,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                         isLoading={isLoading}
                         isStreaming={isLoading && isLastMessage && isAssistant}
                         actionRequests={
-                          isLastMessage ? actionRequests : undefined
+                          isLastMessage ? inlineActionRequests : undefined
                         }
                         submittedActionRequestKeys={submittedActionRequestKeys}
                         onActionRequestSubmitted={markActionRequestSubmitted}

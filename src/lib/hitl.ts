@@ -68,3 +68,19 @@ export function bindActionRequestsToToolCalls(
   }
   return out;
 }
+
+export type ApprovalSurface = "none" | "inline" | "fallback";
+
+// Inline cards and the fallback each collect decisions on their own and only
+// resume once every request of the interrupt is decided. A partial binding
+// (e.g. a still-running main-agent `execute` claiming one of a sub-agent's two
+// `execute` requests) would strand the unbound request with no card at all, so
+// anything short of a full binding goes to the fallback as a whole.
+export function approvalSurface(
+  toolCalls: BindableToolCall[],
+  actionRequests: ActionRequest[]
+): ApprovalSurface {
+  if (actionRequests.length === 0) return "none";
+  const bound = bindActionRequestsToToolCalls(toolCalls, actionRequests).size;
+  return bound === actionRequests.length ? "inline" : "fallback";
+}

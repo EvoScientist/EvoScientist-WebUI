@@ -1,9 +1,12 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { act, renderHook } from "@testing-library/react";
 import {
   getThreadAutoApprove,
   migrateNewThreadAutoApprove,
   setThreadAutoApprove,
+  subscribeAutoApprove,
+  useAutoApproveRevision,
 } from "./autoApprove";
 
 const STORAGE_KEY = "evoscientist-auto-approve";
@@ -70,5 +73,70 @@ describe("autoApprove", () => {
     migrateNewThreadAutoApprove("real-tid");
     expect(getThreadAutoApprove("real-tid")).toBe(false);
     expect(getThreadAutoApprove("existing")).toBe(true);
+  });
+});
+
+describe("autoApprove change notifications", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("notifies subscribers when a thread's setting changes", () => {
+    const listener = vi.fn();
+    const unsubscribe = subscribeAutoApprove(listener);
+    setThreadAutoApprove("t1", true);
+    expect(listener).toHaveBeenCalledTimes(1);
+    unsubscribe();
+    setThreadAutoApprove("t1", false);
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it("notifies when the sentinel migrates onto a real thread id", () => {
+    setThreadAutoApprove(null, true);
+    const listener = vi.fn();
+    const unsubscribe = subscribeAutoApprove(listener);
+    migrateNewThreadAutoApprove("t1");
+    expect(listener).toHaveBeenCalledTimes(1);
+    unsubscribe();
+  });
+
+  it("stays quiet when the write fails, since nothing changed", () => {
+    const listener = vi.fn();
+    const unsubscribe = subscribeAutoApprove(listener);
+    // Swap the whole global rather than spying on `setItem`: depending on the
+    // Node version the suite's localStorage is jsdom's real Storage (an instance
+    // spy is stored as an item and never runs) or the plain in-memory object
+    // from src/test/setup.ts (a Storage.prototype spy never runs).
+    vi.stubGlobal("localStorage", {
+      getItem: () => null,
+      setItem: () => {
+        throw new DOMException("quota", "QuotaExceededError");
+      },
+    });
+    try {
+      setThreadAutoApprove("t1", true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    unsubscribe();
+    expect(listener).not.toHaveBeenCalled();
+    expect(getThreadAutoApprove("t1")).toBe(false);
+  });
+
+  it("notifies on a cross-tab storage event", () => {
+    const listener = vi.fn();
+    const unsubscribe = subscribeAutoApprove(listener);
+    window.dispatchEvent(new StorageEvent("storage", { key: STORAGE_KEY }));
+    expect(listener).toHaveBeenCalledTimes(1);
+    unsubscribe();
+  });
+
+  it("useAutoApproveRevision re-renders consumers on change", () => {
+    const { result } = renderHook(() => useAutoApproveRevision());
+    const before = result.current;
+    act(() => {
+      setThreadAutoApprove("t1", true);
+    });
+    expect(result.current).not.toBe(before);
   });
 });

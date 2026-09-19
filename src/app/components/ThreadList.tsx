@@ -41,7 +41,10 @@ import {
   exportThread,
 } from "@/app/hooks/useThreads";
 import { useMemoryActivity } from "@/app/hooks/useMemoryActivity";
-import { getThreadAutoApprove } from "@/lib/autoApprove";
+import {
+  getThreadAutoApprove,
+  useAutoApproveRevision,
+} from "@/lib/autoApprove";
 import {
   Dialog,
   DialogContent,
@@ -235,6 +238,7 @@ export function ThreadList({
   // Only the open auto-approve thread is exempted: lifting it out of its time
   // group would make it jump around for a behaviour the user opted out of, and
   // it really will resume a moment later.
+  const autoApproveRevision = useAutoApproveRevision();
   const needsAttention = useCallback(
     (thread: ThreadItem): boolean => {
       if (thread.needsUserInput) return true;
@@ -243,7 +247,10 @@ export function ThreadList({
         thread.id === currentThreadId && getThreadAutoApprove(thread.id);
       return !willAutoResume;
     },
-    [currentThreadId]
+    // `autoApproveRevision` re-buckets the rows when the toggle flips; the
+    // setting lives in localStorage, which React cannot see change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [currentThreadId, autoApproveRevision]
   );
 
   // Group threads by time and status

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  approvalSurface,
   bindActionRequestsToToolCalls,
   buildToolApprovalResume,
   interruptIdOf,
@@ -62,5 +63,51 @@ describe("bindActionRequestsToToolCalls", () => {
       [execA]
     );
     expect(map.size).toBe(0);
+  });
+});
+
+describe("approvalSurface", () => {
+  const execA = { name: "execute", args: { command: "pwd" } };
+  const execB = { name: "execute", args: { command: "ls" } };
+
+  it("is none without action requests", () => {
+    expect(
+      approvalSurface(
+        [{ id: "tc1", name: "execute", status: "interrupted" }],
+        []
+      )
+    ).toBe("none");
+  });
+
+  it("is inline when every request binds to a tool call", () => {
+    expect(
+      approvalSurface(
+        [
+          { id: "tc1", name: "execute", status: "interrupted" },
+          { id: "tc2", name: "execute", status: "interrupted" },
+        ],
+        [execA, execB]
+      )
+    ).toBe("inline");
+  });
+
+  it("is fallback when no request binds (sub-agent interrupt)", () => {
+    expect(
+      approvalSurface([{ id: "tc1", name: "task", status: "pending" }], [execA])
+    ).toBe("fallback");
+  });
+
+  it("is fallback when only some requests bind, so none is stranded", () => {
+    // A still-running main-agent `execute` claims one of a sub-agent's two
+    // `execute` requests; the second has no inline card to be decided on.
+    expect(
+      approvalSurface(
+        [
+          { id: "tc1", name: "execute", status: "interrupted" },
+          { id: "tc2", name: "task", status: "pending" },
+        ],
+        [execA, execB]
+      )
+    ).toBe("fallback");
   });
 });

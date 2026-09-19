@@ -123,6 +123,54 @@ describe("messagesToSubAgentSteps", () => {
   });
 });
 
+describe("messagesToSubAgentSteps tool-call dedupe", () => {
+  it("collapses a repeated tool_call id within one ai message", () => {
+    const steps = messagesToSubAgentSteps([
+      {
+        type: "ai",
+        content: "",
+        tool_calls: [
+          { id: "c1", name: "execute", args: { command: "ls" } },
+          { id: "c1", name: "execute", args: { command: "ls" } },
+        ],
+      },
+    ]);
+    expect(steps).toEqual([
+      { kind: "tool_call", id: "c1", name: "execute", args: { command: "ls" } },
+    ]);
+  });
+
+  it("keeps the duplicate's args when the kept copy has none", () => {
+    const steps = messagesToSubAgentSteps([
+      {
+        type: "ai",
+        content: "",
+        tool_calls: [
+          { id: "c1", name: "execute", args: {} },
+          { id: "c1", name: "execute", args: { command: "ls" } },
+        ],
+      },
+    ]);
+    expect(steps).toEqual([
+      { kind: "tool_call", id: "c1", name: "execute", args: { command: "ls" } },
+    ]);
+  });
+
+  it("keeps id-less calls apart", () => {
+    const steps = messagesToSubAgentSteps([
+      {
+        type: "ai",
+        content: "",
+        tool_calls: [
+          { name: "execute", args: { command: "ls" } },
+          { name: "execute", args: { command: "pwd" } },
+        ],
+      },
+    ]);
+    expect(steps).toHaveLength(2);
+  });
+});
+
 describe("subAgentStreamsToSteps", () => {
   it("preserves the SDK's exact task tool-call ids", () => {
     const streams = new Map([

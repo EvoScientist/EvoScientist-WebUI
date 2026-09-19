@@ -118,6 +118,17 @@ export const WorkspaceFileDialog = React.memo<{
     "close" | "cancel-edit" | null
   >(null);
 
+  // This dialog stays mounted while closed (`path === null` renders nothing), so
+  // a confirmation opened for one file would otherwise greet the next one — a
+  // successful delete never closes its own confirm. Reset during render rather
+  // than in an effect so the stale confirm never paints, not even for a frame.
+  const [shownPath, setShownPath] = useState(path);
+  if (shownPath !== path) {
+    setShownPath(path);
+    setDeleteOpen(false);
+    setDiscardAction(null);
+  }
+
   // Suppress state updates after unmount — closing the inspector panel mid
   // save/delete unmounts this dialog while a request is still in flight.
   const mountedRef = useRef(true);
