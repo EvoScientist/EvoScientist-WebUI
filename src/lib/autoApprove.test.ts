@@ -103,13 +103,21 @@ describe("autoApprove change notifications", () => {
   it("stays quiet when the write fails, since nothing changed", () => {
     const listener = vi.fn();
     const unsubscribe = subscribeAutoApprove(listener);
-    // The suite's localStorage is a plain in-memory object (src/test/setup.ts),
-    // so the spy goes on the instance, not on Storage.prototype.
-    const setItem = vi.spyOn(localStorage, "setItem").mockImplementation(() => {
-      throw new DOMException("quota", "QuotaExceededError");
+    // Swap the whole global rather than spying on `setItem`: depending on the
+    // Node version the suite's localStorage is jsdom's real Storage (an instance
+    // spy is stored as an item and never runs) or the plain in-memory object
+    // from src/test/setup.ts (a Storage.prototype spy never runs).
+    vi.stubGlobal("localStorage", {
+      getItem: () => null,
+      setItem: () => {
+        throw new DOMException("quota", "QuotaExceededError");
+      },
     });
-    setThreadAutoApprove("t1", true);
-    setItem.mockRestore();
+    try {
+      setThreadAutoApprove("t1", true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
     unsubscribe();
     expect(listener).not.toHaveBeenCalled();
     expect(getThreadAutoApprove("t1")).toBe(false);
