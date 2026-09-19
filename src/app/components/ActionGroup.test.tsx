@@ -193,6 +193,39 @@ describe("ActionGroup hasPendingApproval (auto-approve gate)", () => {
     expect(screen.queryAllByTestId("chat-message")).toHaveLength(0);
   });
 
+  it("lets the resolved verdict override the local policy in both directions", () => {
+    // Deployment already trusts the command (allow-list): no preview although
+    // this thread's auto-approve is off.
+    const { unmount } = render(
+      <ActionGroup
+        {...defaultProps({
+          defaultCollapsed: true,
+          items: [makeItem("m1", ["execute"], "interrupted")],
+          actionRequests: [req],
+          lastMessageId: "m1",
+          autoApprove: false,
+          approvalAutoResolves: true,
+        })}
+      />
+    );
+    expect(screen.queryAllByTestId("chat-message")).toHaveLength(0);
+    unmount();
+
+    render(
+      <ActionGroup
+        {...defaultProps({
+          defaultCollapsed: true,
+          items: [makeItem("m1", ["execute"], "interrupted")],
+          actionRequests: [req],
+          lastMessageId: "m1",
+          autoApprove: true,
+          approvalAutoResolves: false,
+        })}
+      />
+    );
+    expect(screen.getAllByTestId("chat-message")).toHaveLength(1);
+  });
+
   it("still shows an always-prompt schedule_task while autoApprove is on", () => {
     render(
       <ActionGroup

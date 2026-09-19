@@ -41,6 +41,8 @@ interface ActionGroupProps {
   graphId?: string;
   onEditMessage: (content: string) => void;
   autoApprove: boolean;
+  /** See ToolCallBox: the resolved verdict for the pending interrupt. */
+  approvalAutoResolves?: boolean;
   subAgentSteps?: Record<string, SubAgentStep[]>;
   ui: any[] | undefined;
   // CompactionSummary anchoring: rendered before the matching item inside the group.
@@ -73,6 +75,7 @@ export const ActionGroup = React.memo<ActionGroupProps>(function ActionGroup({
   graphId,
   onEditMessage,
   autoApprove,
+  approvalAutoResolves,
   subAgentSteps,
   ui,
   compactionAnchorId,
@@ -89,12 +92,15 @@ export const ActionGroup = React.memo<ActionGroupProps>(function ActionGroup({
   // collapsed group with no obvious way to continue.
   const hasPendingApproval = useMemo(() => {
     if (actionRequests.length === 0) return false;
-    if (autoApprove && autoApproveDecisions(actionRequests) !== null) {
+    if (
+      approvalAutoResolves ??
+      (autoApprove && autoApproveDecisions(actionRequests) !== null)
+    ) {
       return false;
     }
     if (lastMessageId === undefined) return false;
     return items.some((item) => item.message.id === lastMessageId);
-  }, [autoApprove, actionRequests, lastMessageId, items]);
+  }, [autoApprove, approvalAutoResolves, actionRequests, lastMessageId, items]);
 
   const [open, setOpen] = useState<boolean>(() => !defaultCollapsed);
   const wasStreamingRef = useRef(isStreaming);
@@ -200,6 +206,7 @@ export const ActionGroup = React.memo<ActionGroupProps>(function ActionGroup({
               graphId={graphId}
               onEditMessage={onEditMessage}
               autoApprove={autoApprove}
+              approvalAutoResolves={approvalAutoResolves}
               subAgentSteps={subAgentSteps}
             />
           </div>
@@ -238,6 +245,7 @@ export const ActionGroup = React.memo<ActionGroupProps>(function ActionGroup({
                   graphId={graphId}
                   onEditMessage={onEditMessage}
                   autoApprove={autoApprove}
+                  approvalAutoResolves={approvalAutoResolves}
                   subAgentSteps={subAgentSteps}
                 />
               </React.Fragment>
