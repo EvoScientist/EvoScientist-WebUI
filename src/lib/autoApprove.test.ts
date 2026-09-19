@@ -100,6 +100,21 @@ describe("autoApprove change notifications", () => {
     unsubscribe();
   });
 
+  it("stays quiet when the write fails, since nothing changed", () => {
+    const listener = vi.fn();
+    const unsubscribe = subscribeAutoApprove(listener);
+    // The suite's localStorage is a plain in-memory object (src/test/setup.ts),
+    // so the spy goes on the instance, not on Storage.prototype.
+    const setItem = vi.spyOn(localStorage, "setItem").mockImplementation(() => {
+      throw new DOMException("quota", "QuotaExceededError");
+    });
+    setThreadAutoApprove("t1", true);
+    setItem.mockRestore();
+    unsubscribe();
+    expect(listener).not.toHaveBeenCalled();
+    expect(getThreadAutoApprove("t1")).toBe(false);
+  });
+
   it("notifies on a cross-tab storage event", () => {
     const listener = vi.fn();
     const unsubscribe = subscribeAutoApprove(listener);

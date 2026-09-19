@@ -38,6 +38,8 @@ function save(map: Record<string, boolean>): void {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(map));
   } catch {
     // Quota/private-mode failures are non-fatal — auto-approve just won't persist.
+    // Nothing was stored, so there is nothing for subscribers to re-read.
+    return;
   }
   revision += 1;
   window.dispatchEvent(new Event(CHANGE_EVENT));
