@@ -99,13 +99,32 @@ export function messagesToSubAgentSteps(messages: unknown[]): SubAgentStep[] {
       // Reasoning text first, then the tool calls it issued (natural order).
       const text = extractText(m.content).trim();
       if (text) steps.push({ kind: "text", text });
+      // Same duplicated-SSE-chunk artifact the main transcript collapses in
+      // ChatInterface: a repeated id within one message is one call, and the
+      // dropped copy donates its args when the kept one streamed in empty.
+      const seen = new Map<
+        string,
+        Extract<SubAgentStep, { kind: "tool_call" }>
+      >();
       for (const tc of normalizeToolCalls(m)) {
-        steps.push({
-          kind: "tool_call",
+        const kept = tc.id ? seen.get(tc.id) : undefined;
+        if (kept) {
+          if (
+            Object.keys(kept.args).length === 0 &&
+            Object.keys(tc.args).length > 0
+          ) {
+            kept.args = tc.args;
+          }
+          continue;
+        }
+        const step = {
+          kind: "tool_call" as const,
           id: tc.id,
           name: tc.name,
           args: tc.args,
-        });
+        };
+        if (tc.id) seen.set(tc.id, step);
+        steps.push(step);
       }
     } else if (m.type === "tool") {
       steps.push({

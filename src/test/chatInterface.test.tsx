@@ -43,7 +43,12 @@ vi.mock("nuqs", async () => {
 });
 
 vi.mock("sonner", () => ({
-  toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
+  toast: {
+    error: vi.fn(),
+    success: vi.fn(),
+    info: vi.fn(),
+    warning: vi.fn(),
+  },
 }));
 
 vi.mock("@/app/hooks/useAsyncAgents", async () => {
@@ -108,7 +113,11 @@ import {
 } from "@/test/mocks/chatInterfaceStubs";
 import { humanTurn, aiTurn, aiToolCallTurn } from "@/test/fixtures/messages";
 import type { Message } from "@langchain/langgraph-sdk";
-import { executeInterrupt, askUserInterrupt } from "@/test/fixtures/interrupts";
+import {
+  executeInterrupt,
+  askUserInterrupt,
+  multiActionInterrupt,
+} from "@/test/fixtures/interrupts";
 import { setThreadAutoApprove } from "@/lib/autoApprove";
 
 describe("ChatInterface composition", () => {
@@ -193,6 +202,32 @@ describe("ChatInterface composition", () => {
     expect(group?.actionRequests).toHaveLength(1);
     expect(group?.items[0].message.id).toBe("t1");
     expect(group?.autoApprove).toBe(false);
+  });
+
+  it("hands a partially bound interrupt to the fallback instead of stranding a request", () => {
+    // The main agent's own `execute` is still running (no result yet) next to
+    // a `task`, and the sub-agent asks to approve two `execute` calls. Only one
+    // can bind to a tool call box, so the whole batch must go to the fallback.
+    renderChatInterface();
+    act(() => {
+      stream.setMessages([
+        humanTurn("go"),
+        {
+          id: "t1",
+          type: "ai",
+          content: "",
+          tool_calls: [
+            { id: "t1c", name: "execute", args: { command: "sleep 60" } },
+            { id: "t1d", name: "task", args: { subagent_type: "code-agent" } },
+          ],
+        } as unknown as Message,
+      ]);
+      stream.setInterrupt(multiActionInterrupt());
+    });
+
+    expect(screen.getByText("Approval requested by code-agent")).toBeTruthy();
+    const group = getLastProps<{ actionRequests: unknown[] }>("ActionGroup");
+    expect(group?.actionRequests).toHaveLength(0);
   });
 
   it("renders AskUserInterrupt when the interrupt is type ask_user", () => {
@@ -292,6 +327,31 @@ describe("ChatInterface composition", () => {
     expect(toast.error).toHaveBeenCalled();
     const msg = vi.mocked(toast.error).mock.calls[0][0];
     expect(String(msg)).toContain("outage");
+  });
+
+  it("surfaces a backend model-fallback notice as a single replaceable toast", async () => {
+    const { toast } = await import("sonner");
+    renderChatInterface();
+    const onCustomEvent = stream.getOptions()?.onCustomEvent as (
+      data: unknown,
+      options: { namespace?: string[] }
+    ) => void;
+    act(() => {
+      onCustomEvent(
+        {
+          evoscientist: {
+            kind: "fallback_notice",
+            text: "Primary model failed: APIError: overloaded",
+            style: "yellow",
+          },
+        },
+        { namespace: [] }
+      );
+    });
+    expect(toast.warning).toHaveBeenCalledWith(
+      "Primary model failed: APIError: overloaded",
+      { id: "model-fallback" }
+    );
   });
 
   it("flows autoApprove state from thread-local storage into ActionGroup props", () => {
