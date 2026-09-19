@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { interruptValueKey } from "@/app/hooks/useChat";
-import { interruptIdOf, type Decision } from "@/lib/hitl";
+import { interruptIdOf, type ActionRequest, type Decision } from "@/lib/hitl";
 import { parsePolicyDecisions } from "@/lib/hitlPolicy";
 
 // Long enough for a local deployment to answer, short enough that a hung one
@@ -34,6 +34,17 @@ export interface ApprovalPolicy {
   decisions: Decision[] | null;
 }
 
+// Tells credentials apart inside the answer's identity without keeping the key
+// itself anywhere but the request header. Not a security boundary — djb2.
+function credentialTag(apiKey: string | undefined): string {
+  if (!apiKey) return "";
+  let hash = 5381;
+  for (let i = 0; i < apiKey.length; i++) {
+    hash = ((hash << 5) + hash + apiKey.charCodeAt(i)) | 0;
+  }
+  return (hash >>> 0).toString(36);
+}
+
 function actionRequestsOf(interrupt: unknown): unknown[] {
   const raw = (interrupt as { value?: { action_requests?: unknown } } | null)
     ?.value?.action_requests;
@@ -60,17 +71,17 @@ export function useApprovalPolicy({
   // from the first — a remembered answer would keep its card quiet for good.
   const askable =
     interruptKey !== null && interruptIdOf(interrupt) !== undefined;
-  // An answer belongs to one deployment, one interrupt and one exact set of
-  // requests. Any of them changing makes it a different question.
+  // An answer belongs to one deployment, one credential, one interrupt and one
+  // exact set of requests; any of them changing makes it a different question.
+  // The requests are serialized once: the same snapshot is the key and the POST
+  // body, so an answer can never be filed under requests other than the ones
+  // sent. (`stream.interrupt` is a fresh object on every access — a string keeps
+  // the effect's dependencies stable where the array could not.)
+  const requestsJson = JSON.stringify(actionRequests);
   const questionKey =
     askable && base
-      ? `${base}\n${interruptKey}\n${JSON.stringify(actionRequests)}`
+      ? `${base}\n${credentialTag(apiKey)}\n${interruptKey}\n${requestsJson}`
       : null;
-
-  // `stream.interrupt` is a fresh object on every access, so the effect is
-  // keyed on the interrupt's content key and reads the requests from a ref.
-  const actionRequestsRef = useRef(actionRequests);
-  actionRequestsRef.current = actionRequests;
 
   const [settled, setSettled] = useState<{
     key: string;
@@ -79,7 +90,7 @@ export function useApprovalPolicy({
 
   useEffect(() => {
     if (!questionKey || !base || unsupportedDeployments.has(base)) return;
-    const requests = actionRequestsRef.current;
+    const requests = JSON.parse(requestsJson) as ActionRequest[];
     let cancelled = false;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), POLICY_TIMEOUT_MS);
@@ -94,7 +105,7 @@ export function useApprovalPolicy({
     fetch(`${base}/api/policy`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ action_requests: requests }),
+      body: `{"action_requests":${requestsJson}}`,
       signal: controller.signal,
     })
       .then(async (res) => {
@@ -103,12 +114,7 @@ export function useApprovalPolicy({
           return settle(null);
         }
         if (!res.ok) return settle(null);
-        settle(
-          parsePolicyDecisions(
-            await res.json(),
-            requests as Parameters<typeof parsePolicyDecisions>[1]
-          )
-        );
+        settle(parsePolicyDecisions(await res.json(), requests));
       })
       // Timeout, network failure, bad JSON: a human decides.
       .catch(() => settle(null))
@@ -119,7 +125,7 @@ export function useApprovalPolicy({
       clearTimeout(timer);
       controller.abort();
     };
-  }, [questionKey, base, apiKey]);
+  }, [questionKey, base, apiKey, requestsJson]);
 
   if (!interruptKey) {
     return { interruptKey: null, checking: false, decisions: null };

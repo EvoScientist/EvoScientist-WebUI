@@ -201,6 +201,73 @@ describe("useApprovalPolicy", () => {
     );
   });
 
+  it("does not carry an answer over to a different credential", async () => {
+    let releaseSecond: (r: Response) => void = () => {};
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(async () =>
+        json({ decisions: [{ type: "approve" }] })
+      )
+      .mockImplementationOnce(
+        () => new Promise<Response>((resolve) => (releaseSecond = resolve))
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const { result, rerender } = renderHook(
+      ({ apiKey }) =>
+        useApprovalPolicy({
+          interrupt: interruptOf("ls", "i1"),
+          deploymentUrl: URL,
+          apiKey,
+        }),
+      { initialProps: { apiKey: "key-one" } }
+    );
+    await waitFor(() =>
+      expect(result.current.decisions).toEqual([{ type: "approve" }])
+    );
+
+    rerender({ apiKey: "key-two" });
+    // Asked again under the new credential; the old answer is not shown while
+    // that request is in flight.
+    expect(result.current.checking).toBe(true);
+    expect(result.current.decisions).toBeNull();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    const headers = (fetchMock.mock.calls[1][1] as RequestInit)
+      .headers as Record<string, string>;
+    expect(headers["X-Api-Key"]).toBe("key-two");
+
+    await act(async () => {
+      releaseSecond(json({ decisions: null }));
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(result.current.checking).toBe(false));
+    expect(result.current.decisions).toBeNull();
+  });
+
+  it("posts exactly the requests the answer is filed under", async () => {
+    // The body and the key come from one snapshot, so an answer can never be
+    // stored against requests other than the ones that were sent.
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const sent = JSON.parse(String(init?.body)).action_requests;
+      return json({
+        decisions: sent[0].args.command === "ls" ? [{ type: "approve" }] : null,
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { result, rerender } = renderHook(
+      ({ interrupt }) => useApprovalPolicy({ interrupt, deploymentUrl: URL }),
+      { initialProps: { interrupt: interruptOf("ls", "i1") } }
+    );
+    await waitFor(() =>
+      expect(result.current.decisions).toEqual([{ type: "approve" }])
+    );
+    rerender({ interrupt: interruptOf("rm -rf build", "i2") });
+    await waitFor(() => expect(result.current.checking).toBe(false));
+    expect(result.current.decisions).toBeNull();
+    rerender({ interrupt: interruptOf("ls", "i1") });
+    await waitFor(() => expect(result.current.checking).toBe(false));
+    expect(result.current.decisions).toEqual([{ type: "approve" }]);
+  });
+
   it("leaves an interrupt without an id to the local policy", () => {
     // Without an id the only key is the payload, which cannot tell a repeat of
     // the same request from the first one — so nothing is asked or remembered.
