@@ -7,6 +7,7 @@ import {
   Download,
   Loader2,
   MessageSquare,
+  MoreHorizontal,
   Pencil,
   Pin,
   PinOff,
@@ -53,6 +54,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 
@@ -322,6 +330,24 @@ export function ThreadList({
   // keyboard focus to a stable target (New Chat) instead of dropping to <body>.
   const newChatRef = useRef<HTMLButtonElement>(null);
   const pendingDeleteFocusRef = useRef(false);
+  // A dialog opened from the "⋯" menu has no opener left to return focus to —
+  // the menu item unmounts with the menu — so remember the row and hand focus
+  // back to its trigger. Looked up by id at close time: a rename re-renders the
+  // list. Dialogs opened from the desktop toolbar keep Radix's own restore.
+  const menuOriginRef = useRef<string | null>(null);
+  const restoreMenuFocus = (e: Event) => {
+    const threadId = menuOriginRef.current;
+    menuOriginRef.current = null;
+    if (threadId === null) return;
+    const trigger = Array.from(
+      document.querySelectorAll<HTMLElement>("[data-thread-actions]")
+    ).find((el) => el.dataset.threadActions === threadId);
+    // Hidden at desktop widths (the viewport can grow while a dialog is open):
+    // leave Radix's default rather than focusing an element that can't take it.
+    if (!trigger || getComputedStyle(trigger).display === "none") return;
+    e.preventDefault();
+    trigger.focus();
+  };
 
   const submitRename = async () => {
     if (!renameTarget || actionBusyRef.current) return;
@@ -439,7 +465,7 @@ export function ThreadList({
           type="button"
           onClick={() => onThreadSelect(thread.id)}
           className={cn(
-            "grid w-full cursor-pointer items-center gap-2 rounded-md py-2 pl-2.5 pr-28 text-left transition-colors duration-200 md:pr-2.5 md:group-focus-within:pr-28 md:group-hover:pr-28",
+            "grid w-full cursor-pointer items-center gap-2 rounded-md py-2 pl-2.5 pr-12 text-left transition-colors duration-200 md:pr-2.5 md:group-focus-within:pr-28 md:group-hover:pr-28",
             "hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
             currentThreadId === thread.id
               ? "border border-primary bg-accent hover:bg-accent"
@@ -479,7 +505,7 @@ export function ThreadList({
                   aria-label={`Status: ${STATUS_LABELS[thread.status]}`}
                   title={`Status: ${STATUS_LABELS[thread.status]}`}
                   className={cn(
-                    "h-2 w-2 rounded-full",
+                    "block h-2 w-2 rounded-full",
                     getThreadColor(thread.status)
                   )}
                 />
@@ -487,9 +513,72 @@ export function ThreadList({
             </div>
           </div>
         </button>
-        {/* Per-thread actions — siblings of the select button (not nested);
-          shown on touch, reveal on hover/focus on desktop. */}
-        <div className="absolute right-1.5 top-1.5 flex items-center gap-0.5 rounded-md bg-accent/95 p-0.5 opacity-100 shadow-sm backdrop-blur-sm transition-opacity md:opacity-0 md:group-focus-within:opacity-100 md:group-hover:opacity-100">
+        {/* Per-thread actions — siblings of the select button (not nested).
+          Touch widths get one 44px "⋯" menu so the title keeps the row; four
+          always-visible icons left a 320px title with a few characters.
+          `modal={false}`: Rename/Delete hand over to a Dialog, which does its
+          own focus trapping and scroll locking. */}
+        <DropdownMenu modal={false}>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              aria-label={`Actions for "${thread.title}"`}
+              data-thread-actions={thread.id}
+              className="absolute right-0.5 top-1/2 inline-flex size-11 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:text-foreground md:hidden"
+            >
+              <MoreHorizontal
+                className="size-4"
+                aria-hidden="true"
+              />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem
+              className="min-h-11"
+              disabled={pinBusy}
+              onSelect={() => togglePin(thread)}
+            >
+              {thread.pinned ? (
+                <PinOff aria-hidden="true" />
+              ) : (
+                <Pin aria-hidden="true" />
+              )}
+              {thread.pinned ? "Unpin" : "Pin"}
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              className="min-h-11"
+              onSelect={() => {
+                menuOriginRef.current = thread.id;
+                setRenameTarget(thread);
+                setRenameValue(thread.title);
+              }}
+            >
+              <Pencil aria-hidden="true" />
+              Rename
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              className="min-h-11"
+              disabled={exportBusy}
+              onSelect={() => runExport(thread)}
+            >
+              <Download aria-hidden="true" />
+              Export JSON
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              className="min-h-11 text-destructive focus:bg-destructive/10 focus:text-destructive"
+              onSelect={() => {
+                menuOriginRef.current = thread.id;
+                setDeleteTarget(thread);
+              }}
+            >
+              <Trash2 aria-hidden="true" />
+              Delete
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+        {/* Desktop keeps the inline toolbar, revealed on hover/focus. */}
+        <div className="absolute right-1.5 top-1.5 hidden items-center gap-0.5 rounded-md bg-accent/95 p-0.5 opacity-0 shadow-sm backdrop-blur-sm transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 md:flex">
           <button
             type="button"
             aria-label={
@@ -854,7 +943,10 @@ export function ThreadList({
           if (!open && !actionBusy) setRenameTarget(null);
         }}
       >
-        <DialogContent className="sm:max-w-md">
+        <DialogContent
+          className="sm:max-w-md"
+          onCloseAutoFocus={restoreMenuFocus}
+        >
           <DialogHeader>
             <DialogTitle>Rename research</DialogTitle>
             <DialogDescription>
@@ -909,8 +1001,12 @@ export function ThreadList({
             if (pendingDeleteFocusRef.current) {
               e.preventDefault();
               pendingDeleteFocusRef.current = false;
+              menuOriginRef.current = null;
               newChatRef.current?.focus();
+              return;
             }
+            // Cancelled: back to the row's "⋯" trigger if that is where it began.
+            restoreMenuFocus(e);
           }}
         >
           <DialogHeader>

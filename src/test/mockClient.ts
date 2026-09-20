@@ -9,7 +9,7 @@ import type { Message } from "@langchain/langgraph-sdk";
 
 export interface MockThreadState {
   next?: unknown[];
-  tasks?: Array<{ interrupts?: unknown[] }>;
+  tasks?: Array<{ interrupts?: unknown[]; error?: unknown; result?: unknown }>;
   values?: { messages?: Message[] };
 }
 
