@@ -117,6 +117,7 @@ export const WorkspaceFileDialog = React.memo<{
   const [discardAction, setDiscardAction] = useState<
     "close" | "cancel-edit" | null
   >(null);
+  const titleRef = useRef<HTMLHeadingElement>(null);
 
   // This dialog stays mounted while closed (`path === null` renders nothing), so
   // a confirmation opened for one file would otherwise greet the next one — a
@@ -270,20 +271,28 @@ export const WorkspaceFileDialog = React.memo<{
       >
         <DialogContent
           aria-describedby={undefined}
-          className="flex h-[80vh] max-h-[80vh] min-w-[60vw] flex-col p-6"
+          onOpenAutoFocus={(event) => {
+            event.preventDefault();
+            titleRef.current?.focus();
+          }}
+          className="flex h-[80dvh] max-h-[calc(100dvh-2rem)] flex-col p-3 sm:min-w-[60vw] sm:p-6"
         >
-          <DialogTitle className="sr-only">{path}</DialogTitle>
-          <div className="mb-4 flex items-center justify-between gap-3 border-b border-border pb-4">
-            <div className="flex min-w-0 items-center gap-2">
+          <div className="flex shrink-0 flex-col gap-2 border-b border-border pb-2 sm:mb-4 sm:flex-row sm:items-center sm:justify-between sm:gap-3 sm:pb-4 sm:pr-6">
+            <div className="flex min-w-0 items-center gap-2 pr-10 sm:pr-0">
               <FileText
                 className="h-5 w-5 shrink-0 text-[var(--color-text-tertiary)]"
                 aria-hidden="true"
               />
-              <span className="overflow-hidden text-ellipsis whitespace-nowrap text-base font-medium text-primary">
+              <DialogTitle
+                ref={titleRef}
+                tabIndex={-1}
+                title={path}
+                className="truncate text-base font-medium leading-6 text-primary outline-none"
+              >
                 {path}
-              </span>
+              </DialogTitle>
             </div>
-            <div className="flex shrink-0 items-center gap-1">
+            <div className="flex shrink-0 flex-wrap items-center justify-end gap-1 max-sm:[&>a]:min-h-11 max-sm:[&>button]:min-h-11 max-sm:[&>button]:min-w-11">
               {editing ? (
                 <>
                   <Button

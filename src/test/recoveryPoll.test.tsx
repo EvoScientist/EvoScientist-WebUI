@@ -242,6 +242,59 @@ describe("recovery poll", () => {
     });
     expect(client.threads.getState.mock.calls.length).toBe(settled + 1);
   });
+
+  it.each(["error", "interrupted", "idle"])(
+    "clears a resolved approval when the resumed run is %s with next still populated",
+    async (status) => {
+      const { result } = renderChat({ activeAssistant: fixtureAssistant });
+      await waitFor(() => expect(result.current.interrupt).toBeDefined());
+      act(() => {
+        result.current.resumeInterrupt({ decisions: [{ type: "approve" }] });
+        stream.setLoading(true);
+      });
+      const completedMessages = [
+        ...serverMessages,
+        {
+          id: "tool-result",
+          type: "tool",
+          tool_call_id: "tc1",
+          content: "UI_EXEC_OK",
+        },
+      ] as Message[];
+      const client = getActiveMockClient();
+      client.setThreadState("t-1", {
+        // An error/cancelled checkpoint still names the resumable node.
+        next: ["model"],
+        tasks: [{ interrupts: [], error: "Provider returned error" }],
+        values: { messages: completedMessages },
+      });
+      client.setThreadRecord("t-1", { status });
+      act(() => {
+        // The SDK keeps the previous approval even though its tool completed.
+        stream.setInterrupt(pendingApproval);
+        stream.setMessages(completedMessages);
+        stream.setLoading(false);
+      });
+      await waitFor(() => {
+        expect(result.current.runSettled).toBe(true);
+        expect(result.current.interrupt).toBeUndefined();
+        expect(result.current.messages.at(-1)?.content).toBe("UI_EXEC_OK");
+      });
+
+      // A new interrupt must remain actionable, even with the same arguments.
+      const newApproval = { ...pendingApproval, id: "int-after-error" };
+      client.setThreadState("t-1", {
+        next: ["tools"],
+        tasks: [{ interrupts: [newApproval] }],
+        values: { messages: completedMessages },
+      });
+      act(() => stream.setInterrupt(newApproval));
+      await waitFor(() => {
+        expect(result.current.interrupt).toEqual(newApproval);
+        expect(result.current.runSettled).toBe(false);
+      });
+    }
+  );
 });
 
 // A tool call with no result spins only while something can still produce one.

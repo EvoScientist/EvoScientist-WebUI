@@ -768,11 +768,10 @@ export function useChat({
         // Every poll answers afresh — a run started elsewhere can pick the
         // thread up again — and only statuses known to mean "nothing is running"
         // count, so a server with states of its own never reads as finished.
-        setSettledThreadId(
-          SETTLED_THREAD_STATUSES.has(threadRecord.status ?? "")
-            ? threadId
-            : null
+        const serverSettled = SETTLED_THREAD_STATUSES.has(
+          threadRecord.status ?? ""
         );
+        setSettledThreadId(serverSettled ? threadId : null);
         // Backfill only after the live stream is idle. During active streaming the
         // live message list owns rendering; this recovery loop is for dropped tail
         // state after the stream has settled.
@@ -780,10 +779,11 @@ export function useChat({
           setFetchedThreadId(threadId);
           setFetchedMessages(msgs);
         }
-        if (!stillPending) {
-          // The server has no pending task/interrupt anymore. Record the stale
-          // live interrupt's identity so the getter suppresses ONLY that one
-          // (composer unlocks after approving) — a new interrupt still shows.
+        if (!stillPending || serverSettled) {
+          // A failed/cancelled run can retain `next` after its approval was
+          // resolved. The server has no actionable interrupt and is no longer
+          // busy, so suppress the stale SDK approval even in that case. Key it
+          // by identity so a genuinely new approval still shows.
           setFetchedInterrupt(undefined);
           setResolvedInterruptKey(
             interruptValueKey(coerceInterrupt(stream.interrupt))
@@ -792,10 +792,10 @@ export function useChat({
             setFetchedThreadId(threadId);
             setFetchedMessages(msgs);
           }
-          return;
+          if (!stillPending) return;
         }
-        // Keep polling only while the run is still working server-side; a
-        // finished run (next empty) won't produce anything more.
+        // Keep the bounded follow-up when `next` remains: a run started in
+        // another tab can become busy or reach a new approval during this window.
         if (stillPending && tries < MAX_TRIES && !cancelled) {
           timer = setTimeout(attempt, 1000);
         }

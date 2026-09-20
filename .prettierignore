@@ -36,3 +36,6 @@ AGENTS.md
 pnpm-lock.yaml
 yarn.lock
 package-lock.json
+
+# local QA evidence (not committed)
+.codex-qa/
