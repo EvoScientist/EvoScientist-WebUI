@@ -278,7 +278,7 @@ export const WorkspaceFileDialog = React.memo<{
           className="flex h-[80dvh] max-h-[calc(100dvh-2rem)] flex-col p-3 sm:min-w-[60vw] sm:p-6"
         >
           <div className="flex shrink-0 flex-col gap-2 border-b border-border pb-2 sm:mb-4 sm:flex-row sm:items-center sm:justify-between sm:gap-3 sm:pb-4 sm:pr-6">
-            <div className="flex min-w-0 items-center gap-2 pr-8 sm:pr-0">
+            <div className="flex min-w-0 items-center gap-2 pr-10 sm:pr-0">
               <FileText
                 className="h-5 w-5 shrink-0 text-[var(--color-text-tertiary)]"
                 aria-hidden="true"

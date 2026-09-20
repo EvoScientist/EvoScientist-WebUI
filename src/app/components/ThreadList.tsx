@@ -342,11 +342,17 @@ export function ThreadList({
     const trigger = Array.from(
       document.querySelectorAll<HTMLElement>("[data-thread-actions]")
     ).find((el) => el.dataset.threadActions === threadId);
-    // Hidden at desktop widths (the viewport can grow while a dialog is open):
-    // leave Radix's default rather than focusing an element that can't take it.
-    if (!trigger || getComputedStyle(trigger).display === "none") return;
+    if (!trigger) return;
+    // Hidden at desktop widths, and the viewport can grow while a dialog is open
+    // (a rotated phone). Radix's default would not help — what it remembers is
+    // the unmounted menu item — so fall back to the row's select button.
+    const target =
+      getComputedStyle(trigger).display === "none"
+        ? trigger.parentElement?.querySelector<HTMLElement>("button")
+        : trigger;
+    if (!target) return;
     e.preventDefault();
-    trigger.focus();
+    target.focus();
   };
 
   const submitRename = async () => {

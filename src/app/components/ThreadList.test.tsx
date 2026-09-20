@@ -164,6 +164,24 @@ describe("ThreadList per-thread actions menu", () => {
     }
   );
 
+  // The viewport can cross `md` while a dialog is open (a rotated phone): the
+  // trigger is then `display: none` and cannot take focus.
+  it("falls back to the row when the trigger is hidden at close", async () => {
+    render(<ThreadList onThreadSelect={vi.fn()} />);
+    const trigger = openMenu("Protein folding survey");
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Rename" }));
+    const cancel = await screen.findByRole("button", { name: "Cancel" });
+
+    trigger.style.display = "none";
+    fireEvent.click(cancel);
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(document.activeElement).toBe(
+        screen.getByRole("button", { name: /^Protein folding survey/ })
+      );
+    });
+  });
+
   it("opens the delete confirmation and never selects the thread", async () => {
     const onThreadSelect = vi.fn();
     render(<ThreadList onThreadSelect={onThreadSelect} />);
