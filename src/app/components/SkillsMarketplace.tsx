@@ -1,18 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import {
-  Loader2,
-  Puzzle,
-  RotateCw,
-  Trash2,
-  Download,
-  ArrowUpCircle,
-} from "lucide-react";
+import { useQueryState } from "nuqs";
+import { Loader2, RotateCw } from "lucide-react";
 import {
   SkillDetailDialog,
   type SkillDetailTarget,
 } from "@/app/components/SkillDetailDialog";
+import { SkillTile } from "@/app/components/SkillTile";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -28,6 +23,10 @@ interface SkillCard {
   title: string;
   description: string;
   dir: string;
+  /** Also carries an EXPERT.md, so it can be dispatched as an expert too. */
+  isExpert?: boolean;
+  /** False only when `metadata.type` explicitly omits `skill`. */
+  isSkill?: boolean;
 }
 
 interface CatalogSkill {
@@ -39,9 +38,15 @@ interface CatalogSkill {
   latestVersion?: string;
   installedVersion?: string;
   updateAvailable: boolean;
+  /** Also carries an EXPERT.md, so it can be dispatched as an expert too. */
+  isExpert?: boolean;
+  /** False only when `metadata.type` explicitly omits `skill` — such an entry
+   *  is an actor with no standalone use here, and lives under Experts. */
+  isSkill?: boolean;
 }
 
 export function SkillsMarketplace() {
+  const [, setView] = useQueryState("view");
   const [catalog, setCatalog] = useState<CatalogSkill[]>([]);
   const [other, setOther] = useState<SkillCard[]>([]);
   const [loading, setLoading] = useState(true);
@@ -78,7 +83,13 @@ export function SkillsMarketplace() {
       }),
     ]);
 
-    const cat = catRes.status === "fulfilled" ? catRes.value : [];
+    // An entry whose `metadata.type` omits `skill` is an actor, not a tool:
+    // it belongs under Experts only. Absence of the field means yes, so
+    // nothing disappears just because an author never wrote it.
+    const belongsHere = (s: { isSkill?: boolean }) => s.isSkill !== false;
+    const cat = (catRes.status === "fulfilled" ? catRes.value : []).filter(
+      belongsHere
+    );
     if (catRes.status === "rejected") {
       setCatalogError(
         catRes.reason instanceof Error
@@ -91,7 +102,9 @@ export function SkillsMarketplace() {
     // Installed skills that aren't in the official catalog (custom/local ones).
     if (instRes.status === "fulfilled") {
       const catNames = new Set(cat.map((c) => c.name));
-      setOther(instRes.value.filter((s) => !catNames.has(s.name)));
+      setOther(
+        instRes.value.filter((s) => !catNames.has(s.name) && belongsHere(s))
+      );
     } else {
       setOther([]);
       setError(
@@ -264,6 +277,7 @@ export function SkillsMarketplace() {
                       latestVersion={s.latestVersion}
                       updateAvailable={s.updateAvailable}
                       busy={busy[s.name]}
+                      actions={expertBadge(s.isExpert, setView)}
                       onOpen={() =>
                         setDetail({
                           name: s.name,
@@ -304,6 +318,7 @@ export function SkillsMarketplace() {
                       description={s.description}
                       installed
                       busy={busy[s.name]}
+                      actions={expertBadge(s.isExpert, setView)}
                       onOpen={() =>
                         setDetail({
                           name: s.name,
@@ -366,138 +381,24 @@ export function SkillsMarketplace() {
   );
 }
 
-function SkillTile({
-  title,
-  description,
-  meta,
-  installed,
-  installedVersion,
-  latestVersion,
-  updateAvailable,
-  busy,
-  onOpen,
-  onInstall,
-  onUpdate,
-  onUninstall,
-}: {
-  title: string;
-  description: string;
-  meta?: string;
-  installed: boolean;
-  installedVersion?: string;
-  latestVersion?: string;
-  updateAvailable?: boolean;
-  busy?: "install" | "uninstall" | "update";
-  onOpen?: () => void;
-  onInstall?: () => void;
-  onUpdate?: () => void;
-  onUninstall?: () => void;
-}) {
-  const versionLabel = installed
-    ? installedVersion && `v${installedVersion}`
-    : latestVersion && `v${latestVersion}`;
+/** The "also an expert" marker. Clicking it crosses over to the Experts view,
+ *  where the same skill appears again with its persona and actor identity. */
+function expertBadge(
+  isExpert: boolean | undefined,
+  setView: (v: string) => void
+) {
+  if (!isExpert) return undefined;
   return (
-    <div className="flex flex-col rounded-lg border border-border bg-card p-3">
-      <button
-        type="button"
-        onClick={onOpen}
-        className="-m-1 flex items-start gap-2.5 rounded-md p-1 text-left transition-colors hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring"
-        title="View details"
-      >
-        <Puzzle
-          className="mt-0.5 size-5 shrink-0 text-[var(--brand)]"
-          aria-hidden="true"
-        />
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-            <h3 className="break-words text-lg font-medium leading-tight">
-              {title}
-            </h3>
-            {versionLabel && (
-              <span className="shrink-0 font-mono text-xs text-muted-foreground">
-                {versionLabel}
-              </span>
-            )}
-            {meta && (
-              <span className="shrink-0 text-xs text-muted-foreground">
-                · {meta}
-              </span>
-            )}
-          </div>
-          <p className="mt-1 line-clamp-2 text-sm leading-6 text-muted-foreground">
-            {description || "No description."}
-          </p>
-        </div>
-      </button>
-      <div className="mt-2.5 flex items-center justify-end gap-2">
-        {installed && updateAvailable && (
-          <button
-            type="button"
-            onClick={onUpdate}
-            disabled={!!busy}
-            className="inline-flex items-center gap-1.5 rounded-md bg-[var(--brand-solid)] px-2.5 py-1 text-xs font-medium text-[var(--brand-foreground)] transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
-            title={latestVersion ? `Update to v${latestVersion}` : "Update"}
-          >
-            {busy === "update" ? (
-              <Loader2
-                className="size-3.5 animate-spin"
-                aria-hidden="true"
-              />
-            ) : (
-              <ArrowUpCircle
-                className="size-3.5"
-                aria-hidden="true"
-              />
-            )}
-            {busy === "update"
-              ? "Updating…"
-              : latestVersion
-              ? `Update → v${latestVersion}`
-              : "Update"}
-          </button>
-        )}
-        {installed ? (
-          <button
-            type="button"
-            onClick={onUninstall}
-            disabled={!!busy}
-            className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:border-destructive/40 hover:bg-destructive/10 hover:text-destructive focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
-          >
-            {busy === "uninstall" ? (
-              <Loader2
-                className="size-3.5 animate-spin"
-                aria-hidden="true"
-              />
-            ) : (
-              <Trash2
-                className="size-3.5"
-                aria-hidden="true"
-              />
-            )}
-            {busy === "uninstall" ? "Removing…" : "Uninstall"}
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={onInstall}
-            disabled={!!busy}
-            className="inline-flex items-center gap-1.5 rounded-md bg-[var(--brand-solid)] px-2.5 py-1 text-xs font-medium text-[var(--brand-foreground)] transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
-          >
-            {busy === "install" ? (
-              <Loader2
-                className="size-3.5 animate-spin"
-                aria-hidden="true"
-              />
-            ) : (
-              <Download
-                className="size-3.5"
-                aria-hidden="true"
-              />
-            )}
-            {busy === "install" ? "Installing…" : "Install"}
-          </button>
-        )}
-      </div>
-    </div>
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        void setView("experts");
+      }}
+      className="shrink-0 rounded-full border border-[var(--brand)] bg-[var(--brand-soft)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--brand)] transition-opacity hover:opacity-80 focus-visible:ring-2 focus-visible:ring-ring"
+      title="Also an expert — can be dispatched to run a task on its own"
+    >
+      Expert
+    </button>
   );
 }
