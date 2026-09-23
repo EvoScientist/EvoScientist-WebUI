@@ -8,6 +8,7 @@ import {
   type SkillDetailTarget,
 } from "@/app/components/SkillDetailDialog";
 import { SkillTile } from "@/app/components/SkillTile";
+import { notifyTeamsChanged } from "@/app/hooks/useTeams";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -148,6 +149,9 @@ export function SkillsMarketplace() {
             : s
         )
       );
+      // A skill installed here may be an expert; the Experts view and the
+      // composer pill hold their own copy of that list.
+      notifyTeamsChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : `Failed to ${mode}`);
     } finally {
@@ -177,6 +181,7 @@ export function SkillsMarketplace() {
       } else {
         setOther((prev) => prev.filter((s) => s.name !== name));
       }
+      notifyTeamsChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to uninstall");
     } finally {

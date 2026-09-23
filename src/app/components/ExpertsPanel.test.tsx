@@ -399,4 +399,13 @@ describe("ExpertsPanel", () => {
     expect(document.querySelector("svg.lucide-users")).toBeTruthy();
     expect(document.querySelector("svg.lucide-puzzle")).toBeNull();
   });
+
+  it("counts a single file in the singular", async () => {
+    // Research Skills already does this; the two galleries render the same
+    // tile and should not disagree about grammar.
+    mockApi({ catalog: [catalogRow({ fileCount: 1 })] });
+    render(<ExpertsPanel />);
+
+    expect(await screen.findByText(/1 file(?!s)/)).toBeTruthy();
+  });
 });

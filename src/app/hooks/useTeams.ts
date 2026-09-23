@@ -12,6 +12,15 @@ import { parseTeams, type TeamEntry } from "@/lib/teams";
 // stores already use.
 const CHANGE_EVENT = "evo-teams-change";
 
+/** Tell every mounted `useTeams` to re-read the list. Call after anything that
+ *  installs or removes a skill — an expert can be installed from the skills
+ *  gallery too, and the Experts view and composer pill must not keep counting
+ *  a stale list until a reload. */
+export function notifyTeamsChanged(): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new Event(CHANGE_EVENT));
+}
+
 /**
  * The deployment's installed experts, from `GET ${deploymentUrl}/api/teams`.
  *
@@ -35,10 +44,7 @@ export function useTeams(): {
   const [error, setError] = useState<string | null>(null);
   const [revision, setRevision] = useState(0);
 
-  const refresh = useCallback(() => {
-    if (typeof window === "undefined") return;
-    window.dispatchEvent(new Event(CHANGE_EVENT));
-  }, []);
+  const refresh = useCallback(() => notifyTeamsChanged(), []);
 
   useEffect(() => {
     const onChange = () => setRevision((n) => n + 1);

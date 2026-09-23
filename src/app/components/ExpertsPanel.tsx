@@ -223,7 +223,11 @@ export function ExpertsPanel() {
                     title={entry.title}
                     description={entry.description}
                     meta={
-                      entry.fileCount ? `${entry.fileCount} files` : undefined
+                      entry.fileCount
+                        ? `${entry.fileCount} file${
+                            entry.fileCount === 1 ? "" : "s"
+                          }`
+                        : undefined
                     }
                     installed={entry.installed}
                     installedVersion={entry.installedVersion}

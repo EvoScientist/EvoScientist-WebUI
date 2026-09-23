@@ -5,7 +5,7 @@
 // pointing at its second identity.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 
 const nav = vi.hoisted(() => ({ setView: vi.fn() }));
 
@@ -110,5 +110,37 @@ describe("SkillsMarketplace expert marker", () => {
     mockApi([noDeclaration]);
     render(<SkillsMarketplace />);
     expect(await screen.findByText("Paper Review")).toBeTruthy();
+  });
+
+  it("tells expert consumers to refresh after installing", async () => {
+    // paper-review lives in this catalog, so an expert can be installed from
+    // here — and the Experts view and composer pill must not keep counting a
+    // stale list afterwards.
+    mockApi([row({ installed: false })]);
+    const onChange = vi.fn();
+    window.addEventListener("evo-teams-change", onChange);
+
+    render(<SkillsMarketplace />);
+    fireEvent.click(await screen.findByRole("button", { name: /^install$/i }));
+
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    window.removeEventListener("evo-teams-change", onChange);
+  });
+
+  it("tells them again after uninstalling", async () => {
+    mockApi([row({ installed: true })]);
+    const onChange = vi.fn();
+    window.addEventListener("evo-teams-change", onChange);
+
+    render(<SkillsMarketplace />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: /^uninstall$/i })
+    );
+    // Removal is behind a confirmation dialog.
+    const buttons = screen.getAllByRole("button", { name: /^uninstall$/i });
+    fireEvent.click(buttons[buttons.length - 1]);
+
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    window.removeEventListener("evo-teams-change", onChange);
   });
 });
