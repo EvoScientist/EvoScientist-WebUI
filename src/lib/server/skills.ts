@@ -66,6 +66,118 @@ export interface CatalogSkill {
   installedVersion?: string;
   /** True when installed and the upstream version is strictly newer. */
   updateAvailable: boolean;
+  /** True when the skill dir also ships an EXPERT.md — see `hasExpertFile`. */
+  isExpert: boolean;
+  /** False only when `metadata.type` explicitly omits `skill` — see
+   *  `declaresSkillType`. Governs whether it shows in Research Skills. */
+  isSkill: boolean;
+}
+
+/** The actor definition's filename. Its presence in a skill directory is what
+ *  declares the skill an expert — the backend classifies on exactly this
+ *  (`skills_manager._EXPERT_FILENAME`), never on SKILL.md frontmatter. */
+export const EXPERT_FILENAME = "EXPERT.md";
+
+/** Whether `blobs` (the repo tree) declares `name` an expert: an EXPERT.md
+ *  sitting directly in the skill's own directory, beside its SKILL.md. */
+export function hasExpertFile(
+  name: string,
+  blobs: { path: string }[]
+): boolean {
+  const expected = `${SKILLS_PREFIX}${name}/${EXPERT_FILENAME}`;
+  return blobs.some((b) => b.path === expected);
+}
+
+/** Read `<tier>/<name>/<filename>`, or null when it is absent or escapes the
+ *  tier. Skill dirs are user-writable, so a symlinked file must not be able to
+ *  read arbitrary paths off disk — canonicalize, then re-check containment. */
+export async function readSkillFileIn(
+  tier: string,
+  name: string,
+  filename: string
+): Promise<string | null> {
+  try {
+    const real = await fs.realpath(join(tier, name, filename));
+    const root = await fs.realpath(tier);
+    if (real !== root && !real.startsWith(root + sep)) return null;
+    return await fs.readFile(real, "utf-8");
+  } catch {
+    // not in this tier, or a broken/escaping symlink
+    return null;
+  }
+}
+
+/** EXPERT.md body. The contract says the file carries no frontmatter, but the
+ *  backend strips one when present, so mirror that rather than rendering it. */
+export function stripExpertFrontmatter(text: string): string {
+  const { frontmatter, body } = splitFrontmatter(text);
+  return (frontmatter === null ? text : body).trim();
+}
+
+/** Whether a SKILL.md claims to belong in the skills gallery.
+ *
+ *  Reads `metadata.type`, which the backend deliberately never reads — it is
+ *  an index-facing field, so this is a UI classification only and changes
+ *  nothing about dispatch. An expert that lists `skill` (or omits the field
+ *  entirely) appears in Research Skills as well as Experts; one that declares
+ *  only `expert` appears solely under Experts.
+ *
+ *  Absence means yes on purpose: most skills never write this field, and an
+ *  expert must not disappear from the gallery because its author left it out. */
+export function declaresSkillType(md: string): boolean {
+  const { frontmatter } = splitFrontmatter(md);
+  if (!frontmatter) return true;
+  const block = frontmatter.match(
+    /^metadata\s*:[ \t]*\n((?:[ \t]+.*(?:\n|$))*)/m
+  );
+  if (!block) return true;
+  const body = block[1];
+  // Only `type:` at metadata's own indent level counts — a deeper one
+  // (`metadata.other.type`) belongs to somebody else's field.
+  const firstKey = body.split("\n").find((line) => line.trim());
+  const indent = firstKey?.match(/^[ \t]+/)?.[0] ?? "  ";
+  const inline = body.match(new RegExp(`^${indent}type\\s*:[ \\t]*(.*)$`, "m"));
+  if (!inline) return true;
+  const rest = inline[1].trim();
+
+  let values: string[];
+  if (rest === "" || rest === "|" || rest === ">") {
+    // Block sequence: `type:` on its own line, `- value` items under it.
+    const after = body.slice(body.indexOf(inline[0]) + inline[0].length);
+    values = [];
+    for (const line of after.split("\n")) {
+      if (!line.trim()) continue;
+      const item = line.match(/^[ \t]+-[ \t]*(.+?)[ \t]*$/);
+      // A line at or above the key's indent ends the sequence.
+      if (!item || !line.startsWith(indent)) break;
+      values.push(item[1]);
+    }
+  } else {
+    values = rest.replace(/^\[|\]$/g, "").split(",");
+  }
+
+  const normalized = values
+    .map((v) =>
+      v
+        .trim()
+        .replace(/^["']|["']$/g, "")
+        .toLowerCase()
+    )
+    .filter(Boolean);
+  // An explicitly empty list is still a declaration — it just names nothing,
+  // so it does not name `skill` either.
+  return normalized.includes("skill");
+}
+
+/** Whether the installed skill directory `dir` declares an expert. A directory
+ *  named EXPERT.md does not count — only a regular file carries a persona. */
+export async function isInstalledExpert(dir: string): Promise<boolean> {
+  try {
+    const stat = await fs.stat(join(dir, EXPERT_FILENAME));
+    return stat.isFile();
+  } catch {
+    return false; // no such file, or the skill dir is gone
+  }
 }
 
 /** Per-skill source recorded in .installed.yaml: the `owner/repo@path` shorthand
@@ -360,6 +472,7 @@ export async function getCatalog(force = false): Promise<CatalogSkill[]> {
       let title = name;
       let description = "";
       let latestVersion: string | undefined;
+      let isSkill = true;
       const skillMd = blobs.find(
         (b) => b.path === `${SKILLS_PREFIX}${name}/SKILL.md`
       );
@@ -372,6 +485,7 @@ export async function getCatalog(force = false): Promise<CatalogSkill[]> {
           title = fm.name || name;
           description = fm.description || "";
           latestVersion = fm.version;
+          isSkill = declaresSkillType(md);
         } catch {
           // best-effort metadata
         }
@@ -394,6 +508,8 @@ export async function getCatalog(force = false): Promise<CatalogSkill[]> {
         latestVersion,
         installedVersion,
         updateAvailable,
+        isExpert: hasExpertFile(name, blobs),
+        isSkill,
       } satisfies CatalogSkill;
     })
   );
@@ -409,6 +525,10 @@ export interface SkillDetail {
   /** SKILL.md content with the frontmatter block stripped. */
   body: string;
   installed: boolean;
+  /** EXPERT.md body when the skill declares an expert, else undefined. This is
+   *  the persona the backend runs the expert with — the contract says the file
+   *  carries no frontmatter, but strip one if a skill adds it anyway. */
+  expertBody?: string;
 }
 
 /** Full SKILL.md for one skill — the locally-installed copy if present (what the
@@ -416,33 +536,40 @@ export interface SkillDetail {
 export async function getSkillDetail(name: string): Promise<SkillDetail> {
   if (!isValidSkillName(name)) throw new Error("Invalid skill name.");
 
-  let md: string | undefined;
+  let md: string | null = null;
+  let expertMd: string | null = null;
   let installed = false;
   for (const dir of SKILL_DIRS) {
-    try {
-      // Canonicalize and confirm the SKILL.md stays inside the tier — a
-      // symlinked skill dir / file must not read arbitrary files off disk.
-      const real = await fs.realpath(join(dir, name, "SKILL.md"));
-      const root = await fs.realpath(dir);
-      if (real !== root && !real.startsWith(root + sep)) continue;
-      md = await fs.readFile(real, "utf-8");
-      installed = true;
-      break;
-    } catch {
-      // not in this tier, or a broken/escaping symlink
-    }
+    const local = await readSkillFileIn(dir, name, "SKILL.md");
+    if (local === null) continue; // not in this tier, or an escaping symlink
+    md = local;
+    installed = true;
+    // The actor definition lives beside SKILL.md, in the same tier. An
+    // installed copy is authoritative: don't fall back to upstream for it.
+    expertMd = await readSkillFileIn(dir, name, EXPERT_FILENAME);
+    break;
   }
-  if (md === undefined) {
+
+  if (md === null) {
     const { ref, tree } = await getRepoSnapshot();
-    const skillMd = tree.find(
-      (t) => t.type === "blob" && t.path === `${SKILLS_PREFIX}${name}/SKILL.md`
-    );
-    if (!skillMd) throw new Error(`Skill "${name}" was not found.`);
-    const res = await fetch(rawUrl(ref, skillMd.path), {
-      headers: GITHUB_HEADERS,
-    });
-    if (!res.ok) throw new Error(`Failed to load skill (${res.status}).`);
-    md = await res.text();
+    const readUpstream = async (path: string) => {
+      const res = await fetch(rawUrl(ref, path), { headers: GITHUB_HEADERS });
+      if (!res.ok) throw new Error(`Failed to load skill (${res.status}).`);
+      return res.text();
+    };
+    const has = (path: string) =>
+      tree.some((t) => t.type === "blob" && t.path === path);
+    const skillPath = `${SKILLS_PREFIX}${name}/SKILL.md`;
+    if (!has(skillPath)) throw new Error(`Skill "${name}" was not found.`);
+    md = await readUpstream(skillPath);
+    const expertPath = `${SKILLS_PREFIX}${name}/${EXPERT_FILENAME}`;
+    if (has(expertPath)) {
+      try {
+        expertMd = await readUpstream(expertPath);
+      } catch {
+        // best-effort: a missing persona degrades the card, never breaks it
+      }
+    }
   }
 
   // Strip the frontmatter block only when it's a genuine, positively-parsed
@@ -459,6 +586,8 @@ export async function getSkillDetail(name: string): Promise<SkillDetail> {
     version: fm.version,
     body: isRealFrontmatter ? rawBody : md.trim(),
     installed,
+    expertBody:
+      expertMd === null ? undefined : stripExpertFrontmatter(expertMd),
   };
 }
 
