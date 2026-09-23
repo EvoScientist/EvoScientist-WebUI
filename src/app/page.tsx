@@ -34,6 +34,7 @@ import {
   ChatInterface,
   type ComposerSnapshot,
 } from "@/app/components/ChatInterface";
+import { ExpertsPanel } from "@/app/components/ExpertsPanel";
 import { SkillsMarketplace } from "@/app/components/SkillsMarketplace";
 import { MemoryPanel } from "@/app/components/MemoryPanel";
 import { ScheduledTasksPanel } from "@/app/components/ScheduledTasksPanel";
@@ -250,6 +251,7 @@ function HomePageInner({
           }
         | { view: "schedule" }
         | { view: "workspace" }
+        | { view: "experts" }
     ) => {
       if (target.view === "memory") {
         setMemoryTab(target.tab);
@@ -258,6 +260,8 @@ function HomePageInner({
         setView("memory");
       } else if (target.view === "schedule") {
         setView("schedule");
+      } else if (target.view === "experts") {
+        setView("experts");
       } else {
         if (inspector && inspectorTab !== "agents") {
           closeInspector();
@@ -526,6 +530,7 @@ function HomePageInner({
                 </ChatProvider>
               </div>
               {view === "skills" && <SkillsMarketplace />}
+              {view === "experts" && <ExpertsPanel />}
               {view === "memory" && (
                 <MemoryPanel
                   initialTab={
