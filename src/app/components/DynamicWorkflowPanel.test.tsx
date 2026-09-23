@@ -103,3 +103,55 @@ describe("DynamicWorkflowPanel", () => {
     expect(screen.getByText("first battle")).toBeDefined();
   });
 });
+
+// Experts fan out through the same `task()` dispatch as any other sub-agent,
+// and the backend's panel events carry no type flag — the only way to tell
+// them apart is to check the name against the deployment's expert list.
+describe("DynamicWorkflowPanel expert marking", () => {
+  const mapWith = (subagentType: string): WorkflowMap => ({
+    call_a: {
+      evalId: "call_a",
+      updatedAt: 100,
+      dispatches: [
+        {
+          id: "a1",
+          label: "review the draft",
+          subagentType,
+          description: "",
+          status: "done",
+          startedAt: 0,
+          durationMs: 1000,
+        },
+      ],
+    },
+  });
+
+  it("marks a dispatch whose name is an installed expert", () => {
+    render(
+      <DynamicWorkflowPanel
+        workflows={mapWith("paper-review")}
+        expertNames={new Set(["paper-review"])}
+      />
+    );
+    expect(screen.getByTitle(/expert/i)).toBeTruthy();
+  });
+
+  it("leaves an ordinary sub-agent unmarked", () => {
+    render(
+      <DynamicWorkflowPanel
+        workflows={mapWith("general-purpose")}
+        expertNames={new Set(["paper-review"])}
+      />
+    );
+    // Anchor first: the panel returns null when it has nothing to show, and
+    // then "no expert marker" would pass for the wrong reason.
+    expect(screen.getByText("general-purpose")).toBeTruthy();
+    expect(screen.queryByTitle(/expert/i)).toBeNull();
+  });
+
+  it("marks nothing when the expert list has not loaded", () => {
+    render(<DynamicWorkflowPanel workflows={mapWith("paper-review")} />);
+    expect(screen.getByText("paper-review")).toBeTruthy();
+    expect(screen.queryByTitle(/expert/i)).toBeNull();
+  });
+});
