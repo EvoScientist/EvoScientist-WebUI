@@ -65,6 +65,8 @@ import {
   stringifyUnknown,
 } from "@/app/utils/utils";
 import { useChatContext } from "@/providers/ChatProvider";
+import { useTeams } from "@/app/hooks/useTeams";
+import { ExpertsPill } from "@/app/components/ExpertsPill";
 import { cn } from "@/lib/utils";
 import { formatModel } from "@/lib/model";
 import {
@@ -129,7 +131,8 @@ type DashboardNavTarget =
       execId?: string;
     }
   | { view: "schedule" }
-  | { view: "workspace" };
+  | { view: "workspace" }
+  | { view: "experts" };
 
 interface ChatInterfaceProps {
   assistant: Assistant | null;
@@ -493,6 +496,12 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       modelOverride,
       setModelOverride,
     } = useChatContext();
+    // Names only — used to tell expert dispatches apart in the fan-out panel.
+    const { teams: installedExperts } = useTeams();
+    const expertNames = useMemo(
+      () => new Set(installedExperts.map((t) => t.name)),
+      [installedExperts]
+    );
 
     // Count of background async sub-agents (writing / data-analysis) still
     // running — drives the composer's "agents running" pulse. We poll each task's
@@ -2303,7 +2312,10 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                       )}
 
                       {metaOpen === "workflow" && (
-                        <DynamicWorkflowPanel workflows={dynamicWorkflows} />
+                        <DynamicWorkflowPanel
+                          workflows={dynamicWorkflows}
+                          expertNames={expertNames}
+                        />
                       )}
                     </div>
                   </>
@@ -2333,7 +2345,9 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                 </button>
               </div>
             )}
-            {(currentModel || runningAgents > 0) && (
+            {(currentModel ||
+              runningAgents > 0 ||
+              installedExperts.length > 0) && (
               <div className="flex items-center gap-1.5 border-t border-border px-3 py-1.5 text-xs text-muted-foreground">
                 {currentModel && (
                   <button
@@ -2357,6 +2371,10 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                     )}
                   </button>
                 )}
+                <ExpertsPill
+                  teams={installedExperts}
+                  onManage={() => onNavigate?.({ view: "experts" })}
+                />
                 {runningAgents > 0 && (
                   <button
                     type="button"
