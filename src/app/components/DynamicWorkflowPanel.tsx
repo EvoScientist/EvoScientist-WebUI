@@ -175,8 +175,14 @@ export function DynamicWorkflowTrigger({
 
 export function DynamicWorkflowPanel({
   workflows,
+  expertNames,
 }: {
   workflows: WorkflowMap;
+  /** Installed expert names, from the deployment. Fan-out events carry no type
+   *  flag, so matching the name is the only way to tell an expert dispatch
+   *  apart from an ordinary sub-agent. Absent until the list loads — and an
+   *  unmarked row simply reads as a plain sub-agent, never as an error. */
+  expertNames?: ReadonlySet<string>;
 }) {
   const phases = useMemo(() => sortWorkflowEvals(workflows), [workflows]);
   const agg = useMemo(() => aggregateWorkflows(workflows), [workflows]);
@@ -231,7 +237,19 @@ export function DynamicWorkflowPanel({
             const rowInner = (
               <>
                 <DispatchStatusIcon status={d.status} />
-                <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+                <span
+                  className={cn(
+                    "shrink-0 rounded px-1.5 py-0.5 font-mono text-[10px]",
+                    expertNames?.has(d.subagentType)
+                      ? "bg-[var(--brand-soft)] text-[var(--brand)]"
+                      : "bg-muted text-muted-foreground"
+                  )}
+                  title={
+                    expertNames?.has(d.subagentType)
+                      ? "Expert — dispatched with its own persona"
+                      : undefined
+                  }
+                >
                   {d.subagentType}
                 </span>
                 <span

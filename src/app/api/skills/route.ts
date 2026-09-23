@@ -5,6 +5,8 @@ import {
   SKILL_DIRS,
   recordUninstall,
   isValidSkillName,
+  isInstalledExpert,
+  declaresSkillType,
 } from "@/lib/server/skills";
 
 // SKILL_DIRS (the global ~/.evoscientist/skills tier + legacy ~/.config
@@ -17,6 +19,11 @@ interface SkillCard {
   title: string;
   description: string;
   dir: string;
+  /** True when the dir also ships an EXPERT.md — the skill can be dispatched
+   *  as an expert, and so appears in the Experts view as well as here. */
+  isExpert: boolean;
+  /** False only when `metadata.type` explicitly omits `skill`. */
+  isSkill: boolean;
 }
 
 // Minimal frontmatter parse — we only need name + description. Avoids pulling
@@ -68,6 +75,8 @@ async function readSkills(): Promise<SkillCard[]> {
           title: name || entry,
           description: description || "",
           dir: skillDir,
+          isExpert: await isInstalledExpert(realDir),
+          isSkill: declaresSkillType(md),
         });
       } catch {
         // no SKILL.md or unreadable — skip

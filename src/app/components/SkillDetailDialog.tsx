@@ -17,13 +17,17 @@ export interface SkillDetailTarget {
 
 export const SkillDetailDialog = React.memo<{
   skill: SkillDetailTarget | null;
+  /** Render the skill's EXPERT.md (persona + envelope contract) instead of its
+   *  SKILL.md. Set by the Experts view — the two galleries differ here only. */
+  preferExpert?: boolean;
   onClose: () => void;
-}>(({ skill, onClose }) => {
+}>(({ skill, preferExpert, onClose }) => {
   interface FetchedDetail {
     title?: string;
     description?: string;
     version?: string;
     body?: string;
+    expertBody?: string;
     installed?: boolean;
   }
   const [detail, setDetail] = useState<FetchedDetail | null>(null);
@@ -65,7 +69,10 @@ export const SkillDetailDialog = React.memo<{
   const version = detail?.version ?? skill.version;
   const description = detail?.description ?? skill.description;
   const installed = detail?.installed ?? skill.installed;
-  const body = detail?.body;
+  // In the Experts view the persona IS the content worth reading; the method
+  // stays one click away in Research Skills. Fall back when a deployment
+  // reports an expert whose EXPERT.md the local tiers cannot read.
+  const body = (preferExpert && detail?.expertBody) || detail?.body;
 
   return (
     <Dialog
@@ -115,7 +122,7 @@ export const SkillDetailDialog = React.memo<{
               {description || "No description."}
             </p>
 
-            {/* SKILL.md body — what the skill actually does. */}
+            {/* EXPERT.md for an expert, else the SKILL.md method. */}
             <div className="mt-4 border-t border-border pt-4">
               {loading ? (
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
