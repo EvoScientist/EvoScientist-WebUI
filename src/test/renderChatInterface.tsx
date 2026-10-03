@@ -79,15 +79,8 @@
 //     const m = await import("@/test/mocks/chatInterfaceStubs");
 //     return { FilesPopover: m.stubComponent("FilesPopover") };
 //   });
-//   vi.mock("@/app/components/WorkspaceFileDialog", async () => {
-//     const m = await import("@/test/mocks/chatInterfaceStubs");
-//     return { WorkspaceFileDialog: m.stubComponent("WorkspaceFileDialog") };
-//   });
-//   vi.mock("@/app/components/MemoryFileDialog", async () => {
-//     const m = await import("@/test/mocks/chatInterfaceStubs");
-//     return { MemoryFileDialog: m.stubComponent("MemoryFileDialog") };
-//   });
 
+import type React from "react";
 import { render, type RenderResult } from "@testing-library/react";
 import type { Assistant } from "@langchain/langgraph-sdk";
 import {
@@ -103,6 +96,8 @@ interface RenderChatInterfaceOptions {
   onComposerSnapshotReady?: (
     getSnapshot: (() => ComposerSnapshot) | null
   ) => void;
+  /** Wrap the provider tree, e.g. in a FilePaneProvider. */
+  wrapper?: React.ComponentType<{ children: React.ReactNode }>;
 }
 
 export function renderChatInterface(
@@ -116,6 +111,7 @@ export function renderChatInterface(
         draftSeed={opts.draftSeed}
         onComposerSnapshotReady={opts.onComposerSnapshotReady}
       />
-    </ChatProvider>
+    </ChatProvider>,
+    opts.wrapper ? { wrapper: opts.wrapper } : undefined
   );
 }
