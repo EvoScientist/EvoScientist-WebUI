@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -16,6 +16,11 @@ import {
   FILE_LINK_HREF_PREFIX,
   rehypePathLinks,
 } from "@/lib/fileLink";
+import {
+  extractLatexMath,
+  remarkDisplayMath,
+  remarkLatexMath,
+} from "@/lib/mathDelimiters";
 
 interface MarkdownContentProps {
   content: string;
@@ -37,6 +42,10 @@ const sanitizeSchema = {
 
 export const MarkdownContent = React.memo<MarkdownContentProps>(
   ({ content, className = "", isStreaming = false }) => {
+    const { markdown, maths } = useMemo(
+      () => extractLatexMath(content),
+      [content]
+    );
     return (
       <div
         className={cn(
@@ -45,7 +54,12 @@ export const MarkdownContent = React.memo<MarkdownContentProps>(
         )}
       >
         <ReactMarkdown
-          remarkPlugins={[remarkGfm, remarkMath]}
+          remarkPlugins={[
+            remarkGfm,
+            remarkMath,
+            remarkDisplayMath,
+            [remarkLatexMath, maths],
+          ]}
           rehypePlugins={[
             rehypeRaw,
             rehypePathLinks,
@@ -215,7 +229,7 @@ export const MarkdownContent = React.memo<MarkdownContentProps>(
             },
           }}
         >
-          {content}
+          {markdown}
         </ReactMarkdown>
       </div>
     );
