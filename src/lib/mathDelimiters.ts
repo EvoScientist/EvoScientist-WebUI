@@ -17,9 +17,9 @@
 
 // Private-use characters: markdown leaves them alone and they never split a
 // text node, so each placeholder reaches the syntax tree intact.
-const PH_OPEN = "";
-const PH_CLOSE = "";
-const PLACEHOLDER = /(\d+)/g;
+const PH_OPEN = "\uE000";
+const PH_CLOSE = "\uE001";
+const PLACEHOLDER = /\uE000(\d+)\uE001/g;
 
 // Leading container syntax of a line: indentation, blockquote markers and list
 // markers.
