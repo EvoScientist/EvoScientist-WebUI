@@ -4,7 +4,6 @@ import React, { useCallback, useEffect, useState } from "react";
 import { Copy, Download, Eye, Loader2, Pencil, Save } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { FileTextContent } from "@/app/components/FileTextContent";
 import { copyText } from "@/lib/clipboard";
 import { extOf, fileNameOf } from "@/lib/fileKinds";
@@ -220,14 +219,10 @@ export function StateFileView({
             className="h-full w-full resize-none rounded-md border border-border bg-background p-4 font-mono text-sm leading-relaxed text-foreground outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
           />
         ) : (
-          <ScrollArea className="h-full rounded-md bg-[var(--color-surface)]">
-            <div className="p-4">
-              <FileTextContent
-                content={content}
-                ext={extOf(name)}
-              />
-            </div>
-          </ScrollArea>
+          <FileTextContent
+            content={content}
+            ext={extOf(name)}
+          />
         )}
       </div>
     </div>
