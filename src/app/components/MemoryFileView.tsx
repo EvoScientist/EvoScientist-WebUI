@@ -3,7 +3,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { FileTextContent } from "@/app/components/FileTextContent";
 import { useTickRefresh } from "@/app/hooks/useTickRefresh";
 import { memoryFileExists } from "@/lib/fileExistence";
@@ -138,14 +137,10 @@ export function MemoryFileView({
             )}
           </div>
         ) : (
-          <ScrollArea className="h-full rounded-md bg-[var(--color-surface)]">
-            <div className="p-4">
-              <FileTextContent
-                content={content}
-                ext={ext}
-              />
-            </div>
-          </ScrollArea>
+          <FileTextContent
+            content={content}
+            ext={ext}
+          />
         )}
       </div>
     </div>

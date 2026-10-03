@@ -408,14 +408,10 @@ export function WorkspaceFileView({
       );
     }
     return (
-      <ScrollArea className="h-full rounded-md bg-[var(--color-surface)]">
-        <div className="p-4">
-          <FileTextContent
-            content={content ?? ""}
-            ext={ext}
-          />
-        </div>
-      </ScrollArea>
+      <FileTextContent
+        content={content ?? ""}
+        ext={ext}
+      />
     );
   };
 
