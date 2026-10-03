@@ -1,7 +1,14 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
+  ArrowLeft,
   ChevronRight,
   ChevronDown,
   Folder,
@@ -15,8 +22,8 @@ import {
   File as FileIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { WorkspaceFileDialog } from "@/app/components/WorkspaceFileDialog";
 import type { WorkspaceEntry } from "@/app/api/workspace/route";
+import { useFilePane } from "@/providers/filePaneContext";
 
 async function listDir(path: string): Promise<WorkspaceEntry[]> {
   const res = await fetch(`/api/workspace?${new URLSearchParams({ path })}`);
@@ -152,10 +159,21 @@ export function WorkspacePanel() {
   const [truncated, setTruncated] = useState(false);
 
   const [error, setError] = useState<string | null>(null);
-  const [selected, setSelected] = useState<{
-    path: string;
-    size: number;
-  } | null>(null);
+
+  // Files open in the docked preview next to this tree.
+  const pane = useFilePane();
+  const openFile = (entry: { path: string; size: number }) =>
+    pane?.open({ source: "workspace", path: entry.path, size: entry.size });
+  const openPaths = useMemo(
+    () =>
+      new Set(
+        (pane?.state.tabs ?? [])
+          .filter((t) => t.source === "workspace")
+          .map((t) => t.path)
+      ),
+    [pane?.state.tabs]
+  );
+  const openCount = pane?.state.tabs.length ?? 0;
 
   const loadDir = useCallback(async (path: string) => {
     setLoading((prev) => new Set(prev).add(path));
@@ -221,6 +239,15 @@ export function WorkspacePanel() {
     setRootLoading(false);
   }, [view, expanded, loadDir, loadAll]);
 
+  // Re-list after the preview saved or deleted a file.
+  const handledRevision = useRef(pane?.treeRevision ?? 0);
+  useEffect(() => {
+    const revision = pane?.treeRevision ?? 0;
+    if (revision === handledRevision.current) return;
+    handledRevision.current = revision;
+    void refresh();
+  }, [pane?.treeRevision, refresh]);
+
   const toggleDir = useCallback(
     (path: string) => {
       setExpanded((prev) => {
@@ -270,9 +297,7 @@ export function WorkspacePanel() {
           <button
             type="button"
             onClick={() =>
-              entry.type === "dir"
-                ? toggleDir(entry.path)
-                : setSelected({ path: entry.path, size: entry.size })
+              entry.type === "dir" ? toggleDir(entry.path) : openFile(entry)
             }
             className="flex w-full items-center gap-1.5 rounded-md py-1 pr-2 text-left text-sm text-foreground transition-colors hover:bg-muted"
             style={{ paddingLeft: `${depth * 14 + 4}px` }}
@@ -298,6 +323,12 @@ export function WorkspacePanel() {
               </>
             )}
             <span className="truncate">{entry.name}</span>
+            {openPaths.has(entry.path) && (
+              <span
+                className="ml-auto size-1.5 shrink-0 rounded-full bg-[var(--brand)]"
+                aria-label="Open in preview"
+              />
+            )}
           </button>
           {entry.type === "dir" &&
             isOpen &&
@@ -344,15 +375,25 @@ export function WorkspacePanel() {
                   <button
                     key={f.path}
                     type="button"
-                    onClick={() => setSelected({ path: f.path, size: f.size })}
+                    onClick={() => openFile(f)}
                     className="flex w-full items-center gap-1.5 rounded-md px-1 py-1 text-left text-sm text-foreground transition-colors hover:bg-muted"
                     title={f.path}
                   >
                     <Icon className="size-4 shrink-0 text-muted-foreground" />
                     <span className="truncate">{f.name}</span>
-                    {dir && (
-                      <span className="ml-auto shrink-0 truncate pl-2 text-[11px] text-muted-foreground">
-                        {dir}
+                    {(dir || openPaths.has(f.path)) && (
+                      <span className="ml-auto flex shrink-0 items-center gap-1.5 truncate pl-2">
+                        {dir && (
+                          <span className="truncate text-[11px] text-muted-foreground">
+                            {dir}
+                          </span>
+                        )}
+                        {openPaths.has(f.path) && (
+                          <span
+                            className="size-1.5 shrink-0 rounded-full bg-[var(--brand)]"
+                            aria-label="Open in preview"
+                          />
+                        )}
                       </span>
                     )}
                   </button>
@@ -367,6 +408,19 @@ export function WorkspacePanel() {
 
   return (
     <div className="flex min-h-0 flex-col">
+      {openCount > 0 && (
+        <button
+          type="button"
+          onClick={() => pane?.showPreview()}
+          className="mb-2 flex w-full items-center gap-1.5 rounded-md bg-accent px-2 py-1.5 text-left text-sm font-medium text-[var(--brand)] transition-colors hover:bg-muted max-sm:min-h-11"
+        >
+          <ArrowLeft
+            className="size-4 rotate-180"
+            aria-hidden="true"
+          />
+          {`Back to preview (${openCount} open)`}
+        </button>
+      )}
       <div className="flex items-center justify-between gap-2 pb-1.5">
         {/* Tree / By-type toggle */}
         <div className="flex items-center gap-0.5 rounded-md bg-muted p-0.5 text-xs">
@@ -431,13 +485,6 @@ export function WorkspacePanel() {
       ) : (
         renderByType()
       )}
-
-      <WorkspaceFileDialog
-        path={selected?.path ?? null}
-        size={selected?.size}
-        onClose={() => setSelected(null)}
-        onChanged={refresh}
-      />
     </div>
   );
 }

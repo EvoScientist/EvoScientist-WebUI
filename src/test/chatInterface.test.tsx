@@ -114,22 +114,23 @@ vi.mock("@/app/components/TasksFilesSidebar", async () => {
   const m = await import("@/test/mocks/chatInterfaceStubs");
   return { FilesPopover: m.stubComponent("FilesPopover") };
 });
-vi.mock("@/app/components/WorkspaceFileDialog", async () => {
-  const m = await import("@/test/mocks/chatInterfaceStubs");
-  return { WorkspaceFileDialog: m.stubComponent("WorkspaceFileDialog") };
-});
-vi.mock("@/app/components/MemoryFileDialog", async () => {
-  const m = await import("@/test/mocks/chatInterfaceStubs");
-  return { MemoryFileDialog: m.stubComponent("MemoryFileDialog") };
-});
-
 import { renderChatInterface } from "@/test/renderChatInterface";
 import {
   getAllProps,
   getLastProps,
   resetComponentSpy,
 } from "@/test/mocks/chatInterfaceStubs";
-import { humanTurn, aiTurn, aiToolCallTurn } from "@/test/fixtures/messages";
+import {
+  humanTurn,
+  aiTurn,
+  aiToolCallTurn,
+  toolResultTurn,
+} from "@/test/fixtures/messages";
+import { FilePaneProvider } from "@/providers/FilePaneProvider";
+import {
+  useFilePane,
+  type FilePaneContextValue,
+} from "@/providers/filePaneContext";
 import type { Message } from "@langchain/langgraph-sdk";
 import {
   executeInterrupt,
@@ -756,5 +757,68 @@ describe("ChatInterface composition", () => {
     );
     expect(calls.map((tc) => [tc.id, tc.name])).toEqual([["dup2", "execute"]]);
     expect(calls[0].args).toEqual({ command: "ls" });
+  });
+
+  describe("file pane bridge", () => {
+    let pane: FilePaneContextValue | null = null;
+    function Probe() {
+      pane = useFilePane();
+      return null;
+    }
+    const FilePaneWrapper = ({ children }: { children: React.ReactNode }) => (
+      <FilePaneProvider>
+        <Probe />
+        {children}
+      </FilePaneProvider>
+    );
+
+    beforeEach(() => {
+      pane = null;
+    });
+
+    it("hands the conversation's agent files to the file pane", async () => {
+      stream.setValues({ files: { "notes.md": "hi" } });
+      renderChatInterface({ wrapper: FilePaneWrapper });
+      await waitFor(() =>
+        expect(pane?.chat?.files).toEqual({ "notes.md": "hi" })
+      );
+    });
+
+    it("signals a finished tool call, not the history it loaded with", async () => {
+      const history = [
+        humanTurn(),
+        aiToolCallTurn("write_file", { file_path: "a.md" }, "t1"),
+        toolResultTurn("ok", "t1r", "t1c"),
+      ];
+      stream.setMessages(history);
+      renderChatInterface({ wrapper: FilePaneWrapper });
+      await waitFor(() => expect(pane).not.toBeNull());
+      expect(pane!.refreshTick).toBe(0);
+
+      // A new message without a tool result: the loaded history still
+      // doesn't count.
+      const withReply = [...history, aiTurn("working on it", "a2")];
+      await act(async () => {
+        stream.setMessages(withReply);
+      });
+      expect(pane!.refreshTick).toBe(0);
+
+      act(() =>
+        stream.setMessages([
+          ...withReply,
+          aiToolCallTurn("execute", { command: "ls" }, "t2"),
+          toolResultTurn("ok", "t2r", "t2c"),
+        ])
+      );
+      await waitFor(() => expect(pane!.refreshTick).toBe(1));
+    });
+
+    it("signals the end of a turn", async () => {
+      stream.setLoading(true);
+      renderChatInterface({ wrapper: FilePaneWrapper });
+      await waitFor(() => expect(pane).not.toBeNull());
+      act(() => stream.setLoading(false));
+      await waitFor(() => expect(pane!.refreshTick).toBe(1));
+    });
   });
 });

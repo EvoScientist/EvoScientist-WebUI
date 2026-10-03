@@ -113,9 +113,7 @@ import {
 } from "@/components/ui/dialog";
 import { useQueryState } from "nuqs";
 import { toast } from "sonner";
-import { WorkspaceFileDialog } from "@/app/components/WorkspaceFileDialog";
-import { MemoryFileDialog } from "@/app/components/MemoryFileDialog";
-import { FILE_LINK_EVENT, type FileLinkEventDetail } from "@/lib/fileLink";
+import { useFilePane } from "@/providers/filePaneContext";
 import {
   COMMON_MODELS,
   parseModelCommand,
@@ -385,27 +383,6 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     const queueIdRef = useRef(0);
     const draggedQueuedMessageIdRef = useRef<number | null>(null);
     const [threadId] = useQueryState("threadId");
-    // Inline file paths in agent messages are rendered as click-to-open links
-    // by MarkdownContent. They dispatch a window event with the resolved
-    // workspace / memory path; we open the matching modal over the chat so
-    // workspace and memory feel uniform to the user (no view switch).
-    const [workspaceFilePath, setWorkspaceFilePath] = useState<string | null>(
-      null
-    );
-    const [memoryFilePath, setMemoryFilePath] = useState<string | null>(null);
-    useEffect(() => {
-      const onOpenFile = (e: Event) => {
-        const detail = (e as CustomEvent<FileLinkEventDetail>).detail;
-        if (!detail) return;
-        if (detail.kind === "memory") {
-          setMemoryFilePath(detail.path);
-        } else {
-          setWorkspaceFilePath(detail.path);
-        }
-      };
-      window.addEventListener(FILE_LINK_EVENT, onOpenFile);
-      return () => window.removeEventListener(FILE_LINK_EVENT, onOpenFile);
-    }, []);
     // Auto-approve is per-thread and persisted (see lib/autoApprove): it follows
     // the conversation across view switches (Skills/Memory unmount this), thread
     // switches, and reloads. Seed from storage for whatever thread is active on
@@ -496,6 +473,50 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       modelOverride,
       setModelOverride,
     } = useChatContext();
+    // The docked file pane (inspector) shows this conversation's agent-state
+    // files and re-reads open files when the agent may have written them.
+    const filePane = useFilePane();
+    const registerChatFiles = filePane?.registerChat;
+    const notifyFilesMayHaveChanged = filePane?.notifyFilesMayHaveChanged;
+    const fileEditDisabled = isLoading === true || interrupt !== undefined;
+    useEffect(() => {
+      registerChatFiles?.({
+        threadId,
+        files,
+        setFiles,
+        editDisabled: fileEditDisabled,
+      });
+    }, [registerChatFiles, threadId, files, setFiles, fileEditDisabled]);
+    useEffect(() => () => registerChatFiles?.(null), [registerChatFiles]);
+    // A tool result we haven't seen means a tool call just finished. Results
+    // already in the thread when it loads don't count.
+    const seenToolResultsRef = useRef<Set<string> | null>(null);
+    useEffect(() => {
+      if (isThreadLoading) return;
+      const ids = messages
+        .filter((m) => m.type === "tool" && m.id)
+        .map((m) => m.id as string);
+      const seen = seenToolResultsRef.current;
+      if (seen === null) {
+        seenToolResultsRef.current = new Set(ids);
+        return;
+      }
+      let fresh = false;
+      for (const id of ids) {
+        if (!seen.has(id)) {
+          seen.add(id);
+          fresh = true;
+        }
+      }
+      if (fresh) notifyFilesMayHaveChanged?.();
+    }, [messages, isThreadLoading, notifyFilesMayHaveChanged]);
+    // The end of a turn covers sub-agents, whose tool calls aren't in this
+    // thread's messages.
+    const wasLoadingRef = useRef(isLoading);
+    useEffect(() => {
+      if (wasLoadingRef.current && !isLoading) notifyFilesMayHaveChanged?.();
+      wasLoadingRef.current = isLoading;
+    }, [isLoading, notifyFilesMayHaveChanged]);
     // Names only — used to tell expert dispatches apart in the fan-out panel.
     const { teams: installedExperts } = useTeams();
     const expertNames = useMemo(
@@ -1602,14 +1623,6 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
             </DialogFooter>
           </DialogContent>
         </Dialog>
-        <WorkspaceFileDialog
-          path={workspaceFilePath}
-          onClose={() => setWorkspaceFilePath(null)}
-        />
-        <MemoryFileDialog
-          path={memoryFilePath}
-          onClose={() => setMemoryFilePath(null)}
-        />
         <Dialog
           open={modelPickerOpen}
           onOpenChange={setModelPickerOpen}
@@ -2301,13 +2314,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
 
                       {metaOpen === "files" && (
                         <div className="mb-6">
-                          <FilesPopover
-                            files={files}
-                            setFiles={setFiles}
-                            editDisabled={
-                              isLoading === true || interrupt !== undefined
-                            }
-                          />
+                          <FilesPopover files={files} />
                         </div>
                       )}
 

@@ -17,11 +17,6 @@ export interface SubAgent {
   status: "pending" | "active" | "completed" | "error" | "stopped";
 }
 
-export interface FileItem {
-  path: string;
-  content: string;
-}
-
 export interface TodoItem {
   id: string;
   content: string;

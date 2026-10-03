@@ -15,99 +15,44 @@ import {
   ChevronDown,
 } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import type { TodoItem, FileItem } from "@/app/types/types";
-import { useChatContext } from "@/providers/ChatProvider";
+import type { TodoItem } from "@/app/types/types";
 import { cn } from "@/lib/utils";
-import { FileViewDialog } from "@/app/components/FileViewDialog";
+import { useFilePane } from "@/providers/filePaneContext";
 
-export function FilesPopover({
-  files,
-  setFiles,
-  editDisabled,
-}: {
-  files: Record<string, string>;
-  setFiles: (files: Record<string, string>) => Promise<void>;
-  editDisabled: boolean;
-}) {
-  const [selectedFile, setSelectedFile] = useState<FileItem | null>(null);
-
-  const handleSaveFile = useCallback(
-    async (fileName: string, content: string) => {
-      await setFiles({ ...files, [fileName]: content });
-      setSelectedFile({ path: fileName, content: content });
-    },
-    [files, setFiles]
-  );
-
-  return (
-    <>
-      {Object.keys(files).length === 0 ? (
-        <div className="flex h-full items-center justify-center p-4 text-center">
-          <p className="text-xs text-muted-foreground">No files created yet</p>
-        </div>
-      ) : (
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(256px,1fr))] gap-2">
-          {Object.keys(files).map((file) => {
-            const filePath = String(file);
-            const rawContent = files[file];
-            let fileContent: string;
-            if (
-              typeof rawContent === "object" &&
-              rawContent !== null &&
-              "content" in rawContent
-            ) {
-              const contentArray = (rawContent as { content: unknown }).content;
-              if (Array.isArray(contentArray)) {
-                fileContent = contentArray.join("\n");
-              } else {
-                fileContent = String(contentArray || "");
-              }
-            } else {
-              fileContent = String(rawContent || "");
-            }
-
-            return (
-              <button
-                key={filePath}
-                type="button"
-                onClick={() =>
-                  setSelectedFile({ path: filePath, content: fileContent })
-                }
-                className="cursor-pointer space-y-1 truncate rounded-md border border-border px-2 py-3 shadow-sm transition-colors"
-                style={{
-                  backgroundColor: "var(--color-file-button)",
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.backgroundColor =
-                    "var(--color-file-button-hover)";
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.backgroundColor =
-                    "var(--color-file-button)";
-                }}
-              >
-                <FileText
-                  size={24}
-                  className="mx-auto text-muted-foreground"
-                />
-                <span className="mx-auto block w-full truncate break-words text-center text-sm leading-relaxed text-foreground">
-                  {filePath}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      )}
-
-      {selectedFile && (
-        <FileViewDialog
-          file={selectedFile}
-          onSaveFile={handleSaveFile}
-          onClose={() => setSelectedFile(null)}
-          editDisabled={editDisabled}
-        />
-      )}
-    </>
+export function FilesPopover({ files }: { files: Record<string, string> }) {
+  // Agent files open in the inspector's docked preview (FilePaneProvider).
+  const pane = useFilePane();
+  return Object.keys(files).length === 0 ? (
+    <div className="flex h-full items-center justify-center p-4 text-center">
+      <p className="text-xs text-muted-foreground">No files created yet</p>
+    </div>
+  ) : (
+    <div className="grid grid-cols-[repeat(auto-fill,minmax(256px,1fr))] gap-2">
+      {Object.keys(files).map((filePath) => (
+        <button
+          key={filePath}
+          type="button"
+          onClick={() => pane?.open({ source: "state", path: filePath })}
+          className="cursor-pointer space-y-1 truncate rounded-md border border-border px-2 py-3 shadow-sm transition-colors"
+          style={{ backgroundColor: "var(--color-file-button)" }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.backgroundColor =
+              "var(--color-file-button-hover)";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.backgroundColor = "var(--color-file-button)";
+          }}
+        >
+          <FileText
+            size={24}
+            className="mx-auto text-muted-foreground"
+          />
+          <span className="mx-auto block w-full truncate break-words text-center text-sm leading-relaxed text-foreground">
+            {filePath}
+          </span>
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -115,8 +60,7 @@ export const TasksFilesSidebar = React.memo<{
   todos: TodoItem[];
   files: Record<string, string>;
   setFiles: (files: Record<string, string>) => Promise<void>;
-}>(({ todos, files, setFiles }) => {
-  const { isLoading, interrupt } = useChatContext();
+}>(({ todos, files }) => {
   const [tasksOpen, setTasksOpen] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
 
@@ -250,13 +194,7 @@ export const TasksFilesSidebar = React.memo<{
               <ChevronDown size={14} />
             </button>
           </div>
-          {filesOpen && (
-            <FilesPopover
-              files={files}
-              setFiles={setFiles}
-              editDisabled={isLoading === true || interrupt !== undefined}
-            />
-          )}
+          {filesOpen && <FilesPopover files={files} />}
         </div>
       </div>
     </div>
