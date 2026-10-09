@@ -637,6 +637,50 @@ describe("ChatInterface composition", () => {
     expect(screen.queryByText(/^Approval requested by/)).toBeNull();
   });
 
+  it("keeps a pinned skill message inside its turn, between the user message and the reply", () => {
+    // The backend appends the pinned SKILL.md as a human message right after
+    // the user's. It must neither start a turn of its own for the earlier
+    // calls nor reorder the transcript.
+    const pinned = {
+      id: "p1",
+      type: "human",
+      content: '<skill name="paper-review">body</skill>',
+      additional_kwargs: {
+        lc_source: "pinned_skill",
+        skill: { name: "paper-review" },
+      },
+    } as unknown as Message;
+    renderChatInterface();
+    act(() => {
+      stream.setMessages([
+        humanTurn("run it", "h1"),
+        aiToolCallTurn("execute", { command: "sleep 600" }, "t1"),
+        humanTurn("/paper-review check it", "h2"),
+        pinned,
+        aiToolCallTurn("execute", { command: "ls" }, "t2"),
+      ]);
+      stream.setInterrupt(executeInterrupt("ls"));
+    });
+    const shown = screen.getAllByTestId("stub-ChatMessage").length;
+    const order = getAllProps<{ message: { id: string } }>("ChatMessage")
+      .slice(-shown)
+      .map((props) => props.message.id);
+    expect(order).toEqual(["h1", "h2", "p1"]);
+    const groups = getAllProps<{
+      items: Array<{
+        message: { id: string };
+        toolCalls: Array<{ status: string }>;
+      }>;
+    }>("ActionGroup");
+    const statusOf = (messageId: string) =>
+      [...groups]
+        .reverse()
+        .flatMap((g) => g.items)
+        .find((item) => item.message.id === messageId)?.toolCalls[0].status;
+    expect(statusOf("t1")).toBe("stopped");
+    expect(statusOf("t2")).toBe("interrupted");
+  });
+
   it("flows autoApprove state from thread-local storage into ActionGroup props", () => {
     // Seed storage BEFORE mount so ChatInterface's initial useState reads
     // the persisted value. threadId is null on a fresh chat -> the sentinel
