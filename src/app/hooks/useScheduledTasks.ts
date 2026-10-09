@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { Cron } from "@langchain/langgraph-sdk";
 import { Client } from "@langchain/langgraph-sdk";
 import { getConfig } from "@/lib/config";
+import { browserTimeZone } from "@/lib/cronUtils";
 import { patchClientStreamModes } from "@/lib/streamMode";
 
 const SCHEDULED_RUN_KIND = "scheduled_task";
@@ -27,6 +28,8 @@ export interface ScheduledTask {
   name: string;
   prompt: string;
   schedule: string;
+  /** IANA zone the schedule runs in; null means the server's default, UTC. */
+  timezone: string | null;
   next_run_date: string | null;
   created_at: string;
   updated_at: string;
@@ -40,6 +43,7 @@ function parseCron(cron: Cron): ScheduledTask {
       typeof meta.name === "string" && meta.name ? meta.name : "Unnamed Task",
     prompt: typeof meta.prompt === "string" ? meta.prompt : "",
     schedule: cron.schedule,
+    timezone: cron.timezone || null,
     next_run_date: cron.next_run_date ?? null,
     created_at: cron.created_at,
     updated_at: cron.updated_at,
@@ -72,12 +76,16 @@ export async function createScheduledTask(params: {
   name: string;
   prompt: string;
   schedule: string;
+  /** Defaults to the browser's time zone. */
+  timezone?: string | null;
 }): Promise<ScheduledTask> {
   const client = makeClient();
   if (!client) throw new Error("No EvoScientist deployment configured.");
   const cron = await client.crons.create(SCHEDULER_GRAPH_ID, {
     input: { messages: [{ role: "user", content: params.prompt }] },
     schedule: params.schedule,
+    // Without a time zone the server reads the schedule in UTC.
+    timezone: params.timezone || browserTimeZone(),
     onRunCompleted: "keep",
     metadata: {
       run_kind: SCHEDULED_RUN_KIND,
@@ -99,11 +107,17 @@ export async function updateScheduledTask(params: {
   name: string;
   prompt: string;
   schedule: string;
+  /**
+   * The task's current time zone, which the edit keeps. A task stored without
+   * one (made before #61, meant as local time) moves to the browser's.
+   */
+  timezone: string | null;
 }): Promise<{ task: ScheduledTask; oldTaskDeleted: boolean }> {
   const task = await createScheduledTask({
     name: params.name,
     prompt: params.prompt,
     schedule: params.schedule,
+    timezone: params.timezone,
   });
 
   try {
