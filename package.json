@@ -30,7 +30,7 @@
     "dist/"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=20.9.0"
   },
   "packageManager": "npm@11.16.0",
   "publishConfig": {
