@@ -10,6 +10,7 @@ import React, {
 import { SubAgentIndicator } from "@/app/components/SubAgentIndicator";
 import { ToolCallBox } from "@/app/components/ToolCallBox";
 import { MarkdownContent } from "@/app/components/MarkdownContent";
+import { PinnedSkill } from "@/app/components/PinnedSkill";
 import { SubAgentSteps } from "@/app/components/SubAgentSteps";
 import type {
   SubAgent,
@@ -21,6 +22,7 @@ import { Message } from "@langchain/langgraph-sdk";
 import type { SubAgentStep } from "@/lib/subAgentActivity";
 import { isAsyncUpdateMessage } from "@/lib/asyncAgents";
 import { bindActionRequestsToToolCalls } from "@/lib/hitl";
+import { pinnedSkillDescription, pinnedSkillName } from "@/lib/pinnedSkill";
 import {
   AlertTriangle,
   Bell,
@@ -274,6 +276,20 @@ export const ChatMessage = React.memo<ChatMessageProps>(
             Background agent reported back
           </span>
         </div>
+      );
+    }
+
+    // A pinned skill is context the backend appended for the model, not
+    // something the user typed — show a collapsed row on the agent side, no
+    // bubble or actions.
+    const pinnedSkill = pinnedSkillName(message);
+    if (pinnedSkill !== null) {
+      return (
+        <PinnedSkill
+          name={pinnedSkill}
+          description={pinnedSkillDescription(message)}
+          content={messageContent}
+        />
       );
     }
 

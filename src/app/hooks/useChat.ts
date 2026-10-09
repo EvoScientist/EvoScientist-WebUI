@@ -18,6 +18,7 @@ import type { TodoItem } from "@/app/types/types";
 import { useClient } from "@/providers/ClientProvider";
 import { useQueryState } from "nuqs";
 import { pickThreadMessages } from "@/lib/threadMessages";
+import { pinnedSkillName } from "@/lib/pinnedSkill";
 import { parseSummarizationEvent } from "@/lib/summarization";
 import {
   applySubagentEvent,
@@ -148,8 +149,12 @@ const SETTLED_THREAD_STATUSES = new Set(["idle", "interrupted", "error"]);
 
 function lastHumanMessageId(messages: readonly unknown[]): string | null {
   for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i] as { type?: unknown; id?: unknown } | null;
-    if (m?.type === "human") return typeof m.id === "string" ? m.id : null;
+    const m = messages[i] as Message | null;
+    // The pinned-skill message is not a user turn; counting it would read the
+    // stopped turn's own late-arriving pinned message as a new turn.
+    if (m?.type === "human" && pinnedSkillName(m) === null) {
+      return typeof m.id === "string" ? m.id : null;
+    }
   }
   return null;
 }

@@ -176,6 +176,96 @@ describe("recovery poll", () => {
     expect(result.current.runSettled).toBe(false);
   });
 
+  describe("with a pinned-skill message", () => {
+    // `/paper-review run it` makes the backend insert a second human message
+    // (tagged pinned_skill) right after the user's; it is not a new turn.
+    const userMessage = {
+      id: "h1",
+      type: "human",
+      content: "/paper-review run it",
+    };
+    const pinnedMessage = {
+      id: "p1",
+      type: "human",
+      content: "SKILL.md body",
+      additional_kwargs: {
+        lc_source: "pinned_skill",
+        skill: { name: "paper-review" },
+      },
+    };
+    const toolCall = {
+      id: "a1",
+      type: "ai",
+      content: "",
+      tool_calls: [{ id: "tc1", name: "execute", args: { command: "ls" } }],
+    };
+
+    it("keeps suppressing when recovery brings the pinned message the client had not received at Stop", async () => {
+      const { result } = renderChat({ activeAssistant: fixtureAssistant });
+      act(() => {
+        stream.setMessages([userMessage] as unknown as Message[]);
+        stream.setLoading(true);
+      });
+      act(() => {
+        result.current.abortRun();
+      });
+      getActiveMockClient().setThreadState("t-1", {
+        next: ["tools"],
+        tasks: [{ interrupts: [pendingApproval] }],
+        values: {
+          messages: [
+            userMessage,
+            pinnedMessage,
+            toolCall,
+          ] as unknown as Message[],
+        },
+      });
+      act(() => {
+        stream.setLoading(false);
+      });
+      await waitFor(() => {
+        expect(result.current.messages.map((m) => m.id)).toEqual([
+          "h1",
+          "p1",
+          "a1",
+        ]);
+      });
+      expect(result.current.interrupt).toBeUndefined();
+    });
+
+    it("stops suppressing once a newer user turn follows the pinned message", async () => {
+      const { result } = renderChat({ activeAssistant: fixtureAssistant });
+      act(() => {
+        stream.setMessages([
+          userMessage,
+          pinnedMessage,
+          toolCall,
+        ] as unknown as Message[]);
+        stream.setLoading(true);
+      });
+      act(() => {
+        result.current.abortRun();
+      });
+      getActiveMockClient().setThreadState("t-1", {
+        next: ["tools"],
+        tasks: [{ interrupts: [{ ...pendingApproval, id: "int-srv-2" }] }],
+        values: {
+          messages: [
+            userMessage,
+            pinnedMessage,
+            toolCall,
+            { id: "h2", type: "human", content: "scheduled run" },
+            { ...toolCall, id: "a2" },
+          ] as unknown as Message[],
+        },
+      });
+      act(() => {
+        stream.setLoading(false);
+      });
+      await waitFor(() => expect(result.current.interrupt).toBeDefined());
+    });
+  });
+
   it.each([
     ["with an ID", pendingApproval],
     ["without an ID", { value: pendingApproval.value }],
