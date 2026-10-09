@@ -6,6 +6,7 @@
 // `node dist/server.js` can run.
 import { cp, rm, readdir } from "fs/promises";
 import { existsSync } from "fs";
+import { sep } from "path";
 
 const STANDALONE = ".next/standalone";
 const STATIC = ".next/static";
@@ -51,6 +52,27 @@ for (const entry of await readdir(OUT, { recursive: true })) {
     await rm(`${OUT}/${entry}`, { force: true });
     strippedMaps++;
   }
+}
+
+// The published package must run on every platform, so it carries no native
+// binaries. A native module only loads on the platform that built the package
+// (sharp shipped darwin-arm64 only, #62), and the desktop app would have to
+// sign and notarize each one. Fail the build instead of publishing one.
+const NATIVE_DIRS = ["node_modules/sharp", "node_modules/@img"];
+const native = (await readdir(OUT, { recursive: true }))
+  // readdir joins with the platform separator (a backslash on Windows).
+  .map((entry) => entry.split(sep).join("/"))
+  .filter(
+    (entry) =>
+      entry.endsWith(".node") ||
+      NATIVE_DIRS.some((dir) => entry === dir || entry.endsWith(`/${dir}`))
+  );
+if (native.length > 0) {
+  console.error(
+    `✗ ${OUT}/ contains native modules, which only run on the platform that ` +
+      `built them:\n${native.map((entry) => `  ${entry}`).join("\n")}`
+  );
+  process.exit(1);
 }
 
 console.log(
