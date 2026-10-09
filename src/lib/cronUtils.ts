@@ -137,6 +137,28 @@ export function cronLabel(cron: string): string {
   }
 }
 
+/** The browser's IANA time zone, or undefined when the browser reports none. */
+export function browserTimeZone(): string | undefined {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** A cron stored without a time zone runs on UTC (the server's default). */
+export function timeZoneLabel(timezone: string | null | undefined): string {
+  return timezone ? timezone.replace(/_/g, " ") : "UTC";
+}
+
+/** Schedule summary plus the time zone it runs in. */
+export function scheduleLabel(
+  cron: string,
+  timezone: string | null | undefined
+): string {
+  return `${cronLabel(cron)} · ${timeZoneLabel(timezone)}`;
+}
+
 /** Format a next_run_date ISO string into a short relative label. */
 export function nextRunLabel(iso: string | null): string {
   if (!iso) return "—";
