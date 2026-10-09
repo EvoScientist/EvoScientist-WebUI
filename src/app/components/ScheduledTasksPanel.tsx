@@ -45,12 +45,15 @@ import {
   type ScheduledTask,
 } from "@/app/hooks/useScheduledTasks";
 import {
+  browserTimeZone,
   cronLabel,
   cronToSpec,
   DAY_NAMES,
   DEFAULT_SCHEDULE_SPEC,
   nextRunLabel,
+  scheduleLabel,
   specToCron,
+  timeZoneLabel,
   validateCronExpression,
   type Frequency,
   type ScheduleSpec,
@@ -142,7 +145,7 @@ function taskSearchText(task: ScheduledTask): string {
     task.name,
     task.prompt,
     task.schedule,
-    cronLabel(task.schedule),
+    scheduleLabel(task.schedule, task.timezone),
     task.next_run_date ? formatAbsoluteDate(task.next_run_date) : "",
   ]
     .join(" ")
@@ -181,10 +184,13 @@ function ScheduleBuilder({
   value,
   onChange,
   error,
+  timeZone,
 }: {
   value: ScheduleSpec;
   onChange: (s: ScheduleSpec) => void;
   error?: string | null;
+  /** The zone the task will be saved in; undefined reads as UTC. */
+  timeZone: string | undefined;
 }) {
   const set = (patch: Partial<ScheduleSpec>) =>
     onChange({ ...value, ...patch });
@@ -302,7 +308,7 @@ function ScheduleBuilder({
           aria-hidden="true"
         />
         <span className="min-w-0 truncate">
-          {error ?? cronLabel(specToCron(value))}
+          {error ?? scheduleLabel(specToCron(value), timeZone)}
         </span>
       </div>
     </div>
@@ -383,8 +389,15 @@ function TaskForm({
   const cron = specToCron(spec);
   const cronError =
     spec.frequency === "custom" ? validateCronExpression(cron) : null;
+  // An edit keeps the task's time zone. A task stored without one (made before
+  // #61, so read as UTC) moves to the browser's when saved.
+  const timeZone = initialTask?.timezone || browserTimeZone();
+  const movesTimeZone =
+    Boolean(initialTask) &&
+    timeZoneLabel(initialTask?.timezone) !== timeZoneLabel(timeZone);
   const hasChanges =
     !initialTask ||
+    movesTimeZone ||
     name.trim() !== initialTask.name.trim() ||
     prompt.trim() !== initialTask.prompt.trim() ||
     cron !== initialTask.schedule.trim();
@@ -420,6 +433,7 @@ function TaskForm({
           name: name.trim(),
           prompt: prompt.trim(),
           schedule: cron,
+          timezone: initialTask.timezone,
         });
         if (result.oldTaskDeleted) {
           toast.success(`"${name.trim()}" updated.`);
@@ -513,7 +527,14 @@ function TaskForm({
               value={spec}
               onChange={setSpec}
               error={cronError}
+              timeZone={timeZone}
             />
+            {movesTimeZone && (
+              <p className="text-xs text-muted-foreground">
+                This task has no time zone and runs on UTC time. Saving it
+                switches it to {timeZoneLabel(timeZone)} time.
+              </p>
+            )}
           </div>
         </div>
       </ScrollArea>
@@ -615,7 +636,7 @@ function TaskDetail({
           <div className="min-w-0 flex-1">
             <h2 className="truncate text-sm font-semibold">{task.name}</h2>
             <p className="truncate text-xs text-muted-foreground">
-              {cronLabel(task.schedule)}
+              {scheduleLabel(task.schedule, task.timezone)}
             </p>
           </div>
           <Button
@@ -785,7 +806,7 @@ function TaskRow({
       <span className="min-w-0 flex-1">
         <span className="block truncate text-sm font-medium">{task.name}</span>
         <span className="mt-0.5 block truncate text-xs text-muted-foreground">
-          {cronLabel(task.schedule)}
+          {scheduleLabel(task.schedule, task.timezone)}
         </span>
         <span className="mt-1 flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
           <Clock
