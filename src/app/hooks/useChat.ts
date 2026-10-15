@@ -31,6 +31,7 @@ import { loadThreadWorkflows, saveThreadWorkflows } from "@/lib/workflowStore";
 import { subAgentStreamsToSteps } from "@/lib/subAgentActivity";
 import { toast } from "sonner";
 import { parseFallbackNotice } from "@/lib/middlewareEvents";
+import { createRetryToasts, ModelRetryTracker } from "@/lib/modelRetry";
 import {
   MODEL_OVERRIDE_METADATA_KEY,
   type ModelOverride,
@@ -335,6 +336,15 @@ export function useChat({
     };
   }, []);
 
+  // Model-call retries (lib/modelRetry.ts): announces each retry and drops the
+  // main agent's failed-call output from the live view. Its state lasts one
+  // run; the reset sites are the run ending (`isLoading` falling, below), Stop,
+  // a new submit and unmount.
+  const [retryTracker] = useState(
+    () => new ModelRetryTracker(createRetryToasts(toast))
+  );
+  useEffect(() => () => retryTracker.reset(), [retryTracker]);
+
   const streamOptions: UseStreamOptions<StateType> & {
     filterSubagentMessages: boolean;
   } = {
@@ -431,6 +441,7 @@ export function useChat({
         toast[notice.level](notice.text, { id: "model-fallback" });
         return;
       }
+      if (retryTracker.handle(data, options)) return;
       if (options?.namespace && options.namespace.length > 0) return;
       const event = parseSubagentEvent(data);
       if (!event) return;
@@ -464,6 +475,15 @@ export function useChat({
   // inside stable callbacks, so downstream callback identity stays constant.
   const streamRef = useRef(stream);
   streamRef.current = stream;
+
+  // The run is over (finished, failed or stopped). The SDK flips `isLoading`
+  // back in every case, unlike `onFinish` (success only) and `onError` (also
+  // called for a failed history fetch while a run streams).
+  const wasLoadingRef = useRef(false);
+  useEffect(() => {
+    if (wasLoadingRef.current && !stream.isLoading) retryTracker.reset();
+    wasLoadingRef.current = stream.isLoading;
+  }, [stream.isLoading, retryTracker]);
 
   useEffect(() => {
     const previousThreadId = workflowThreadIdRef.current;
@@ -912,6 +932,7 @@ export function useChat({
       abortedTurnRef.current = null;
       setUserAborted(false);
       recoveryRunRef.current += 1;
+      retryTracker.reset();
       const newMessage: Message = { id: uuidv4(), type: "human", content };
       lastSubmittedHumanIdRef.current = newMessage.id ?? null;
       streamRef.current.submit(
@@ -930,7 +951,7 @@ export function useChat({
       // Update thread list immediately when sending a message
       onHistoryRevalidate?.();
     },
-    [buildRunConfig, onHistoryRevalidate]
+    [buildRunConfig, onHistoryRevalidate, retryTracker]
   );
 
   const setFiles = useCallback(
@@ -956,6 +977,7 @@ export function useChat({
       abortedTurnRef.current = null;
       setUserAborted(false);
       recoveryRunRef.current += 1;
+      retryTracker.reset();
       lastSubmittedHumanIdRef.current = null;
       streamRef.current.submit(null, {
         command: { resume: value },
@@ -968,7 +990,7 @@ export function useChat({
       // Update thread list when resuming from interrupt
       onHistoryRevalidate?.();
     },
-    [buildRunConfig, onHistoryRevalidate]
+    [buildRunConfig, onHistoryRevalidate, retryTracker]
   );
 
   // Abandon the current run when the user hits Stop and hand control back to
@@ -982,8 +1004,9 @@ export function useChat({
     abortedTurnRef.current = lastHumanMessageId(streamRef.current.messages);
     setUserAborted(true);
     lastSubmittedHumanIdRef.current = null;
+    retryTracker.reset();
     streamRef.current.stop();
-  }, []);
+  }, [retryTracker]);
 
   // Precompute the sidebar labels ("auto_title" + "preview") into thread
   // metadata whenever a run settles, so the sidebar can render off metadata
