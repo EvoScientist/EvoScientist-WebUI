@@ -66,6 +66,7 @@ vi.mock("sonner", () => ({
     success: vi.fn(),
     info: vi.fn(),
     warning: vi.fn(),
+    dismiss: vi.fn(),
   },
 }));
 
@@ -372,6 +373,265 @@ describe("ChatInterface composition", () => {
       "Primary model failed: APIError: overloaded",
       { id: "model-fallback" }
     );
+  });
+
+  describe("model retries", () => {
+    const start = (call: string) => ({
+      type: "model_call",
+      phase: "start",
+      call,
+    });
+    const end = (call: string, status: string) => ({
+      type: "model_call",
+      phase: "end",
+      call,
+      status,
+    });
+    const retry = (extra: Record<string, unknown> = {}) => ({
+      type: "model_retry",
+      attempt: 2,
+      wait_seconds: 1.1,
+      reason: "Connection error.",
+      budget_left_seconds: 58.9,
+      cause: "exception",
+      agent: "EvoScientist",
+      ...extra,
+    });
+    // The id of the retry toast shown last.
+    const lastRetryToastId = async () => {
+      const { toast } = await import("sonner");
+      const calls = vi.mocked(toast.warning).mock.calls;
+      return (calls[calls.length - 1][1] as { id: string }).id;
+    };
+    // Ids of the messages the transcript currently shows, in order.
+    const shownIds = () => {
+      const shown = screen.queryAllByTestId("stub-ChatMessage").length;
+      if (shown === 0) return [];
+      return getAllProps<{ message: { id: string } }>("ChatMessage")
+        .slice(-shown)
+        .map((props) => props.message.id);
+    };
+
+    beforeEach(async () => {
+      const { toast } = await import("sonner");
+      vi.mocked(toast.warning).mockClear();
+      vi.mocked(toast.dismiss).mockClear();
+    });
+
+    it("shows a retry as a toast and clears it once the retried call ends clean", async () => {
+      const { toast } = await import("sonner");
+      renderChatInterface();
+      act(() => {
+        stream.emitCustomEvent(start("c1"));
+        stream.emitCustomEvent(end("c1", "failed"));
+        stream.emitCustomEvent(retry());
+      });
+      expect(toast.warning).toHaveBeenCalledWith(
+        "Model request failed (Connection error.); retrying in 1 s (attempt 2)",
+        expect.objectContaining({
+          id: expect.stringMatching(/^model-retry-\d+$/),
+          duration: 5100,
+          closeButton: true,
+        })
+      );
+      act(() => {
+        stream.emitCustomEvent(start("c2"));
+      });
+      expect(toast.dismiss).not.toHaveBeenCalled();
+      act(() => {
+        stream.emitCustomEvent(end("c2", "clean"));
+      });
+      expect(toast.dismiss).toHaveBeenCalledWith(await lastRetryToastId());
+    });
+
+    it("drops the failed call's half answer when the backend retries", () => {
+      renderChatInterface();
+      act(() => {
+        stream.setMessages([humanTurn("say hello", "h1")]);
+        stream.emitCustomEvent(start("c1"));
+        stream.setMessages([
+          humanTurn("say hello", "h1"),
+          aiTurn("PARTIAL text", "partial"),
+        ]);
+      });
+      expect(shownIds()).toEqual(["h1", "partial"]);
+      act(() => {
+        stream.emitCustomEvent(end("c1", "failed"));
+      });
+      // A failed call alone changes nothing: the run may still end in an error.
+      expect(shownIds()).toEqual(["h1", "partial"]);
+      act(() => {
+        stream.emitCustomEvent(retry());
+      });
+      expect(shownIds()).toEqual(["h1"]);
+      act(() => {
+        stream.emitCustomEvent(start("c2"));
+        stream.setMessages([
+          ...stream.getSnapshot().messages,
+          aiTurn("Hello!", "answer"),
+        ]);
+        stream.emitCustomEvent(end("c2", "clean"));
+      });
+      expect(shownIds()).toEqual(["h1", "answer"]);
+    });
+
+    it("drops a failed call's output when the next model starts without a retry (fallback chain)", () => {
+      renderChatInterface();
+      act(() => {
+        stream.setMessages([humanTurn("q", "h1"), aiTurn("earlier", "a0")]);
+        stream.emitCustomEvent(start("c1"));
+        stream.setMessages([
+          humanTurn("q", "h1"),
+          aiTurn("earlier", "a0"),
+          aiTurn("PARTIAL", "partial"),
+        ]);
+        stream.emitCustomEvent(end("c1", "error"));
+        stream.emitCustomEvent(start("c2"));
+      });
+      expect(shownIds()).toEqual(["h1", "a0"]);
+    });
+
+    it("keeps a clean call's answer, and a call whose end mark never came, when the next call starts", () => {
+      renderChatInterface();
+      act(() => {
+        stream.setMessages([humanTurn("q", "h1")]);
+        stream.emitCustomEvent(start("c1"));
+        stream.setMessages([humanTurn("q", "h1"), aiTurn("first", "a1")]);
+        stream.emitCustomEvent(end("c1", "clean"));
+        stream.emitCustomEvent(start("c2"));
+        stream.setMessages([
+          humanTurn("q", "h1"),
+          aiTurn("first", "a1"),
+          aiTurn("second", "a2"),
+        ]);
+        // No end mark for c2: losing a good answer is worse than keeping a bad one.
+        stream.emitCustomEvent(start("c3"));
+      });
+      expect(shownIds()).toEqual(["h1", "a1", "a2"]);
+    });
+
+    it("ignores an end mark that belongs to another call", () => {
+      renderChatInterface();
+      act(() => {
+        stream.setMessages([humanTurn("q", "h1")]);
+        stream.emitCustomEvent(start("c1"));
+        stream.setMessages([humanTurn("q", "h1"), aiTurn("answer", "a1")]);
+        stream.emitCustomEvent(end("other", "failed"));
+        stream.emitCustomEvent(start("c2"));
+      });
+      expect(shownIds()).toEqual(["h1", "a1"]);
+    });
+
+    it("never applies a sub-agent's call marks to the main agent's calls", () => {
+      renderChatInterface();
+      act(() => {
+        stream.setMessages([humanTurn("q", "h1")]);
+        stream.emitCustomEvent(start("c1"));
+        stream.setMessages([
+          humanTurn("q", "h1"),
+          aiTurn("PARTIAL", "partial"),
+        ]);
+        stream.emitCustomEvent(end("c1", "failed"));
+        stream.emitCustomEvent(start("s1"), ["tools:abc"]);
+      });
+      // The main agent's own retry (or next call) decides; a sub-agent's start does not.
+      expect(shownIds()).toEqual(["h1", "partial"]);
+      act(() => {
+        stream.emitCustomEvent(retry());
+      });
+      expect(shownIds()).toEqual(["h1"]);
+    });
+
+    it("names a sub-agent's retry and leaves the transcript alone", async () => {
+      const { toast } = await import("sonner");
+      renderChatInterface();
+      act(() => {
+        stream.setMessages([humanTurn("q", "h1")]);
+        // The main agent's call is still open (its end mark has not come).
+        stream.emitCustomEvent(start("m0"));
+        stream.setMessages([humanTurn("q", "h1"), aiTurn("main", "a1")]);
+        stream.emitCustomEvent(start("s1"), ["tools:abc"]);
+        stream.emitCustomEvent(end("s1", "failed"), ["tools:abc"]);
+        stream.emitCustomEvent(retry({ agent: "code-agent" }), ["tools:abc"]);
+      });
+      expect(toast.warning).toHaveBeenCalledWith(
+        "code-agent: Model request failed (Connection error.); retrying in 1 s (attempt 2)",
+        expect.objectContaining({
+          id: expect.stringMatching(/^model-retry-\d+$/),
+        })
+      );
+      expect(shownIds()).toEqual(["h1", "a1"]);
+      // The main agent's clean call is not the sub-agent's recovery.
+      act(() => {
+        stream.emitCustomEvent(start("m1"));
+        stream.emitCustomEvent(end("m1", "clean"));
+      });
+      expect(toast.dismiss).not.toHaveBeenCalled();
+      act(() => {
+        stream.emitCustomEvent(start("s2"), ["tools:abc"]);
+        stream.emitCustomEvent(end("s2", "clean"), ["tools:abc"]);
+      });
+      expect(toast.dismiss).toHaveBeenCalledWith(await lastRetryToastId());
+    });
+
+    it("clears a retry toast that is still up when the run ends, however it ends", async () => {
+      const { toast } = await import("sonner");
+      renderChatInterface();
+      act(() => {
+        stream.setLoading(true);
+        stream.emitCustomEvent(retry());
+      });
+      expect(toast.dismiss).not.toHaveBeenCalled();
+      act(() => {
+        stream.setLoading(false);
+      });
+      expect(toast.dismiss).toHaveBeenCalledWith(await lastRetryToastId());
+    });
+
+    it("keeps retry state through a failed history fetch while the run streams", async () => {
+      // The SDK reports a failed history fetch through the same onError.
+      const { toast } = await import("sonner");
+      renderChatInterface();
+      act(() => {
+        stream.setLoading(true);
+        stream.setMessages([humanTurn("q", "h1")]);
+        stream.emitCustomEvent(start("c1"));
+        stream.setMessages([
+          humanTurn("q", "h1"),
+          aiTurn("PARTIAL", "partial"),
+        ]);
+        stream.emitError(new Error("Failed to fetch"));
+        stream.emitCustomEvent(end("c1", "failed"));
+        stream.emitCustomEvent(retry());
+      });
+      expect(shownIds()).toEqual(["h1"]);
+      act(() => {
+        stream.emitError(new Error("Failed to fetch"));
+      });
+      expect(toast.dismiss).not.toHaveBeenCalled();
+    });
+
+    it("clears a retry toast when the chat unmounts (thread switch, New Chat)", async () => {
+      const { toast } = await import("sonner");
+      const { unmount } = renderChatInterface();
+      act(() => {
+        stream.emitCustomEvent(retry());
+      });
+      unmount();
+      expect(toast.dismiss).toHaveBeenCalledWith(await lastRetryToastId());
+    });
+
+    it("does not touch toasts on a run that never retried", async () => {
+      const { toast } = await import("sonner");
+      renderChatInterface();
+      act(() => {
+        stream.emitCustomEvent(start("c1"));
+        stream.emitCustomEvent(end("c1", "clean"));
+        stream.emitFinish();
+      });
+      expect(toast.warning).not.toHaveBeenCalled();
+      expect(toast.dismiss).not.toHaveBeenCalled();
+    });
   });
 
   it("resumes with the deployment's approval policy while auto-approve is off, without opening a card", async () => {

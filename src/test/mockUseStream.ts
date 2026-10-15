@@ -114,6 +114,37 @@ export class MockStreamStore<
     cb?.(data, { namespace });
   }
 
+  // Fire useChat's onCustomEvent the way the SDK does: with the event's
+  // namespace and a `mutate` that reads and patches the live stream values
+  // (`getMutateFn` in the SDK's ui/manager.js merges the patch over them).
+  emitCustomEvent(data: unknown, namespace: string[] = []): void {
+    const cb = this.lastOptions?.onCustomEvent as
+      | ((
+          d: unknown,
+          o: { namespace: string[]; mutate: (update: unknown) => void }
+        ) => void)
+      | undefined;
+    cb?.(data, { namespace, mutate: this.mutate });
+  }
+
+  private mutate = (update: unknown): void => {
+    const prev = {
+      ...(this.snap.values as object),
+      messages: this.snap.messages,
+    } as Record<string, unknown>;
+    const next =
+      typeof update === "function"
+        ? (update as (p: Record<string, unknown>) => Record<string, unknown>)(
+            prev
+          )
+        : (update as Record<string, unknown>);
+    const { messages, ...values } = { ...prev, ...next };
+    this.update({
+      values: values as unknown as S,
+      messages: messages as Message[],
+    });
+  };
+
   emitError(error: unknown): void {
     const cb = this.lastOptions?.onError as ((e: unknown) => void) | undefined;
     cb?.(error);

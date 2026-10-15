@@ -49,6 +49,8 @@ vi.mock("sonner", () => ({
     error: vi.fn(),
     success: vi.fn(),
     info: vi.fn(),
+    warning: vi.fn(),
+    dismiss: vi.fn(),
   },
 }));
 
@@ -245,6 +247,92 @@ describe("simple chat scenario", () => {
       stream.setLoading(false);
     });
     expect(result.current.isLoading).toBe(false);
+  });
+
+  it("abortRun clears a model-retry toast that is still up", () => {
+    const { result } = renderChat({ activeAssistant: fixtureAssistant });
+    act(() => {
+      result.current.sendMessage("hi");
+      stream.setLoading(true);
+      stream.emitCustomEvent({
+        type: "model_retry",
+        attempt: 2,
+        wait_seconds: 4,
+        reason: "503",
+      });
+    });
+    vi.mocked(toast.dismiss).mockClear();
+    act(() => {
+      result.current.abortRun();
+    });
+    const shown = vi.mocked(toast.warning).mock.calls.at(-1)?.[1] as {
+      id: string;
+    };
+    expect(toast.dismiss).toHaveBeenCalledWith(shown.id);
+  });
+
+  it("a new message forgets a failed model call from the run before", () => {
+    const { result } = renderChat({ activeAssistant: fixtureAssistant });
+    const h1: Message = { id: "h1", type: "human", content: "first" };
+    const a1: Message = { id: "a1", type: "ai", content: "kept answer" };
+    act(() => {
+      stream.setMessages([h1]);
+      stream.emitCustomEvent({
+        type: "model_call",
+        phase: "start",
+        call: "c1",
+      });
+      stream.setMessages([h1, a1]);
+      stream.emitCustomEvent({
+        type: "model_call",
+        phase: "end",
+        call: "c1",
+        status: "failed",
+      });
+    });
+    act(() => {
+      result.current.sendMessage("second");
+    });
+    act(() => {
+      stream.emitCustomEvent({
+        type: "model_call",
+        phase: "start",
+        call: "c2",
+      });
+    });
+    expect(result.current.messages.map((m) => m.id)).toContain("a1");
+  });
+
+  it("a resume forgets a failed model call from the run before", () => {
+    const { result } = renderChat({ activeAssistant: fixtureAssistant });
+    const h1: Message = { id: "h1", type: "human", content: "first" };
+    const a1: Message = { id: "a1", type: "ai", content: "kept answer" };
+    act(() => {
+      stream.setMessages([h1]);
+      stream.emitCustomEvent({
+        type: "model_call",
+        phase: "start",
+        call: "c1",
+      });
+      stream.setMessages([h1, a1]);
+      stream.emitCustomEvent({
+        type: "model_call",
+        phase: "end",
+        call: "c1",
+        status: "failed",
+      });
+    });
+    act(() => {
+      result.current.resumeInterrupt({ decisions: [{ type: "approve" }] });
+    });
+    act(() => {
+      stream.emitCustomEvent({
+        type: "model_call",
+        phase: "start",
+        call: "c2",
+      });
+    });
+    expect(result.current.messages.map((m) => m.id)).toContain("a1");
   });
 
   it("abortRun while an interrupt is pending stops the run and suppresses the card", () => {
