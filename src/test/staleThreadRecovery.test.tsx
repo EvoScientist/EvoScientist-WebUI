@@ -59,9 +59,8 @@ import type { Message } from "@langchain/langgraph-sdk";
 import {
   isMissingThreadOrAssistantError,
   missingThreadIdFromError,
-} from "@/app/hooks/useChat";
+} from "@/lib/streamError";
 import { renderChat } from "@/test/renderChat";
-import { fixtureAssistant } from "@/test/fixtures/assistants";
 import { mockWorkspace } from "@/test/mockWorkspace";
 
 /** The open thread is gone on the server: the run-path 404 is about it. */
@@ -91,7 +90,7 @@ describe("stale thread recovery", () => {
   });
 
   it("sends nothing while the assistant is not known", () => {
-    const { result } = renderChat({ activeAssistant: null });
+    const { result } = renderChat({ connected: false });
 
     let sent = true;
     act(() => {
@@ -104,7 +103,7 @@ describe("stale thread recovery", () => {
 
   it("clears a stale thread after the explicit SDK 404", async () => {
     threadGone();
-    renderChat({ activeAssistant: null });
+    renderChat({ connected: false });
 
     act(() => {
       stream.emitError(
@@ -123,7 +122,7 @@ describe("stale thread recovery", () => {
   it("hands recovery to onThreadUnavailable when the page provides it", async () => {
     threadGone();
     const onThreadUnavailable = vi.fn();
-    renderChat({ activeAssistant: null, onThreadUnavailable });
+    renderChat({ connected: false, onThreadUnavailable });
 
     act(() => {
       stream.emitError(
@@ -146,7 +145,7 @@ describe("stale thread recovery", () => {
     threadGone();
     const onThreadUnavailable = vi.fn();
     const { result } = renderChat({
-      activeAssistant: fixtureAssistant,
+      connected: true,
       onThreadUnavailable,
     });
     await waitFor(() => expect(result.current.canSend).toBe(true));
@@ -180,7 +179,7 @@ describe("stale thread recovery", () => {
   it("stays quiet when the page rejects the report as stale", async () => {
     threadGone();
     const onThreadUnavailable = vi.fn(() => false);
-    renderChat({ activeAssistant: null, onThreadUnavailable });
+    renderChat({ connected: false, onThreadUnavailable });
 
     act(() => {
       stream.emitError(
@@ -196,7 +195,7 @@ describe("stale thread recovery", () => {
   it("ignores a 404 that lands after the hook instance unmounted", () => {
     const onThreadUnavailable = vi.fn();
     const { unmount } = renderChat({
-      activeAssistant: null,
+      connected: false,
       onThreadUnavailable,
     });
     unmount();
@@ -213,7 +212,7 @@ describe("stale thread recovery", () => {
   });
 
   it("does not clear the URL for unrelated errors", () => {
-    renderChat({ activeAssistant: null });
+    renderChat({ connected: false });
 
     act(() => {
       stream.emitError(new Error("HTTP 404: Workspace file not found."));
@@ -228,7 +227,7 @@ describe("stale thread recovery", () => {
 
   it("ignores a history 404 that names a thread other than the open one", () => {
     const onThreadUnavailable = vi.fn();
-    renderChat({ activeAssistant: null, onThreadUnavailable });
+    renderChat({ connected: false, onThreadUnavailable });
 
     act(() => {
       stream.emitError(
@@ -246,7 +245,7 @@ describe("stale thread recovery", () => {
   it("drops a late history 404 once the URL has no thread", () => {
     queryState.initialThreadId = null;
     const onThreadUnavailable = vi.fn();
-    renderChat({ activeAssistant: null, onThreadUnavailable });
+    renderChat({ connected: false, onThreadUnavailable });
 
     act(() => {
       stream.emitError(
@@ -264,7 +263,7 @@ describe("stale thread recovery", () => {
   it("resolves the assistant again when a new chat's run 404s", async () => {
     queryState.initialThreadId = null;
     const workspace = mockWorkspace();
-    renderChat({ activeAssistant: null, workspace });
+    renderChat({ connected: false, workspace });
 
     act(() => {
       stream.emitError(
@@ -282,7 +281,7 @@ describe("stale thread recovery", () => {
     );
     const workspace = mockWorkspace();
     const onThreadUnavailable = vi.fn();
-    renderChat({ activeAssistant: null, onThreadUnavailable, workspace });
+    renderChat({ connected: false, onThreadUnavailable, workspace });
 
     act(() => {
       stream.emitError(
@@ -297,7 +296,7 @@ describe("stale thread recovery", () => {
   it("keeps an open thread that still exists when its run 404s", async () => {
     const workspace = mockWorkspace();
     const onThreadUnavailable = vi.fn();
-    renderChat({ activeAssistant: null, onThreadUnavailable, workspace });
+    renderChat({ connected: false, onThreadUnavailable, workspace });
 
     act(() => {
       stream.emitError(

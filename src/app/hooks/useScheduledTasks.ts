@@ -9,7 +9,7 @@ import { patchClientStreamModes } from "@/lib/streamMode";
 import {
   isMissingThreadOrAssistantError,
   isRunFolderMismatchError,
-} from "@/app/hooks/useChat";
+} from "@/lib/streamError";
 import { SCHEDULER_GRAPH_ID } from "@/lib/workspaceAssistant";
 import { useWorkspace } from "@/providers/WorkspaceProvider";
 import { assistantIdFor } from "@/lib/workspaceSession";

@@ -31,7 +31,6 @@
 
 import { renderHook, type RenderHookResult } from "@testing-library/react";
 import type { ReactNode } from "react";
-import type { Assistant } from "@langchain/langgraph-sdk";
 import { ChatProvider, useChatContext } from "@/providers/ChatProvider";
 import type { ThreadUnavailableInfo } from "@/app/hooks/useChat";
 import type { WorkspaceContextValue } from "@/providers/WorkspaceProvider";
@@ -40,7 +39,9 @@ import { TestWorkspaceProvider, mockWorkspace } from "@/test/mockWorkspace";
 export type ChatContextValue = ReturnType<typeof useChatContext>;
 
 interface RenderChatOptions {
-  activeAssistant?: Assistant | null;
+  /** A backend without the workspace route that the chat can run on; false
+   *  (the default) leaves the backend's folder unknown, so nothing runs. */
+  connected?: boolean;
   onHistoryRevalidate?: () => void;
   onThreadUnavailable?: (info: ThreadUnavailableInfo) => void;
   /** The backend's folder; defaults to a backend without the route. */
@@ -51,7 +52,7 @@ export function renderChat(
   opts: RenderChatOptions = {}
 ): RenderHookResult<ChatContextValue, unknown> {
   const {
-    activeAssistant = null,
+    connected = false,
     onHistoryRevalidate,
     onThreadUnavailable,
     workspace,
@@ -61,8 +62,7 @@ export function renderChat(
       <TestWorkspaceProvider
         value={
           workspace ??
-          // No assistant yet: the backend's folder is not known.
-          mockWorkspace(activeAssistant ? undefined : { status: "pending" })
+          mockWorkspace(connected ? undefined : { status: "pending" })
         }
       >
         <ChatProvider

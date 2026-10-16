@@ -1,17 +1,26 @@
-import { folderName } from "@/lib/workspaceAssistant";
+import {
+  CHAT_GRAPH_ID,
+  SCHEDULER_GRAPH_ID,
+  folderName,
+} from "@/lib/workspaceAssistant";
 import type { WorkspaceState } from "@/lib/workspaceSession";
 
 /** Graphs the main chat runs; other threads opened in it are read-only. */
 export const CHAT_GRAPHS: ReadonlySet<string> = new Set([
-  "EvoScientist",
-  "scheduler",
+  CHAT_GRAPH_ID,
+  SCHEDULER_GRAPH_ID,
 ]);
 /** Graphs whose threads the Agents panel sends follow-ups to. */
 export const AGENT_GRAPHS: ReadonlySet<string> = new Set([
   "writing-agent",
   "data-analysis-agent",
   "expert-container-async",
-  "scheduler",
+  SCHEDULER_GRAPH_ID,
+]);
+/** Every graph the WebUI runs: their assistants are ensured per folder. */
+export const RUN_GRAPHS: ReadonlySet<string> = new Set([
+  ...CHAT_GRAPHS,
+  ...AGENT_GRAPHS,
 ]);
 
 /** The folders a thread records: its own metadata first, else its latest
@@ -50,9 +59,9 @@ export function threadFolders(
   threadMetadata: Record<string, unknown> | null | undefined,
   checkpointMetadata: Record<string, unknown> | null | undefined
 ): ThreadFolders {
-  const graphId =
-    stringField(threadMetadata, "graph_id") ??
-    stringField(checkpointMetadata, "graph_id");
+  // The graph comes from the thread's own metadata, as the run's assistant
+  // does (the server and the SDK set it there): the two never disagree.
+  const graphId = stringField(threadMetadata, "graph_id");
   const fromThread = stringField(threadMetadata, "workspace_dir");
   const source = fromThread ? threadMetadata : checkpointMetadata;
   return {

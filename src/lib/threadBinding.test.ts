@@ -44,6 +44,12 @@ describe("threadFolders", () => {
   });
 });
 
+it("takes the graph from the thread's own metadata only", () => {
+  // The run's assistant comes from the thread's metadata; the binding's graph
+  // must be the same one.
+  expect(threadFolders({}, { graph_id: "scheduler" }).graphId).toBeNull();
+});
+
 describe("threadBinding", () => {
   it("waits while the workspace or the thread is loading", () => {
     expect(threadBinding({ status: "pending" }, null, CHAT_GRAPHS).kind).toBe(

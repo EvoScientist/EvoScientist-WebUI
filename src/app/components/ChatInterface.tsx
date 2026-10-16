@@ -94,6 +94,7 @@ import {
 import { useAutoApproveInterrupt } from "@/app/hooks/useAutoApproveInterrupt";
 import { useApprovalPolicy } from "@/app/hooks/useApprovalPolicy";
 import { useWorkspace } from "@/providers/WorkspaceProvider";
+import { CHAT_GRAPH_ID } from "@/lib/workspaceAssistant";
 import { localFilesAvailable } from "@/lib/workspaceSession";
 import { folderName } from "@/lib/workspaceAssistant";
 import { useDeployment } from "@/providers/ClientProvider";
@@ -824,6 +825,9 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       if (modelOverride) {
         return formatModel(modelOverride.model, modelOverride.model_provider);
       }
+      // Another graph's thread (a scheduled task's) runs on its own model,
+      // which the registry's default doesn't describe.
+      if (threadGraph !== CHAT_GRAPH_ID) return null;
       if (modelRegistry.defaultEntry) {
         return formatModel(
           modelRegistry.defaultEntry.name,
@@ -841,7 +845,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         if (info) return info;
       }
       return null;
-    }, [messages, modelOverride, modelRegistry.defaultEntry]);
+    }, [messages, modelOverride, modelRegistry.defaultEntry, threadGraph]);
 
     // While the agent waits on an *actionable* interrupt (approval or ask_user),
     // lock the composer so the user answers via the in-message controls — a free
@@ -1280,9 +1284,8 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         ) !== null);
 
     const resumeToolApproval = useCallback(
-      (value: any) => {
-        resumeInterrupt(buildToolApprovalResume(interruptId, value));
-      },
+      (value: any): boolean =>
+        resumeInterrupt(buildToolApprovalResume(interruptId, value)),
       [resumeInterrupt, interruptId]
     );
 

@@ -24,9 +24,10 @@ import {
   type ThreadFolders,
 } from "@/lib/threadBinding";
 import {
+  assistantIsMissing,
   isMissingThreadOrAssistantError,
   isRunFolderMismatchError,
-} from "@/app/hooks/useChat";
+} from "@/lib/streamError";
 import { cn } from "@/lib/utils";
 import { extractStringFromMessageContent } from "@/app/utils/utils";
 import {
@@ -217,11 +218,7 @@ export function AgentsPanel({ onReportToMainChat }: AgentsPanelProps) {
       // thread that still exists means the assistants are gone.
       const assistantsGone =
         isMissingThreadOrAssistantError(err) &&
-        (await client.threads.get(task.thread_id).then(
-          () => true,
-          (checkError: unknown) =>
-            (checkError as { status?: unknown } | null)?.status !== 404
-        ));
+        (await assistantIsMissing(client, task.thread_id));
       if (!mountedRef.current) return;
       if (assistantsGone || isRunFolderMismatchError(err)) {
         void refreshWorkspace();

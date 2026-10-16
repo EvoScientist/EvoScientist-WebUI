@@ -52,7 +52,6 @@ vi.mock("sonner", () => ({
 }));
 
 import { renderChat } from "@/test/renderChat";
-import { fixtureAssistantWithConfig as fixtureAssistant } from "@/test/fixtures/assistants";
 
 const serverMessages = [
   { id: "h1", type: "human", content: "run it" },
@@ -99,7 +98,7 @@ describe("recovery poll", () => {
     // approval interrupt and the dropped tail from thread state. This also
     // proves the fixture is genuinely actionable — the Stop test below would
     // otherwise pass vacuously.
-    const { result } = renderChat({ activeAssistant: fixtureAssistant });
+    const { result } = renderChat({ connected: true });
     await waitFor(() => {
       expect(result.current.interrupt).toBeDefined();
     });
@@ -113,7 +112,7 @@ describe("recovery poll", () => {
     // approval the aborted run paused on and must NOT re-surface it — the
     // bounce-back this PR removes — while the partial turn's messages still
     // arrive.
-    const { result } = renderChat({ activeAssistant: fixtureAssistant });
+    const { result } = renderChat({ connected: true });
     act(() => {
       stream.setLoading(true);
     });
@@ -143,7 +142,7 @@ describe("recovery poll", () => {
     // Stop belongs to the turn it was pressed on. If another tab or a cron run
     // then starts a new turn on this thread and pauses for approval, that
     // approval is not the abandoned run's and must be shown.
-    const { result } = renderChat({ activeAssistant: fixtureAssistant });
+    const { result } = renderChat({ connected: true });
     act(() => {
       stream.setMessages(serverMessages);
       stream.setLoading(true);
@@ -201,7 +200,7 @@ describe("recovery poll", () => {
     };
 
     it("keeps suppressing when recovery brings the pinned message the client had not received at Stop", async () => {
-      const { result } = renderChat({ activeAssistant: fixtureAssistant });
+      const { result } = renderChat({ connected: true });
       act(() => {
         stream.setMessages([userMessage] as unknown as Message[]);
         stream.setLoading(true);
@@ -234,7 +233,7 @@ describe("recovery poll", () => {
     });
 
     it("stops suppressing once a newer user turn follows the pinned message", async () => {
-      const { result } = renderChat({ activeAssistant: fixtureAssistant });
+      const { result } = renderChat({ connected: true });
       act(() => {
         stream.setMessages([
           userMessage,
@@ -277,7 +276,7 @@ describe("recovery poll", () => {
       // after one approval) and the stream is idle. The SDK hands back a fresh
       // interrupt object per render; unrelated store notifications must NOT
       // re-run the recovery effect and re-issue getState/get.
-      const { result } = renderChat({ activeAssistant: fixtureAssistant });
+      const { result } = renderChat({ connected: true });
       act(() => {
         stream.setInterrupt(liveInterrupt);
       });
@@ -303,7 +302,7 @@ describe("recovery poll", () => {
   );
 
   it("recovers a new approval ID even when the tool arguments are identical", async () => {
-    const { result } = renderChat({ activeAssistant: fixtureAssistant });
+    const { result } = renderChat({ connected: true });
     await waitFor(() => {
       expect(result.current.interrupt).toEqual(pendingApproval);
     });
@@ -336,7 +335,7 @@ describe("recovery poll", () => {
   it.each(["error", "interrupted", "idle"])(
     "clears a resolved approval when the resumed run is %s with next still populated",
     async (status) => {
-      const { result } = renderChat({ activeAssistant: fixtureAssistant });
+      const { result } = renderChat({ connected: true });
       await waitFor(() => expect(result.current.interrupt).toBeDefined());
       act(() => {
         result.current.resumeInterrupt({ decisions: [{ type: "approve" }] });
@@ -415,14 +414,14 @@ describe("runSettled", () => {
 
   it("is true once the server reports the thread is not busy and nothing is pending", async () => {
     seedDangling("interrupted");
-    const { result } = renderChat({ activeAssistant: fixtureAssistant });
+    const { result } = renderChat({ connected: true });
     expect(result.current.runSettled).toBe(false);
     await waitFor(() => expect(result.current.runSettled).toBe(true));
   });
 
   it("stays false while the server is still busy (the stream settled early)", async () => {
     seedDangling("busy");
-    const { result } = renderChat({ activeAssistant: fixtureAssistant });
+    const { result } = renderChat({ connected: true });
     const client = getActiveMockClient();
     await waitFor(() =>
       expect(client.threads.get.mock.calls.length).toBeGreaterThan(0)
@@ -433,7 +432,7 @@ describe("runSettled", () => {
 
   it("stays false when the server gives no status to go on", async () => {
     seedDangling(undefined);
-    const { result } = renderChat({ activeAssistant: fixtureAssistant });
+    const { result } = renderChat({ connected: true });
     const client = getActiveMockClient();
     await waitFor(() =>
       expect(client.threads.get.mock.calls.length).toBeGreaterThan(0)
@@ -450,14 +449,14 @@ describe("runSettled", () => {
       values: { messages: serverMessages },
     });
     client.setThreadRecord("t-1", { status: "interrupted" });
-    const { result } = renderChat({ activeAssistant: fixtureAssistant });
+    const { result } = renderChat({ connected: true });
     await waitFor(() => expect(result.current.interrupt).toBeDefined());
     expect(result.current.runSettled).toBe(false);
   });
 
   it("does not settle on a status it does not recognise", async () => {
     seedDangling("queued");
-    const { result } = renderChat({ activeAssistant: fixtureAssistant });
+    const { result } = renderChat({ connected: true });
     const client = getActiveMockClient();
     await waitFor(() =>
       expect(client.threads.get.mock.calls.length).toBeGreaterThan(0)
@@ -470,7 +469,7 @@ describe("runSettled", () => {
     // `next` stays populated after a cancel, so the poll keeps going; if a run
     // started elsewhere picks the thread up, its calls must spin again.
     seedDangling("interrupted");
-    const { result } = renderChat({ activeAssistant: fixtureAssistant });
+    const { result } = renderChat({ connected: true });
     await waitFor(() => expect(result.current.runSettled).toBe(true));
     getActiveMockClient().setThreadRecord("t-1", { status: "busy" });
     await waitFor(() => expect(result.current.runSettled).toBe(false), {
@@ -480,7 +479,7 @@ describe("runSettled", () => {
 
   it("takes it back when an approval turns up on a thread it had called settled", async () => {
     seedDangling("interrupted");
-    const { result } = renderChat({ activeAssistant: fixtureAssistant });
+    const { result } = renderChat({ connected: true });
     await waitFor(() => expect(result.current.runSettled).toBe(true));
     getActiveMockClient().setThreadState("t-1", {
       next: ["tools"],
@@ -495,7 +494,7 @@ describe("runSettled", () => {
 
   it("is true as soon as the user stops the run, and false again once a run streams", async () => {
     seedDangling("busy");
-    const { result } = renderChat({ activeAssistant: fixtureAssistant });
+    const { result } = renderChat({ connected: true });
     act(() => {
       stream.setLoading(true);
     });

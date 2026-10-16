@@ -180,4 +180,24 @@ describe("WorkspaceProvider", () => {
     await expect(first).resolves.toMatchObject({ key: "/srv/projB" });
     expect(result.current.workspace).toMatchObject({ key: "/srv/projB" });
   });
+
+  it("connects under React's development double mount", async () => {
+    stubBackend(() => served("/home/you/projA"));
+    create.mockResolvedValue({});
+    const { result } = renderHook(() => useWorkspace(), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <WorkspaceProvider
+          deploymentUrl="http://127.0.0.1:6174"
+          apiKey=""
+        >
+          {children}
+        </WorkspaceProvider>
+      ),
+      // Mount, unmount and mount again, as `next dev` does.
+      reactStrictMode: true,
+    });
+
+    await waitFor(() => expect(result.current.isReady()).toBe(true));
+    expect(result.current.workspace).toMatchObject({ key: "/home/you/projA" });
+  });
 });

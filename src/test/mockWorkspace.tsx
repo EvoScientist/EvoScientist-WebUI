@@ -8,6 +8,7 @@ import {
   WorkspaceContext,
   type WorkspaceContextValue,
 } from "@/providers/WorkspaceProvider";
+import { RUN_GRAPHS } from "@/lib/threadBinding";
 import { type WorkspaceState } from "@/lib/workspaceSession";
 
 export function mockWorkspace(
@@ -31,13 +32,7 @@ export function readyWorkspace(
     key,
     runDir: null,
     local: null,
-    graphs: new Set([
-      "EvoScientist",
-      "scheduler",
-      "writing-agent",
-      "data-analysis-agent",
-      "expert-container-async",
-    ]),
+    graphs: new Set(RUN_GRAPHS),
   };
 }
 

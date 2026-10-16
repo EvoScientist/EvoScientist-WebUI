@@ -82,18 +82,15 @@
 
 import type React from "react";
 import { render, type RenderResult } from "@testing-library/react";
-import type { Assistant } from "@langchain/langgraph-sdk";
 import {
   ChatInterface,
   type ComposerSnapshot,
 } from "@/app/components/ChatInterface";
 import { ChatProvider } from "@/providers/ChatProvider";
-import { fixtureAssistant } from "@/test/fixtures/assistants";
 import type { WorkspaceContextValue } from "@/providers/WorkspaceProvider";
 import { TestWorkspaceProvider, mockWorkspace } from "@/test/mockWorkspace";
 
 interface RenderChatInterfaceOptions {
-  assistant?: Assistant | null;
   draftSeed?: ComposerSnapshot | null;
   onComposerSnapshotReady?: (
     getSnapshot: (() => ComposerSnapshot) | null
@@ -107,14 +104,8 @@ interface RenderChatInterfaceOptions {
 export function renderChatInterface(
   opts: RenderChatInterfaceOptions = {}
 ): RenderResult {
-  const assistant = opts.assistant ?? fixtureAssistant;
   return render(
-    <TestWorkspaceProvider
-      value={
-        opts.workspace ??
-        mockWorkspace(assistant ? undefined : { status: "pending" })
-      }
-    >
+    <TestWorkspaceProvider value={opts.workspace ?? mockWorkspace()}>
       <ChatProvider>
         <ChatInterface
           draftSeed={opts.draftSeed}

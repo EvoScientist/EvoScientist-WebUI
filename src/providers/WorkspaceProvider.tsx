@@ -15,9 +15,9 @@ import type { Client } from "@langchain/langgraph-sdk";
 
 import { useClient } from "@/providers/ClientProvider";
 import { retryWithBackoff } from "@/lib/retry";
+import { RUN_GRAPHS } from "@/lib/threadBinding";
 import {
   CHAT_GRAPH_ID,
-  SCHEDULER_GRAPH_ID,
   ensureWorkspaceAssistant,
   fetchServedWorkspace,
 } from "@/lib/workspaceAssistant";
@@ -45,16 +45,6 @@ export const WorkspaceContext = createContext<WorkspaceContextValue | null>(
 );
 
 const MAX_RETRY_MS = 10_000;
-
-/** Graphs the WebUI runs. The chat graph must exist; a backend without one
- *  of the others leaves that surface read-only. */
-const RUN_GRAPHS = [
-  CHAT_GRAPH_ID,
-  SCHEDULER_GRAPH_ID,
-  "writing-agent",
-  "data-analysis-agent",
-  "expert-container-async",
-];
 
 function httpStatus(error: unknown): number | undefined {
   const status = (error as { status?: unknown } | null)?.status;
@@ -89,14 +79,17 @@ async function readWorkspace(
 ): Promise<WorkspaceState> {
   const served = await fetchServedWorkspace(deploymentUrl, apiKey, signal);
   if (!served) return { status: "legacy" };
+  // The chat graph must exist; a backend without one of the others leaves
+  // that surface read-only.
+  const runGraphs = [...RUN_GRAPHS];
   const created = await Promise.allSettled(
-    RUN_GRAPHS.map((graphId) =>
+    runGraphs.map((graphId) =>
       ensureWorkspaceAssistant(client, graphId, served.key)
     )
   );
   const graphs = new Set<string>();
   created.forEach((result, i) => {
-    if (result.status === "fulfilled") graphs.add(RUN_GRAPHS[i]);
+    if (result.status === "fulfilled") graphs.add(runGraphs[i]);
     else if (httpStatus(result.reason) !== 404) throw result.reason;
   });
   if (!graphs.has(CHAT_GRAPH_ID)) {
@@ -134,31 +127,32 @@ export function WorkspaceProvider({
   const gateRef = useRef(false);
   // One read at a time; a request during it reads once more afterwards, so
   // the published answer is never older than the latest request.
-  const runningRef = useRef<Promise<WorkspaceState> | null>(null);
+  const runningRef = useRef<{ promise: Promise<WorkspaceState> } | null>(null);
   const againRef = useRef(false);
-  const controllerRef = useRef(new AbortController());
-  useEffect(() => {
-    const controller = controllerRef.current;
-    return () => controller.abort();
-  }, []);
+  // Made per mount: React's development double mount aborts the first one.
+  const controllerRef = useRef<AbortController | null>(null);
 
   const refresh = useCallback((): Promise<WorkspaceState> => {
     gateRef.current = false;
     setState((prev) =>
       prev.refreshing ? prev : { ...prev, refreshing: true }
     );
+    const controller = controllerRef.current;
+    if (!controller) return Promise.resolve({ status: "pending" });
     if (runningRef.current) {
       againRef.current = true;
-      return runningRef.current;
+      return runningRef.current.promise;
     }
-    const signal = controllerRef.current.signal;
-    const run = (async () => {
+    const run: { promise: Promise<WorkspaceState> } = {
+      promise: Promise.resolve({ status: "pending" }),
+    };
+    run.promise = (async () => {
       let answer: WorkspaceState | null = null;
       do {
         againRef.current = false;
         answer = await retryWithBackoff(
-          () => readWorkspace(client, deploymentUrl, apiKey, signal),
-          signal,
+          () => readWorkspace(client, deploymentUrl, apiKey, controller.signal),
+          controller.signal,
           MAX_RETRY_MS,
           (error) =>
             setState((prev) => ({
@@ -167,18 +161,27 @@ export function WorkspaceProvider({
             }))
         );
       } while (answer && againRef.current);
+      // Done before publishing, in the same step: a request from here on
+      // starts a new read rather than joining this finished one.
+      if (runningRef.current === run) runningRef.current = null;
       if (!answer) return { status: "pending" } as WorkspaceState; // unmounted
       setState({ workspace: answer, refreshing: false, error: null });
       return answer;
-    })().finally(() => {
-      runningRef.current = null;
-    });
+    })();
     runningRef.current = run;
-    return run;
+    return run.promise;
   }, [client, deploymentUrl, apiKey]);
 
   useEffect(() => {
+    const controller = new AbortController();
+    controllerRef.current = controller;
+    runningRef.current = null;
+    againRef.current = false;
     void refresh();
+    return () => {
+      controller.abort();
+      if (controllerRef.current === controller) controllerRef.current = null;
+    };
   }, [refresh]);
 
   // Open the gate only once the answer has rendered (see `isReady`).

@@ -55,7 +55,6 @@ vi.mock("sonner", () => ({
 }));
 
 import { renderChat } from "@/test/renderChat";
-import { fixtureAssistantWithConfig as fixtureAssistant } from "@/test/fixtures/assistants";
 
 describe("simple chat scenario", () => {
   let stream: MockStreamStore;
@@ -76,7 +75,7 @@ describe("simple chat scenario", () => {
 
   it("submits the composed message with the pinned run options", () => {
     const { result } = renderChat({
-      activeAssistant: fixtureAssistant,
+      connected: true,
       onHistoryRevalidate: () => historyRevalidate(),
     });
 
@@ -118,7 +117,7 @@ describe("simple chat scenario", () => {
 
   it("immediately kicks off a thread-list revalidate on send", () => {
     const { result } = renderChat({
-      activeAssistant: fixtureAssistant,
+      connected: true,
       onHistoryRevalidate: () => historyRevalidate(),
     });
     act(() => {
@@ -130,12 +129,12 @@ describe("simple chat scenario", () => {
   it("does not call a chat with no thread settled", () => {
     // `runSettled` compares against the thread the server confirmed; with no
     // thread at all that comparison must not come out true by accident.
-    const { result } = renderChat({ activeAssistant: fixtureAssistant });
+    const { result } = renderChat({ connected: true });
     expect(result.current.runSettled).toBe(false);
   });
 
   it("reflects isLoading transitions from the SDK", () => {
-    const { result } = renderChat({ activeAssistant: fixtureAssistant });
+    const { result } = renderChat({ connected: true });
     expect(result.current.isLoading).toBe(false);
     act(() => {
       stream.setLoading(true);
@@ -148,7 +147,7 @@ describe("simple chat scenario", () => {
   });
 
   it("surfaces both user and assistant messages after the run settles", () => {
-    const { result } = renderChat({ activeAssistant: fixtureAssistant });
+    const { result } = renderChat({ connected: true });
 
     // Send.
     act(() => {
@@ -180,7 +179,7 @@ describe("simple chat scenario", () => {
   });
 
   it("does not surface an error toast in the happy path", () => {
-    const { result } = renderChat({ activeAssistant: fixtureAssistant });
+    const { result } = renderChat({ connected: true });
     act(() => {
       result.current.sendMessage("hi");
       stream.setLoading(true);
@@ -194,7 +193,7 @@ describe("simple chat scenario", () => {
   });
 
   it("each sendMessage produces a distinct submit call with a unique id", () => {
-    const { result } = renderChat({ activeAssistant: fixtureAssistant });
+    const { result } = renderChat({ connected: true });
     act(() => {
       result.current.sendMessage("first");
     });
@@ -212,7 +211,7 @@ describe("simple chat scenario", () => {
 
   it("propagates SDK errors as a toast (onError -> sonner)", () => {
     renderChat({
-      activeAssistant: fixtureAssistant,
+      connected: true,
       onHistoryRevalidate: () => historyRevalidate(),
     });
     act(() => {
@@ -229,7 +228,7 @@ describe("simple chat scenario", () => {
   });
 
   it("abortRun during an active run records a stop call and clears loading on next tick", () => {
-    const { result } = renderChat({ activeAssistant: fixtureAssistant });
+    const { result } = renderChat({ connected: true });
     // Start a run and confirm we're loading.
     act(() => {
       result.current.sendMessage("hi");
@@ -251,7 +250,7 @@ describe("simple chat scenario", () => {
   });
 
   it("abortRun clears a model-retry toast that is still up", () => {
-    const { result } = renderChat({ activeAssistant: fixtureAssistant });
+    const { result } = renderChat({ connected: true });
     act(() => {
       result.current.sendMessage("hi");
       stream.setLoading(true);
@@ -273,7 +272,7 @@ describe("simple chat scenario", () => {
   });
 
   it("a new message forgets a failed model call from the run before", () => {
-    const { result } = renderChat({ activeAssistant: fixtureAssistant });
+    const { result } = renderChat({ connected: true });
     const h1: Message = { id: "h1", type: "human", content: "first" };
     const a1: Message = { id: "a1", type: "ai", content: "kept answer" };
     act(() => {
@@ -305,7 +304,7 @@ describe("simple chat scenario", () => {
   });
 
   it("a resume forgets a failed model call from the run before", () => {
-    const { result } = renderChat({ activeAssistant: fixtureAssistant });
+    const { result } = renderChat({ connected: true });
     const h1: Message = { id: "h1", type: "human", content: "first" };
     const a1: Message = { id: "a1", type: "ai", content: "kept answer" };
     act(() => {
@@ -337,7 +336,7 @@ describe("simple chat scenario", () => {
   });
 
   it("abortRun while an interrupt is pending stops the run and suppresses the card", () => {
-    const { result } = renderChat({ activeAssistant: fixtureAssistant });
+    const { result } = renderChat({ connected: true });
     act(() => {
       result.current.sendMessage("hi");
       stream.setInterrupt({
@@ -366,7 +365,7 @@ describe("simple chat scenario", () => {
       id,
       value: { action_requests: [{ name, args: {} }] },
     });
-    const { result } = renderChat({ activeAssistant: fixtureAssistant });
+    const { result } = renderChat({ connected: true });
 
     // First approval shows; user approves; the run resumes.
     act(() => {

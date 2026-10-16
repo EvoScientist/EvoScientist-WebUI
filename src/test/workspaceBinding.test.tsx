@@ -42,6 +42,7 @@ vi.mock("@/providers/ClientProvider", async (importOriginal) => {
 vi.mock("@/app/hooks/useThreads", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   stampThreadWorkspace: stamp,
+  setThreadModelOverride: async () => {},
 }));
 
 vi.mock("nuqs", async () => {
@@ -57,7 +58,6 @@ vi.mock("sonner", () => ({
 }));
 
 import { renderChat } from "@/test/renderChat";
-import { fixtureAssistant } from "@/test/fixtures/assistants";
 import { mockWorkspace, readyWorkspace } from "@/test/mockWorkspace";
 import { workspaceAssistantId } from "@/lib/workspaceAssistant";
 
@@ -88,7 +88,7 @@ describe("workspace binding", () => {
 
   it("creates a new thread with the backend's folder", () => {
     const { result } = renderChat({
-      activeAssistant: fixtureAssistant,
+      connected: true,
       workspace: ready(),
     });
 
@@ -105,7 +105,7 @@ describe("workspace binding", () => {
   it("makes a thread of another folder read-only", async () => {
     openThread({ graph_id: "EvoScientist", workspace_dir: "/home/you/projB" });
     const { result } = renderChat({
-      activeAssistant: fixtureAssistant,
+      connected: true,
       workspace: ready(),
     });
 
@@ -119,6 +119,21 @@ describe("workspace binding", () => {
 
     expect([sent, resumed]).toEqual([false, false]);
     expect(stream.getSubmitCalls()).toHaveLength(0);
+  });
+
+  it("keeps a model picked on a thread when its folder is stamped", async () => {
+    openThread({ graph_id: "EvoScientist" });
+    const { result } = renderChat({ workspace: ready() });
+    await waitFor(() => expect(result.current.binding.kind).toBe("unbound"));
+
+    await act(async () => {
+      await result.current.setModelOverride({ model: "m-2" });
+    });
+    act(() => {
+      result.current.sendMessage("hi");
+    });
+
+    expect(result.current.modelOverride).toEqual({ model: "m-2" });
   });
 
   it("reads a thread's folder from its newest checkpoint", async () => {
@@ -135,7 +150,7 @@ describe("workspace binding", () => {
   it("stamps the backend's folder on a thread that had none", async () => {
     openThread({ graph_id: "EvoScientist" });
     const { result } = renderChat({
-      activeAssistant: fixtureAssistant,
+      connected: true,
       workspace: ready(),
     });
     await waitFor(() => expect(result.current.binding.kind).toBe("unbound"));
@@ -175,7 +190,7 @@ describe("workspace binding", () => {
   it("runs a scheduled task's thread on the scheduler assistant", async () => {
     openThread({ graph_id: "scheduler", workspace_dir: KEY });
     const workspace = ready();
-    renderChat({ activeAssistant: fixtureAssistant, workspace });
+    renderChat({ connected: true, workspace });
 
     await waitFor(() =>
       expect(stream.getOptions()?.assistantId).toBe(
@@ -191,7 +206,7 @@ describe("workspace binding", () => {
       isReady: () => false,
     };
     const { result } = renderChat({
-      activeAssistant: fixtureAssistant,
+      connected: true,
       workspace,
     });
 
@@ -209,7 +224,7 @@ describe("workspace binding", () => {
     let readyNow = true;
     const workspace = { ...ready(), isReady: () => readyNow };
     const { result } = renderChat({
-      activeAssistant: fixtureAssistant,
+      connected: true,
       workspace,
     });
 
@@ -226,7 +241,7 @@ describe("workspace binding", () => {
 
   it("asks the backend again after a folder mismatch and explains a refusal", async () => {
     const workspace = ready();
-    renderChat({ activeAssistant: fixtureAssistant, workspace });
+    renderChat({ connected: true, workspace });
 
     act(() => {
       stream.emitError(
