@@ -108,7 +108,7 @@ export function FilePreviewPane() {
         <Button
           variant="ghost"
           size="sm"
-          className="h-7 shrink-0 px-2 max-sm:min-h-11"
+          className="h-7 shrink-0 px-2 max-md:min-h-11"
           onClick={showTree}
           aria-label="Back to files"
         >
@@ -152,7 +152,7 @@ export function FilePreviewPane() {
                   title={tab.path}
                   onClick={() => activate(tab.id)}
                   onKeyDown={(e) => onTabKeyDown(e, index)}
-                  className="flex min-w-0 items-center gap-1 py-1 pl-2 pr-1 max-sm:min-h-11"
+                  className="flex min-w-0 items-center gap-1 py-1 pl-2 pr-1 max-md:min-h-11"
                 >
                   <Icon
                     className="size-3.5 shrink-0"
@@ -181,7 +181,7 @@ export function FilePreviewPane() {
                       e.currentTarget === document.activeElement
                     )
                   }
-                  className="rounded p-1 hover:bg-accent max-sm:min-h-11 max-sm:min-w-11"
+                  className="rounded p-1 hover:bg-accent max-md:min-h-11 max-md:min-w-11"
                 >
                   <X
                     className="size-3"

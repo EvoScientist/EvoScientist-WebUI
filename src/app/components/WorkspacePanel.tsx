@@ -418,7 +418,7 @@ export function WorkspacePanel() {
         <button
           type="button"
           onClick={() => pane?.showPreview()}
-          className="mb-2 flex w-full items-center gap-1.5 rounded-md bg-accent px-2 py-1.5 text-left text-sm font-medium text-[var(--brand)] transition-colors hover:bg-muted max-sm:min-h-11"
+          className="mb-2 flex w-full items-center gap-1.5 rounded-md bg-accent px-2 py-1.5 text-left text-sm font-medium text-[var(--brand)] transition-colors hover:bg-muted max-md:min-h-11"
         >
           <ArrowLeft
             className="size-4 rotate-180"

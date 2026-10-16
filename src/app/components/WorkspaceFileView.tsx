@@ -76,7 +76,7 @@ async function readText(path: string): Promise<string> {
 }
 
 const TOOLBAR =
-  "flex shrink-0 flex-wrap items-center justify-end gap-1 max-sm:[&>a]:min-h-11 max-sm:[&>button]:min-h-11 max-sm:[&>button]:min-w-11";
+  "flex shrink-0 flex-wrap items-center justify-end gap-1 max-md:[&>a]:min-h-11 max-md:[&>button]:min-h-11 max-md:[&>button]:min-w-11";
 
 export function WorkspaceFileView({
   tabId,
@@ -335,7 +335,7 @@ export function WorkspaceFileView({
           <Button
             variant="outline"
             size="sm"
-            className="max-sm:min-h-11"
+            className="max-md:min-h-11"
             onClick={() => onClose(tabId)}
           >
             Close tab
@@ -350,7 +350,7 @@ export function WorkspaceFileView({
           <Button
             variant="outline"
             size="sm"
-            className="max-sm:min-h-11"
+            className="max-md:min-h-11"
             onClick={() => void read("manual")}
           >
             Retry
@@ -392,6 +392,7 @@ export function WorkspaceFileView({
           <Button
             variant="outline"
             size="sm"
+            className="max-md:min-h-11"
             asChild
           >
             {downloadLink("Download file")}
@@ -542,7 +543,7 @@ export function WorkspaceFileView({
           <Button
             variant="outline"
             size="sm"
-            className="h-7 max-sm:min-h-11"
+            className="h-7 max-md:min-h-11"
             onClick={() => {
               setContent(diskChange);
               finishEditing();
@@ -553,7 +554,7 @@ export function WorkspaceFileView({
           <Button
             variant="ghost"
             size="sm"
-            className="h-7 max-sm:min-h-11"
+            className="h-7 max-md:min-h-11"
             onClick={() => {
               setContent(diskChange);
               setDiskChange(null);
@@ -572,7 +573,7 @@ export function WorkspaceFileView({
           <Button
             variant="outline"
             size="sm"
-            className="h-7 max-sm:min-h-11"
+            className="h-7 max-md:min-h-11"
             onClick={() => void read("manual")}
           >
             Retry
