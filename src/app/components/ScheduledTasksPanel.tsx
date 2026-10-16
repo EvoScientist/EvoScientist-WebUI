@@ -386,7 +386,40 @@ function TaskForm({
   const [saving, setSaving] = useState(false);
   const nameRef = useRef<HTMLInputElement>(null);
 
-  const cron = specToCron(spec);
+  // A stored schedule the builder reads but spells differently (`09 07 * * *`
+  // opens as daily at 07:09 and is written `9 7 * * *`) is kept as stored
+  // while the builder still writes what it wrote on opening. Custom cron text
+  // is saved as entered (outer spaces trimmed).
+  const openedCron = useMemo(
+    () => (initialTask ? specToCron(cronToSpec(initialTask.schedule)) : null),
+    [initialTask]
+  );
+  const builtCron = specToCron(spec);
+  const cron =
+    initialTask && spec.frequency !== "custom" && builtCron === openedCron
+      ? initialTask.schedule.trim()
+      : builtCron;
+  // Whether the Custom cron box holds text to keep: the custom cron the task
+  // opened with, or text typed there (an emptied box counts as none).
+  // Otherwise switching to Custom cron fills the box with what the form would
+  // save: the task's own cron while nothing changed, or the schedule as the
+  // builder shows it.
+  const keepCustomText = useRef(spec.frequency === "custom");
+  const changeSpec = (next: ScheduleSpec) => {
+    const wasCustom = spec.frequency === "custom";
+    if (
+      wasCustom &&
+      next.frequency === "custom" &&
+      next.custom !== spec.custom
+    ) {
+      keepCustomText.current = next.custom.trim() !== "";
+    }
+    setSpec(
+      !wasCustom && next.frequency === "custom" && !keepCustomText.current
+        ? { ...next, custom: cron }
+        : next
+    );
+  };
   const cronError =
     spec.frequency === "custom" ? validateCronExpression(cron) : null;
   // An edit keeps the task's time zone. A task stored without one (made before
@@ -525,7 +558,7 @@ function TaskForm({
             <FieldLabel>Schedule</FieldLabel>
             <ScheduleBuilder
               value={spec}
-              onChange={setSpec}
+              onChange={changeSpec}
               error={cronError}
               timeZone={timeZone}
             />

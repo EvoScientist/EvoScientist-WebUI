@@ -67,6 +67,8 @@ function openEdit(name: string) {
 }
 
 const saveButton = () => screen.getByRole("button", { name: /Save changes/ });
+const customCron = () =>
+  (screen.getByPlaceholderText("0 9 * * 1-5") as HTMLInputElement).value;
 
 beforeEach(() => {
   stubBrowserTimeZone("Asia/Shanghai");
@@ -161,5 +163,376 @@ describe("ScheduledTasksPanel time zones", () => {
 
     expect(screen.queryByText(/Saving it switches it/)).toBeNull();
     expect(saveButton().hasAttribute("disabled")).toBe(true);
+  });
+});
+
+describe("ScheduledTasksPanel custom cron", () => {
+  it("keeps a weekday range when a task is saved without touching its schedule", async () => {
+    const weekdays = task({ name: "Weekdays", schedule: "0 9 * * 1-5" });
+    hook.tasks = [weekdays];
+    hook.updateScheduledTask.mockResolvedValue({
+      task: { ...weekdays, name: "Weekday briefing" },
+      oldTaskDeleted: true,
+    });
+    render(<ScheduledTasksPanel />);
+    // The list shows the expression, not "Every Mon at 09:00".
+    expect(
+      screen.getAllByText("0 9 * * 1-5 · Asia/Shanghai").length
+    ).toBeGreaterThan(0);
+    expect(screen.queryByText("Every Mon at 09:00 · Asia/Shanghai")).toBeNull();
+    openEdit("Weekdays");
+
+    fireEvent.change(screen.getByLabelText("Task name"), {
+      target: { value: "Weekday briefing" },
+    });
+    fireEvent.click(saveButton());
+    await waitFor(() =>
+      expect(hook.updateScheduledTask).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "Weekday briefing",
+          schedule: "0 9 * * 1-5",
+        })
+      )
+    );
+  });
+
+  it("starts the builder from a custom cron's time when switched to weekly", () => {
+    hook.tasks = [task({ name: "Afternoons", schedule: "30 14 * * 1-5" })];
+    render(<ScheduledTasksPanel />);
+    openEdit("Afternoons");
+
+    fireEvent.change(screen.getByLabelText("Schedule frequency"), {
+      target: { value: "weekly" },
+    });
+    expect(screen.getByText("Every Mon at 14:30 · Asia/Shanghai")).toBeTruthy();
+  });
+
+  it("keeps a stored schedule's own spelling while the schedule is unchanged", async () => {
+    const zeros = task({ name: "Zeros", schedule: "09 07 * * *" });
+    hook.tasks = [zeros];
+    hook.updateScheduledTask.mockResolvedValue({
+      task: { ...zeros, name: "Zeros renamed" },
+      oldTaskDeleted: true,
+    });
+    render(<ScheduledTasksPanel />);
+    openEdit("Zeros");
+
+    // Read as the builder's daily schedule, with nothing to save yet.
+    expect(
+      screen.getAllByText("Every day at 07:09 · Asia/Shanghai").length
+    ).toBeGreaterThan(1);
+    expect(saveButton().hasAttribute("disabled")).toBe(true);
+
+    fireEvent.change(screen.getByLabelText("Task name"), {
+      target: { value: "Zeros renamed" },
+    });
+    fireEvent.click(saveButton());
+    await waitFor(() =>
+      expect(hook.updateScheduledTask).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "Zeros renamed",
+          schedule: "09 07 * * *",
+        })
+      )
+    );
+  });
+
+  it("shows a task's own cron when switched to Custom cron", () => {
+    hook.tasks = [task({ name: "Nines", schedule: "00 09 * * *" })];
+    render(<ScheduledTasksPanel />);
+    openEdit("Nines");
+
+    fireEvent.change(screen.getByLabelText("Schedule frequency"), {
+      target: { value: "custom" },
+    });
+    expect(customCron()).toBe("00 09 * * *");
+    expect(saveButton().hasAttribute("disabled")).toBe(true);
+  });
+
+  it("keeps the stored spelling after a visit to Custom cron", async () => {
+    const zeros = task({ name: "Zeros", schedule: "09 07 * * *" });
+    hook.tasks = [zeros];
+    hook.updateScheduledTask.mockResolvedValue({
+      task: { ...zeros, name: "Zeros renamed" },
+      oldTaskDeleted: true,
+    });
+    render(<ScheduledTasksPanel />);
+    openEdit("Zeros");
+
+    const frequency = screen.getByLabelText("Schedule frequency");
+    fireEvent.change(frequency, { target: { value: "custom" } });
+    fireEvent.change(frequency, { target: { value: "daily" } });
+    expect(saveButton().hasAttribute("disabled")).toBe(true);
+
+    fireEvent.change(screen.getByLabelText("Task name"), {
+      target: { value: "Zeros renamed" },
+    });
+    fireEvent.click(saveButton());
+    await waitFor(() =>
+      expect(hook.updateScheduledTask).toHaveBeenCalledWith(
+        expect.objectContaining({ schedule: "09 07 * * *" })
+      )
+    );
+  });
+
+  it("saves a task's own cron from Custom cron", async () => {
+    const zeros = task({ name: "Zeros", schedule: "09 07 * * *" });
+    hook.tasks = [zeros];
+    hook.updateScheduledTask.mockResolvedValue({
+      task: { ...zeros, name: "Zeros renamed" },
+      oldTaskDeleted: true,
+    });
+    render(<ScheduledTasksPanel />);
+    openEdit("Zeros");
+
+    fireEvent.change(screen.getByLabelText("Schedule frequency"), {
+      target: { value: "custom" },
+    });
+    fireEvent.change(screen.getByLabelText("Task name"), {
+      target: { value: "Zeros renamed" },
+    });
+    fireEvent.click(saveButton());
+    await waitFor(() =>
+      expect(hook.updateScheduledTask).toHaveBeenCalledWith(
+        expect.objectContaining({ schedule: "09 07 * * *" })
+      )
+    );
+  });
+
+  it("keeps a UTC task's cron when it is saved from Custom cron", async () => {
+    const legacy = task({
+      name: "Legacy",
+      schedule: "09 07 * * *",
+      timezone: null,
+    });
+    hook.tasks = [legacy];
+    hook.updateScheduledTask.mockResolvedValue({
+      task: legacy,
+      oldTaskDeleted: true,
+    });
+    render(<ScheduledTasksPanel />);
+    openEdit("Legacy");
+
+    fireEvent.change(screen.getByLabelText("Schedule frequency"), {
+      target: { value: "custom" },
+    });
+    fireEvent.click(saveButton());
+    await waitFor(() =>
+      expect(hook.updateScheduledTask).toHaveBeenCalledWith(
+        expect.objectContaining({ schedule: "09 07 * * *" })
+      )
+    );
+  });
+
+  it("starts Custom cron from a schedule changed in the builder", async () => {
+    const zeros = task({ name: "Zeros", schedule: "09 07 * * *" });
+    hook.tasks = [zeros];
+    hook.updateScheduledTask.mockResolvedValue({
+      task: zeros,
+      oldTaskDeleted: true,
+    });
+    render(<ScheduledTasksPanel />);
+    openEdit("Zeros");
+
+    fireEvent.change(screen.getByLabelText("Hour"), { target: { value: "8" } });
+    fireEvent.change(screen.getByLabelText("Schedule frequency"), {
+      target: { value: "custom" },
+    });
+    expect(customCron()).toBe("9 8 * * *");
+    fireEvent.click(saveButton());
+    await waitFor(() =>
+      expect(hook.updateScheduledTask).toHaveBeenCalledWith(
+        expect.objectContaining({ schedule: "9 8 * * *" })
+      )
+    );
+  });
+
+  it("returns to a task's own cron when a builder change is undone", () => {
+    hook.tasks = [task({ name: "Zeros", schedule: "09 07 * * *" })];
+    render(<ScheduledTasksPanel />);
+    openEdit("Zeros");
+
+    const frequency = screen.getByLabelText("Schedule frequency");
+    fireEvent.change(screen.getByLabelText("Hour"), { target: { value: "8" } });
+    fireEvent.change(frequency, { target: { value: "custom" } });
+    fireEvent.change(frequency, { target: { value: "daily" } });
+    fireEvent.change(screen.getByLabelText("Hour"), { target: { value: "7" } });
+    fireEvent.change(frequency, { target: { value: "custom" } });
+    expect(customCron()).toBe("09 07 * * *");
+    expect(saveButton().hasAttribute("disabled")).toBe(true);
+  });
+
+  it("keeps a custom cron's text after a look at the builder", () => {
+    hook.tasks = [task({ name: "Afternoons", schedule: "30 14 * * 1-5" })];
+    render(<ScheduledTasksPanel />);
+    openEdit("Afternoons");
+
+    const frequency = screen.getByLabelText("Schedule frequency");
+    fireEvent.change(frequency, { target: { value: "weekly" } });
+    fireEvent.change(frequency, { target: { value: "custom" } });
+    expect(customCron()).toBe("30 14 * * 1-5");
+    expect(saveButton().hasAttribute("disabled")).toBe(true);
+  });
+
+  it("starts Custom cron from a template changed in the builder", () => {
+    render(<ScheduledTasksPanel />);
+    fireEvent.click(screen.getByRole("button", { name: /New task/ }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /Weekly Research Review/ })
+    );
+
+    fireEvent.change(screen.getByLabelText("Day of week"), {
+      target: { value: "1" },
+    });
+    fireEvent.change(screen.getByLabelText("Schedule frequency"), {
+      target: { value: "custom" },
+    });
+    expect(customCron()).toBe("0 17 * * 1");
+  });
+
+  it("fills Custom cron again once the builder is back at the schedule", () => {
+    hook.tasks = [task({ name: "Zeros", schedule: "09 07 * * *" })];
+    render(<ScheduledTasksPanel />);
+    openEdit("Zeros");
+
+    const frequency = screen.getByLabelText("Schedule frequency");
+    fireEvent.change(frequency, { target: { value: "weekly" } });
+    fireEvent.change(frequency, { target: { value: "custom" } });
+    expect(customCron()).toBe("9 7 * * 1");
+    fireEvent.change(frequency, { target: { value: "daily" } });
+    fireEvent.change(frequency, { target: { value: "custom" } });
+    expect(customCron()).toBe("09 07 * * *");
+    expect(saveButton().hasAttribute("disabled")).toBe(true);
+  });
+
+  it("fills a new task's Custom cron from the builder each time", () => {
+    render(<ScheduledTasksPanel />);
+    fireEvent.click(screen.getByRole("button", { name: /New task/ }));
+
+    const frequency = screen.getByLabelText("Schedule frequency");
+    fireEvent.change(frequency, { target: { value: "weekly" } });
+    fireEvent.change(frequency, { target: { value: "custom" } });
+    expect(customCron()).toBe("0 9 * * 1");
+    fireEvent.change(frequency, { target: { value: "daily" } });
+    fireEvent.change(frequency, { target: { value: "custom" } });
+    expect(customCron()).toBe("0 9 * * *");
+  });
+
+  it("keeps a custom cron's text through more than one frequency", () => {
+    hook.tasks = [task({ name: "Afternoons", schedule: "30 14 * * 1-5" })];
+    render(<ScheduledTasksPanel />);
+    openEdit("Afternoons");
+
+    const frequency = screen.getByLabelText("Schedule frequency");
+    fireEvent.change(frequency, { target: { value: "weekly" } });
+    fireEvent.change(frequency, { target: { value: "daily" } });
+    fireEvent.change(frequency, { target: { value: "custom" } });
+    expect(customCron()).toBe("30 14 * * 1-5");
+    expect(saveButton().hasAttribute("disabled")).toBe(true);
+  });
+
+  it("keeps text typed in Custom cron through the builder", () => {
+    hook.tasks = [task({ name: "Zeros", schedule: "09 07 * * *" })];
+    render(<ScheduledTasksPanel />);
+    openEdit("Zeros");
+
+    const frequency = screen.getByLabelText("Schedule frequency");
+    fireEvent.change(frequency, { target: { value: "custom" } });
+    fireEvent.change(screen.getByPlaceholderText("0 9 * * 1-5"), {
+      target: { value: "*/5 * * * *" },
+    });
+    fireEvent.change(frequency, { target: { value: "weekly" } });
+    fireEvent.change(frequency, { target: { value: "daily" } });
+    fireEvent.change(frequency, { target: { value: "custom" } });
+    expect(customCron()).toBe("*/5 * * * *");
+  });
+
+  it("fills an emptied Custom cron box again", () => {
+    hook.tasks = [task({ name: "Zeros", schedule: "09 07 * * *" })];
+    render(<ScheduledTasksPanel />);
+    openEdit("Zeros");
+
+    const frequency = screen.getByLabelText("Schedule frequency");
+    fireEvent.change(frequency, { target: { value: "custom" } });
+    fireEvent.change(screen.getByPlaceholderText("0 9 * * 1-5"), {
+      target: { value: "   " },
+    });
+    fireEvent.change(frequency, { target: { value: "daily" } });
+    fireEvent.change(frequency, { target: { value: "custom" } });
+    expect(customCron()).toBe("09 07 * * *");
+    expect(saveButton().hasAttribute("disabled")).toBe(true);
+  });
+
+  it("keeps a custom cron's text over a builder edit", () => {
+    hook.tasks = [task({ name: "Weekdays", schedule: "0 9 * * 1-5" })];
+    render(<ScheduledTasksPanel />);
+    openEdit("Weekdays");
+
+    // The box keeps what the builder cannot show; the edit is still there on
+    // Every day.
+    const frequency = screen.getByLabelText("Schedule frequency");
+    fireEvent.change(frequency, { target: { value: "daily" } });
+    fireEvent.change(screen.getByLabelText("Hour"), {
+      target: { value: "10" },
+    });
+    fireEvent.change(screen.getByLabelText("Minute"), {
+      target: { value: "30" },
+    });
+    fireEvent.change(frequency, { target: { value: "custom" } });
+    expect(customCron()).toBe("0 9 * * 1-5");
+
+    fireEvent.change(frequency, { target: { value: "daily" } });
+    expect((screen.getByLabelText("Hour") as HTMLInputElement).value).toBe(
+      "10"
+    );
+    expect((screen.getByLabelText("Minute") as HTMLInputElement).value).toBe(
+      "30"
+    );
+  });
+
+  it("saves a custom cron typed in the builder's spelling", async () => {
+    const zeros = task({ name: "Zeros", schedule: "09 07 * * *" });
+    hook.tasks = [zeros];
+    hook.updateScheduledTask.mockResolvedValue({
+      task: { ...zeros, schedule: "9 7 * * *" },
+      oldTaskDeleted: true,
+    });
+    render(<ScheduledTasksPanel />);
+    openEdit("Zeros");
+
+    // Typed in Custom cron, the builder's spelling is an edit like any other.
+    fireEvent.change(screen.getByLabelText("Schedule frequency"), {
+      target: { value: "custom" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("0 9 * * 1-5"), {
+      target: { value: "9 7 * * *" },
+    });
+    expect(saveButton().hasAttribute("disabled")).toBe(false);
+    fireEvent.click(saveButton());
+    await waitFor(() =>
+      expect(hook.updateScheduledTask).toHaveBeenCalledWith(
+        expect.objectContaining({ schedule: "9 7 * * *" })
+      )
+    );
+  });
+
+  it("writes the builder's spelling once the schedule changes", async () => {
+    const zeros = task({ name: "Zeros", schedule: "09 07 * * *" });
+    hook.tasks = [zeros];
+    hook.updateScheduledTask.mockResolvedValue({
+      task: zeros,
+      oldTaskDeleted: true,
+    });
+    render(<ScheduledTasksPanel />);
+    openEdit("Zeros");
+
+    fireEvent.change(screen.getByLabelText("Hour"), { target: { value: "8" } });
+    expect(saveButton().hasAttribute("disabled")).toBe(false);
+    fireEvent.click(saveButton());
+    await waitFor(() =>
+      expect(hook.updateScheduledTask).toHaveBeenCalledWith(
+        expect.objectContaining({ schedule: "9 8 * * *" })
+      )
+    );
   });
 });
