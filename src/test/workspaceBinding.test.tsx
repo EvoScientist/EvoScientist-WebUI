@@ -58,11 +58,11 @@ vi.mock("sonner", () => ({
 
 import { renderChat } from "@/test/renderChat";
 import { fixtureAssistant } from "@/test/fixtures/assistants";
-import { mockWorkspace } from "@/test/mockWorkspace";
+import { mockWorkspace, readyWorkspace } from "@/test/mockWorkspace";
+import { workspaceAssistantId } from "@/lib/workspaceAssistant";
 
 const KEY = "/home/you/projA";
-const ready = () =>
-  mockWorkspace({ status: "ready", key: KEY, runDir: null, local: null });
+const ready = () => mockWorkspace(readyWorkspace(KEY));
 
 describe("workspace binding", () => {
   let stream: MockStreamStore;
@@ -121,6 +121,17 @@ describe("workspace binding", () => {
     expect(stream.getSubmitCalls()).toHaveLength(0);
   });
 
+  it("reads a thread's folder from its newest checkpoint", async () => {
+    openThread({ graph_id: "EvoScientist" });
+    stream.setHistory([
+      { metadata: {} },
+      { metadata: { workspace_dir: "/home/you/projB" } },
+    ]);
+    const { result } = renderChat({ workspace: ready() });
+
+    await waitFor(() => expect(result.current.binding.kind).toBe("readOnly"));
+  });
+
   it("stamps the backend's folder on a thread that had none", async () => {
     openThread({ graph_id: "EvoScientist" });
     const { result } = renderChat({
@@ -160,9 +171,10 @@ describe("workspace binding", () => {
     renderChat({ activeAssistant: fixtureAssistant, workspace });
 
     await waitFor(() =>
-      expect(stream.getOptions()?.assistantId).toBe("scheduler-assistant")
+      expect(stream.getOptions()?.assistantId).toBe(
+        workspaceAssistantId("scheduler", KEY)
+      )
     );
-    expect(workspace.assistantFor).toHaveBeenCalledWith("scheduler");
   });
 
   it("sends nothing while the folder is being read again", () => {

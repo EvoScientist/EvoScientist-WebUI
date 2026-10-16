@@ -1,5 +1,5 @@
 import { folderName } from "@/lib/workspaceAssistant";
-import type { WorkspaceState } from "@/providers/WorkspaceProvider";
+import type { WorkspaceState } from "@/lib/workspaceSession";
 
 /** Graphs the main chat runs; other threads opened in it are read-only. */
 export const CHAT_GRAPHS: ReadonlySet<string> = new Set([

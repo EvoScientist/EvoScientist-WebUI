@@ -6,9 +6,13 @@ import { Client } from "@langchain/langgraph-sdk";
 import { getConfig } from "@/lib/config";
 import { browserTimeZone } from "@/lib/cronUtils";
 import { patchClientStreamModes } from "@/lib/streamMode";
-import { isMissingThreadOrAssistantError } from "@/app/hooks/useChat";
+import {
+  isMissingThreadOrAssistantError,
+  isRunFolderMismatchError,
+} from "@/app/hooks/useChat";
 import { SCHEDULER_GRAPH_ID } from "@/lib/workspaceAssistant";
-import { useGraphAssistant, useWorkspace } from "@/providers/WorkspaceProvider";
+import { useWorkspace } from "@/providers/WorkspaceProvider";
+import { assistantIdFor } from "@/lib/workspaceSession";
 
 const SCHEDULED_RUN_KIND = "scheduled_task";
 
@@ -205,29 +209,41 @@ export function useServedFolder(): string | null {
 
 /**
  * Handle a failed create or run: a 404 for the assistant means the backend
- * lost this folder's assistants (a fresh store), so they are ensured again
- * for the next try.
+ * lost this folder's assistants (a fresh store), and a folder mismatch means
+ * it serves another folder now; either way the folder is read again.
  */
 export function useAssistantRecovery(): (error: unknown) => void {
   const { refresh } = useWorkspace();
   return useCallback(
     (error: unknown) => {
-      if (isMissingThreadOrAssistantError(error)) void refresh();
+      if (
+        isMissingThreadOrAssistantError(error) ||
+        isRunFolderMismatchError(error)
+      ) {
+        void refresh();
+      }
     },
     [refresh]
   );
 }
 
+/** Whether a task may be created or run now (the folder is not being read
+ *  again); check it at the moment of acting. */
+export function useSchedulerGate(): () => boolean {
+  return useWorkspace().isReady;
+}
+
 /** The scheduler assistant for the backend's folder; null until known. */
 export function useSchedulerTarget(): SchedulerTarget | null {
   const { workspace, refreshing } = useWorkspace();
-  const { assistant } = useGraphAssistant(SCHEDULER_GRAPH_ID);
-  const workspaceDir = workspace.status === "ready" ? workspace.key : null;
   // None while the folder is read again: tasks wait for its answer.
-  const usable = refreshing ? null : assistant;
+  const assistantId = refreshing
+    ? null
+    : assistantIdFor(workspace, SCHEDULER_GRAPH_ID);
+  const workspaceDir = workspace.status === "ready" ? workspace.key : null;
   return useMemo(
-    () => (usable ? { assistantId: usable.assistant_id, workspaceDir } : null),
-    [usable, workspaceDir]
+    () => (assistantId ? { assistantId, workspaceDir } : null),
+    [assistantId, workspaceDir]
   );
 }
 

@@ -1,9 +1,7 @@
 "use client";
 
-import {
-  localFilesAvailable,
-  useWorkspace,
-} from "@/providers/WorkspaceProvider";
+import { useWorkspace } from "@/providers/WorkspaceProvider";
+import { localFilesAvailable } from "@/lib/workspaceSession";
 import { FilesElsewhereNotice } from "@/app/components/WorkspacePanel";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {

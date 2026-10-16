@@ -93,10 +93,8 @@ import {
 } from "@/lib/subAgentStepsStore";
 import { useAutoApproveInterrupt } from "@/app/hooks/useAutoApproveInterrupt";
 import { useApprovalPolicy } from "@/app/hooks/useApprovalPolicy";
-import {
-  localFilesAvailable,
-  useWorkspace,
-} from "@/providers/WorkspaceProvider";
+import { useWorkspace } from "@/providers/WorkspaceProvider";
+import { localFilesAvailable } from "@/lib/workspaceSession";
 import { folderName } from "@/lib/workspaceAssistant";
 import { useDeployment } from "@/providers/ClientProvider";
 import { resolveApprovalDecisions } from "@/lib/hitlPolicy";
@@ -339,7 +337,11 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         }
       });
     }, [draftSeed]);
-    const { workspace } = useWorkspace();
+    const {
+      workspace,
+      refreshing: workspaceRefreshing,
+      error: workspaceError,
+    } = useWorkspace();
     const filesHere = localFilesAvailable(workspace);
     const [isUploadingFiles, setIsUploadingFiles] = useState(false);
     const [workspaceDir, setWorkspaceDir] = useState<string | null>(null);
@@ -489,8 +491,8 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       summarizationEvent,
       modelOverride,
       setModelOverride,
-      threadAssistant: assistant,
-      assistantError,
+      threadGraph,
+      canRunNow,
       binding,
       canSend,
     } = useChatContext();
@@ -721,6 +723,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
           markThreadAutoNotifyReported(threadId, key);
           continue;
         }
+        if (!canRunNow()) return;
         autoFireInFlightRef.current = true;
         markThreadAutoNotifyReported(threadId, key);
         sendMessage(formatAsyncUpdateMessage(t));
@@ -731,6 +734,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       }
     }, [
       canSend,
+      canRunNow,
       liveAgentTasks,
       autoNotify,
       isLoading,
@@ -758,7 +762,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       isLoading,
       messages,
       threadId,
-      canSend,
+      canRunNow,
       readOnly: false,
     });
     notifyStateRef.current = {
@@ -766,7 +770,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       isLoading,
       messages,
       threadId,
-      canSend,
+      canRunNow,
       readOnly: binding.kind === "readOnly",
     };
     const onNotifyReadyRef = useRef(onNotifyReady);
@@ -777,7 +781,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         if (current.threadId !== expectedThreadId) return "wrong-thread";
         if (current.readOnly) return "read-only";
         // Still loading, or the folder is being read again.
-        if (!current.canSend) return "busy";
+        if (!current.canRunNow()) return "busy";
         if (current.isLoading) return "busy";
         if (
           current.messages.some(
@@ -809,8 +813,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     //      run will use this verbatim.
     //   2. The model registry endpoint's reported deployment default —
     //      what the next run will use when no override is set.
-    //   3. The assistant's configured default from `assistant.config.configurable`.
-    //   4. Last AI message's `response_metadata.model_name` — final fallback
+    //   3. Last AI message's `response_metadata.model_name` — final fallback
     //      when none of the above are available (older deployment without
     //      `/api/models`).
     // The endpoint's `default` can disagree with what the runtime actually
@@ -827,17 +830,6 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
           modelRegistry.defaultEntry.provider ?? undefined
         );
       }
-      const cfg = assistant?.config as
-        | { configurable?: Record<string, unknown> }
-        | undefined;
-      const configurable = cfg?.configurable;
-      if (configurable) {
-        const info = formatModel(
-          configurable.model ?? configurable.model_name,
-          configurable.model_provider
-        );
-        if (info) return info;
-      }
       for (let i = messages.length - 1; i >= 0; i--) {
         const m = messages[i];
         if (m.type !== "ai") continue;
@@ -849,12 +841,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         if (info) return info;
       }
       return null;
-    }, [
-      messages,
-      modelOverride,
-      assistant?.config,
-      modelRegistry.defaultEntry,
-    ]);
+    }, [messages, modelOverride, modelRegistry.defaultEntry]);
 
     // While the agent waits on an *actionable* interrupt (approval or ask_user),
     // lock the composer so the user answers via the in-message controls — a free
@@ -887,11 +874,13 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       // Effects from the previous render still run once after a route/thread
       // change. Never let that stale queue drain into the newly selected thread.
       if (head.threadId !== threadId) return;
+      if (!canRunNow()) return;
       autoFireInFlightRef.current = true;
       setQueuedMessages(rest);
       sendMessage(formatMessageWithFiles(head.text, head.files));
     }, [
       canSend,
+      canRunNow,
       isLoading,
       hasPendingInterrupt,
       queuedMessages,
@@ -1080,6 +1069,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
           setPendingFiles([]);
           return;
         }
+        if (!canRunNow()) return;
         migrateAutoApproveForCreatedThreadRef.current =
           threadId === null && autoApprove;
         sendMessage(formatMessageWithFiles(messageText, pendingFiles));
@@ -1090,6 +1080,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         input,
         applyModelCommand,
         canSend,
+        canRunNow,
         hasPendingInterrupt,
         autoApprove,
         isLoading,
@@ -1238,6 +1229,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       isLoading,
       resetKey: threadId,
       policy: approvalPolicy,
+      canResumeNow: canRunNow,
     });
 
     // ask_user: the agent is asking the user structured questions.
@@ -1890,7 +1882,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                         reviewConfigsMap={reviewConfigsMap}
                         stream={stream}
                         onResumeInterrupt={resumeToolApproval}
-                        graphId={assistant?.graph_id}
+                        graphId={threadGraph}
                         onEditMessage={handleEditMessage}
                         autoApprove={autoApprove}
                         approvalAutoResolves={approvalAutoResolves}
@@ -1935,7 +1927,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                         ui={messageUi}
                         stream={stream}
                         onResumeInterrupt={resumeToolApproval}
-                        graphId={assistant?.graph_id}
+                        graphId={threadGraph}
                         onEditMessage={handleEditMessage}
                         autoApprove={autoApprove}
                         approvalAutoResolves={approvalAutoResolves}
@@ -2507,8 +2499,10 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                 placeholder={
                   binding.kind === "readOnly"
                     ? binding.reason
-                    : !assistant && assistantError
-                    ? `Couldn't set up this folder's assistant (${assistantError}). Retrying…`
+                    : !canSend && workspaceRefreshing
+                    ? workspaceError
+                      ? `Can't read the backend's folder (${workspaceError}). Retrying…`
+                      : "Connecting to the backend…"
                     : hasPendingInterrupt
                     ? "Respond to the request above to continue…"
                     : isLoading

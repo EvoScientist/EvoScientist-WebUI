@@ -15,6 +15,7 @@ import { useQueryState } from "nuqs";
 import { toast } from "sonner";
 import { useClient } from "@/providers/ClientProvider";
 import { useWorkspace } from "@/providers/WorkspaceProvider";
+import { assistantIdFor } from "@/lib/workspaceSession";
 import {
   AGENT_GRAPHS,
   canRun,
@@ -119,12 +120,7 @@ interface AgentsPanelProps {
 
 export function AgentsPanel({ onReportToMainChat }: AgentsPanelProps) {
   const client = useClient();
-  const {
-    workspace,
-    isReady,
-    assistantFor,
-    refresh: refreshWorkspace,
-  } = useWorkspace();
+  const { workspace, isReady, refresh: refreshWorkspace } = useWorkspace();
   const [threadId] = useQueryState("threadId");
   const { tasks, loaded, error, refresh } = useAsyncAgents(threadId);
   const [now, setNow] = useState(() => Date.now());
@@ -180,18 +176,16 @@ export function AgentsPanel({ onReportToMainChat }: AgentsPanelProps) {
     const folders = taskFolders[task.task_id];
     if (!folders?.graphId) return;
     if (!canRun(threadBinding(workspace, folders, AGENT_GRAPHS))) return;
-    if (!isReady()) return;
+    // Computed from the folder answer this render carries; the gate opens
+    // only after that answer has rendered.
+    const assistantId = assistantIdFor(workspace, folders.graphId);
+    if (!assistantId || !isReady()) return;
     setChatBusy((b) => ({ ...b, [task.task_id]: true }));
     setChatError((e) => ({ ...e, [task.task_id]: null }));
     try {
-      const assistant = await assistantFor(folders.graphId);
-      const values = (await client.runs.wait(
-        task.thread_id,
-        assistant.assistant_id,
-        {
-          input: { messages: [{ type: "human", content: text }] },
-        }
-      )) as { messages?: unknown[] } | null;
+      const values = (await client.runs.wait(task.thread_id, assistantId, {
+        input: { messages: [{ type: "human", content: text }] },
+      })) as { messages?: unknown[] } | null;
       if (!mountedRef.current) return;
       const messages = Array.isArray(values?.messages) ? values.messages : [];
       if (messages.length === 0) {
@@ -229,7 +223,9 @@ export function AgentsPanel({ onReportToMainChat }: AgentsPanelProps) {
             (checkError as { status?: unknown } | null)?.status !== 404
         ));
       if (!mountedRef.current) return;
-      if (assistantsGone) void refreshWorkspace();
+      if (assistantsGone || isRunFolderMismatchError(err)) {
+        void refreshWorkspace();
+      }
       // The SDK raises run errors as plain Errors ("<error>: <message>") and
       // transport problems as HTTPError (numeric status) / TypeError (fetch) —
       // tell the user which side failed.

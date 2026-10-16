@@ -1,35 +1,43 @@
 // A fixed workspace for tests that mount the chat without a backend. The
 // default is a backend without the workspace route, which addresses graphs
-// as before and checks no folders.
+// by name as before and checks no folders.
 
 import type { ReactNode } from "react";
 import { vi } from "vitest";
-import type { Assistant } from "@langchain/langgraph-sdk";
 import {
   WorkspaceContext,
   type WorkspaceContextValue,
-  type WorkspaceState,
 } from "@/providers/WorkspaceProvider";
-import { fixtureAssistant } from "@/test/fixtures/assistants";
+import { type WorkspaceState } from "@/lib/workspaceSession";
 
 export function mockWorkspace(
-  workspace: WorkspaceState = { status: "legacy" },
-  /** The chat graph's assistant; null while it is not resolved. */
-  chatAssistant: Assistant | null = fixtureAssistant
+  workspace: WorkspaceState = { status: "legacy" }
 ): WorkspaceContextValue {
   return {
     workspace,
     refreshing: false,
+    error: null,
     isReady: () => workspace.status !== "pending",
-    chat: { assistant: chatAssistant, error: null },
-    assistantFor: vi.fn(
-      async (graphId: string): Promise<Assistant> => ({
-        ...fixtureAssistant,
-        assistant_id: `${graphId}-assistant`,
-        graph_id: graphId,
-      })
-    ),
     refresh: vi.fn(async () => workspace),
+  };
+}
+
+/** A backend serving `key`, with every graph the WebUI runs. */
+export function readyWorkspace(
+  key: string
+): Extract<WorkspaceState, { status: "ready" }> {
+  return {
+    status: "ready",
+    key,
+    runDir: null,
+    local: null,
+    graphs: new Set([
+      "EvoScientist",
+      "scheduler",
+      "writing-agent",
+      "data-analysis-agent",
+      "expert-container-async",
+    ]),
   };
 }
 

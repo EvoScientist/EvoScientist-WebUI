@@ -110,7 +110,10 @@ export function renderChatInterface(
   const assistant = opts.assistant ?? fixtureAssistant;
   return render(
     <TestWorkspaceProvider
-      value={opts.workspace ?? mockWorkspace(undefined, assistant)}
+      value={
+        opts.workspace ??
+        mockWorkspace(assistant ? undefined : { status: "pending" })
+      }
     >
       <ChatProvider>
         <ChatInterface

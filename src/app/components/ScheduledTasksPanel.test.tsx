@@ -25,6 +25,7 @@ vi.mock("@/app/hooks/useScheduledTasks", async (importOriginal) => ({
   updateScheduledTask: hook.updateScheduledTask,
   useServedFolder: () => "/home/you/projA",
   useAssistantRecovery: () => () => {},
+  useSchedulerGate: () => () => true,
   useSchedulerTarget: () => ({
     assistantId: "scheduler-assistant",
     workspaceDir: "/home/you/projA",

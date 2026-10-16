@@ -42,11 +42,8 @@ import {
   setThreadModelOverride,
   stampThreadWorkspace,
 } from "@/app/hooks/useThreads";
-import {
-  useGraphAssistant,
-  useWorkspace,
-  type WorkspaceState,
-} from "@/providers/WorkspaceProvider";
+import { useWorkspace } from "@/providers/WorkspaceProvider";
+import { assistantIdFor, type WorkspaceState } from "@/lib/workspaceSession";
 import { retryWithBackoff } from "@/lib/retry";
 import { CHAT_GRAPH_ID } from "@/lib/workspaceAssistant";
 import {
@@ -352,7 +349,6 @@ export function useChat({
     workspace,
     refreshing,
     isReady,
-    chat: chatAssistant,
     refresh: refreshWorkspace,
   } = useWorkspace();
   // Whether the latest send started a new chat (its thread was created by
@@ -425,14 +421,11 @@ export function useChat({
     threadMeta && threadMeta.threadId === threadId
       ? (threadMeta.metadata["graph_id"] as string | undefined)
       : undefined;
-  const otherGraph =
-    openGraph && openGraph !== CHAT_GRAPH_ID && CHAT_GRAPHS.has(openGraph)
-      ? openGraph
-      : null;
-  const graphAssistant = useGraphAssistant(otherGraph);
-  const resolvedAssistant = otherGraph ? graphAssistant : chatAssistant;
-  const threadAssistant = resolvedAssistant.assistant;
-  const threadAssistantId = threadAssistant?.assistant_id ?? "";
+  const threadGraph =
+    openGraph && CHAT_GRAPHS.has(openGraph) ? openGraph : CHAT_GRAPH_ID;
+  // Computed from the folder answer this render carries, so it can never
+  // belong to another folder than the one the gate was opened for.
+  const threadAssistantId = assistantIdFor(workspace, threadGraph) ?? "";
 
   // The open thread is gone: hand back an unsent message and start over.
   const reportThreadUnavailable = (threadId: string) => {
@@ -619,7 +612,8 @@ export function useChat({
   streamRef.current = stream;
 
   // Whether the open thread may run here, and on which assistant.
-  const latestCheckpointMetadata = stream.history?.[0]?.metadata as
+  // The SDK's history runs from the oldest checkpoint to the newest.
+  const latestCheckpointMetadata = stream.history?.at(-1)?.metadata as
     | Record<string, unknown>
     | undefined;
   const folders: ThreadFolders | null | undefined = !threadId
@@ -630,9 +624,16 @@ export function useChat({
   const binding = threadBinding(workspace, folders, CHAT_GRAPHS);
   // One gate for every run: an assistant for the current folder answer, a
   // thread that may run here, and no folder read in progress.
-  const canSend = threadAssistant !== null && canRun(binding) && !refreshing;
+  const canSend = threadAssistantId !== "" && canRun(binding) && !refreshing;
   const runStateRef = useRef({ canSend, binding, threadId });
   runStateRef.current = { canSend, binding, threadId };
+  // For every run path: check this, and only then change local state and
+  // send, in one synchronous block, so the send can't be refused after the
+  // caller has acted on it.
+  const canRunNow = useCallback(
+    () => isReady() && runStateRef.current.canSend,
+    [isReady]
+  );
 
   // The run is over (finished, failed or stopped). The SDK flips `isLoading`
   // back in every case, unlike `onFinish` (success only) and `onError` (also
@@ -1072,7 +1073,7 @@ export function useChat({
   const sendMessage = useCallback(
     (content: string): boolean => {
       const run = runStateRef.current;
-      if (!run.canSend || !isReady()) return false;
+      if (!canRunNow()) return false;
       startedNewChatRef.current = !run.threadId;
       const served = workspaceRef.current;
       const key = served.status === "ready" ? served.key : null;
@@ -1118,26 +1119,26 @@ export function useChat({
       onHistoryRevalidate?.();
       return true;
     },
-    [buildRunConfig, isReady, onHistoryRevalidate, retryTracker]
+    [buildRunConfig, canRunNow, onHistoryRevalidate, retryTracker]
   );
 
   const setFiles = useCallback(
     async (files: Record<string, string>) => {
       if (!threadId) return;
       // Writing state adds a checkpoint without the run's folders.
-      if (!runStateRef.current.canSend || !isReady()) {
+      if (!canRunNow()) {
         throw new Error("This conversation is read-only here.");
       }
       // TODO: missing a way how to revalidate the internal state
       // I think we do want to have the ability to externally manage the state
       await client.threads.updateState(threadId, { values: { files } });
     },
-    [client, isReady, threadId]
+    [canRunNow, client, threadId]
   );
 
   const resumeInterrupt = useCallback(
     (value: any): boolean => {
-      if (!runStateRef.current.canSend || !isReady()) return false;
+      if (!canRunNow()) return false;
       startedNewChatRef.current = false;
       // Same as sendMessage: clear the prior snapshot before resuming so a stale
       // fetchedInterrupt/fetchedMessages can't briefly re-surface a resolved
@@ -1164,7 +1165,7 @@ export function useChat({
       onHistoryRevalidate?.();
       return true;
     },
-    [buildRunConfig, isReady, onHistoryRevalidate, retryTracker]
+    [buildRunConfig, canRunNow, onHistoryRevalidate, retryTracker]
   );
 
   // Abandon the current run when the user hits Stop and hand control back to
@@ -1260,15 +1261,15 @@ export function useChat({
       !stream.isLoading &&
       (userAborted || settledThreadId === threadId),
     isThreadLoading: stream.isThreadLoading,
-    /** The open thread's assistant: the chat's, or its own graph's. */
-    threadAssistant,
-    /** Why the assistant isn't there yet, while it keeps being retried. */
-    assistantError: resolvedAssistant.error,
+    /** The graph the open thread runs on. */
+    threadGraph,
 
     /** Whether the open thread runs here, and why not. */
     binding,
-    /** Every run path checks this first. */
+    /** Whether a run could start, for rendering and effect dependencies. */
     canSend,
+    /** Every run path checks this first, at the moment it acts. */
+    canRunNow,
     interrupt,
     sendMessage,
     abortRun,

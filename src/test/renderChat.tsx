@@ -59,7 +59,11 @@ export function renderChat(
   return renderHook(() => useChatContext(), {
     wrapper: ({ children }: { children: ReactNode }) => (
       <TestWorkspaceProvider
-        value={workspace ?? mockWorkspace(undefined, activeAssistant)}
+        value={
+          workspace ??
+          // No assistant yet: the backend's folder is not known.
+          mockWorkspace(activeAssistant ? undefined : { status: "pending" })
+        }
       >
         <ChatProvider
           onHistoryRevalidate={onHistoryRevalidate}

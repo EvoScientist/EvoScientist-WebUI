@@ -614,6 +614,8 @@ function HomePageContent() {
       apiKey={langsmithApiKey}
     >
       <WorkspaceProvider
+        // Its state belongs to one backend: another one remounts it.
+        key={`${config.deploymentUrl}\n${langsmithApiKey}`}
         deploymentUrl={config.deploymentUrl}
         apiKey={langsmithApiKey}
       >

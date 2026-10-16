@@ -46,6 +46,7 @@ import {
   useSchedulerTarget,
   useServedFolder,
   useAssistantRecovery,
+  useSchedulerGate,
   type ScheduledTask,
 } from "@/app/hooks/useScheduledTasks";
 import {
@@ -443,6 +444,7 @@ function TaskForm({
   // of another folder.
   const servedFolder = useServedFolder();
   const recoverAssistant = useAssistantRecovery();
+  const gateOpen = useSchedulerGate();
   const elsewhere = initialTask
     ? otherFolderReason(initialTask, servedFolder)
     : null;
@@ -473,7 +475,7 @@ function TaskForm({
       toast.error(cronError);
       return;
     }
-    if (!hasChanges || !target || elsewhere) return;
+    if (!hasChanges || !target || elsewhere || !gateOpen()) return;
 
     setSaving(true);
     try {
@@ -643,9 +645,10 @@ function TaskDetail({
   const target = useSchedulerTarget();
   const elsewhere = otherFolderReason(task, useServedFolder());
   const recoverAssistant = useAssistantRecovery();
+  const gateOpen = useSchedulerGate();
 
   const handleRunNow = useCallback(async () => {
-    if (!target || elsewhere) return;
+    if (!target || elsewhere || !gateOpen()) return;
     setRunning(true);
     try {
       await runScheduledTaskNow(task, target);
@@ -658,7 +661,7 @@ function TaskDetail({
     } finally {
       setRunning(false);
     }
-  }, [task, target, elsewhere, recoverAssistant]);
+  }, [task, target, elsewhere, recoverAssistant, gateOpen]);
 
   const handleDelete = useCallback(async () => {
     setDeleting(true);

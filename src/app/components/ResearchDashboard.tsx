@@ -14,10 +14,8 @@ import {
 import { nodeColor, type ObsGraphData } from "@/lib/observationGraph";
 import { listScheduledTasks } from "@/app/hooks/useScheduledTasks";
 import { useThreads } from "@/app/hooks/useThreads";
-import {
-  localFilesAvailable,
-  useWorkspace,
-} from "@/providers/WorkspaceProvider";
+import { useWorkspace } from "@/providers/WorkspaceProvider";
+import { localFilesAvailable } from "@/lib/workspaceSession";
 import { formatTime } from "@/lib/time";
 
 type MemoryTab = "identity" | "knowledge" | "history";

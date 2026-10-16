@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import type { WorkspaceState } from "@/providers/WorkspaceProvider";
+import { readyWorkspace } from "@/test/mockWorkspace";
+import type { WorkspaceState } from "@/lib/workspaceSession";
 import {
   AGENT_GRAPHS,
   CHAT_GRAPHS,
@@ -9,12 +10,7 @@ import {
   type ThreadFolders,
 } from "./threadBinding";
 
-const ready: WorkspaceState = {
-  status: "ready",
-  key: "/home/you/projA",
-  runDir: null,
-  local: null,
-};
+const ready: WorkspaceState = readyWorkspace("/home/you/projA");
 
 function folders(over: Partial<ThreadFolders> = {}): ThreadFolders {
   return {
@@ -103,7 +99,7 @@ describe("threadBinding", () => {
 
   it("locks folder graphs while a run-mode session holds the backend", () => {
     const held: WorkspaceState = {
-      ...ready,
+      ...readyWorkspace("/home/you/projA"),
       runDir: "/home/you/projA/runs/r1",
     };
     expect(threadBinding(held, null, CHAT_GRAPHS).kind).toBe("readOnly");
