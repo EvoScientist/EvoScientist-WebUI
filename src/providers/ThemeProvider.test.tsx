@@ -24,7 +24,8 @@ describe("ThemedToaster", () => {
   });
 
   // At the default bottom right, a toast covered the composer's Stop button.
-  it("shows toasts at the top center, below the header", async () => {
+  // Below the header, a desktop toast covered the inspector's tabs.
+  it("shows toasts at the top center, at the app's own offset", async () => {
     render(
       <ThemeProvider>
         <ThemedToaster />
@@ -41,14 +42,17 @@ describe("ThemedToaster", () => {
     });
     expect(toaster.dataset.yPosition).toBe("top");
     expect(toaster.dataset.xPosition).toBe("center");
-    const belowHeader = "calc(env(safe-area-inset-top) + 4rem)";
-    expect(toaster.style.getPropertyValue("--offset-top")).toBe(belowHeader);
+    // Both of sonner's layouts take --toast-top, which globals.css sets per
+    // the app's breakpoint (sonner switches at 600px, the app at 768px).
+    expect(toaster.style.getPropertyValue("--offset-top")).toBe(
+      "var(--toast-top)"
+    );
     expect(toaster.style.getPropertyValue("--mobile-offset-top")).toBe(
-      belowHeader
+      "var(--toast-top)"
     );
   });
 
-  // Up there a toast can cover the inspector's tabs for a few seconds.
+  // On a phone a toast can cover the inspector drawer's tabs for a few seconds.
   it("gives toasts a close button", async () => {
     render(
       <ThemeProvider>
