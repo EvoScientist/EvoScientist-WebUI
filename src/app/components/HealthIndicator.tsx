@@ -2,6 +2,11 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import {
+  offlineTitle,
+  pageHostBackendUrl,
+  type OfflineCause,
+} from "@/lib/backendBoundary";
 
 type HealthStatus = "checking" | "online" | "offline";
 
@@ -18,6 +23,11 @@ interface HealthIndicatorProps {
 }
 
 const POLL_INTERVAL_MS = 10_000;
+// Below this a phone header has no room for Reconnect: every header button is
+// at least 44 px wide there (measured: the word fits from about 417 px). Up
+// to Tailwind's `sm` (640 px) the button shows only the word, from `sm` the
+// address too.
+const RECONNECT_MIN_WIDTH_QUERY = "(min-width: 420px)";
 const REQUEST_TIMEOUT_MS = 4_000;
 
 // Theme tokens (light + dark defined in globals.css). The base's shadcn
@@ -94,7 +104,10 @@ async function probeInfo(base: string): Promise<boolean> {
  * the backend's currently-detected port via `/api/evosci-config`. If a DIFFERENT,
  * reachable URL is found (the classic "EvoSci deploy moved ports" case), it
  * surfaces a one-click "Reconnect" so the user doesn't have to hand-edit the URL
- * in Settings. Polling pauses while the tab is hidden and resumes on return.
+ * in Settings. A page opened off localhost also tries that port on its own host
+ * (a backend listening on the network). The tooltip says when a failure may be
+ * the backend's browser boundary refusing the page (lib/backendBoundary.ts).
+ * Polling pauses while the tab is hidden and resumes on return.
  */
 export function HealthIndicator({
   deploymentUrl,
@@ -104,6 +117,20 @@ export function HealthIndicator({
   const [info, setInfo] = useState<BackendInfo | null>(null);
   // A different, reachable backend URL detected while the saved one is dead.
   const [suggestedUrl, setSuggestedUrl] = useState<string | null>(null);
+  // How the last check failed; decides whether the tooltip may blame the
+  // backend's browser boundary (lib/backendBoundary.ts).
+  const [offlineCause, setOfflineCause] = useState<OfflineCause | null>(null);
+  // Whether the header has room for Reconnect (see RECONNECT_MIN_WIDTH_QUERY).
+  // A suggestion only arrives after a failed check, by which time this is set.
+  const [roomForReconnect, setRoomForReconnect] = useState(true);
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const query = window.matchMedia(RECONNECT_MIN_WIDTH_QUERY);
+    const update = () => setRoomForReconnect(query.matches);
+    update();
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
   // Monotonic id so a slow check against a previous URL can't clobber a newer one.
   const requestRef = useRef(0);
   // Cancel the in-flight probe and suppress state updates after unmount.
@@ -111,8 +138,11 @@ export function HealthIndicator({
   const controllerRef = useRef<AbortController | null>(null);
 
   // When the saved URL is dead, ask our own /api/evosci-config what port the
-  // backend is actually configured on, then verify that alternate is reachable
-  // before offering it. requestId ties the result to the check that spawned it.
+  // backend is actually configured on, then verify an alternate is reachable
+  // before offering it: for a page opened off localhost, that port on the
+  // page's own host first (a backend listening on the network, reached from
+  // another device), then that port on loopback. requestId ties the result to
+  // the check that spawned it.
   const findAlternate = useCallback(
     async (requestId: number) => {
       const current = normalizeUrl(deploymentUrl);
@@ -120,19 +150,30 @@ export function HealthIndicator({
         const res = await fetch("/api/evosci-config", { cache: "no-store" });
         const data = (await res.json().catch(() => null)) as {
           deploymentUrl?: string;
+          port?: number;
         } | null;
         const detected = data?.deploymentUrl
           ? normalizeUrl(data.deploymentUrl)
           : "";
+        const onPageHost = pageHostBackendUrl(
+          typeof window === "undefined" ? null : window.location,
+          typeof data?.port === "number" ? data.port : null
+        );
         if (requestId !== requestRef.current || !mountedRef.current) return;
-        // No alternate, or it's the same dead URL we already tried.
-        if (!detected || detected === current) {
-          setSuggestedUrl(null);
-          return;
+        // The page's own host first: for a page opened from another device,
+        // loopback is that device. Skip the dead URL we already tried.
+        const candidates = [onPageHost ?? "", detected].filter(
+          (url, i, all) => url && url !== current && all.indexOf(url) === i
+        );
+        for (const candidate of candidates) {
+          const reachable = await probeInfo(candidate);
+          if (requestId !== requestRef.current || !mountedRef.current) return;
+          if (reachable) {
+            setSuggestedUrl(candidate);
+            return;
+          }
         }
-        const reachable = await probeInfo(detected);
-        if (requestId !== requestRef.current || !mountedRef.current) return;
-        setSuggestedUrl(reachable ? detected : null);
+        setSuggestedUrl(null);
       } catch {
         if (requestId === requestRef.current && mountedRef.current) {
           setSuggestedUrl(null);
@@ -149,6 +190,7 @@ export function HealthIndicator({
       if (requestId === requestRef.current && mountedRef.current) {
         setInfo(null);
         setStatus("offline");
+        setOfflineCause(null);
         setSuggestedUrl(null);
       }
       return;
@@ -167,6 +209,7 @@ export function HealthIndicator({
       if (requestId !== requestRef.current || !mountedRef.current) return;
       if (!response.ok) {
         setStatus("offline");
+        setOfflineCause("http");
         void findAlternate(requestId);
         return;
       }
@@ -181,6 +224,9 @@ export function HealthIndicator({
     } catch {
       if (requestId === requestRef.current && mountedRef.current) {
         setStatus("offline");
+        // Only our timer aborts this controller while the check is current
+        // (a newer check aborts it too, but then the request id moved on).
+        setOfflineCause(controller.signal.aborted ? "timeout" : "network");
         void findAlternate(requestId);
       }
     } finally {
@@ -217,17 +263,23 @@ export function HealthIndicator({
   }, [check]);
 
   const meta = STATUS_META[status];
+  const canReconnect = onReconnect !== undefined && roomForReconnect;
+  const showReconnect =
+    status === "offline" && suggestedUrl !== null && canReconnect;
   const title =
     status === "online"
       ? `Connected to ${deploymentUrl}${
           info?.version ? ` · langgraph ${info.version}` : ""
         }`
       : status === "offline"
-      ? `Can't reach the backend at ${deploymentUrl}. Is "EvoSci deploy" running? Click to retry.`
+      ? offlineTitle(
+          deploymentUrl,
+          typeof window === "undefined" ? null : window.location,
+          offlineCause,
+          suggestedUrl,
+          canReconnect
+        )
       : `Checking connection to ${deploymentUrl}…`;
-
-  const showReconnect =
-    status === "offline" && suggestedUrl !== null && onReconnect !== undefined;
 
   return (
     <div className="flex items-center gap-1">
@@ -263,7 +315,8 @@ export function HealthIndicator({
           className="h-8 gap-1 px-2 text-xs font-medium text-[var(--brand)] hover:text-[var(--brand)]"
         >
           Reconnect{" "}
-          <span className="tabular-nums">
+          {/* A long host name is cut short; the title carries the full URL. */}
+          <span className="hidden max-w-44 truncate tabular-nums sm:block">
             {suggestedUrl ? shortUrlLabel(suggestedUrl) : ""}
           </span>
         </Button>
