@@ -16,8 +16,14 @@ vi.mock("@/lib/config", () => ({
 import {
   createScheduledTask,
   listScheduledTasks,
+  runScheduledTaskNow,
   updateScheduledTask,
 } from "./useScheduledTasks";
+
+const target = {
+  assistantId: "8b1f3c2a-4d5e-5f60-9a7b-1c2d3e4f5a6b",
+  workspaceDir: "/home/you/projA",
+};
 
 interface Call {
   method: string;
@@ -100,6 +106,7 @@ describe("createScheduledTask", () => {
       name: "Daily",
       prompt: "Brief me",
       schedule: "0 9 * * *",
+      target,
     });
 
     expect(createCall(calls)?.body).toMatchObject({
@@ -117,9 +124,51 @@ describe("createScheduledTask", () => {
       name: "Daily",
       prompt: "Brief me",
       schedule: "0 9 * * *",
+      target,
     });
 
     expect(createCall(calls)?.body).not.toHaveProperty("timezone");
+  });
+});
+
+describe("scheduled tasks run in the backend's folder", () => {
+  it("creates the cron on the folder's scheduler assistant, tagged with the folder", async () => {
+    const calls = mockServer(() => cron());
+
+    await createScheduledTask({
+      name: "Daily",
+      prompt: "Brief me",
+      schedule: "0 9 * * *",
+      target,
+    });
+
+    expect(createCall(calls)?.body).toMatchObject({
+      assistant_id: target.assistantId,
+      metadata: { workspace_dir: "/home/you/projA" },
+    });
+  });
+
+  it("runs a task now on the folder's scheduler assistant", async () => {
+    const calls = mockServer((call) =>
+      call.path === "/threads"
+        ? { thread_id: "t-1", metadata: {} }
+        : { run_id: "r-1" }
+    );
+
+    await runScheduledTaskNow(
+      { cron_id: "cron-1", name: "Daily", prompt: "Brief me" },
+      target
+    );
+
+    const thread = calls.find((c) => c.path === "/threads");
+    const run = calls.find((c) => c.path === "/threads/t-1/runs");
+    expect(thread?.body?.metadata).toMatchObject({
+      workspace_dir: "/home/you/projA",
+    });
+    expect(run?.body).toMatchObject({
+      assistant_id: target.assistantId,
+      metadata: { workspace_dir: "/home/you/projA" },
+    });
   });
 });
 
@@ -137,6 +186,7 @@ describe("updateScheduledTask", () => {
       prompt: "Brief me",
       schedule: "0 8 * * *",
       timezone: "Europe/London",
+      target,
     });
 
     expect(createCall(calls)?.body).toMatchObject({
@@ -159,6 +209,7 @@ describe("updateScheduledTask", () => {
       prompt: "Brief me",
       schedule: "0 9 * * *",
       timezone: null,
+      target,
     });
 
     expect(createCall(calls)?.body).toMatchObject({

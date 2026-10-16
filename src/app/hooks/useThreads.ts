@@ -8,6 +8,8 @@ import {
   needsThreadLabelBackfill,
 } from "@/lib/threadLabels";
 import { cancelActiveRuns, type RunCancelClient } from "@/lib/threadLifecycle";
+import { CHAT_GRAPH_ID } from "@/lib/workspaceAssistant";
+import { useWorkspace } from "@/providers/WorkspaceProvider";
 
 export interface ThreadItem {
   id: string;
@@ -15,7 +17,6 @@ export interface ThreadItem {
   status: Thread["status"];
   title: string;
   description: string;
-  assistantId?: string;
   pinned: boolean;
   /** True when any of the thread's pending interrupts is an `ask_user` —
    *  i.e. the agent is asking the user a question that auto-approve can't
@@ -62,6 +63,7 @@ export function useThreads(props: {
   limit?: number;
 }) {
   const pageSize = props.limit || DEFAULT_PAGE_SIZE;
+  const { workspace } = useWorkspace();
 
   return useSWRInfinite(
     (pageIndex: number, previousPageData: ThreadItem[] | null) => {
@@ -71,7 +73,9 @@ export function useThreads(props: {
         process.env.NEXT_PUBLIC_LANGSMITH_API_KEY ||
         "";
 
-      if (!config) {
+      // Until the backend's folder is known the list would mix every
+      // folder's threads.
+      if (!config || workspace.status === "pending") {
         return null;
       }
 
@@ -85,14 +89,14 @@ export function useThreads(props: {
         pageIndex,
         pageSize,
         deploymentUrl: config.deploymentUrl,
-        assistantId: config.assistantId,
+        workspaceDir: workspace.status === "ready" ? workspace.key : null,
         apiKey,
         status: props?.status,
       };
     },
     async ({
       deploymentUrl,
-      assistantId,
+      workspaceDir,
       apiKey,
       status,
       pageIndex,
@@ -102,7 +106,7 @@ export function useThreads(props: {
       pageIndex: number;
       pageSize: number;
       deploymentUrl: string;
-      assistantId: string;
+      workspaceDir: string | null;
       apiKey: string;
       status?: Thread["status"];
     }) => {
@@ -113,22 +117,14 @@ export function useThreads(props: {
         })
       );
 
-      // Always scope the thread list to the selected assistant so we never
-      // show threads spawned by async sub-agents (e.g. writing-agent,
-      // data-analysis-agent) that share the same deployment store.
-      //
-      // Every thread carries both `graph_id` (the graph name) and
-      // `assistant_id` (a deterministic UUID per graph) in its metadata.
-      // A deployed UUID is matched against `assistant_id`; a graph name
-      // (the local-dev case, e.g. "EvoScientist") is matched against
-      // `graph_id`.
-      const isUUID =
-        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-          assistantId
-        );
-      const metadata = isUUID
-        ? { assistant_id: assistantId }
-        : { graph_id: assistantId };
+      // Scope the list to chat threads of the backend's folder. The graph
+      // keeps out threads of async sub-agents and memory workers, which carry
+      // the folder too; the folder, not the assistant, matches threads
+      // created under an older assistant. A backend without the workspace
+      // route lists by graph only, as before.
+      const metadata = workspaceDir
+        ? { graph_id: CHAT_GRAPH_ID, workspace_dir: workspaceDir }
+        : { graph_id: CHAT_GRAPH_ID };
 
       // Sort by state_updated_at (last checkpoint write, i.e. last actual
       // chat activity) rather than updated_at. Any metadata patch
@@ -262,7 +258,6 @@ export function useThreads(props: {
             status: thread.status,
             title,
             description,
-            assistantId,
             pinned,
             needsUserInput,
           };
@@ -311,6 +306,19 @@ async function updateThreadMetadata(
     ...patch,
   };
   await client.threads.update(id, { metadata });
+}
+
+/**
+ * Record `workspaceDir` as the folder of a thread that had none, so it shows
+ * in that folder's list. Read + merge like the other metadata writes.
+ */
+export async function stampThreadWorkspace(
+  id: string,
+  workspaceDir: string
+): Promise<void> {
+  const client = makeThreadsClient();
+  if (!client) return;
+  await updateThreadMetadata(client, id, { workspace_dir: workspaceDir });
 }
 
 /**

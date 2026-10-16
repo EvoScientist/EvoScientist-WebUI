@@ -36,6 +36,7 @@ vi.mock("nuqs", async () => {
   };
 });
 
+import { fixtureAssistant } from "@/test/fixtures/assistants";
 import { renderChat } from "@/test/renderChat";
 
 describe("chat harness — smoke", () => {
@@ -85,7 +86,7 @@ describe("chat harness — smoke", () => {
   });
 
   it("records a submit call when sendMessage is invoked", () => {
-    const { result } = renderChat();
+    const { result } = renderChat({ activeAssistant: fixtureAssistant });
     act(() => {
       result.current.sendMessage("hi");
     });

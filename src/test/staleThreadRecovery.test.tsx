@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act } from "@testing-library/react";
+import { act, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 import {
@@ -61,6 +61,17 @@ import {
   missingThreadIdFromError,
 } from "@/app/hooks/useChat";
 import { renderChat } from "@/test/renderChat";
+import { fixtureAssistant } from "@/test/fixtures/assistants";
+import { mockWorkspace } from "@/test/mockWorkspace";
+
+/** The open thread is gone on the server: the run-path 404 is about it. */
+function threadGone() {
+  getActiveMockClient().threads.get.mockRejectedValue(
+    Object.assign(new Error('HTTP 404: {"detail":"Thread not found."}'), {
+      status: 404,
+    })
+  );
+}
 
 describe("stale thread recovery", () => {
   let stream: MockStreamStore;
@@ -79,13 +90,20 @@ describe("stale thread recovery", () => {
     clearMockClient();
   });
 
-  it("uses the EvoScientist graph id while assistant discovery is pending", () => {
-    renderChat({ activeAssistant: null });
+  it("sends nothing while the assistant is not known", () => {
+    const { result } = renderChat({ activeAssistant: null });
 
-    expect(stream.getOptions()?.assistantId).toBe("EvoScientist");
+    let sent = true;
+    act(() => {
+      sent = result.current.sendMessage("hi");
+    });
+
+    expect(sent).toBe(false);
+    expect(stream.getSubmitCalls()).toHaveLength(0);
   });
 
-  it("clears a stale thread after the explicit SDK 404", () => {
+  it("clears a stale thread after the explicit SDK 404", async () => {
+    threadGone();
     renderChat({ activeAssistant: null });
 
     act(() => {
@@ -94,13 +112,16 @@ describe("stale thread recovery", () => {
       );
     });
 
-    expect(queryState.setThreadId).toHaveBeenCalledWith(null);
+    await waitFor(() =>
+      expect(queryState.setThreadId).toHaveBeenCalledWith(null)
+    );
     expect(toast.error).toHaveBeenCalledWith(
       "This conversation is no longer available. Started a new chat."
     );
   });
 
-  it("hands recovery to onThreadUnavailable when the page provides it", () => {
+  it("hands recovery to onThreadUnavailable when the page provides it", async () => {
+    threadGone();
     const onThreadUnavailable = vi.fn();
     renderChat({ activeAssistant: null, onThreadUnavailable });
 
@@ -110,6 +131,7 @@ describe("stale thread recovery", () => {
       );
     });
 
+    await waitFor(() => expect(onThreadUnavailable).toHaveBeenCalled());
     expect(onThreadUnavailable).toHaveBeenCalledWith({
       threadId: "5f2c8e6a-9b1d-4c3e-8a7f-1d2e3c4b5a69",
       unsentMessage: null,
@@ -120,12 +142,14 @@ describe("stale thread recovery", () => {
     );
   });
 
-  it("reports the just-sent message as unsent when the submit itself 404s", () => {
+  it("reports the just-sent message as unsent when the submit itself 404s", async () => {
+    threadGone();
     const onThreadUnavailable = vi.fn();
     const { result } = renderChat({
-      activeAssistant: null,
+      activeAssistant: fixtureAssistant,
       onThreadUnavailable,
     });
+    await waitFor(() => expect(result.current.canSend).toBe(true));
 
     act(() => {
       result.current.sendMessage("hello there");
@@ -142,16 +166,19 @@ describe("stale thread recovery", () => {
       );
     });
 
-    expect(onThreadUnavailable).toHaveBeenCalledWith({
-      threadId: "5f2c8e6a-9b1d-4c3e-8a7f-1d2e3c4b5a69",
-      unsentMessage: "hello there",
-    });
+    await waitFor(() =>
+      expect(onThreadUnavailable).toHaveBeenCalledWith({
+        threadId: "5f2c8e6a-9b1d-4c3e-8a7f-1d2e3c4b5a69",
+        unsentMessage: "hello there",
+      })
+    );
     expect(toast.error).toHaveBeenCalledWith(
       "This conversation is no longer available. Started a new chat; your unsent message is back in the composer."
     );
   });
 
-  it("stays quiet when the page rejects the report as stale", () => {
+  it("stays quiet when the page rejects the report as stale", async () => {
+    threadGone();
     const onThreadUnavailable = vi.fn(() => false);
     renderChat({ activeAssistant: null, onThreadUnavailable });
 
@@ -161,7 +188,7 @@ describe("stale thread recovery", () => {
       );
     });
 
-    expect(onThreadUnavailable).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(onThreadUnavailable).toHaveBeenCalledTimes(1));
     expect(queryState.setThreadId).not.toHaveBeenCalled();
     expect(toast.error).not.toHaveBeenCalled();
   });
@@ -234,9 +261,10 @@ describe("stale thread recovery", () => {
     expect(toast.error).not.toHaveBeenCalled();
   });
 
-  it("does not reset an already-new conversation", () => {
+  it("resolves the assistant again when a new chat's run 404s", async () => {
     queryState.initialThreadId = null;
-    renderChat({ activeAssistant: null });
+    const workspace = mockWorkspace();
+    renderChat({ activeAssistant: null, workspace });
 
     act(() => {
       stream.emitError(
@@ -244,10 +272,42 @@ describe("stale thread recovery", () => {
       );
     });
 
+    await waitFor(() => expect(workspace.refresh).toHaveBeenCalled());
     expect(queryState.setThreadId).not.toHaveBeenCalled();
-    expect(toast.error).toHaveBeenCalledWith(
-      'Error: HTTP 404: {"detail":"Thread or assistant not found."}'
+  });
+
+  it("keeps an open thread when checking it fails for another reason", async () => {
+    getActiveMockClient().threads.get.mockRejectedValue(
+      new TypeError("Failed to fetch")
     );
+    const workspace = mockWorkspace();
+    const onThreadUnavailable = vi.fn();
+    renderChat({ activeAssistant: null, onThreadUnavailable, workspace });
+
+    act(() => {
+      stream.emitError(
+        new Error('HTTP 404: {"detail":"Thread or assistant not found."}')
+      );
+    });
+
+    await waitFor(() => expect(workspace.refresh).toHaveBeenCalled());
+    expect(onThreadUnavailable).not.toHaveBeenCalled();
+  });
+
+  it("keeps an open thread that still exists when its run 404s", async () => {
+    const workspace = mockWorkspace();
+    const onThreadUnavailable = vi.fn();
+    renderChat({ activeAssistant: null, onThreadUnavailable, workspace });
+
+    act(() => {
+      stream.emitError(
+        new Error('HTTP 404: {"detail":"Thread or assistant not found."}')
+      );
+    });
+
+    await waitFor(() => expect(workspace.refresh).toHaveBeenCalled());
+    expect(onThreadUnavailable).not.toHaveBeenCalled();
+    expect(queryState.setThreadId).not.toHaveBeenCalled();
   });
 });
 

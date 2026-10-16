@@ -1,14 +1,28 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Cron } from "@langchain/langgraph-sdk";
 import { Client } from "@langchain/langgraph-sdk";
 import { getConfig } from "@/lib/config";
 import { browserTimeZone } from "@/lib/cronUtils";
 import { patchClientStreamModes } from "@/lib/streamMode";
+import { isMissingThreadOrAssistantError } from "@/app/hooks/useChat";
+import { SCHEDULER_GRAPH_ID } from "@/lib/workspaceAssistant";
+import { useGraphAssistant, useWorkspace } from "@/providers/WorkspaceProvider";
 
 const SCHEDULED_RUN_KIND = "scheduled_task";
-const SCHEDULER_GRAPH_ID = "scheduler";
+
+/** Where scheduled tasks run: the scheduler graph's assistant for the
+ *  backend's folder, and that folder for the task's tag. */
+export interface SchedulerTarget {
+  assistantId: string;
+  /** Null on a backend without the workspace route. */
+  workspaceDir: string | null;
+}
+
+function workspaceTag(target: SchedulerTarget): Record<string, string> {
+  return target.workspaceDir ? { workspace_dir: target.workspaceDir } : {};
+}
 
 export function makeClient(): Client | null {
   const config = getConfig();
@@ -33,6 +47,23 @@ export interface ScheduledTask {
   next_run_date: string | null;
   created_at: string;
   updated_at: string;
+  /** The folder the task runs in; null for a task made before tags. */
+  workspaceDir: string | null;
+}
+
+/**
+ * Why `task` can't be edited or run from here: it runs in another folder
+ * than the backend's, and editing or running it would move it to this one.
+ * Null when it can. An untagged task counts as this folder's, as the core's
+ * scheduling does.
+ */
+export function otherFolderReason(
+  task: ScheduledTask,
+  servedFolder: string | null
+): string | null {
+  if (!task.workspaceDir || !servedFolder) return null;
+  if (task.workspaceDir === servedFolder) return null;
+  return `This task runs in ${task.workspaceDir}, not the backend's folder.`;
 }
 
 function parseCron(cron: Cron): ScheduledTask {
@@ -47,14 +78,18 @@ function parseCron(cron: Cron): ScheduledTask {
     next_run_date: cron.next_run_date ?? null,
     created_at: cron.created_at,
     updated_at: cron.updated_at,
+    workspaceDir:
+      typeof meta.workspace_dir === "string" && meta.workspace_dir
+        ? meta.workspace_dir
+        : null,
   };
 }
 
 export async function listScheduledTasks(): Promise<ScheduledTask[]> {
   const client = makeClient();
   if (!client) return [];
-  // The TS SDK's crons.search doesn't support metadata filtering — fetch all
-  // and filter client-side. Only EvoScientist crons carry run_kind in metadata.
+  // Only EvoScientist crons carry run_kind in metadata. Scoping the list to
+  // the backend's folder comes with the project sidebar.
   const crons = await client.crons.search({ limit: 200 });
   const scheduledCrons = crons.filter(
     (c) =>
@@ -78,10 +113,11 @@ export async function createScheduledTask(params: {
   schedule: string;
   /** Defaults to the browser's time zone. */
   timezone?: string | null;
+  target: SchedulerTarget;
 }): Promise<ScheduledTask> {
   const client = makeClient();
   if (!client) throw new Error("No EvoScientist deployment configured.");
-  const cron = await client.crons.create(SCHEDULER_GRAPH_ID, {
+  const cron = await client.crons.create(params.target.assistantId, {
     input: { messages: [{ role: "user", content: params.prompt }] },
     schedule: params.schedule,
     // Without a time zone the server reads the schedule in UTC.
@@ -91,6 +127,7 @@ export async function createScheduledTask(params: {
       run_kind: SCHEDULED_RUN_KIND,
       name: params.name,
       prompt: params.prompt,
+      ...workspaceTag(params.target),
     },
   });
   return parseCron(cron as unknown as Cron);
@@ -112,12 +149,14 @@ export async function updateScheduledTask(params: {
    * one (made before #61, meant as local time) moves to the browser's.
    */
   timezone: string | null;
+  target: SchedulerTarget;
 }): Promise<{ task: ScheduledTask; oldTaskDeleted: boolean }> {
   const task = await createScheduledTask({
     name: params.name,
     prompt: params.prompt,
     schedule: params.schedule,
     timezone: params.timezone,
+    target: params.target,
   });
 
   try {
@@ -128,11 +167,14 @@ export async function updateScheduledTask(params: {
   }
 }
 
-export async function runScheduledTaskNow(task: {
-  cron_id: string;
-  name: string;
-  prompt: string;
-}): Promise<void> {
+export async function runScheduledTaskNow(
+  task: {
+    cron_id: string;
+    name: string;
+    prompt: string;
+  },
+  target: SchedulerTarget
+): Promise<void> {
   const client = makeClient();
   if (!client) throw new Error("No EvoScientist deployment configured.");
   const metadata = {
@@ -141,16 +183,52 @@ export async function runScheduledTaskNow(task: {
     trigger: "manual",
     name: task.name,
     prompt: task.prompt,
+    ...workspaceTag(target),
   };
   const thread = await client.threads.create({
     graphId: SCHEDULER_GRAPH_ID,
     metadata,
   });
-  await client.runs.create(thread.thread_id, SCHEDULER_GRAPH_ID, {
+  await client.runs.create(thread.thread_id, target.assistantId, {
     input: { messages: [{ role: "user", content: task.prompt }] },
     metadata,
     config: { configurable: { cron_id: task.cron_id } },
   });
+}
+
+/** The backend's folder; null until known, or on a backend without the
+ *  workspace route. */
+export function useServedFolder(): string | null {
+  const { workspace } = useWorkspace();
+  return workspace.status === "ready" ? workspace.key : null;
+}
+
+/**
+ * Handle a failed create or run: a 404 for the assistant means the backend
+ * lost this folder's assistants (a fresh store), so they are ensured again
+ * for the next try.
+ */
+export function useAssistantRecovery(): (error: unknown) => void {
+  const { refresh } = useWorkspace();
+  return useCallback(
+    (error: unknown) => {
+      if (isMissingThreadOrAssistantError(error)) void refresh();
+    },
+    [refresh]
+  );
+}
+
+/** The scheduler assistant for the backend's folder; null until known. */
+export function useSchedulerTarget(): SchedulerTarget | null {
+  const { workspace, refreshing } = useWorkspace();
+  const { assistant } = useGraphAssistant(SCHEDULER_GRAPH_ID);
+  const workspaceDir = workspace.status === "ready" ? workspace.key : null;
+  // None while the folder is read again: tasks wait for its answer.
+  const usable = refreshing ? null : assistant;
+  return useMemo(
+    () => (usable ? { assistantId: usable.assistant_id, workspaceDir } : null),
+    [usable, workspaceDir]
+  );
 }
 
 export function useScheduledTasks(): {

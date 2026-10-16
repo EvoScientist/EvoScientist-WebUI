@@ -1,5 +1,10 @@
 "use client";
 
+import {
+  localFilesAvailable,
+  useWorkspace,
+} from "@/providers/WorkspaceProvider";
+import { FilesElsewhereNotice } from "@/app/components/WorkspacePanel";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   Download,
@@ -78,7 +83,13 @@ async function readText(path: string): Promise<string> {
 const TOOLBAR =
   "flex shrink-0 flex-wrap items-center justify-end gap-1 max-sm:[&>a]:min-h-11 max-sm:[&>button]:min-h-11 max-sm:[&>button]:min-w-11";
 
-export function WorkspaceFileView({
+export function WorkspaceFileView(props: WorkspaceFileViewProps) {
+  const { workspace } = useWorkspace();
+  if (!localFilesAvailable(workspace)) return <FilesElsewhereNotice />;
+  return <LocalWorkspaceFileView {...props} />;
+}
+
+function LocalWorkspaceFileView({
   tabId,
   path,
   size,

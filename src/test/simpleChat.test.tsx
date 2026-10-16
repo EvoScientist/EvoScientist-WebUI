@@ -111,8 +111,9 @@ describe("simple chat scenario", () => {
     expect(opts.streamMode).toEqual(["updates"]);
     expect(opts.streamResumable).toBe(true);
     expect(opts.onDisconnect).toBe("continue");
-    // Assistant-level config is merged in.
-    expect(opts.config.configurable.some_seed).toBe("abc");
+    // The server layers the assistant's config underneath; the run carries
+    // only the model override, so a stale assistant can't override its folder.
+    expect(opts.config).toEqual({ configurable: {} });
   });
 
   it("immediately kicks off a thread-list revalidate on send", () => {

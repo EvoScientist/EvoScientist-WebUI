@@ -23,6 +23,12 @@ vi.mock("@/app/hooks/useScheduledTasks", async (importOriginal) => ({
     refresh: vi.fn(),
   }),
   updateScheduledTask: hook.updateScheduledTask,
+  useServedFolder: () => "/home/you/projA",
+  useAssistantRecovery: () => () => {},
+  useSchedulerTarget: () => ({
+    assistantId: "scheduler-assistant",
+    workspaceDir: "/home/you/projA",
+  }),
 }));
 
 vi.mock("@/app/components/ScheduledTaskActivity", () => ({
@@ -41,6 +47,7 @@ function task(overrides: Partial<ScheduledTask>): ScheduledTask {
     next_run_date: null,
     created_at: "2026-10-09T08:00:00+00:00",
     updated_at: "2026-10-09T08:00:00+00:00",
+    workspaceDir: null,
     ...overrides,
   };
 }
@@ -122,6 +129,10 @@ describe("ScheduledTasksPanel time zones", () => {
         prompt: "Brief me",
         schedule: "0 9 * * *",
         timezone: null,
+        target: {
+          assistantId: "scheduler-assistant",
+          workspaceDir: "/home/you/projA",
+        },
       })
     );
   });
@@ -163,6 +174,21 @@ describe("ScheduledTasksPanel time zones", () => {
 
     expect(screen.queryByText(/Saving it switches it/)).toBeNull();
     expect(saveButton().hasAttribute("disabled")).toBe(true);
+  });
+
+  it("keeps a task of another folder from being edited or run here", () => {
+    hook.tasks = [task({ name: "Elsewhere", workspaceDir: "/home/you/projB" })];
+    render(<ScheduledTasksPanel />);
+    fireEvent.click(screen.getByRole("button", { name: /Elsewhere/ }));
+
+    expect(
+      screen
+        .getByRole("button", { name: 'Edit scheduled task "Elsewhere"' })
+        .hasAttribute("disabled")
+    ).toBe(true);
+    expect(
+      screen.getByRole("button", { name: /Run now/ }).hasAttribute("disabled")
+    ).toBe(true);
   });
 });
 

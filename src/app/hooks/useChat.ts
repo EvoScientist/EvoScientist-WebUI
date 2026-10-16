@@ -12,7 +12,7 @@ import {
   type UseStreamOptions,
   type UseStreamThread,
 } from "@langchain/langgraph-sdk/react";
-import { type Message, type Assistant } from "@langchain/langgraph-sdk";
+import { type Message } from "@langchain/langgraph-sdk";
 import { v4 as uuidv4 } from "uuid";
 import type { TodoItem } from "@/app/types/types";
 import { useClient } from "@/providers/ClientProvider";
@@ -40,8 +40,22 @@ import {
   deriveThreadMetadata,
   persistThreadDerivedMetadata,
   setThreadModelOverride,
+  stampThreadWorkspace,
 } from "@/app/hooks/useThreads";
-import { DEFAULT_ASSISTANT_ID } from "@/lib/config";
+import {
+  useGraphAssistant,
+  useWorkspace,
+  type WorkspaceState,
+} from "@/providers/WorkspaceProvider";
+import { retryWithBackoff } from "@/lib/retry";
+import { CHAT_GRAPH_ID } from "@/lib/workspaceAssistant";
+import {
+  CHAT_GRAPHS,
+  canRun,
+  threadBinding,
+  threadFolders,
+  type ThreadFolders,
+} from "@/lib/threadBinding";
 import { extractStringFromMessageContent } from "@/app/utils/utils";
 
 export type StateType = {
@@ -287,6 +301,22 @@ export function isMissingThreadOrAssistantError(error: unknown): boolean {
   );
 }
 
+/**
+ * The run was refused because the backend serves another folder than the one
+ * the run is for (the core's `RunFolderMismatchError`). It reaches `useStream`
+ * as an error with that name, and `runs.wait` as a message starting with it.
+ */
+export function isRunFolderMismatchError(error: unknown): boolean {
+  if ((error as { name?: unknown } | null)?.name === "RunFolderMismatchError") {
+    return true;
+  }
+  return formatStreamError(error).includes("RunFolderMismatchError");
+}
+
+function servedKey(workspace: WorkspaceState): string {
+  return workspace.status === "ready" ? workspace.key : workspace.status;
+}
+
 /** Payload handed to `onThreadUnavailable` when the open thread is gone. */
 export interface ThreadUnavailableInfo {
   /** The thread the URL pointed at when the backend reported it missing. */
@@ -300,12 +330,10 @@ export interface ThreadUnavailableInfo {
 }
 
 export function useChat({
-  activeAssistant,
   onHistoryRevalidate,
   onThreadUnavailable,
   thread,
 }: {
-  activeAssistant: Assistant | null;
   onHistoryRevalidate?: () => void;
   /**
    * Called instead of the local `setThreadId(null)` fallback when the
@@ -320,6 +348,48 @@ export function useChat({
 }) {
   const [threadId, setThreadId] = useQueryState("threadId");
   const client = useClient();
+  const {
+    workspace,
+    refreshing,
+    isReady,
+    chat: chatAssistant,
+    refresh: refreshWorkspace,
+  } = useWorkspace();
+  // Whether the latest send started a new chat (its thread was created by
+  // that send, for the folder it was sent for).
+  const startedNewChatRef = useRef(false);
+  const workspaceRef = useRef(workspace);
+  workspaceRef.current = workspace;
+
+  // The open thread's own metadata: its graph and the folders it records.
+  const [threadMeta, setThreadMeta] = useState<{
+    threadId: string;
+    metadata: Record<string, unknown>;
+  } | null>(null);
+  useEffect(() => {
+    if (!threadId) return;
+    // Until it is read the thread stays pending, so a failed read is retried
+    // rather than guessed. A missing thread (404) is final: the stream's 404
+    // handling takes it from there.
+    const controller = new AbortController();
+    let gone = false;
+    void retryWithBackoff(
+      () => client.threads.get(threadId),
+      controller.signal,
+      10_000,
+      (error) => {
+        gone = getHttpStatus(error) === 404;
+        return gone ? false : undefined;
+      }
+    ).then((t) => {
+      if (controller.signal.aborted || (!t && !gone)) return;
+      setThreadMeta({
+        threadId,
+        metadata: (t?.metadata ?? {}) as Record<string, unknown>,
+      });
+    });
+    return () => controller.abort();
+  }, [client, threadId]);
   // Id of the human message the most recent `sendMessage` submitted. If the
   // submit fails with a thread-gone 404, this is the message that never made
   // it and should be handed back to the user.
@@ -345,15 +415,58 @@ export function useChat({
   );
   useEffect(() => () => retryTracker.reset(), [retryTracker]);
 
+  // The chat runs on the chat graph's assistant for the backend's folder; a
+  // thread of another chat graph (a scheduled task's thread) runs on that
+  // graph's assistant for the same folder. The graph comes from the thread's
+  // own metadata only: the stream needs the assistant before it loads the
+  // history that carries the checkpoint's copy, and the SDK and the server
+  // both set it on the thread.
+  const openGraph =
+    threadMeta && threadMeta.threadId === threadId
+      ? (threadMeta.metadata["graph_id"] as string | undefined)
+      : undefined;
+  const otherGraph =
+    openGraph && openGraph !== CHAT_GRAPH_ID && CHAT_GRAPHS.has(openGraph)
+      ? openGraph
+      : null;
+  const graphAssistant = useGraphAssistant(otherGraph);
+  const resolvedAssistant = otherGraph ? graphAssistant : chatAssistant;
+  const threadAssistant = resolvedAssistant.assistant;
+  const threadAssistantId = threadAssistant?.assistant_id ?? "";
+
+  // The open thread is gone: hand back an unsent message and start over.
+  const reportThreadUnavailable = (threadId: string) => {
+    const last = streamRef.current.messages.at(-1);
+    const unsentMessage =
+      last &&
+      last.type === "human" &&
+      last.id != null &&
+      last.id === lastSubmittedHumanIdRef.current
+        ? extractStringFromMessageContent(last).trim() || null
+        : null;
+    lastSubmittedHumanIdRef.current = null;
+    if (onThreadUnavailable) {
+      if (onThreadUnavailable({ threadId, unsentMessage }) === false) {
+        return;
+      }
+    } else {
+      void setThreadId(null);
+    }
+    toast.error(
+      unsentMessage
+        ? onThreadUnavailable
+          ? "This conversation is no longer available. Started a new chat; your unsent message is back in the composer."
+          : "This conversation is no longer available. Started a new chat; your last message was not sent."
+        : "This conversation is no longer available. Started a new chat."
+    );
+  };
+
   const streamOptions: UseStreamOptions<StateType> & {
     filterSubagentMessages: boolean;
   } = {
-    // Assistant discovery resolves asynchronously during startup. useStream
-    // only reads this id at submit time and the composer stays disabled until
-    // `assistant` resolves, so this covers the non-composer submitters (queue
-    // drain, async auto-report) racing discovery: the graph id is a valid
-    // target until the deployed assistant UUID arrives.
-    assistantId: activeAssistant?.assistant_id || DEFAULT_ASSISTANT_ID,
+    // The open thread's assistant. Every submitter checks `canSend` first,
+    // so the empty id is never sent.
+    assistantId: threadAssistantId,
     client: client ?? undefined,
     reconnectOnMount: true,
     threadId: threadId ?? null,
@@ -399,32 +512,61 @@ export function useChat({
         // assistant misconfiguration and still surfaces below.
         if (/thread with id/i.test(formatStreamError(error))) return;
       }
+      if (isRunFolderMismatchError(error)) {
+        lastSubmittedHumanIdRef.current = null;
+        const startedHere = startedNewChatRef.current;
+        // Read the folder again (runs wait until it is in): if the backend
+        // moved, the next send goes to that folder's assistant; otherwise
+        // say why it refused.
+        const before = servedKey(workspaceRef.current);
+        void refreshWorkspace().then((next) => {
+          if (!mountedRef.current) return;
+          if (servedKey(next) !== before) {
+            toast.info(
+              startedHere
+                ? "The backend now serves another folder, and this new chat was made for the previous one. Start a new chat to continue."
+                : "The backend now serves another folder. Send your message again."
+            );
+          } else {
+            toast.error(formatStreamError(error));
+          }
+        });
+        return;
+      }
+      // The run path answers a missing assistant and a missing thread with
+      // the same 404. A new chat's thread was just created, and an open
+      // thread that still exists means the assistant is what's missing:
+      // resolve it again and keep the conversation.
+      if (
+        isMissingThreadOrAssistantError(error) &&
+        /thread or assistant not found/i.test(formatStreamError(error))
+      ) {
+        // Only a 404 means the thread is gone; any other failure to check
+        // keeps the conversation.
+        const assistantMissing = threadId
+          ? client.threads.get(threadId).then(
+              () => true,
+              (checkError: unknown) => getHttpStatus(checkError) !== 404
+            )
+          : Promise.resolve(true);
+        void assistantMissing.then((missing) => {
+          if (!mountedRef.current) return;
+          if (!missing) {
+            reportThreadUnavailable(threadId as string);
+            return;
+          }
+          lastSubmittedHumanIdRef.current = null;
+          void refreshWorkspace();
+          toast.error(
+            "The backend lost this folder's assistant; it is being recreated. Send your message again."
+          );
+        });
+        return;
+      }
       if (threadId && isMissingThreadOrAssistantError(error)) {
         const reported = missingThreadIdFromError(error);
         if (reported && reported !== threadId) return;
-        const last = streamRef.current.messages.at(-1);
-        const unsentMessage =
-          last &&
-          last.type === "human" &&
-          last.id != null &&
-          last.id === lastSubmittedHumanIdRef.current
-            ? extractStringFromMessageContent(last).trim() || null
-            : null;
-        lastSubmittedHumanIdRef.current = null;
-        if (onThreadUnavailable) {
-          if (onThreadUnavailable({ threadId, unsentMessage }) === false) {
-            return;
-          }
-        } else {
-          void setThreadId(null);
-        }
-        toast.error(
-          unsentMessage
-            ? onThreadUnavailable
-              ? "This conversation is no longer available. Started a new chat; your unsent message is back in the composer."
-              : "This conversation is no longer available. Started a new chat; your last message was not sent."
-            : "This conversation is no longer available. Started a new chat."
-        );
+        reportThreadUnavailable(threadId);
         return;
       }
       lastSubmittedHumanIdRef.current = null;
@@ -475,6 +617,22 @@ export function useChat({
   // inside stable callbacks, so downstream callback identity stays constant.
   const streamRef = useRef(stream);
   streamRef.current = stream;
+
+  // Whether the open thread may run here, and on which assistant.
+  const latestCheckpointMetadata = stream.history?.[0]?.metadata as
+    | Record<string, unknown>
+    | undefined;
+  const folders: ThreadFolders | null | undefined = !threadId
+    ? null
+    : threadMeta?.threadId !== threadId || stream.isThreadLoading
+    ? undefined
+    : threadFolders(threadMeta.metadata, latestCheckpointMetadata);
+  const binding = threadBinding(workspace, folders, CHAT_GRAPHS);
+  // One gate for every run: an assistant for the current folder answer, a
+  // thread that may run here, and no folder read in progress.
+  const canSend = threadAssistant !== null && canRun(binding) && !refreshing;
+  const runStateRef = useRef({ canSend, binding, threadId });
+  runStateRef.current = { canSend, binding, threadId };
 
   // The run is over (finished, failed or stopped). The SDK flips `isLoading`
   // back in every case, unlike `onFinish` (success only) and `onError` (also
@@ -614,7 +772,13 @@ export function useChat({
     null
   );
   const pendingOverrideRef = useRef<ModelOverride | null>(null);
+  const wrotePendingForRef = useRef<string | null>(null);
   useEffect(() => {
+    // The skip below is for the thread the pick was written to, until another
+    // thread (or a new chat) opens.
+    if (wrotePendingForRef.current !== threadId) {
+      wrotePendingForRef.current = null;
+    }
     if (!threadId) {
       // Don't clobber a pending pre-thread override — `buildRunConfig` still
       // needs to read it for the first send.
@@ -623,11 +787,11 @@ export function useChat({
     }
     // Thread just came into existence (or we switched onto an existing one).
     // If we have a pending pre-thread override, write it through to metadata
-    // and keep the local state as-is. Otherwise fetch the thread's persisted
-    // override and seed local state from it.
+    // and keep the local state as-is.
     if (pendingOverrideRef.current) {
       const pending = pendingOverrideRef.current;
       pendingOverrideRef.current = null;
+      wrotePendingForRef.current = threadId;
       void (async () => {
         try {
           await setThreadModelOverride(threadId, pending);
@@ -638,38 +802,29 @@ export function useChat({
       })();
       return;
     }
-    let cancelled = false;
-    void (async () => {
-      try {
-        const t = (await client.threads.get(threadId)) as {
-          metadata?: Record<string, unknown>;
-        };
-        if (cancelled) return;
-        const raw = (t.metadata ?? {})[MODEL_OVERRIDE_METADATA_KEY];
-        if (
-          raw &&
-          typeof raw === "object" &&
-          typeof (raw as { model?: unknown }).model === "string"
-        ) {
-          const r = raw as { model: string; model_provider?: unknown };
-          setModelOverrideState({
-            model: r.model,
-            model_provider:
-              typeof r.model_provider === "string"
-                ? r.model_provider
-                : undefined,
-          });
-        } else {
-          setModelOverrideState(null);
-        }
-      } catch {
-        if (!cancelled) setModelOverrideState(null);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [client, threadId]);
+    // Otherwise the override is seeded from the thread's metadata below.
+  }, [threadId]);
+  // Seed the override from the thread's own metadata (fetched once per
+  // thread, above), except on the thread a pending pick was just written to.
+  useEffect(() => {
+    if (!threadId || threadMeta?.threadId !== threadId) return;
+    if (wrotePendingForRef.current === threadId) return;
+    const raw = threadMeta.metadata[MODEL_OVERRIDE_METADATA_KEY];
+    if (
+      raw &&
+      typeof raw === "object" &&
+      typeof (raw as { model?: unknown }).model === "string"
+    ) {
+      const r = raw as { model: string; model_provider?: unknown };
+      setModelOverrideState({
+        model: r.model,
+        model_provider:
+          typeof r.model_provider === "string" ? r.model_provider : undefined,
+      });
+    } else {
+      setModelOverrideState(null);
+    }
+  }, [threadId, threadMeta]);
 
   // Persist + apply locally. When the thread row exists, writes metadata
   // first so a reload keeps the choice. Pre-thread (new chat with no
@@ -900,26 +1055,34 @@ export function useChat({
   // practice.
   const messages = useDeferredValue(rawMessages);
 
-  // Fold the per-thread model override into the assistant's base config. The
-  // backend reads `configurable.model` + `configurable.model_provider` per
-  // request. We always send a `configurable` object (possibly empty) so the
-  // override leaves no trace on runs that don't need it.
+  // The run's config carries only the per-thread model override. The server
+  // layers the assistant's config (its `workspace_dir`) underneath, so a
+  // stale assistant held here can't send another folder that would win.
   const buildRunConfig = useCallback(() => {
-    const base = activeAssistant?.config ?? {};
-    const baseConfigurable =
-      (base as { configurable?: Record<string, unknown> }).configurable ?? {};
-    const configurable: Record<string, unknown> = { ...baseConfigurable };
+    const configurable: Record<string, unknown> = {};
     if (modelOverride) {
       configurable.model = modelOverride.model;
       if (modelOverride.model_provider) {
         configurable.model_provider = modelOverride.model_provider;
       }
     }
-    return { ...base, configurable };
-  }, [activeAssistant?.config, modelOverride]);
+    return { configurable };
+  }, [modelOverride]);
 
   const sendMessage = useCallback(
-    (content: string) => {
+    (content: string): boolean => {
+      const run = runStateRef.current;
+      if (!run.canSend || !isReady()) return false;
+      startedNewChatRef.current = !run.threadId;
+      const served = workspaceRef.current;
+      const key = served.status === "ready" ? served.key : null;
+      // A thread with no folder joins the backend's: the run binds it, and
+      // its metadata gets the folder so it shows in this folder's list.
+      if (key && run.threadId && run.binding.kind === "unbound") {
+        void stampThreadWorkspace(run.threadId, key).catch(() => {
+          // The next restore stamps it from the run's checkpoint.
+        });
+      }
       // Drop any settled-run snapshot up front. Otherwise, until `isLoading`
       // flips true (and the effect above clears it), a previous run's
       // `fetchedMessages` can still out-count `stream.messages` and shadow the
@@ -942,6 +1105,9 @@ export function useChat({
             messages: [...(prev.messages ?? []), newMessage],
           }),
           config: buildRunConfig(),
+          // A new thread is created with this metadata, so it is in the
+          // folder's list from the first message.
+          metadata: key ? { workspace_dir: key } : undefined,
           streamSubgraphs: true,
           streamMode: ["updates"],
           streamResumable: true,
@@ -950,22 +1116,29 @@ export function useChat({
       );
       // Update thread list immediately when sending a message
       onHistoryRevalidate?.();
+      return true;
     },
-    [buildRunConfig, onHistoryRevalidate, retryTracker]
+    [buildRunConfig, isReady, onHistoryRevalidate, retryTracker]
   );
 
   const setFiles = useCallback(
     async (files: Record<string, string>) => {
       if (!threadId) return;
+      // Writing state adds a checkpoint without the run's folders.
+      if (!runStateRef.current.canSend || !isReady()) {
+        throw new Error("This conversation is read-only here.");
+      }
       // TODO: missing a way how to revalidate the internal state
       // I think we do want to have the ability to externally manage the state
       await client.threads.updateState(threadId, { values: { files } });
     },
-    [client, threadId]
+    [client, isReady, threadId]
   );
 
   const resumeInterrupt = useCallback(
-    (value: any) => {
+    (value: any): boolean => {
+      if (!runStateRef.current.canSend || !isReady()) return false;
+      startedNewChatRef.current = false;
       // Same as sendMessage: clear the prior snapshot before resuming so a stale
       // fetchedInterrupt/fetchedMessages can't briefly re-surface a resolved
       // approval card or shadow the resumed run's messages.
@@ -989,8 +1162,9 @@ export function useChat({
       });
       // Update thread list when resuming from interrupt
       onHistoryRevalidate?.();
+      return true;
     },
-    [buildRunConfig, onHistoryRevalidate, retryTracker]
+    [buildRunConfig, isReady, onHistoryRevalidate, retryTracker]
   );
 
   // Abandon the current run when the user hits Stop and hand control back to
@@ -1086,6 +1260,15 @@ export function useChat({
       !stream.isLoading &&
       (userAborted || settledThreadId === threadId),
     isThreadLoading: stream.isThreadLoading,
+    /** The open thread's assistant: the chat's, or its own graph's. */
+    threadAssistant,
+    /** Why the assistant isn't there yet, while it keeps being retried. */
+    assistantError: resolvedAssistant.error,
+
+    /** Whether the open thread runs here, and why not. */
+    binding,
+    /** Every run path checks this first. */
+    canSend,
     interrupt,
     sendMessage,
     abortRun,

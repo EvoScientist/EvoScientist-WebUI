@@ -89,6 +89,8 @@ import {
 } from "@/app/components/ChatInterface";
 import { ChatProvider } from "@/providers/ChatProvider";
 import { fixtureAssistant } from "@/test/fixtures/assistants";
+import type { WorkspaceContextValue } from "@/providers/WorkspaceProvider";
+import { TestWorkspaceProvider, mockWorkspace } from "@/test/mockWorkspace";
 
 interface RenderChatInterfaceOptions {
   assistant?: Assistant | null;
@@ -98,6 +100,8 @@ interface RenderChatInterfaceOptions {
   ) => void;
   /** Wrap the provider tree, e.g. in a FilePaneProvider. */
   wrapper?: React.ComponentType<{ children: React.ReactNode }>;
+  /** The backend's folder; defaults to a backend without the route. */
+  workspace?: WorkspaceContextValue;
 }
 
 export function renderChatInterface(
@@ -105,13 +109,16 @@ export function renderChatInterface(
 ): RenderResult {
   const assistant = opts.assistant ?? fixtureAssistant;
   return render(
-    <ChatProvider activeAssistant={assistant}>
-      <ChatInterface
-        assistant={assistant}
-        draftSeed={opts.draftSeed}
-        onComposerSnapshotReady={opts.onComposerSnapshotReady}
-      />
-    </ChatProvider>,
+    <TestWorkspaceProvider
+      value={opts.workspace ?? mockWorkspace(undefined, assistant)}
+    >
+      <ChatProvider>
+        <ChatInterface
+          draftSeed={opts.draftSeed}
+          onComposerSnapshotReady={opts.onComposerSnapshotReady}
+        />
+      </ChatProvider>
+    </TestWorkspaceProvider>,
     opts.wrapper ? { wrapper: opts.wrapper } : undefined
   );
 }

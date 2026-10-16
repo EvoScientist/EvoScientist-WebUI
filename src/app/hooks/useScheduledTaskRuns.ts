@@ -1,5 +1,6 @@
 "use client";
 
+import { SCHEDULER_GRAPH_ID } from "@/lib/workspaceAssistant";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { makeClient } from "@/app/hooks/useScheduledTasks";
 import {
@@ -12,8 +13,6 @@ import {
 const POLL_INTERVAL_MS = 3_000;
 const SEARCH_LIMIT = 50;
 const MAX_RUNS = 20;
-
-const SCHEDULER_GRAPH_ID = "scheduler";
 
 interface SchedulerThread {
   thread_id: string;

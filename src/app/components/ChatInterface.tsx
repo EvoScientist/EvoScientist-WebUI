@@ -59,7 +59,7 @@ import type {
   ActionRequest,
   ReviewConfig,
 } from "@/app/types/types";
-import { Assistant, Message } from "@langchain/langgraph-sdk";
+import { Message } from "@langchain/langgraph-sdk";
 import {
   extractStringFromMessageContent,
   stringifyUnknown,
@@ -93,6 +93,11 @@ import {
 } from "@/lib/subAgentStepsStore";
 import { useAutoApproveInterrupt } from "@/app/hooks/useAutoApproveInterrupt";
 import { useApprovalPolicy } from "@/app/hooks/useApprovalPolicy";
+import {
+  localFilesAvailable,
+  useWorkspace,
+} from "@/providers/WorkspaceProvider";
+import { folderName } from "@/lib/workspaceAssistant";
 import { useDeployment } from "@/providers/ClientProvider";
 import { resolveApprovalDecisions } from "@/lib/hitlPolicy";
 import {
@@ -133,7 +138,6 @@ type DashboardNavTarget =
   | { view: "experts" };
 
 interface ChatInterfaceProps {
-  assistant: Assistant | null;
   // Open the right inspector on its Agents tab (composer "agents running" pulse).
   onShowAgents?: () => void;
   // Navigate to a memory tab / the schedule view from the empty-state dashboard.
@@ -301,7 +305,6 @@ const getStatusIcon = (status: TodoItem["status"], className?: string) => {
 
 export const ChatInterface = React.memo<ChatInterfaceProps>(
   ({
-    assistant,
     onShowAgents,
     onNotifyReady,
     onNavigate,
@@ -336,10 +339,14 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         }
       });
     }, [draftSeed]);
+    const { workspace } = useWorkspace();
+    const filesHere = localFilesAvailable(workspace);
     const [isUploadingFiles, setIsUploadingFiles] = useState(false);
     const [workspaceDir, setWorkspaceDir] = useState<string | null>(null);
 
+    // A backend without the workspace route: name the local folder, as before.
     useEffect(() => {
+      if (workspace.status !== "legacy") return;
       let cancelled = false;
       fetch("/api/workspace")
         .then((r) => (r.ok ? r.json() : null))
@@ -350,7 +357,17 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       return () => {
         cancelled = true;
       };
-    }, []);
+    }, [workspace.status]);
+    // The chip names the folder the backend runs in.
+    const folderLabel =
+      workspace.status === "ready"
+        ? { full: workspace.key, name: folderName(workspace.key) }
+        : workspace.status === "legacy" && workspaceDir
+        ? {
+            full: workspaceDir,
+            name: folderName(workspaceDir.replaceAll("\\", "/")),
+          }
+        : null;
     // Messages typed while the agent is busy are queued. They
     // drain one-per-idle-window into the thread once it's free. A ref mirrors the
     // latest queue so event handlers (key ↑, edit) read current state without
@@ -472,13 +489,20 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       summarizationEvent,
       modelOverride,
       setModelOverride,
+      threadAssistant: assistant,
+      assistantError,
+      binding,
+      canSend,
     } = useChatContext();
     // The docked file pane (inspector) shows this conversation's agent-state
     // files and re-reads open files when the agent may have written them.
     const filePane = useFilePane();
     const registerChatFiles = filePane?.registerChat;
     const notifyFilesMayHaveChanged = filePane?.notifyFilesMayHaveChanged;
-    const fileEditDisabled = isLoading === true || interrupt !== undefined;
+    // Saving a file writes a checkpoint on the thread, so it follows the
+    // thread's read-only rule like a run.
+    const fileEditDisabled =
+      !canSend || isLoading === true || interrupt !== undefined;
     useEffect(() => {
       registerChatFiles?.({
         threadId,
@@ -674,7 +698,8 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       // a query (draft text) — their message has priority, so we hold the queue
       // until the composer is clear. Pending completions stay unreported (= the
       // queue) and drain one per idle window.
-      if (isLoading || autoFireInFlightRef.current || input.trim()) return;
+      if (!canSend || isLoading || autoFireInFlightRef.current || input.trim())
+        return;
       // User-queued messages take the idle slot first — hold auto-reports until
       // the user's own queue has drained.
       if (queuedMessages.length > 0) return;
@@ -705,6 +730,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         break; // one per idle window; the rest fire once this turn settles
       }
     }, [
+      canSend,
       liveAgentTasks,
       autoNotify,
       isLoading,
@@ -732,14 +758,26 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       isLoading,
       messages,
       threadId,
+      canSend,
+      readOnly: false,
     });
-    notifyStateRef.current = { sendMessage, isLoading, messages, threadId };
+    notifyStateRef.current = {
+      sendMessage,
+      isLoading,
+      messages,
+      threadId,
+      canSend,
+      readOnly: binding.kind === "readOnly",
+    };
     const onNotifyReadyRef = useRef(onNotifyReady);
     onNotifyReadyRef.current = onNotifyReady;
     useEffect(() => {
       const notify: MainChatReporter = (task, expectedThreadId) => {
         const current = notifyStateRef.current;
         if (current.threadId !== expectedThreadId) return "wrong-thread";
+        if (current.readOnly) return "read-only";
+        // Still loading, or the folder is being read again.
+        if (!current.canSend) return "busy";
         if (current.isLoading) return "busy";
         if (
           current.messages.some(
@@ -829,7 +867,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       interruptValue?.type === "ask_user" ||
       (Array.isArray(interruptValue?.action_requests) &&
         interruptValue.action_requests.length > 0);
-    const submitDisabled = isLoading || !assistant || hasPendingInterrupt;
+    const submitDisabled = isLoading || !canSend || hasPendingInterrupt;
 
     // Drain the user-message queue: when the thread goes idle (and no interrupt is
     // pending), send the head as the next turn. One per idle window — the
@@ -837,7 +875,12 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     // isLoading flips true so two messages can't race onto the thread. After Stop,
     // isLoading drops and the queue still drains (queued = intent to send).
     useEffect(() => {
-      if (isLoading || hasPendingInterrupt || autoFireInFlightRef.current)
+      if (
+        !canSend ||
+        isLoading ||
+        hasPendingInterrupt ||
+        autoFireInFlightRef.current
+      )
         return;
       if (queuedMessages.length === 0) return;
       const [head, ...rest] = queuedMessages;
@@ -847,7 +890,14 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       autoFireInFlightRef.current = true;
       setQueuedMessages(rest);
       sendMessage(formatMessageWithFiles(head.text, head.files));
-    }, [isLoading, hasPendingInterrupt, queuedMessages, sendMessage, threadId]);
+    }, [
+      canSend,
+      isLoading,
+      hasPendingInterrupt,
+      queuedMessages,
+      sendMessage,
+      threadId,
+    ]);
 
     // Clear the queue when switching to a *different* conversation, but NOT on the
     // null→real-id transition that happens when the first message of a brand-new
@@ -1012,7 +1062,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         }
         // Can't compose with no assistant, a pending interrupt, or files still
         // uploading. (Unlike before, isLoading is NOT a blocker — see below.)
-        if (!assistant || hasPendingInterrupt || isUploadingFiles) return;
+        if (!canSend || hasPendingInterrupt || isUploadingFiles) return;
         // Agent busy → queue it. The queue drains and sends
         // automatically once this turn finishes (or is stopped); the message is
         // appended as the next turn — it never replaces what's already running.
@@ -1039,7 +1089,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       [
         input,
         applyModelCommand,
-        assistant,
+        canSend,
         hasPendingInterrupt,
         autoApprove,
         isLoading,
@@ -1181,7 +1231,9 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     });
     useAutoApproveInterrupt({
       autoApprove,
-      interrupt,
+      // Nothing is approved for a thread that can't run here; the interrupt
+      // is not marked handled either, so it fires once the thread can.
+      interrupt: canSend ? interrupt : undefined,
       resumeInterrupt,
       isLoading,
       resetKey: threadId,
@@ -1832,7 +1884,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                         isAtBottom={isAtBottom}
                         lastMessageId={lastMessageId}
                         isLoading={isLoading}
-                        actionRequests={inlineActionRequests}
+                        actionRequests={canSend ? inlineActionRequests : []}
                         submittedActionRequestKeys={submittedActionRequestKeys}
                         onActionRequestSubmitted={markActionRequestSubmitted}
                         reviewConfigsMap={reviewConfigsMap}
@@ -1871,7 +1923,9 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                         isLoading={isLoading}
                         isStreaming={isLoading && isLastMessage && isAssistant}
                         actionRequests={
-                          isLastMessage ? inlineActionRequests : undefined
+                          isLastMessage && canSend
+                            ? inlineActionRequests
+                            : undefined
                         }
                         submittedActionRequestKeys={submittedActionRequestKeys}
                         onActionRequestSubmitted={markActionRequestSubmitted}
@@ -1896,7 +1950,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                     summarizedCount={summarizationEvent.cutoffIndex}
                   />
                 )}
-                {hasUnboundActionRequests && (
+                {hasUnboundActionRequests && canSend && (
                   <InterruptApprovalFallback
                     actionRequests={actionRequests}
                     reviewConfigsMap={reviewConfigsMap ?? new Map()}
@@ -1908,7 +1962,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                     isLoading={isLoading || approvalPolicy.checking}
                   />
                 )}
-                {askUserQuestions && (
+                {askUserQuestions && canSend && (
                   <div className="mt-4">
                     <AskUserInterrupt
                       key={`ask-user-${
@@ -2449,9 +2503,13 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
                 aria-label="Message"
-                disabled={hasPendingInterrupt}
+                disabled={hasPendingInterrupt || binding.kind === "readOnly"}
                 placeholder={
-                  hasPendingInterrupt
+                  binding.kind === "readOnly"
+                    ? binding.reason
+                    : !assistant && assistantError
+                    ? `Couldn't set up this folder's assistant (${assistantError}). Retrying…`
+                    : hasPendingInterrupt
                     ? "Respond to the request above to continue…"
                     : isLoading
                     ? "Queue a follow-up — sends when this turn finishes…"
@@ -2468,7 +2526,10 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                     multiple
                     onChange={handleFilesSelected}
                     disabled={
-                      !assistant || hasPendingInterrupt || isUploadingFiles
+                      !canSend ||
+                      !filesHere ||
+                      hasPendingInterrupt ||
+                      isUploadingFiles
                     }
                     className="hidden"
                   />
@@ -2476,7 +2537,10 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                     type="button"
                     onClick={() => uploadInputRef.current?.click()}
                     disabled={
-                      !assistant || hasPendingInterrupt || isUploadingFiles
+                      !canSend ||
+                      !filesHere ||
+                      hasPendingInterrupt ||
+                      isUploadingFiles
                     }
                     aria-label="Upload files to workspace"
                     title="Upload files to workspace (max 50 MB each)"
@@ -2514,16 +2578,16 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                       {autoApprove ? "Auto-approve On" : "Auto-approve"}
                     </span>
                   </button>
-                  {onNavigate && workspaceDir && (
+                  {onNavigate && folderLabel && (
                     <button
                       type="button"
                       onClick={() => onNavigate({ view: "workspace" })}
-                      title={`${
-                        workspaceOpen ? "Close" : "Open"
-                      } workspace: ${workspaceDir}`}
+                      title={`${workspaceOpen ? "Close" : "Open"} workspace: ${
+                        folderLabel.full
+                      }`}
                       aria-label={`${
                         workspaceOpen ? "Close" : "Open"
-                      } workspace: ${workspaceDir}`}
+                      } workspace: ${folderLabel.full}`}
                       aria-pressed={Boolean(workspaceOpen)}
                       className="inline-flex min-w-0 items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
                     >
@@ -2532,8 +2596,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                         aria-hidden="true"
                       />
                       <span className="hidden max-w-[140px] truncate font-mono sm:inline lg:max-w-[220px]">
-                        {workspaceDir.split("/").filter(Boolean).pop() ||
-                          workspaceDir}
+                        {folderLabel.name}
                       </span>
                     </button>
                   )}

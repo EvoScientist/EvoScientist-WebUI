@@ -87,7 +87,8 @@ export type MainChatReportResult =
   | "sent"
   | "busy"
   | "duplicate"
-  | "wrong-thread";
+  | "wrong-thread"
+  | "read-only";
 
 export type MainChatReporter = (
   task: AsyncTaskReportTarget,

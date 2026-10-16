@@ -1,13 +1,7 @@
 export interface DeploymentConfig {
   deploymentUrl: string;
-  assistantId: string;
   langsmithApiKey?: string;
 }
-
-// The UI always talks to the EvoScientist main agent. writing-agent and
-// data-analysis-agent are internal sub-agents and are intentionally not
-// user-selectable, so the assistant is fixed rather than configurable.
-export const DEFAULT_ASSISTANT_ID = "EvoScientist";
 
 const CONFIG_KEY = "evoscientist-config";
 
@@ -18,13 +12,17 @@ export function getConfig(): DeploymentConfig | null {
   if (!stored) return null;
 
   try {
-    const parsed = JSON.parse(stored) as DeploymentConfig;
+    const parsed = JSON.parse(stored) as Partial<DeploymentConfig>;
     // A stored config with no usable deployment URL would make the SDK send
     // requests to the app's own origin (404s). Treat it as unconfigured so
     // the config dialog reappears instead.
     if (!parsed.deploymentUrl?.trim()) return null;
-    // Always pin the assistant to the EvoScientist main agent.
-    return { ...parsed, assistantId: DEFAULT_ASSISTANT_ID };
+    // Older versions also stored a fixed assistantId; the assistant now comes
+    // from the backend's folder, so it is dropped.
+    return {
+      deploymentUrl: parsed.deploymentUrl,
+      langsmithApiKey: parsed.langsmithApiKey,
+    };
   } catch {
     return null;
   }

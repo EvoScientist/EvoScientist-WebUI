@@ -14,6 +14,10 @@ import {
 import { nodeColor, type ObsGraphData } from "@/lib/observationGraph";
 import { listScheduledTasks } from "@/app/hooks/useScheduledTasks";
 import { useThreads } from "@/app/hooks/useThreads";
+import {
+  localFilesAvailable,
+  useWorkspace,
+} from "@/providers/WorkspaceProvider";
 import { formatTime } from "@/lib/time";
 
 type MemoryTab = "identity" | "knowledge" | "history";
@@ -94,6 +98,9 @@ export function ResearchDashboard({
   const [activity, setActivity] = useState<ActivityItem[]>([]);
   const [ready, setReady] = useState(false);
   const reqRef = useRef(0);
+  // The workspace size counts this machine's folder, which is only the
+  // backend's when they resolve to the same place.
+  const filesHere = localFilesAvailable(useWorkspace().workspace);
 
   useEffect(() => {
     const reqId = ++reqRef.current;
@@ -106,9 +113,11 @@ export function ResearchDashboard({
           fetch("/api/memory/executions", { cache: "no-store" }).catch(
             () => null
           ),
-          fetch("/api/workspace?recursive=1", { cache: "no-store" }).catch(
-            () => null
-          ),
+          filesHere
+            ? fetch("/api/workspace?recursive=1", { cache: "no-store" }).catch(
+                () => null
+              )
+            : null,
           listScheduledTasks().catch(() => []),
         ]);
         const obs = obsRes ? await readJson<ObsGraphData>(obsRes) : null;
@@ -160,7 +169,7 @@ export function ResearchDashboard({
         if (reqRef.current === reqId) setReady(true);
       }
     })();
-  }, []);
+  }, [filesHere]);
 
   const hasStats =
     ready &&

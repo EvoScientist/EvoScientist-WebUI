@@ -34,6 +34,8 @@ import type { ReactNode } from "react";
 import type { Assistant } from "@langchain/langgraph-sdk";
 import { ChatProvider, useChatContext } from "@/providers/ChatProvider";
 import type { ThreadUnavailableInfo } from "@/app/hooks/useChat";
+import type { WorkspaceContextValue } from "@/providers/WorkspaceProvider";
+import { TestWorkspaceProvider, mockWorkspace } from "@/test/mockWorkspace";
 
 export type ChatContextValue = ReturnType<typeof useChatContext>;
 
@@ -41,6 +43,8 @@ interface RenderChatOptions {
   activeAssistant?: Assistant | null;
   onHistoryRevalidate?: () => void;
   onThreadUnavailable?: (info: ThreadUnavailableInfo) => void;
+  /** The backend's folder; defaults to a backend without the route. */
+  workspace?: WorkspaceContextValue;
 }
 
 export function renderChat(
@@ -50,16 +54,20 @@ export function renderChat(
     activeAssistant = null,
     onHistoryRevalidate,
     onThreadUnavailable,
+    workspace,
   } = opts;
   return renderHook(() => useChatContext(), {
     wrapper: ({ children }: { children: ReactNode }) => (
-      <ChatProvider
-        activeAssistant={activeAssistant}
-        onHistoryRevalidate={onHistoryRevalidate}
-        onThreadUnavailable={onThreadUnavailable}
+      <TestWorkspaceProvider
+        value={workspace ?? mockWorkspace(undefined, activeAssistant)}
       >
-        {children}
-      </ChatProvider>
+        <ChatProvider
+          onHistoryRevalidate={onHistoryRevalidate}
+          onThreadUnavailable={onThreadUnavailable}
+        >
+          {children}
+        </ChatProvider>
+      </TestWorkspaceProvider>
     ),
   });
 }
