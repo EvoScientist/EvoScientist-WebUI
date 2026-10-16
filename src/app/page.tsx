@@ -269,6 +269,7 @@ function HomePageInner({
         | { view: "schedule" }
         | { view: "workspace" }
         | { view: "experts" }
+        | { view: "skills" }
     ) => {
       if (target.view === "memory") {
         setMemoryTab(target.tab);
@@ -279,6 +280,8 @@ function HomePageInner({
         setView("schedule");
       } else if (target.view === "experts") {
         setView("experts");
+      } else if (target.view === "skills") {
+        setView("skills");
       } else {
         if (inspector && inspectorTab !== "agents") {
           closeInspector();

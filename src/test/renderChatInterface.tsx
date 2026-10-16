@@ -98,6 +98,7 @@ interface RenderChatInterfaceOptions {
   ) => void;
   /** Wrap the provider tree, e.g. in a FilePaneProvider. */
   wrapper?: React.ComponentType<{ children: React.ReactNode }>;
+  onNavigate?: React.ComponentProps<typeof ChatInterface>["onNavigate"];
 }
 
 export function renderChatInterface(
@@ -110,6 +111,7 @@ export function renderChatInterface(
         assistant={assistant}
         draftSeed={opts.draftSeed}
         onComposerSnapshotReady={opts.onComposerSnapshotReady}
+        onNavigate={opts.onNavigate}
       />
     </ChatProvider>,
     opts.wrapper ? { wrapper: opts.wrapper } : undefined
