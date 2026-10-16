@@ -60,7 +60,7 @@
 ## 📦 Prerequisites
 
 - [**EvoScientist**](https://github.com/EvoScientist/EvoScientist) installed and configured (`EvoSci onboard`).
-- **Node.js 20+** — the WebUI mode launches the front-end for you.
+- **Node.js 20.9+** for Option B. Option A with EvoScientist v0.3.6 or later uses your Node.js if it is 20.9 or newer with `npx` installed next to it, and otherwise installs its own. With older versions, keep the Node.js on your `PATH` at 20.9 or newer (v0.3.4 and older need it).
 
 ## ⚡ Quick Start
 
@@ -77,6 +77,8 @@ Then launch EvoScientist as usual — it starts the backend and the WebUI togeth
 ```bash
 EvoSci                # opens http://localhost:4716
 ```
+
+From EvoScientist v0.3.6, `EvoSci setup` (or the first WebUI launch) installs the newest compatible WebUI release on your machine, and later launches start it offline. Once a day, a launch also checks in the background for a newer compatible release and downloads it; the next launch checks it and switches to it. Run `EvoSci setup` to update right away.
 
 That's it — start chatting.
 
@@ -132,7 +134,7 @@ Open the URL, confirm the prefilled **Deployment URL** (auto-detected, default `
 
 ## 🤝 Contributing
 
-We welcome contributions! See the [Contributing Guidelines](./CONTRIBUTING.md) for development setup, project structure, the zero-touch-backend principle, scripts, and the release flow.
+We welcome contributions! See the [Contributing Guidelines](./CONTRIBUTING.md) for development setup, project structure, the zero-touch-backend principle, and scripts.
 
 Every contribution brings us one step closer to a future where AI accelerates scientific breakthroughs for all of humanity.
 
