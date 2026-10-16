@@ -24,4 +24,4 @@
 
 ---
 
-> Merging ≠ shipping: releases are handled solely by the maintainer (EvoScientist pulls the UI via `@latest`).
+> Merging ≠ shipping: releases are handled solely by the maintainer. A published release reaches users without a core release: EvoScientist v0.3.6+ picks up the newest version in its supported range (`>=0.3,<0.4`), and older versions run `@latest`.

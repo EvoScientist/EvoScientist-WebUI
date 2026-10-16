@@ -15,7 +15,7 @@ We appreciate your interest and the time you spend helping improve the EvoScient
 
 ## Prerequisites
 
-- **Node.js 20+**.
+- **Node.js 20.9+**.
 - A running **EvoScientist backend** (the LangGraph deployment). From your EvoScientist install:
   ```bash
   EvoSci deploy        # serves the LangGraph API at http://127.0.0.1:6174
