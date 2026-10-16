@@ -468,6 +468,26 @@ button {
   }
 }
 
+/* Sonner draws a 20px toast close button, hanging 6px past the toast's corner.
+   Where the main pointer is coarse (touch), give it the 44px target the app's
+   phone buttons have, without changing how it looks: a 44px square from that
+   corner into the toast, so the extra area takes no taps meant for the header
+   above or a sidebar beside it, in either text direction. Toasts stacked behind
+   the front one get it only once the stack is expanded: their square would
+   poke out below the front toast, where a tap means "expand". */
+@media (pointer: coarse) {
+  [data-sonner-toast][data-styled="true"]:is(
+      [data-front="true"],
+      [data-expanded="true"]
+    )
+    [data-close-button]::after {
+    content: "";
+    position: absolute;
+    inset-block: 6px -32px;
+    inset-inline: 6px -32px;
+  }
+}
+
 .mobile-composer textarea {
   field-sizing: content;
 }

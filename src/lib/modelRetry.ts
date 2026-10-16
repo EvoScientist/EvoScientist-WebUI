@@ -222,9 +222,10 @@ export function createRetryToasts(api: RetryToastApi): RetryNoticeSink {
       api.warning(text, {
         id,
         // Up through the wait plus a normal toast's 4 s, unless the retried
-        // call ends clean or the run ends first. The toast sits over the
-        // composer's Stop button, so it must not outlive the wait by much,
-        // and a long wait (a provider's Retry-After) can be closed.
+        // call ends clean or the run ends first. It is stale once the retry
+        // starts and can cover the inspector's tabs, so it must not outlive
+        // the wait by much, and a long wait (a provider's Retry-After) can be
+        // closed.
         duration: Math.round(waitSeconds * 1000) + 4000,
         closeButton: true,
         onAutoClose: release(id),
