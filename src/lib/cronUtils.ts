@@ -33,17 +33,36 @@ export const DAY_NAMES = [
   "Sat",
 ] as const;
 
+/** A whole number in range: the backend refuses a cron like `0 9.5 * * *`. */
 function clampNumber(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
-  return Math.min(max, Math.max(min, value));
+  return Math.trunc(Math.min(max, Math.max(min, value)));
 }
 
+// The shortcuts the backend's cron parser takes, in any case (not @reboot),
+// with the five fields each stands for.
+const CRON_SHORTCUTS = new Map([
+  ["@yearly", "0 0 1 1 *"],
+  ["@annually", "0 0 1 1 *"],
+  ["@monthly", "0 0 1 * *"],
+  ["@weekly", "0 0 * * 0"],
+  ["@daily", "0 0 * * *"],
+  ["@midnight", "0 0 * * *"],
+  ["@hourly", "0 * * * *"],
+]);
+
+function shortcutFields(cron: string): string | undefined {
+  return CRON_SHORTCUTS.get(cron.trim().toLowerCase());
+}
+
+/** Checks the shape only; the backend checks the fields. */
 export function validateCronExpression(cron: string): string | null {
   const trimmed = cron.trim();
   if (!trimmed) return "Enter a cron expression.";
+  if (shortcutFields(trimmed)) return null;
   const parts = trimmed.split(/\s+/);
   if (parts.length !== 5) {
-    return "Use five cron fields: minute hour day month weekday.";
+    return "Use minute hour day month weekday, or @daily.";
   }
   return null;
 }
@@ -83,7 +102,10 @@ function plainField(value: string, min: number, max: number): number | null {
  * runs.
  */
 export function cronToSpec(cron: string): ScheduleSpec {
-  const parts = cron.trim().split(/\s+/);
+  // A shortcut such as @daily stays a custom cron, as written, but lends the
+  // builder the fields it stands for.
+  const shortcut = shortcutFields(cron);
+  const parts = (shortcut ?? cron).trim().split(/\s+/);
   const fields = parts.length === 5 ? parts : null;
   const read = (index: number, min: number, max: number) =>
     fields ? plainField(fields[index], min, max) : null;
@@ -99,7 +121,7 @@ export function cronToSpec(cron: string): ScheduleSpec {
     dayOfMonth: read(2, 1, 28) ?? DEFAULT_SCHEDULE_SPEC.dayOfMonth,
     dayOfWeek: read(4, 0, 6) ?? DEFAULT_SCHEDULE_SPEC.dayOfWeek,
   };
-  if (!fields || minute === null || hour === null) return custom;
+  if (shortcut || !fields || minute === null || hour === null) return custom;
   const [, , dom, month, dow] = fields;
   if (month !== "*") return custom;
   const time = { ...DEFAULT_SCHEDULE_SPEC, hour, minute };

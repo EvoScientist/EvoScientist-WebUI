@@ -265,7 +265,9 @@ function ScheduleBuilder({
                 min={0}
                 max={23}
                 value={value.hour}
-                onChange={(e) => set({ hour: Number(e.target.value) })}
+                onChange={(e) =>
+                  set({ hour: Math.trunc(Number(e.target.value)) })
+                }
                 className="h-9 text-center font-mono tabular-nums"
               />
               <span className="font-mono text-muted-foreground">:</span>
@@ -275,7 +277,9 @@ function ScheduleBuilder({
                 min={0}
                 max={59}
                 value={value.minute}
-                onChange={(e) => set({ minute: Number(e.target.value) })}
+                onChange={(e) =>
+                  set({ minute: Math.trunc(Number(e.target.value)) })
+                }
                 className="h-9 text-center font-mono tabular-nums"
               />
             </div>
@@ -420,8 +424,12 @@ function TaskForm({
         : next
     );
   };
+  // A stored schedule saves as it is: the backend took it, and it may use what
+  // the editor doesn't write, such as a seconds field. Only new text is checked.
   const cronError =
-    spec.frequency === "custom" ? validateCronExpression(cron) : null;
+    spec.frequency === "custom" && cron !== initialTask?.schedule.trim()
+      ? validateCronExpression(cron)
+      : null;
   // An edit keeps the task's time zone. A task stored without one (made before
   // #61, so read as UTC) moves to the browser's when saved.
   const timeZone = initialTask?.timezone || browserTimeZone();
