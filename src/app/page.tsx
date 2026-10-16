@@ -84,7 +84,8 @@ function HomePageInner({
     null
   );
 
-  const { refresh: refreshWorkspace } = useWorkspace();
+  const { refresh: refreshWorkspace, refreshing: workspaceRefreshing } =
+    useWorkspace();
 
   useEffect(() => {
     const mediaQuery = window.matchMedia("(min-width: 768px)");
@@ -339,7 +340,11 @@ function HomePageInner({
               onReconnect={(url) =>
                 handleSaveConfig({ ...config, deploymentUrl: url })
               }
-              onOnline={() => void refreshWorkspace()}
+              // A read already in progress (the first one, retrying while the
+              // backend was down) answers for this reconnect too.
+              onOnline={() => {
+                if (!workspaceRefreshing) void refreshWorkspace();
+              }}
             />
             <ThemeToggle />
             <Button

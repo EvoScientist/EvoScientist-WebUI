@@ -31,7 +31,7 @@ export function workspaceAssistantId(graphId: string, key: string): string {
 
 /** The last segment of a folder key, for labels. */
 export function folderName(key: string): string {
-  const parts = key.split("/").filter(Boolean);
+  const parts = key.split(/[\\/]/).filter(Boolean);
   return parts[parts.length - 1] ?? key;
 }
 

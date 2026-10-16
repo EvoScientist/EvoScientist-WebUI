@@ -115,6 +115,7 @@ vi.mock("@/app/components/TasksFilesSidebar", async () => {
   const m = await import("@/test/mocks/chatInterfaceStubs");
   return { FilesPopover: m.stubComponent("FilesPopover") };
 });
+import { mockWorkspace } from "@/test/mockWorkspace";
 import { renderChatInterface } from "@/test/renderChatInterface";
 import {
   getAllProps,
@@ -260,6 +261,26 @@ describe("ChatInterface composition", () => {
     expect(screen.getByTestId("stub-AskUserInterrupt")).toBeDefined();
     // Not an ActionGroup — this is the ask-user branch.
     expect(screen.queryAllByTestId("stub-ActionGroup")).toHaveLength(0);
+  });
+
+  it("keeps an ask_user form on the page, disabled, while the folder is read again", () => {
+    renderChatInterface({
+      workspace: {
+        ...mockWorkspace(),
+        refreshing: true,
+        isReady: () => false,
+      },
+    });
+    act(() => {
+      stream.setMessages([humanTurn("hi")]);
+      stream.setInterrupt(askUserInterrupt("what do you want?"));
+    });
+
+    // Unmounting it would drop what the user has typed.
+    expect(screen.getByTestId("stub-AskUserInterrupt")).toBeDefined();
+    expect(
+      getLastProps<{ isLoading: boolean }>("AskUserInterrupt")?.isLoading
+    ).toBe(true);
   });
 
   it("disables the composer submit button while a run is in flight", () => {

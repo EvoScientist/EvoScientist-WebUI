@@ -15,6 +15,7 @@ import type { Client } from "@langchain/langgraph-sdk";
 
 import { useClient } from "@/providers/ClientProvider";
 import { retryWithBackoff } from "@/lib/retry";
+import { getHttpStatus } from "@/lib/streamError";
 import { RUN_GRAPHS } from "@/lib/threadBinding";
 import {
   CHAT_GRAPH_ID,
@@ -46,11 +47,6 @@ export const WorkspaceContext = createContext<WorkspaceContextValue | null>(
 
 const MAX_RETRY_MS = 10_000;
 
-function httpStatus(error: unknown): number | undefined {
-  const status = (error as { status?: unknown } | null)?.status;
-  return typeof status === "number" ? status : undefined;
-}
-
 async function fetchLocalFolder(
   key: string,
   signal: AbortSignal
@@ -59,10 +55,11 @@ async function fetchLocalFolder(
     `/api/workspace/local?${new URLSearchParams({ key })}`,
     { cache: "no-store", signal }
   );
-  // 404: this machine has no workspace of its own. Other failures retry.
+  // 404: this machine has no workspace of its own.
   if (res.status === 404) return null;
-  if (!res.ok)
+  if (!res.ok) {
     throw new Error(`Local folder check failed (HTTP ${res.status}).`);
+  }
   return (await res.json()) as LocalFolder;
 }
 
@@ -82,6 +79,9 @@ async function readWorkspace(
   // The chat graph must exist; a backend without one of the others leaves
   // that surface read-only.
   const runGraphs = [...RUN_GRAPHS];
+  // The local check only decides the file views: if it fails, they are off,
+  // and the chat is not held up.
+  const local = fetchLocalFolder(served.key, signal).catch(() => null);
   const created = await Promise.allSettled(
     runGraphs.map((graphId) =>
       ensureWorkspaceAssistant(client, graphId, served.key)
@@ -90,7 +90,7 @@ async function readWorkspace(
   const graphs = new Set<string>();
   created.forEach((result, i) => {
     if (result.status === "fulfilled") graphs.add(runGraphs[i]);
-    else if (httpStatus(result.reason) !== 404) throw result.reason;
+    else if (getHttpStatus(result.reason) !== 404) throw result.reason;
   });
   if (!graphs.has(CHAT_GRAPH_ID)) {
     throw new Error(`The backend has no ${CHAT_GRAPH_ID} graph.`);
@@ -99,7 +99,7 @@ async function readWorkspace(
     status: "ready",
     key: served.key,
     runDir: served.runDir,
-    local: await fetchLocalFolder(served.key, signal),
+    local: await local,
     graphs,
   };
 }

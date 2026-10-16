@@ -200,4 +200,20 @@ describe("WorkspaceProvider", () => {
     await waitFor(() => expect(result.current.isReady()).toBe(true));
     expect(result.current.workspace).toMatchObject({ key: "/home/you/projA" });
   });
+
+  it("doesn't hold the chat up when the local files check fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) =>
+        String(input).includes("/api/workspace/local")
+          ? json(500)
+          : served("/home/you/projA")
+      )
+    );
+    create.mockResolvedValue({});
+    const { result } = renderWorkspace();
+
+    await waitFor(() => expect(result.current.isReady()).toBe(true));
+    expect(result.current.workspace).toMatchObject({ local: null });
+  });
 });

@@ -16,6 +16,7 @@ import { toast } from "sonner";
 import { useClient } from "@/providers/ClientProvider";
 import { useWorkspace } from "@/providers/WorkspaceProvider";
 import { assistantIdFor } from "@/lib/workspaceSession";
+import { stampThreadWorkspace } from "@/app/hooks/useThreads";
 import {
   AGENT_GRAPHS,
   canRun,
@@ -176,11 +177,18 @@ export function AgentsPanel({ onReportToMainChat }: AgentsPanelProps) {
     // graph, and only where that thread may run (see `threadBinding`).
     const folders = taskFolders[task.task_id];
     if (!folders?.graphId) return;
-    if (!canRun(threadBinding(workspace, folders, AGENT_GRAPHS))) return;
+    const binding = threadBinding(workspace, folders, AGENT_GRAPHS, null);
+    if (!canRun(binding)) return;
     // Computed from the folder answer this render carries; the gate opens
     // only after that answer has rendered.
     const assistantId = assistantIdFor(workspace, folders.graphId);
     if (!assistantId || !isReady()) return;
+    // A task thread with no folder joins the backend's, as in the chat.
+    if (binding.kind === "unbound" && workspace.status === "ready") {
+      const key = workspace.key;
+      void stampThreadWorkspace(task.thread_id, key).catch(() => {});
+      rememberFolders(task.task_id, { ...folders, workspaceDir: key });
+    }
     setChatBusy((b) => ({ ...b, [task.task_id]: true }));
     setChatError((e) => ({ ...e, [task.task_id]: null }));
     try {
@@ -609,7 +617,8 @@ export function AgentsPanel({ onReportToMainChat }: AgentsPanelProps) {
                         const followUp = threadBinding(
                           workspace,
                           taskFolders[task.task_id],
-                          AGENT_GRAPHS
+                          AGENT_GRAPHS,
+                          null
                         );
                         if (followUp.kind === "readOnly") {
                           return (

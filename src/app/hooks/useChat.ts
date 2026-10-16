@@ -521,6 +521,30 @@ export function useChat({
     () => isReady() && runStateRef.current.canSend,
     [isReady]
   );
+  // Every run on the open thread starts here, once canRunNow() said yes:
+  // it records the folder the run is sent for, and a thread with no folder
+  // joins the backend's (the run binds it; its metadata gets the folder so
+  // it shows in this folder's list). Returns the folder key, if any.
+  // Reads only refs and stable setters, so one instance serves every render.
+  const startRun = useCallback((): string | null => {
+    const run = runStateRef.current;
+    const served = workspaceRef.current;
+    sentForRef.current = servedKey(served);
+    const key = served.status === "ready" ? served.key : null;
+    if (key && run.threadId && run.binding.kind === "unbound") {
+      const stamped = run.threadId;
+      void stampThreadWorkspace(stamped, key).catch(() => {
+        // The next restore stamps it from the run's checkpoint.
+      });
+      // Stamped once: the thread now reads as bound here.
+      setThreadMeta((prev) =>
+        prev?.threadId === stamped
+          ? { ...prev, metadata: { ...prev.metadata, workspace_dir: key } }
+          : prev
+      );
+    }
+    return key;
+  }, []);
 
   // The run is over (finished, failed or stopped). The SDK flips `isLoading`
   // back in every case, unlike `onFinish` (success only) and `onError` (also
@@ -727,6 +751,9 @@ export function useChat({
         return;
       }
       pendingOverrideRef.current = null;
+      // A pick made here wins over the metadata read when the thread opened,
+      // even if that read lands after it.
+      wrotePendingForRef.current = threadId;
       // Keep the thread's metadata held here in step, so seeding from it
       // later (e.g. after stamping the folder) can't undo this pick.
       setThreadMeta((prev) =>
@@ -972,25 +999,8 @@ export function useChat({
 
   const sendMessage = useCallback(
     (content: string): boolean => {
-      const run = runStateRef.current;
       if (!canRunNow()) return false;
-      const served = workspaceRef.current;
-      sentForRef.current = servedKey(served);
-      const key = served.status === "ready" ? served.key : null;
-      // A thread with no folder joins the backend's: the run binds it, and
-      // its metadata gets the folder so it shows in this folder's list.
-      if (key && run.threadId && run.binding.kind === "unbound") {
-        const stamped = run.threadId;
-        void stampThreadWorkspace(stamped, key).catch(() => {
-          // The next restore stamps it from the run's checkpoint.
-        });
-        // Stamped once: the thread now reads as bound here.
-        setThreadMeta((prev) =>
-          prev?.threadId === stamped
-            ? { ...prev, metadata: { ...prev.metadata, workspace_dir: key } }
-            : prev
-        );
-      }
+      const key = startRun();
       // Drop any settled-run snapshot up front. Otherwise, until `isLoading`
       // flips true (and the effect above clears it), a previous run's
       // `fetchedMessages` can still out-count `stream.messages` and shadow the
@@ -1026,7 +1036,7 @@ export function useChat({
       onHistoryRevalidate?.();
       return true;
     },
-    [buildRunConfig, canRunNow, onHistoryRevalidate, retryTracker]
+    [buildRunConfig, canRunNow, onHistoryRevalidate, retryTracker, startRun]
   );
 
   const setFiles = useCallback(
@@ -1046,7 +1056,7 @@ export function useChat({
   const resumeInterrupt = useCallback(
     (value: any): boolean => {
       if (!canRunNow()) return false;
-      sentForRef.current = servedKey(workspaceRef.current);
+      startRun();
       // Same as sendMessage: clear the prior snapshot before resuming so a stale
       // fetchedInterrupt/fetchedMessages can't briefly re-surface a resolved
       // approval card or shadow the resumed run's messages.
@@ -1072,7 +1082,7 @@ export function useChat({
       onHistoryRevalidate?.();
       return true;
     },
-    [buildRunConfig, canRunNow, onHistoryRevalidate, retryTracker]
+    [buildRunConfig, canRunNow, onHistoryRevalidate, retryTracker, startRun]
   );
 
   // Abandon the current run when the user hits Stop and hand control back to

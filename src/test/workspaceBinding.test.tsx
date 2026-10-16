@@ -136,6 +136,35 @@ describe("workspace binding", () => {
     expect(result.current.modelOverride).toEqual({ model: "m-2" });
   });
 
+  it("stamps the folder on a thread with none when it resumes", async () => {
+    openThread({ graph_id: "EvoScientist" });
+    const { result } = renderChat({ workspace: ready() });
+    await waitFor(() => expect(result.current.binding.kind).toBe("unbound"));
+
+    act(() => {
+      result.current.resumeInterrupt({ decisions: [] });
+    });
+
+    expect(stamp).toHaveBeenCalledWith(THREAD, KEY);
+  });
+
+  it("keeps a model picked before the thread's metadata arrives", async () => {
+    openThread({
+      graph_id: "EvoScientist",
+      workspace_dir: KEY,
+      model_override: { model: "old" },
+    });
+    const { result } = renderChat({ workspace: ready() });
+
+    // Picked in the same tick as opening, before the thread's read lands.
+    await act(async () => {
+      await result.current.setModelOverride({ model: "new" });
+    });
+    await waitFor(() => expect(result.current.binding.kind).toBe("open"));
+
+    expect(result.current.modelOverride).toEqual({ model: "new" });
+  });
+
   it("reads a thread's folder from its newest checkpoint", async () => {
     openThread({ graph_id: "EvoScientist" });
     stream.setHistory([

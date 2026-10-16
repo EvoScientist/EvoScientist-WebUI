@@ -80,12 +80,21 @@ export function threadFolders(
 export function threadBinding(
   workspace: WorkspaceState,
   folders: ThreadFolders | null | undefined,
-  allowedGraphs: ReadonlySet<string>
+  allowedGraphs: ReadonlySet<string>,
+  /** The graph of a thread that names none; null: such a thread can't run. */
+  defaultGraph: string | null = CHAT_GRAPH_ID
 ): ThreadBinding {
   if (workspace.status === "pending" || folders === undefined) {
     return { kind: "pending" };
   }
-  const graphId = folders?.graphId ?? "EvoScientist";
+  const graphId = folders?.graphId ?? defaultGraph;
+  if (!graphId) {
+    return {
+      kind: "readOnly",
+      reason:
+        "This conversation doesn't record its graph, so it can't be continued here.",
+    };
+  }
   if (!allowedGraphs.has(graphId)) {
     return {
       kind: "readOnly",

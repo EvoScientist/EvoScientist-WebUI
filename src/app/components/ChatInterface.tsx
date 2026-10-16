@@ -368,7 +368,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         : workspace.status === "legacy" && workspaceDir
         ? {
             full: workspaceDir,
-            name: folderName(workspaceDir.replaceAll("\\", "/")),
+            name: folderName(workspaceDir),
           }
         : null;
     // Messages typed while the agent is busy are queued. They
@@ -859,6 +859,10 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       (Array.isArray(interruptValue?.action_requests) &&
         interruptValue.action_requests.length > 0);
     const submitDisabled = isLoading || !canSend || hasPendingInterrupt;
+    // Approvals and questions stay on the page while the folder is read
+    // again (disabled, so nothing typed or chosen is lost) and are hidden
+    // only on a thread that can't run here.
+    const interruptsShown = binding.kind !== "readOnly";
 
     // Drain the user-message queue: when the thread goes idle (and no interrupt is
     // pending), send the head as the next turn. One per idle window — the
@@ -1878,8 +1882,10 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                         defaultCollapsed={collapseAgentActions}
                         isAtBottom={isAtBottom}
                         lastMessageId={lastMessageId}
-                        isLoading={isLoading}
-                        actionRequests={canSend ? inlineActionRequests : []}
+                        isLoading={isLoading || !canSend}
+                        actionRequests={
+                          interruptsShown ? inlineActionRequests : []
+                        }
                         submittedActionRequestKeys={submittedActionRequestKeys}
                         onActionRequestSubmitted={markActionRequestSubmitted}
                         reviewConfigsMap={reviewConfigsMap}
@@ -1915,10 +1921,10 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                       <ChatMessage
                         message={data.message}
                         toolCalls={data.toolCalls}
-                        isLoading={isLoading}
+                        isLoading={isLoading || !canSend}
                         isStreaming={isLoading && isLastMessage && isAssistant}
                         actionRequests={
-                          isLastMessage && canSend
+                          isLastMessage && interruptsShown
                             ? inlineActionRequests
                             : undefined
                         }
@@ -1945,7 +1951,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                     summarizedCount={summarizationEvent.cutoffIndex}
                   />
                 )}
-                {hasUnboundActionRequests && canSend && (
+                {hasUnboundActionRequests && interruptsShown && (
                   <InterruptApprovalFallback
                     actionRequests={actionRequests}
                     reviewConfigsMap={reviewConfigsMap ?? new Map()}
@@ -1954,10 +1960,10 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                     onResume={resumeToolApproval}
                     // Deciding by hand while the deployment is still being
                     // asked would race the decision it is about to return.
-                    isLoading={isLoading || approvalPolicy.checking}
+                    isLoading={isLoading || approvalPolicy.checking || !canSend}
                   />
                 )}
-                {askUserQuestions && canSend && (
+                {askUserQuestions && interruptsShown && (
                   <div className="mt-4">
                     <AskUserInterrupt
                       key={`ask-user-${
@@ -1966,7 +1972,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                       questions={askUserQuestions}
                       onSubmit={handleAskUserSubmit}
                       onCancel={handleAskUserCancel}
-                      isLoading={isLoading}
+                      isLoading={isLoading || !canSend}
                     />
                   </div>
                 )}

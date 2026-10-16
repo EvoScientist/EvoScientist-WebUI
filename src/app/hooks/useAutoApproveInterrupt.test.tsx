@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
 //
-// Auto-approve resumes an interrupt once; a resume the chat can't start yet
-// is not counted, so it happens once the chat can.
+// Auto-approve resumes an interrupt once. The chat hands it the interrupt
+// only while it can run, and checks again at the moment of resuming; a
+// resume refused at that moment is not counted, so it happens once the chat
+// can run again.
 
 import { describe, expect, it, vi } from "vitest";
 import { renderHook } from "@testing-library/react";
@@ -14,25 +16,30 @@ const interrupt = {
 };
 
 describe("useAutoApproveInterrupt", () => {
-  it("resumes once the chat can, not counting a refused try", () => {
+  it("resumes once the chat can run, after a refused try", () => {
     const resumeInterrupt = vi.fn();
     let ready = false;
-    const props = {
+    // Stable, like useChat's canRunNow.
+    const canResumeNow = () => ready;
+    const props = (canSend: boolean) => ({
       autoApprove: true,
-      interrupt,
+      // As ChatInterface passes it: only while the chat can run.
+      interrupt: canSend ? interrupt : undefined,
       resumeInterrupt,
       isLoading: false,
       resetKey: "thread-1",
-      canResumeNow: () => ready,
-    };
+      canResumeNow,
+    });
+    // Rendered as runnable, but the gate closed in the same tick.
     const { rerender } = renderHook((p) => useAutoApproveInterrupt(p), {
-      initialProps: props,
+      initialProps: props(true),
     });
     expect(resumeInterrupt).not.toHaveBeenCalled();
 
+    // The re-read renders (can't run), then its answer renders (can run).
+    rerender(props(false));
     ready = true;
-    // The chat re-renders when it can run (its rendered state changed).
-    rerender({ ...props, canResumeNow: () => ready });
+    rerender(props(true));
 
     expect(resumeInterrupt).toHaveBeenCalledTimes(1);
   });
