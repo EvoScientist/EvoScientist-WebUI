@@ -351,9 +351,6 @@ export function useChat({
     isReady,
     refresh: refreshWorkspace,
   } = useWorkspace();
-  // Whether the latest send started a new chat (its thread was created by
-  // that send, for the folder it was sent for).
-  const startedNewChatRef = useRef(false);
   const workspaceRef = useRef(workspace);
   workspaceRef.current = workspace;
 
@@ -507,7 +504,6 @@ export function useChat({
       }
       if (isRunFolderMismatchError(error)) {
         lastSubmittedHumanIdRef.current = null;
-        const startedHere = startedNewChatRef.current;
         // Read the folder again (runs wait until it is in): if the backend
         // moved, the next send goes to that folder's assistant; otherwise
         // say why it refused.
@@ -516,9 +512,7 @@ export function useChat({
           if (!mountedRef.current) return;
           if (servedKey(next) !== before) {
             toast.info(
-              startedHere
-                ? "The backend now serves another folder, and this new chat was made for the previous one. Start a new chat to continue."
-                : "The backend now serves another folder. Send your message again."
+              "The backend now serves another folder. This conversation was made for the previous one, so it is read-only here; start a new chat to continue."
             );
           } else {
             toast.error(formatStreamError(error));
@@ -1074,15 +1068,21 @@ export function useChat({
     (content: string): boolean => {
       const run = runStateRef.current;
       if (!canRunNow()) return false;
-      startedNewChatRef.current = !run.threadId;
       const served = workspaceRef.current;
       const key = served.status === "ready" ? served.key : null;
       // A thread with no folder joins the backend's: the run binds it, and
       // its metadata gets the folder so it shows in this folder's list.
       if (key && run.threadId && run.binding.kind === "unbound") {
-        void stampThreadWorkspace(run.threadId, key).catch(() => {
+        const stamped = run.threadId;
+        void stampThreadWorkspace(stamped, key).catch(() => {
           // The next restore stamps it from the run's checkpoint.
         });
+        // Stamped once: the thread now reads as bound here.
+        setThreadMeta((prev) =>
+          prev?.threadId === stamped
+            ? { ...prev, metadata: { ...prev.metadata, workspace_dir: key } }
+            : prev
+        );
       }
       // Drop any settled-run snapshot up front. Otherwise, until `isLoading`
       // flips true (and the effect above clears it), a previous run's
@@ -1139,7 +1139,6 @@ export function useChat({
   const resumeInterrupt = useCallback(
     (value: any): boolean => {
       if (!canRunNow()) return false;
-      startedNewChatRef.current = false;
       // Same as sendMessage: clear the prior snapshot before resuming so a stale
       // fetchedInterrupt/fetchedMessages can't briefly re-surface a resolved
       // approval card or shadow the resumed run's messages.

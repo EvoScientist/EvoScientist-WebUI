@@ -104,35 +104,21 @@ export function ResearchDashboard({
     const reqId = ++reqRef.current;
     (async () => {
       try {
-        const [obsRes, execRes, wsRes, scheduled] = await Promise.all([
+        const [obsRes, execRes, scheduled] = await Promise.all([
           fetch("/api/memory/observations", { cache: "no-store" }).catch(
             () => null
           ),
           fetch("/api/memory/executions", { cache: "no-store" }).catch(
             () => null
           ),
-          filesHere
-            ? fetch("/api/workspace?recursive=1", { cache: "no-store" }).catch(
-                () => null
-              )
-            : null,
           listScheduledTasks().catch(() => []),
         ]);
         const obs = obsRes ? await readJson<ObsGraphData>(obsRes) : null;
         const exec = execRes
           ? await readJson<{ entries?: ExecEntry[] }>(execRes)
           : null;
-        const ws = wsRes
-          ? await readJson<{ entries?: Array<{ size?: number }> }>(wsRes)
-          : null;
         if (reqRef.current !== reqId) return;
         setScheduledCount(scheduled.length);
-        setWsBytes(
-          (Array.isArray(ws?.entries) ? ws.entries : []).reduce(
-            (sum, f) => sum + (typeof f.size === "number" ? f.size : 0),
-            0
-          )
-        );
 
         const obsNodes = Array.isArray(obs?.nodes) ? obs.nodes : [];
         const execEntries = Array.isArray(exec?.entries) ? exec.entries : [];
@@ -167,6 +153,30 @@ export function ResearchDashboard({
         if (reqRef.current === reqId) setReady(true);
       }
     })();
+  }, []);
+
+  // The workspace size, from this machine's folder when it is the backend's.
+  useEffect(() => {
+    if (!filesHere) {
+      setWsBytes(0);
+      return;
+    }
+    let cancelled = false;
+    fetch("/api/workspace?recursive=1", { cache: "no-store" })
+      .then((res) => readJson<{ entries?: Array<{ size?: number }> }>(res))
+      .then((ws) => {
+        if (cancelled) return;
+        setWsBytes(
+          (Array.isArray(ws?.entries) ? ws.entries : []).reduce(
+            (sum, f) => sum + (typeof f.size === "number" ? f.size : 0),
+            0
+          )
+        );
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
   }, [filesHere]);
 
   const hasStats =

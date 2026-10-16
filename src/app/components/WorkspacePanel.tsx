@@ -1,7 +1,7 @@
 "use client";
 
 import { useWorkspace } from "@/providers/WorkspaceProvider";
-import { localFilesAvailable } from "@/lib/workspaceSession";
+import { localFilesNotice } from "@/lib/workspaceSession";
 import React, {
   useCallback,
   useEffect,
@@ -145,20 +145,15 @@ for (const cat of CATEGORIES) {
 type ViewMode = "tree" | "type";
 
 export function WorkspacePanel() {
-  const { workspace } = useWorkspace();
-  if (!localFilesAvailable(workspace)) return <FilesElsewhereNotice />;
+  const notice = localFilesNotice(useWorkspace().workspace);
+  if (notice) return <LocalFilesNotice message={notice} />;
   return <WorkspaceTree />;
 }
 
-/** Shown instead of the WebUI's own file views when this machine's folder is
- *  not the one the backend runs in (a remote backend, or another folder). */
-export function FilesElsewhereNotice() {
-  return (
-    <p className="p-4 text-sm text-muted-foreground">
-      The files are on the backend&apos;s machine: this WebUI can only show
-      files when it runs where the backend&apos;s folder is.
-    </p>
-  );
+/** Shown instead of the WebUI's own file views when they can't show the
+ *  backend's folder (see `localFilesNotice`). */
+export function LocalFilesNotice({ message }: { message: string }) {
+  return <p className="p-4 text-sm text-muted-foreground">{message}</p>;
 }
 
 function WorkspaceTree() {

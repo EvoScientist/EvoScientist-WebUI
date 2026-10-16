@@ -146,6 +146,13 @@ describe("workspace binding", () => {
 
     expect(stamp).toHaveBeenCalledWith(THREAD, KEY);
     expect(stream.getSubmitCalls()).toHaveLength(1);
+
+    // Stamped once: the thread now reads as this folder's.
+    expect(result.current.binding.kind).toBe("open");
+    act(() => {
+      result.current.sendMessage("again");
+    });
+    expect(stamp).toHaveBeenCalledTimes(1);
   });
 
   it("reads the folder and the model override from the thread's metadata", async () => {

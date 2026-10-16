@@ -47,3 +47,16 @@ export function assistantIdFor(
   }
   return workspaceAssistantId(graphId, workspace.key);
 }
+
+/**
+ * Why the WebUI's own file views are off, or null when they show the
+ * backend's folder.
+ */
+export function localFilesNotice(workspace: WorkspaceState): string | null {
+  if (localFilesAvailable(workspace)) return null;
+  if (workspace.status === "pending") return "Connecting to the backend…";
+  if (workspace.status === "ready" && !workspace.local) {
+    return "This machine has no EvoScientist workspace of its own, so the backend's files can't be shown here.";
+  }
+  return "The files are on the backend's machine: this WebUI can only show files when it runs where the backend's folder is.";
+}

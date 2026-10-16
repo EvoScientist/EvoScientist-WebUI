@@ -1,8 +1,8 @@
 "use client";
 
 import { useWorkspace } from "@/providers/WorkspaceProvider";
-import { localFilesAvailable } from "@/lib/workspaceSession";
-import { FilesElsewhereNotice } from "@/app/components/WorkspacePanel";
+import { localFilesNotice } from "@/lib/workspaceSession";
+import { LocalFilesNotice } from "@/app/components/WorkspacePanel";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   Download,
@@ -83,7 +83,8 @@ const TOOLBAR =
 
 export function WorkspaceFileView(props: WorkspaceFileViewProps) {
   const { workspace } = useWorkspace();
-  if (!localFilesAvailable(workspace)) return <FilesElsewhereNotice />;
+  const notice = localFilesNotice(workspace);
+  if (notice) return <LocalFilesNotice message={notice} />;
   return <LocalWorkspaceFileView {...props} />;
 }
 
