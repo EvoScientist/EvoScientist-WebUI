@@ -102,14 +102,15 @@ export const MarkdownContent = React.memo<MarkdownContentProps>(
                 );
               }
               // Inline code that names a workspace or memory file becomes a
-              // click-to-open link. ChatInterface (or any ancestor) listens
-              // for `evosci:open-file` and routes to the right dialog.
+              // click-to-open link. FilePaneProvider listens for
+              // `evosci:open-file` and opens the file in the inspector; the
+              // button goes along, to get focus back when the inspector closes.
               const link = !isBlock ? detectFileLink(code) : null;
               if (link) {
                 return (
                   <button
                     type="button"
-                    onClick={() => dispatchFileLink(link)}
+                    onClick={(e) => dispatchFileLink(link, e.currentTarget)}
                     title={`Open ${link.display}`}
                     className="rounded-sm bg-[var(--color-surface)] px-1 py-0.5 font-mono text-[0.9em] text-primary underline underline-offset-2 hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   >
@@ -158,7 +159,7 @@ export const MarkdownContent = React.memo<MarkdownContentProps>(
                 return (
                   <button
                     type="button"
-                    onClick={() => dispatchFileLink(link)}
+                    onClick={(e) => dispatchFileLink(link, e.currentTarget)}
                     title={`Open ${link.display}`}
                     className="text-primary underline underline-offset-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   >

@@ -335,6 +335,7 @@ export function WorkspaceFileView({
           <Button
             variant="outline"
             size="sm"
+            className="max-sm:min-h-11"
             onClick={() => onClose(tabId)}
           >
             Close tab
@@ -349,6 +350,7 @@ export function WorkspaceFileView({
           <Button
             variant="outline"
             size="sm"
+            className="max-sm:min-h-11"
             onClick={() => void read("manual")}
           >
             Retry
@@ -540,7 +542,7 @@ export function WorkspaceFileView({
           <Button
             variant="outline"
             size="sm"
-            className="h-7"
+            className="h-7 max-sm:min-h-11"
             onClick={() => {
               setContent(diskChange);
               finishEditing();
@@ -551,7 +553,7 @@ export function WorkspaceFileView({
           <Button
             variant="ghost"
             size="sm"
-            className="h-7"
+            className="h-7 max-sm:min-h-11"
             onClick={() => {
               setContent(diskChange);
               setDiskChange(null);
@@ -570,7 +572,7 @@ export function WorkspaceFileView({
           <Button
             variant="outline"
             size="sm"
-            className="h-7"
+            className="h-7 max-sm:min-h-11"
             onClick={() => void read("manual")}
           >
             Retry

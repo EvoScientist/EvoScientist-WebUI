@@ -120,6 +120,7 @@ export function MemoryFileView({
             <Button
               variant="outline"
               size="sm"
+              className="max-sm:min-h-11"
               onClick={() => onClose(tabId)}
             >
               Close tab

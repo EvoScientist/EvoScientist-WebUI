@@ -324,10 +324,13 @@ export function WorkspacePanel() {
             )}
             <span className="truncate">{entry.name}</span>
             {openPaths.has(entry.path) && (
-              <span
-                className="ml-auto size-1.5 shrink-0 rounded-full bg-[var(--brand)]"
-                aria-label="Open in preview"
-              />
+              <>
+                <span
+                  className="ml-auto size-1.5 shrink-0 rounded-full bg-[var(--brand)]"
+                  aria-hidden="true"
+                />
+                <span className="sr-only">, open in preview</span>
+              </>
             )}
           </button>
           {entry.type === "dir" &&
@@ -389,10 +392,13 @@ export function WorkspacePanel() {
                           </span>
                         )}
                         {openPaths.has(f.path) && (
-                          <span
-                            className="size-1.5 shrink-0 rounded-full bg-[var(--brand)]"
-                            aria-label="Open in preview"
-                          />
+                          <>
+                            <span
+                              className="size-1.5 shrink-0 rounded-full bg-[var(--brand)]"
+                              aria-hidden="true"
+                            />
+                            <span className="sr-only">, open in preview</span>
+                          </>
                         )}
                       </span>
                     )}
