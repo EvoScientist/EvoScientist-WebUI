@@ -100,8 +100,9 @@ describe("HealthIndicator on a localhost page", () => {
     it("keeps toasts below the header until the user reconnects", async () => {
       const { button } = await showReconnect();
       // Toasts sit over the middle of the header, where Reconnect can be:
-      // globals.css moves them below it while this is set.
-      expect(marked()).toBe(true);
+      // globals.css moves them below it while this is set. (The mark comes
+      // from an effect, which can land just after the button shows.)
+      await waitFor(() => expect(marked()).toBe(true));
 
       fireEvent.click(button);
       expect(marked()).toBe(false);
@@ -109,7 +110,7 @@ describe("HealthIndicator on a localhost page", () => {
 
     it("drops the mark when it unmounts", async () => {
       const { unmount } = await showReconnect();
-      expect(marked()).toBe(true);
+      await waitFor(() => expect(marked()).toBe(true));
       unmount();
       expect(marked()).toBe(false);
     });
