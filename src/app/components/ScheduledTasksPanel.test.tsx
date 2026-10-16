@@ -163,3 +163,95 @@ describe("ScheduledTasksPanel time zones", () => {
     expect(saveButton().hasAttribute("disabled")).toBe(true);
   });
 });
+
+describe("ScheduledTasksPanel custom cron", () => {
+  it("keeps a weekday range when a task is saved without touching its schedule", async () => {
+    const weekdays = task({ name: "Weekdays", schedule: "0 9 * * 1-5" });
+    hook.tasks = [weekdays];
+    hook.updateScheduledTask.mockResolvedValue({
+      task: { ...weekdays, name: "Weekday briefing" },
+      oldTaskDeleted: true,
+    });
+    render(<ScheduledTasksPanel />);
+    // The list shows the expression, not "Every Mon at 09:00".
+    expect(
+      screen.getAllByText("0 9 * * 1-5 · Asia/Shanghai").length
+    ).toBeGreaterThan(0);
+    expect(screen.queryByText("Every Mon at 09:00 · Asia/Shanghai")).toBeNull();
+    openEdit("Weekdays");
+
+    fireEvent.change(screen.getByLabelText("Task name"), {
+      target: { value: "Weekday briefing" },
+    });
+    fireEvent.click(saveButton());
+    await waitFor(() =>
+      expect(hook.updateScheduledTask).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "Weekday briefing",
+          schedule: "0 9 * * 1-5",
+        })
+      )
+    );
+  });
+
+  it("starts the builder from a custom cron's time when switched to weekly", () => {
+    hook.tasks = [task({ name: "Afternoons", schedule: "30 14 * * 1-5" })];
+    render(<ScheduledTasksPanel />);
+    openEdit("Afternoons");
+
+    fireEvent.change(screen.getByLabelText("Schedule frequency"), {
+      target: { value: "weekly" },
+    });
+    expect(screen.getByText("Every Mon at 14:30 · Asia/Shanghai")).toBeTruthy();
+  });
+
+  it("keeps a stored schedule's own spelling while the schedule is unchanged", async () => {
+    const zeros = task({ name: "Zeros", schedule: "09 07 * * *" });
+    hook.tasks = [zeros];
+    hook.updateScheduledTask.mockResolvedValue({
+      task: { ...zeros, name: "Zeros renamed" },
+      oldTaskDeleted: true,
+    });
+    render(<ScheduledTasksPanel />);
+    openEdit("Zeros");
+
+    // Read as the builder's daily schedule, with nothing to save yet.
+    expect(
+      screen.getAllByText("Every day at 07:09 · Asia/Shanghai").length
+    ).toBeGreaterThan(1);
+    expect(saveButton().hasAttribute("disabled")).toBe(true);
+
+    fireEvent.change(screen.getByLabelText("Task name"), {
+      target: { value: "Zeros renamed" },
+    });
+    fireEvent.click(saveButton());
+    await waitFor(() =>
+      expect(hook.updateScheduledTask).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "Zeros renamed",
+          schedule: "09 07 * * *",
+        })
+      )
+    );
+  });
+
+  it("writes the builder's spelling once the schedule changes", async () => {
+    const zeros = task({ name: "Zeros", schedule: "09 07 * * *" });
+    hook.tasks = [zeros];
+    hook.updateScheduledTask.mockResolvedValue({
+      task: zeros,
+      oldTaskDeleted: true,
+    });
+    render(<ScheduledTasksPanel />);
+    openEdit("Zeros");
+
+    fireEvent.change(screen.getByLabelText("Hour"), { target: { value: "8" } });
+    expect(saveButton().hasAttribute("disabled")).toBe(false);
+    fireEvent.click(saveButton());
+    await waitFor(() =>
+      expect(hook.updateScheduledTask).toHaveBeenCalledWith(
+        expect.objectContaining({ schedule: "9 8 * * *" })
+      )
+    );
+  });
+});

@@ -67,56 +67,57 @@ export function specToCron(spec: ScheduleSpec): string {
   return `${minute} ${hour} * * *`;
 }
 
-/** Parse a cron string back into a ScheduleSpec (best-effort). */
+// A field the visual builder can show: a plain number within range. A range
+// (1-5), a list (1,15), a step (*/5), a name (MON) or an out-of-range value
+// (31 for the builder's 1-28, 7 for Sunday) is not, so its cron stays custom.
+function plainField(value: string, min: number, max: number): number | null {
+  if (!/^\d+$/.test(value)) return null;
+  const n = Number(value);
+  return n >= min && n <= max ? n : null;
+}
+
+/**
+ * Parse a cron string back into a ScheduleSpec. Only schedules the builder
+ * can write come back as daily / weekly / monthly; anything else stays a
+ * custom cron, verbatim, so saving a task unchanged never changes when it
+ * runs.
+ */
 export function cronToSpec(cron: string): ScheduleSpec {
   const parts = cron.trim().split(/\s+/);
-  if (parts.length !== 5) {
-    return { ...DEFAULT_SCHEDULE_SPEC, frequency: "custom", custom: cron };
-  }
-  const [min, hr, dom, month, dow] = parts;
-  const minute = parseInt(min, 10);
-  const hour = parseInt(hr, 10);
+  const fields = parts.length === 5 ? parts : null;
+  const read = (index: number, min: number, max: number) =>
+    fields ? plainField(fields[index], min, max) : null;
+  const minute = read(0, 0, 59);
+  const hour = read(1, 0, 23);
+  // A custom cron still lends the builder the fields it can show, so
+  // switching it to daily / weekly / monthly starts from them.
+  const custom: ScheduleSpec = {
+    frequency: "custom",
+    custom: cron,
+    minute: minute ?? DEFAULT_SCHEDULE_SPEC.minute,
+    hour: hour ?? DEFAULT_SCHEDULE_SPEC.hour,
+    dayOfMonth: read(2, 1, 28) ?? DEFAULT_SCHEDULE_SPEC.dayOfMonth,
+    dayOfWeek: read(4, 0, 6) ?? DEFAULT_SCHEDULE_SPEC.dayOfWeek,
+  };
+  if (!fields || minute === null || hour === null) return custom;
+  const [, , dom, month, dow] = fields;
+  if (month !== "*") return custom;
+  const time = { ...DEFAULT_SCHEDULE_SPEC, hour, minute };
 
-  if (
-    month === "*" &&
-    dom === "*" &&
-    dow === "*" &&
-    !isNaN(minute) &&
-    !isNaN(hour)
-  ) {
-    return { ...DEFAULT_SCHEDULE_SPEC, frequency: "daily", hour, minute };
+  if (dom === "*" && dow === "*") return { ...time, frequency: "daily" };
+  if (dom === "*") {
+    const dayOfWeek = plainField(dow, 0, 6);
+    return dayOfWeek === null
+      ? custom
+      : { ...time, frequency: "weekly", dayOfWeek };
   }
-  if (
-    month === "*" &&
-    dom === "*" &&
-    !isNaN(parseInt(dow, 10)) &&
-    !isNaN(minute) &&
-    !isNaN(hour)
-  ) {
-    return {
-      ...DEFAULT_SCHEDULE_SPEC,
-      frequency: "weekly",
-      hour: clampNumber(hour, 0, 23),
-      minute: clampNumber(minute, 0, 59),
-      dayOfWeek: clampNumber(parseInt(dow, 10), 0, 6),
-    };
+  if (dow === "*") {
+    const dayOfMonth = plainField(dom, 1, 28);
+    return dayOfMonth === null
+      ? custom
+      : { ...time, frequency: "monthly", dayOfMonth };
   }
-  if (
-    month === "*" &&
-    dow === "*" &&
-    !isNaN(parseInt(dom, 10)) &&
-    !isNaN(minute) &&
-    !isNaN(hour)
-  ) {
-    return {
-      ...DEFAULT_SCHEDULE_SPEC,
-      frequency: "monthly",
-      hour: clampNumber(hour, 0, 23),
-      minute: clampNumber(minute, 0, 59),
-      dayOfMonth: clampNumber(parseInt(dom, 10), 1, 28),
-    };
-  }
-  return { ...DEFAULT_SCHEDULE_SPEC, frequency: "custom", custom: cron };
+  return custom;
 }
 
 /** Human-readable summary of a cron expression. */

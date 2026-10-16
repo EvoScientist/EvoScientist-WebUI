@@ -386,7 +386,18 @@ function TaskForm({
   const [saving, setSaving] = useState(false);
   const nameRef = useRef<HTMLInputElement>(null);
 
-  const cron = specToCron(spec);
+  // A stored schedule the builder reads but spells differently (`09 07 * * *`
+  // opens as daily at 07:09 and is written `9 7 * * *`) is kept as stored
+  // while the form still writes what it wrote on opening.
+  const openedCron = useMemo(
+    () => (initialTask ? specToCron(cronToSpec(initialTask.schedule)) : null),
+    [initialTask]
+  );
+  const builtCron = specToCron(spec);
+  const cron =
+    initialTask && builtCron === openedCron
+      ? initialTask.schedule.trim()
+      : builtCron;
   const cronError =
     spec.frequency === "custom" ? validateCronExpression(cron) : null;
   // An edit keeps the task's time zone. A task stored without one (made before
