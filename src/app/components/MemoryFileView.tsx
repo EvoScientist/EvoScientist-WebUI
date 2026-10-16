@@ -84,7 +84,7 @@ export function MemoryFileView({
         >
           /memories/{path}
         </p>
-        <div className="flex shrink-0 items-center gap-1 max-sm:[&>button]:min-h-11 max-sm:[&>button]:min-w-11">
+        <div className="flex shrink-0 items-center gap-1 max-md:[&>button]:min-h-11 max-md:[&>button]:min-w-11">
           <span className="rounded border border-border px-1.5 py-0.5 text-[11px] text-muted-foreground">
             Read-only
           </span>
@@ -120,6 +120,7 @@ export function MemoryFileView({
             <Button
               variant="outline"
               size="sm"
+              className="max-md:min-h-11"
               onClick={() => onClose(tabId)}
             >
               Close tab

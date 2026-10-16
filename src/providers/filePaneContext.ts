@@ -36,10 +36,16 @@ export interface FilePaneContextValue {
    * The user asked for it, so the file's tab takes focus.
    */
   open: (ref: FileRef) => void;
-  /** Bumps when an open asks for focus; see takeFocusRequest. */
+  /** Bumps when an open or requestFocus asks for focus; see takeFocusRequest. */
   focusRequest: number;
-  /** True once per open that asked for focus; whoever shows it focuses. */
+  /** True once per request; whoever shows the Workspace side focuses. */
   takeFocusRequest: () => boolean;
+  /**
+   * Ask for focus on what the inspector's Workspace side shows, as an open
+   * does: the shown file's tab in the preview, else the tree. A request made
+   * while the Agents tab is showing waits until Workspace shows again.
+   */
+  requestFocus: () => void;
   activate: (id: string) => void;
   /** Close without asking; callers confirm unsaved edits first. */
   close: (id: string) => void;

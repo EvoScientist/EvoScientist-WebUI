@@ -205,6 +205,7 @@ function HomePageInner({
   // The inspector is sized per what it shows (file tree vs. preview); the
   // sizer below drives it and its resize handle remembers the user's drags.
   const inspectorPanelRef = useRef<ImperativePanelHandle>(null);
+  const inspectorToggleRef = useRef<HTMLButtonElement>(null);
   const threadPanelRef = useRef<ImperativePanelHandle>(null);
   const sidebarToggleLabel = view
     ? sidebar
@@ -402,6 +403,7 @@ function HomePageInner({
             />
             <ThemeToggle />
             <Button
+              ref={inspectorToggleRef}
               variant="ghost"
               size="icon"
               onClick={toggleInspector}
@@ -437,7 +439,12 @@ function HomePageInner({
           </div>
         </header>
 
-        <FilePaneProvider onReveal={revealFilePane}>
+        <FilePaneProvider
+          onReveal={revealFilePane}
+          inspectorOpen={Boolean(inspector)}
+          inspectorToggleRef={inspectorToggleRef}
+          returnFocusOnClose={!(sidebar && isDesktopLayout === false)}
+        >
           <div className="relative flex-1 overflow-hidden">
             <FilePaneSizer
               panelRef={inspectorPanelRef}

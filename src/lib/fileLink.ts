@@ -6,8 +6,8 @@
 // backtick signal).
 //
 // Dispatch flows through a custom DOM event so MarkdownContent doesn't need
-// a context dependency — ChatInterface (or any parent) attaches the
-// listener that opens the right dialog/view.
+// a context dependency — FilePaneProvider listens and opens the file in the
+// inspector.
 
 const KNOWN_EXTS = new Set<string>([
   "md",
@@ -86,12 +86,17 @@ export function detectFileLink(text: string): FileLink | null {
 
 export const FILE_LINK_EVENT = "evosci:open-file";
 
-export type FileLinkEventDetail = FileLink;
+export type FileLinkEventDetail = FileLink & {
+  /** The control the user opened it from, to give focus back to later. */
+  opener?: HTMLElement;
+};
 
-export function dispatchFileLink(detail: FileLink): void {
+export function dispatchFileLink(link: FileLink, opener?: HTMLElement): void {
   if (typeof window === "undefined") return;
   window.dispatchEvent(
-    new CustomEvent<FileLinkEventDetail>(FILE_LINK_EVENT, { detail })
+    new CustomEvent<FileLinkEventDetail>(FILE_LINK_EVENT, {
+      detail: { ...link, opener },
+    })
   );
 }
 
