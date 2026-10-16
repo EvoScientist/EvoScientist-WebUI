@@ -80,14 +80,17 @@ export function useTheme(): ThemeContextValue {
   return ctx;
 }
 
-// Toasts open at the top center, just below the header (h-14 inside the
-// shell's safe-area padding). At the default bottom right they covered the
-// composer's Stop button. Up here one can briefly cover the inspector's tabs
-// (beside a file preview, or in the phone drawer), so toasts get a close
-// button and can be swiped away up or sideways (sonner draws no close button on
-// loading or custom toasts, and loading toasts can't be swiped; the app shows
-// neither kind).
-const TOAST_TOP = "calc(env(safe-area-inset-top) + 4rem)";
+// Toasts open at the top center: at the default bottom right they covered the
+// composer's Stop button. How far down is --toast-top in globals.css: over the
+// middle of the header on the desktop layout, below it on the phone layout and
+// while the header offers Reconnect. Sonner switches to its phone layout at
+// 600px, the app at 768px, so both of its offsets take that one value. Toasts
+// can still briefly cover the inspector's tabs (a long or stacked toast beside
+// a file preview, any toast there while Reconnect shows, or any toast in the
+// phone drawer), so they get a close button and can be swiped away up or
+// sideways (sonner draws no close button on loading or custom toasts, and
+// loading toasts can't be swiped; the app shows neither kind).
+const TOAST_TOP = "var(--toast-top)";
 
 /** Sonner toaster that follows the resolved theme (must render inside ThemeProvider). */
 export function ThemedToaster() {
