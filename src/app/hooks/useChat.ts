@@ -254,10 +254,18 @@ export function useChat({
   const sentForRef = useRef(servedKey(workspace));
 
   // The open thread's own metadata: its graph and the folders it records.
+  // It holds for the backend it was read from (`openMeta`).
   const [threadMeta, setThreadMeta] = useState<{
     threadId: string;
+    client: typeof client;
     metadata: Record<string, unknown>;
   } | null>(null);
+  const openMeta =
+    threadMeta &&
+    threadMeta.threadId === threadId &&
+    threadMeta.client === client
+      ? threadMeta
+      : null;
   useEffect(() => {
     if (!threadId) return;
     // Until it is read the thread stays pending, so a failed read is retried
@@ -277,6 +285,7 @@ export function useChat({
       if (controller.signal.aborted || (!t && !gone)) return;
       setThreadMeta({
         threadId,
+        client,
         metadata: (t?.metadata ?? {}) as Record<string, unknown>,
       });
     });
@@ -313,18 +322,25 @@ export function useChat({
   // own metadata only: the stream needs the assistant before it loads the
   // history that carries the checkpoint's copy, and the SDK and the server
   // both set it on the thread.
-  const openGraph =
-    threadMeta && threadMeta.threadId === threadId
-      ? (threadMeta.metadata["graph_id"] as string | undefined)
-      : undefined;
+  const openGraph = openMeta?.metadata["graph_id"] as string | undefined;
   const threadGraph =
     openGraph && CHAT_GRAPHS.has(openGraph) ? openGraph : CHAT_GRAPH_ID;
   // Computed from the folder answer this render carries, so it can never
   // belong to another folder than the one the gate was opened for.
   const threadAssistantId = assistantIdFor(workspace, threadGraph) ?? "";
 
-  // The open thread is gone: hand back an unsent message and start over.
-  const reportThreadUnavailable = (threadId: string) => {
+  // A message the backend refused before running it goes back to the
+  // composer, which registers how (`setRefusalHandler`).
+  const refusalHandlerRef = useRef<((text: string) => void) | null>(null);
+  const setRefusalHandler = useCallback(
+    (handler: ((text: string) => void) | null) => {
+      refusalHandlerRef.current = handler;
+    },
+    []
+  );
+  // The message the latest send submitted, if the stream still ends on it:
+  // the one a gone thread leaves unsent.
+  const takeUnsentMessage = (): string | null => {
     const last = streamRef.current.messages.at(-1);
     const unsentMessage =
       last &&
@@ -334,6 +350,17 @@ export function useChat({
         ? extractStringFromMessageContent(last).trim() || null
         : null;
     lastSubmittedHumanIdRef.current = null;
+    return unsentMessage;
+  };
+
+  // The open thread is gone: hand back an unsent message and start over.
+  // `inComposer`: it is back in the composer already, and goes along with
+  // the draft.
+  const reportThreadUnavailable = (
+    threadId: string,
+    unsentMessage = takeUnsentMessage(),
+    inComposer = false
+  ) => {
     if (onThreadUnavailable) {
       if (onThreadUnavailable({ threadId, unsentMessage }) === false) {
         return;
@@ -342,8 +369,8 @@ export function useChat({
       void setThreadId(null);
     }
     toast.error(
-      unsentMessage
-        ? onThreadUnavailable
+      unsentMessage || inComposer
+        ? onThreadUnavailable || inComposer
           ? "This conversation is no longer available. Started a new chat; your unsent message is back in the composer."
           : "This conversation is no longer available. Started a new chat; your last message was not sent."
         : "This conversation is no longer available. Started a new chat."
@@ -408,7 +435,8 @@ export function useChat({
         // say why it refused.
         const before = sentForRef.current;
         void refreshWorkspace().then((next) => {
-          if (!mountedRef.current) return;
+          // A read cut short by a switch to another backend has no answer.
+          if (!mountedRef.current || next.status === "pending") return;
           if (servedKey(next) !== before) {
             toast.info(
               "The backend now serves another folder. This conversation was made for the previous one, so it is read-only here; start a new chat to continue."
@@ -427,18 +455,41 @@ export function useChat({
         isMissingThreadOrAssistantError(error) &&
         /thread or assistant not found/i.test(formatStreamError(error))
       ) {
+        // At once, before the check: the folder read closes the gate, so
+        // nothing else runs into the same 404 meanwhile, and the message goes
+        // back to the composer, ahead of what was queued after it. The
+        // refusal belongs to the thread open now (a new chat's thread was
+        // just made).
+        const unsent = takeUnsentMessage();
+        const refusedOn = runStateRef.current.threadId;
+        void refreshWorkspace();
+        const handBack = refusalHandlerRef.current;
+        const inComposer = unsent !== null && handBack !== null;
+        if (inComposer) handBack(unsent);
         // Only a 404 means the thread is gone; any other failure to check
-        // keeps the conversation.
-        void assistantIsMissing(client, threadId).then((missing) => {
-          if (!mountedRef.current) return;
-          if (!missing) {
-            reportThreadUnavailable(threadId as string);
+        // keeps the conversation. One toast, for what the check found.
+        void assistantIsMissing(client, refusedOn).then((missing) => {
+          // Another thread is open since (a new chat getting its id is not
+          // one): it replaced this composer, so there is nothing to say.
+          const openNow = runStateRef.current.threadId;
+          if (
+            !mountedRef.current ||
+            (refusedOn !== null && openNow !== refusedOn)
+          ) {
             return;
           }
-          lastSubmittedHumanIdRef.current = null;
-          void refreshWorkspace();
+          if (!missing) {
+            reportThreadUnavailable(
+              refusedOn as string,
+              inComposer ? null : unsent,
+              inComposer
+            );
+            return;
+          }
           toast.error(
-            "The backend lost this folder's assistant; it is being recreated. Send your message again."
+            inComposer
+              ? "The backend lost this folder's assistant; it is being recreated. Your message is back in the composer: send it again."
+              : "The backend lost this folder's assistant; it is being recreated."
           );
         });
         return;
@@ -505,9 +556,9 @@ export function useChat({
     | undefined;
   const folders: ThreadFolders | null | undefined = !threadId
     ? null
-    : threadMeta?.threadId !== threadId || stream.isThreadLoading
+    : !openMeta || stream.isThreadLoading
     ? undefined
-    : threadFolders(threadMeta.metadata, latestCheckpointMetadata);
+    : threadFolders(openMeta.metadata, latestCheckpointMetadata);
   const binding = threadBinding(workspace, folders, CHAT_GRAPHS);
   // One gate for every run: an assistant for the current folder answer, a
   // thread that may run here, and no folder read in progress.
@@ -719,9 +770,9 @@ export function useChat({
   // Seed the override from the thread's own metadata (fetched once per
   // thread, above), except on the thread a pending pick was just written to.
   useEffect(() => {
-    if (!threadId || threadMeta?.threadId !== threadId) return;
+    if (!threadId || !openMeta) return;
     if (wrotePendingForRef.current === threadId) return;
-    const raw = threadMeta.metadata[MODEL_OVERRIDE_METADATA_KEY];
+    const raw = openMeta.metadata[MODEL_OVERRIDE_METADATA_KEY];
     if (
       raw &&
       typeof raw === "object" &&
@@ -736,7 +787,7 @@ export function useChat({
     } else {
       setModelOverrideState(null);
     }
-  }, [threadId, threadMeta]);
+  }, [threadId, openMeta]);
 
   // Persist + apply locally. When the thread row exists, writes metadata
   // first so a reload keeps the choice. Pre-thread (new chat with no
@@ -1187,6 +1238,8 @@ export function useChat({
     canSend,
     /** Every run path checks this first, at the moment it acts. */
     canRunNow,
+    /** Where a refused message goes back to: the composer. */
+    setRefusalHandler,
     interrupt,
     sendMessage,
     abortRun,

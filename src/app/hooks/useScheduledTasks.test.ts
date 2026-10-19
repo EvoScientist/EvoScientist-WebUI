@@ -14,6 +14,7 @@ vi.mock("@/lib/config", () => ({
 }));
 
 import {
+  assistantRecoveryNeeded,
   createScheduledTask,
   listScheduledTasks,
   runScheduledTaskNow,
@@ -235,5 +236,33 @@ describe("listScheduledTasks", () => {
       ["local", "Europe/London"],
       ["legacy", null],
     ]);
+  });
+});
+
+describe("assistant recovery", () => {
+  it("reads the folder again when the scheduler assistant is gone", async () => {
+    // The server's answer to a cron for an assistant it doesn't have, through
+    // the real SDK client.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              detail: `Assistant '${target.assistantId}' not found`,
+            }),
+            { status: 404, headers: { "Content-Type": "application/json" } }
+          )
+      )
+    );
+
+    const error = await createScheduledTask({
+      name: "Daily",
+      prompt: "Brief me",
+      schedule: "0 9 * * *",
+      target,
+    }).catch((e: unknown) => e);
+
+    expect(assistantRecoveryNeeded(error)).toBe(true);
   });
 });

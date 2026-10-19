@@ -102,7 +102,7 @@ export function threadBinding(
     };
   }
   if (workspace.status === "legacy") return { kind: "open" };
-  if (workspace.runDir && graphId !== "scheduler") {
+  if (workspace.runDir && graphId !== SCHEDULER_GRAPH_ID) {
     return {
       kind: "readOnly",
       reason:

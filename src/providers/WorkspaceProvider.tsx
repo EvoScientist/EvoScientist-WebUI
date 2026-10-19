@@ -105,8 +105,9 @@ async function readWorkspace(
 }
 
 /**
- * The backend's folder for the WebUI. Mount it once per backend
- * (`key={deploymentUrl}`): its state belongs to the client it was made with.
+ * The backend's folder for the WebUI. On another backend it starts over: the
+ * last backend's answer is dropped in the same render, so nothing renders or
+ * runs on it while the new one is read.
  */
 export function WorkspaceProvider({
   children,
@@ -118,27 +119,51 @@ export function WorkspaceProvider({
   apiKey: string;
 }) {
   const client = useClient();
+  const backend = `${deploymentUrl}\n${apiKey}`;
   const [state, setState] = useState<{
+    backend: string;
     workspace: WorkspaceState;
     refreshing: boolean;
     error: string | null;
-  }>({ workspace: { status: "pending" }, refreshing: true, error: null });
+  }>({
+    backend,
+    workspace: { status: "pending" },
+    refreshing: true,
+    error: null,
+  });
+  if (state.backend !== backend) {
+    setState({
+      backend,
+      workspace: { status: "pending" },
+      refreshing: true,
+      error: null,
+    });
+  }
 
   const gateRef = useRef(false);
   // One read at a time; a request during it reads once more afterwards, so
   // the published answer is never older than the latest request.
   const runningRef = useRef<{ promise: Promise<WorkspaceState> } | null>(null);
   const againRef = useRef(false);
-  // Made per mount: React's development double mount aborts the first one.
-  const controllerRef = useRef<AbortController | null>(null);
+  // Made per mount and per backend: the last one's read is aborted, as is
+  // the first mount's under React's development double mount.
+  const controllerRef = useRef<{
+    backend: string;
+    controller: AbortController;
+  } | null>(null);
 
   const refresh = useCallback((): Promise<WorkspaceState> => {
+    // A `refresh` kept from before a switch to another backend (a request
+    // that failed late) reads nothing: the current backend's is in charge.
+    const current = controllerRef.current;
+    if (current?.backend !== backend) {
+      return Promise.resolve({ status: "pending" });
+    }
+    const { controller } = current;
     gateRef.current = false;
     setState((prev) =>
       prev.refreshing ? prev : { ...prev, refreshing: true }
     );
-    const controller = controllerRef.current;
-    if (!controller) return Promise.resolve({ status: "pending" });
     if (runningRef.current) {
       againRef.current = true;
       return runningRef.current.promise;
@@ -160,29 +185,41 @@ export function WorkspaceProvider({
               error: error instanceof Error ? error.message : String(error),
             }))
         );
-      } while (answer && againRef.current);
+      } while (answer && !controller.signal.aborted && againRef.current);
       // Done before publishing, in the same step: a request from here on
       // starts a new read rather than joining this finished one.
       if (runningRef.current === run) runningRef.current = null;
-      if (!answer) return { status: "pending" } as WorkspaceState; // unmounted
-      setState({ workspace: answer, refreshing: false, error: null });
-      return answer;
+      // Unmounted, or moved to another backend while `assistants.create`,
+      // which takes no signal, was in flight: the answer is the last one's.
+      if (!answer || controller.signal.aborted) {
+        return { status: "pending" } as WorkspaceState;
+      }
+      const published = answer;
+      setState((prev) => ({
+        ...prev,
+        workspace: published,
+        refreshing: false,
+        error: null,
+      }));
+      return published;
     })();
     runningRef.current = run;
     return run.promise;
-  }, [client, deploymentUrl, apiKey]);
+  }, [client, deploymentUrl, apiKey, backend]);
 
   useEffect(() => {
     const controller = new AbortController();
-    controllerRef.current = controller;
+    controllerRef.current = { backend, controller };
     runningRef.current = null;
     againRef.current = false;
     void refresh();
     return () => {
       controller.abort();
-      if (controllerRef.current === controller) controllerRef.current = null;
+      if (controllerRef.current?.controller === controller) {
+        controllerRef.current = null;
+      }
     };
-  }, [refresh]);
+  }, [refresh, backend]);
 
   // Open the gate only once the answer has rendered (see `isReady`).
   useLayoutEffect(() => {

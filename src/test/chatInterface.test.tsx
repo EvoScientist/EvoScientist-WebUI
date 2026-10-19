@@ -283,6 +283,102 @@ describe("ChatInterface composition", () => {
     ).toBe(true);
   });
 
+  it("makes the chat read-only while a run-mode session holds the backend", () => {
+    const { container } = renderChatInterface({
+      workspace: mockWorkspace({
+        ...readyWorkspace("/home/you/projA"),
+        runDir: "/home/you/projA/runs/r1",
+      }),
+    });
+    const textarea = container.querySelector("textarea")!;
+    expect(textarea.disabled).toBe(true);
+    expect(textarea.placeholder).toMatch(/run folder/);
+
+    act(() => {
+      stream.setMessages([humanTurn("hi")]);
+      stream.setInterrupt(askUserInterrupt("what do you want?"));
+    });
+    expect(screen.queryByTestId("stub-AskUserInterrupt")).toBeNull();
+  });
+
+  // "first" refused, with "second" queued behind it while it ran and
+  // `draft` typed since.
+  async function refuseWithQueued(draft = "") {
+    const { container } = renderChatInterface({ workspace: mockWorkspace() });
+    const textarea = container.querySelector("textarea")!;
+    fireEvent.change(textarea, { target: { value: "first" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+    const sent = stream.getSubmitCalls()[0]?.values as {
+      messages: Message[];
+    };
+    act(() => {
+      stream.setMessages([...sent.messages]);
+      stream.setLoading(true);
+    });
+    fireEvent.change(textarea, { target: { value: "second" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+    fireEvent.change(textarea, { target: { value: draft } });
+    act(() => {
+      stream.emitError(
+        new Error('HTTP 404: {"detail":"Thread or assistant not found."}')
+      );
+      stream.setLoading(false);
+    });
+    return { container, textarea };
+  }
+  const submitted = () =>
+    stream
+      .getSubmitCalls()
+      .map(
+        (call) =>
+          (call.values as { messages: Message[] }).messages.at(-1)?.content
+      );
+
+  it("puts a refused message back in the composer with what was queued after it", async () => {
+    const { textarea } = await refuseWithQueued("my draft");
+
+    expect(textarea.value).toBe("first\n\nsecond\n\nmy draft");
+    expect(screen.queryByLabelText("Queued messages")).toBeNull();
+  });
+
+  it("sends nothing on its own after a refusal", async () => {
+    await refuseWithQueued();
+
+    // Runs from elsewhere come and go; what came back stays in the composer.
+    act(() => {
+      stream.setLoading(true);
+    });
+    act(() => {
+      stream.setLoading(false);
+    });
+
+    expect(submitted()).toEqual(["first"]);
+  });
+
+  it("keeps a queued message while the folder is being read again", () => {
+    let readyNow = true;
+    const { container } = renderChatInterface({
+      workspace: { ...mockWorkspace(), isReady: () => readyNow },
+    });
+    act(() => {
+      stream.setMessages([humanTurn("hi")]);
+      stream.setLoading(true);
+    });
+    const textarea = container.querySelector("textarea")!;
+    fireEvent.change(textarea, { target: { value: "follow-up" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    readyNow = false;
+    act(() => {
+      stream.setLoading(false);
+    });
+
+    expect(stream.getSubmitCalls()).toHaveLength(0);
+    expect(
+      screen.getAllByRole("button", { name: "Steer with this message next" })
+    ).toHaveLength(1);
+  });
+
   it("disables the composer submit button while a run is in flight", () => {
     const { container } = renderChatInterface();
     act(() => {

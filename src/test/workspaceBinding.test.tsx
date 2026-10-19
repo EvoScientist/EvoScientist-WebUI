@@ -3,7 +3,9 @@
 // Runs carry the backend's folder, and a thread that belongs elsewhere is
 // read-only.
 
-import { act, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
+import type { ReactNode } from "react";
+import { SWRConfig } from "swr";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 import {
@@ -58,8 +60,14 @@ vi.mock("sonner", () => ({
 }));
 
 import { renderChat } from "@/test/renderChat";
-import { mockWorkspace, readyWorkspace } from "@/test/mockWorkspace";
+import {
+  TestWorkspaceProvider,
+  mockWorkspace,
+  readyWorkspace,
+} from "@/test/mockWorkspace";
 import { workspaceAssistantId } from "@/lib/workspaceAssistant";
+import { useThreads } from "@/app/hooks/useThreads";
+import type { WorkspaceContextValue } from "@/providers/WorkspaceProvider";
 
 const KEY = "/home/you/projA";
 const ready = () => mockWorkspace(readyWorkspace(KEY));
@@ -283,7 +291,143 @@ describe("workspace binding", () => {
       );
     });
 
-    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        expect.stringContaining("serves workspace /x")
+      )
+    );
     expect(workspace.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("says nothing when the read after a mismatch is cut short by another backend", async () => {
+    vi.mocked(toast.info).mockClear();
+    // The read was aborted by a switch to another backend: it has no answer.
+    const workspace = {
+      ...ready(),
+      refresh: vi.fn(async () => ({ status: "pending" } as const)),
+    };
+    renderChat({ connected: true, workspace });
+
+    act(() => {
+      stream.emitError(
+        Object.assign(
+          new Error("This EvoScientist server serves workspace /x"),
+          {
+            name: "RunFolderMismatchError",
+          }
+        )
+      );
+    });
+
+    await waitFor(() => expect(workspace.refresh).toHaveBeenCalled());
+    await act(async () => {});
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(toast.info).not.toHaveBeenCalled();
+  });
+
+  it("forgets the thread's folder on another backend until that one answers", async () => {
+    openThread({ graph_id: "EvoScientist", workspace_dir: KEY });
+    const { result, rerender } = renderChat({ workspace: ready() });
+    await waitFor(() => expect(result.current.canSend).toBe(true));
+
+    // Another backend, whose answer for the thread hasn't come yet.
+    const other = new MockClient();
+    other.threads.get.mockImplementation(() => new Promise(() => {}));
+    installMockClient(other);
+    rerender();
+
+    expect(result.current.binding.kind).toBe("pending");
+    expect(result.current.canSend).toBe(false);
+  });
+
+  it("sends only the model override in the run config", async () => {
+    openThread({
+      graph_id: "EvoScientist",
+      workspace_dir: KEY,
+      model_override: { model: "m-1", model_provider: "p-1" },
+    });
+    const { result } = renderChat({ workspace: ready() });
+    await waitFor(() => expect(result.current.canSend).toBe(true));
+    await waitFor(() =>
+      expect(result.current.modelOverride).toEqual({
+        model: "m-1",
+        model_provider: "p-1",
+      })
+    );
+
+    act(() => {
+      result.current.sendMessage("hi");
+    });
+
+    const options = stream.getSubmitCalls()[0].options as { config?: unknown };
+    expect(options.config).toEqual({
+      configurable: { model: "m-1", model_provider: "p-1" },
+    });
+  });
+
+  it("runs the chat on the folder's assistant", () => {
+    renderChat({ workspace: ready() });
+    expect(stream.getOptions()?.assistantId).toBe(
+      workspaceAssistantId("EvoScientist", KEY)
+    );
+  });
+
+  it("addresses the chat graph by name on a core without the route", () => {
+    renderChat({ connected: true });
+    expect(stream.getOptions()?.assistantId).toBe("EvoScientist");
+  });
+});
+
+describe("thread list", () => {
+  beforeEach(() => {
+    localStorage.setItem(
+      "evoscientist-config",
+      JSON.stringify({ deploymentUrl: "http://127.0.0.1:6174" })
+    );
+  });
+
+  afterEach(() => {
+    localStorage.removeItem("evoscientist-config");
+    vi.unstubAllGlobals();
+  });
+
+  async function searchedMetadata(workspace: WorkspaceContextValue) {
+    const bodies: Array<{ metadata?: unknown }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input).endsWith("/threads/search")) {
+          bodies.push(JSON.parse(String(init?.body)));
+        }
+        return new Response("[]", {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      })
+    );
+    renderHook(() => useThreads({}), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <SWRConfig value={{ provider: () => new Map() }}>
+          <TestWorkspaceProvider value={workspace}>
+            {children}
+          </TestWorkspaceProvider>
+        </SWRConfig>
+      ),
+    });
+    await waitFor(() => expect(bodies.length).toBeGreaterThan(0));
+    return bodies[0].metadata;
+  }
+
+  it("lists the chat threads of the backend's folder", async () => {
+    expect(await searchedMetadata(ready())).toEqual({
+      graph_id: "EvoScientist",
+      workspace_dir: KEY,
+    });
+  });
+
+  it("lists the chat graph's threads on a core without the route", async () => {
+    expect(await searchedMetadata(mockWorkspace())).toEqual({
+      graph_id: "EvoScientist",
+    });
   });
 });

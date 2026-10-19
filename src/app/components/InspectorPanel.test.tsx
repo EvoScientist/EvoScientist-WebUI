@@ -28,9 +28,26 @@ vi.mock("@/app/components/WorkspacePanel", async () => {
     },
   };
 });
-vi.mock("@/app/components/AgentsPanel", () => ({
-  AgentsPanel: () => <div>agents</div>,
+// The backend the page talks to; a test can move it to another one.
+const deployment = vi.hoisted(() => ({
+  deploymentUrl: "http://127.0.0.1:6174",
+  apiKey: "",
 }));
+vi.mock("@/providers/ClientProvider", () => ({
+  useDeployment: () => ({ ...deployment }),
+}));
+const agentsMounts = vi.hoisted(() => ({ count: 0 }));
+vi.mock("@/app/components/AgentsPanel", async () => {
+  const { useEffect } = await import("react");
+  return {
+    AgentsPanel: () => {
+      useEffect(() => {
+        agentsMounts.count += 1;
+      }, []);
+      return <div>agents</div>;
+    },
+  };
+});
 vi.mock("@/app/components/FilePreviewPane", async () => {
   const { useFilePane } = await import("@/providers/filePaneContext");
   return {
@@ -94,6 +111,24 @@ describe("InspectorPanel", () => {
     expect(isHidden("tree")).toBe(true);
     expect(isHidden("preview")).toBe(true);
     expect(paneMode("agents")).toBe("tree");
+  });
+
+  it("starts the Agents panel over on another backend", () => {
+    const rerender = { current: () => {} };
+    function Host() {
+      const [, setTick] = useState(0);
+      rerender.current = () => setTick((n) => n + 1);
+      return <InspectorPanel onClose={() => {}} />;
+    }
+    renderWithFilePane(<Host />);
+    fireEvent.click(screen.getByRole("tab", { name: "Agents" }));
+    const mounts = agentsMounts.count;
+
+    deployment.deploymentUrl = "http://127.0.0.1:7000";
+    act(() => rerender.current());
+
+    expect(agentsMounts.count).toBe(mounts + 1);
+    deployment.deploymentUrl = "http://127.0.0.1:6174";
   });
 
   describe("focus", () => {

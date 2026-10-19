@@ -18,6 +18,8 @@ vi.mock("@/providers/ClientProvider", () => ({
 import { WorkspaceProvider, useWorkspace } from "./WorkspaceProvider";
 import { assistantIdFor } from "@/lib/workspaceSession";
 import { workspaceAssistantId } from "@/lib/workspaceAssistant";
+import { useSchedulerTarget } from "@/app/hooks/useScheduledTasks";
+import { RUN_GRAPHS } from "@/lib/threadBinding";
 
 function json(status: number, body: unknown = {}) {
   return Promise.resolve(
@@ -199,6 +201,213 @@ describe("WorkspaceProvider", () => {
 
     await waitFor(() => expect(result.current.isReady()).toBe(true));
     expect(result.current.workspace).toMatchObject({ key: "/home/you/projA" });
+  });
+
+  it("starts again on another backend and drops the last one's answer", async () => {
+    const folders: Record<string, string> = {
+      "http://127.0.0.1:6174": "/home/you/projA",
+      "http://127.0.0.1:7000": "/srv/projB",
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/workspace/local")) return json(404);
+        return served(folders[url.replace("/api/workspace", "")]);
+      })
+    );
+    // projA's assistants hang once asked to, as `assistants.create` takes no
+    // abort signal.
+    let holdA = false;
+    const heldA: Array<() => void> = [];
+    create.mockImplementation(
+      ({ metadata }: { metadata: { workspace_dir: string } }) =>
+        holdA && metadata.workspace_dir === "/home/you/projA"
+          ? new Promise((resolve) => heldA.push(() => resolve({})))
+          : Promise.resolve({})
+    );
+    let deploymentUrl = "http://127.0.0.1:6174";
+    const { result, rerender } = renderHook(() => useWorkspace(), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <WorkspaceProvider
+          deploymentUrl={deploymentUrl}
+          apiKey=""
+        >
+          {children}
+        </WorkspaceProvider>
+      ),
+    });
+    await waitFor(() => expect(result.current.isReady()).toBe(true));
+
+    holdA = true;
+    act(() => {
+      void result.current.refresh();
+    });
+    deploymentUrl = "http://127.0.0.1:7000";
+    rerender();
+    expect(result.current.workspace.status).toBe("pending");
+    expect(result.current.isReady()).toBe(false);
+    await waitFor(() =>
+      expect(result.current.workspace).toMatchObject({ key: "/srv/projB" })
+    );
+
+    // The last backend's read ends late, and changes nothing.
+    await act(async () => {
+      heldA.forEach((release) => release());
+    });
+    expect(result.current.workspace).toMatchObject({ key: "/srv/projB" });
+    expect(result.current.isReady()).toBe(true);
+  });
+
+  it("reads nothing for a refresh kept from before a backend switch", async () => {
+    const folders: Record<string, string> = {
+      "http://127.0.0.1:6174": "/home/you/projA",
+      "http://127.0.0.1:7000": "/srv/projB",
+    };
+    const reads: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/workspace/local")) return json(404);
+        const base = url.replace("/api/workspace", "");
+        reads.push(base);
+        return served(folders[base]);
+      })
+    );
+    create.mockResolvedValue({});
+    let deploymentUrl = "http://127.0.0.1:6174";
+    const { result, rerender } = renderHook(() => useWorkspace(), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <WorkspaceProvider
+          deploymentUrl={deploymentUrl}
+          apiKey=""
+        >
+          {children}
+        </WorkspaceProvider>
+      ),
+    });
+    await waitFor(() => expect(result.current.isReady()).toBe(true));
+    const staleRefresh = result.current.refresh;
+    deploymentUrl = "http://127.0.0.1:7000";
+    rerender();
+    await waitFor(() =>
+      expect(result.current.workspace).toMatchObject({ key: "/srv/projB" })
+    );
+    const readsBefore = reads.length;
+
+    // A request made on the old backend fails late and asks to read again.
+    await act(async () => {
+      await staleRefresh();
+    });
+
+    expect(reads).toHaveLength(readsBefore);
+    expect(result.current.workspace).toMatchObject({ key: "/srv/projB" });
+    expect(result.current.isReady()).toBe(true);
+  });
+
+  it("keeps a re-read asked for on the new backend while the old one's read ends", async () => {
+    const folders: Record<string, string> = {
+      "http://127.0.0.1:6174": "/home/you/projA",
+      "http://127.0.0.1:7000": "/srv/projB",
+    };
+    const reads: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/workspace/local")) return json(404);
+        const base = url.replace("/api/workspace", "");
+        reads.push(base);
+        return served(folders[base]);
+      })
+    );
+    const held: Record<string, Array<() => void>> = {
+      "/home/you/projA": [],
+      "/srv/projB": [],
+    };
+    const holding = new Set<string>();
+    create.mockImplementation(
+      ({ metadata }: { metadata: { workspace_dir: string } }) =>
+        holding.has(metadata.workspace_dir)
+          ? new Promise((resolve) =>
+              held[metadata.workspace_dir].push(() => resolve({}))
+            )
+          : Promise.resolve({})
+    );
+    let deploymentUrl = "http://127.0.0.1:6174";
+    const { result, rerender } = renderHook(() => useWorkspace(), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <WorkspaceProvider
+          deploymentUrl={deploymentUrl}
+          apiKey=""
+        >
+          {children}
+        </WorkspaceProvider>
+      ),
+    });
+    await waitFor(() => expect(result.current.isReady()).toBe(true));
+
+    holding.add("/home/you/projA");
+    act(() => {
+      void result.current.refresh();
+    });
+    holding.add("/srv/projB");
+    deploymentUrl = "http://127.0.0.1:7000";
+    rerender();
+    await waitFor(() =>
+      expect(held["/srv/projB"]).toHaveLength(RUN_GRAPHS.size)
+    );
+    // Asked for on the new backend, while both reads are in flight.
+    act(() => {
+      void result.current.refresh();
+    });
+    await act(async () => {
+      held["/home/you/projA"].forEach((release) => release());
+    });
+    holding.delete("/srv/projB");
+    await act(async () => {
+      held["/srv/projB"].forEach((release) => release());
+    });
+
+    await waitFor(() => expect(result.current.isReady()).toBe(true));
+    expect(reads.filter((url) => url === "http://127.0.0.1:7000")).toHaveLength(
+      2
+    );
+  });
+
+  it("gives scheduled tasks the folder's scheduler, and none while it is read again", async () => {
+    stubBackend(() => served("/home/you/projA"));
+    create.mockResolvedValue({});
+    const { result } = renderHook(
+      () => ({ ...useWorkspace(), target: useSchedulerTarget() }),
+      {
+        wrapper: ({ children }: { children: ReactNode }) => (
+          <WorkspaceProvider
+            deploymentUrl="http://127.0.0.1:6174"
+            apiKey=""
+          >
+            {children}
+          </WorkspaceProvider>
+        ),
+      }
+    );
+    await waitFor(() =>
+      expect(result.current.target).toEqual({
+        assistantId: workspaceAssistantId("scheduler", "/home/you/projA"),
+        workspaceDir: "/home/you/projA",
+      })
+    );
+
+    let read!: Promise<unknown>;
+    act(() => {
+      read = result.current.refresh();
+    });
+    expect(result.current.target).toBeNull();
+    await act(async () => {
+      await read;
+    });
+    expect(result.current.target).not.toBeNull();
   });
 
   it("doesn't hold the chat up when the local files check fails", async () => {

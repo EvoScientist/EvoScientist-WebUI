@@ -19,6 +19,8 @@ import {
 const queryState = vi.hoisted(() => ({
   initialThreadId: "5f2c8e6a-9b1d-4c3e-8a7f-1d2e3c4b5a69" as string | null,
   setThreadId: vi.fn(),
+  // Moves the rendered hook to another thread, as navigating does.
+  switchTo: null as ((next: string | null) => void) | null,
 }));
 
 vi.mock("@langchain/langgraph-sdk/react", async (importOriginal) => {
@@ -46,6 +48,7 @@ vi.mock("nuqs", async () => {
         queryState.setThreadId(next);
         setThreadId(next);
       }, []);
+      queryState.switchTo = setThreadId;
       return [threadId, updateThreadId];
     },
   };
@@ -172,7 +175,7 @@ describe("stale thread recovery", () => {
       })
     );
     expect(toast.error).toHaveBeenCalledWith(
-      "This conversation is no longer available. Started a new chat; your unsent message is back in the composer."
+      expect.stringContaining("back in the composer")
     );
   });
 
@@ -307,6 +310,164 @@ describe("stale thread recovery", () => {
     await waitFor(() => expect(workspace.refresh).toHaveBeenCalled());
     expect(onThreadUnavailable).not.toHaveBeenCalled();
     expect(queryState.setThreadId).not.toHaveBeenCalled();
+  });
+
+  it("hands the message to the composer at once when its run 404s for a missing assistant", async () => {
+    const workspace = mockWorkspace();
+    const { result } = renderChat({ workspace });
+    await waitFor(() => expect(result.current.canSend).toBe(true));
+    const handBack = vi.fn();
+    act(() => {
+      result.current.setRefusalHandler(handBack);
+    });
+
+    act(() => {
+      result.current.sendMessage("hello there");
+    });
+    const sent = stream.getSubmitCalls()[0]?.values as {
+      messages: Message[];
+    };
+    act(() => {
+      stream.setMessages([...sent.messages]);
+    });
+    act(() => {
+      stream.emitError(
+        new Error('HTTP 404: {"detail":"Thread or assistant not found."}')
+      );
+    });
+
+    // Back before the backend is asked about the thread.
+    expect(handBack).toHaveBeenCalledWith("hello there");
+    expect(workspace.refresh).toHaveBeenCalled();
+    // One toast, once the check has found the assistant missing.
+    await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(1));
+    expect(toast.error).toHaveBeenCalledWith(
+      expect.stringContaining("lost this folder's assistant")
+    );
+    expect(toast.error).toHaveBeenCalledWith(
+      expect.stringContaining("back in the composer")
+    );
+  });
+
+  it("hands back nothing that already reached the thread", async () => {
+    const { result } = renderChat({ workspace: mockWorkspace() });
+    await waitFor(() => expect(result.current.canSend).toBe(true));
+    const handBack = vi.fn();
+    act(() => {
+      result.current.setRefusalHandler(handBack);
+    });
+    act(() => {
+      result.current.sendMessage("hello there");
+    });
+    const sent = stream.getSubmitCalls()[0]?.values as {
+      messages: Message[];
+    };
+    // The thread has it, and an answer after it.
+    act(() => {
+      stream.setMessages([
+        ...sent.messages,
+        { id: "ai-1", type: "ai", content: "Hi." } as Message,
+      ]);
+    });
+
+    act(() => {
+      stream.emitError(
+        new Error('HTTP 404: {"detail":"Thread or assistant not found."}')
+      );
+    });
+
+    expect(handBack).not.toHaveBeenCalled();
+  });
+
+  it("keeps the check of a new chat's refusal once the chat has its thread", async () => {
+    queryState.initialThreadId = null;
+    const pending: Array<() => void> = [];
+    getActiveMockClient().threads.get.mockImplementation(
+      () => new Promise((resolve) => pending.push(() => resolve({})))
+    );
+    renderChat({ connected: false });
+
+    act(() => {
+      stream.emitError(
+        new Error('HTTP 404: {"detail":"Thread or assistant not found."}')
+      );
+    });
+    // The SDK made the thread before the run was refused.
+    act(() => {
+      queryState.switchTo!("0c4f1e2d-7a6b-4c5d-9e8f-1a2b3c4d5e6f");
+    });
+    await act(async () => {
+      pending.forEach((release) => release());
+    });
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        expect.stringContaining("lost this folder's assistant")
+      )
+    );
+  });
+
+  it("drops the check of a refusal once another thread is open", async () => {
+    const pending: Array<() => void> = [];
+    getActiveMockClient().threads.get.mockImplementation(
+      () => new Promise((resolve) => pending.push(() => resolve({})))
+    );
+    const onThreadUnavailable = vi.fn();
+    renderChat({ connected: false, onThreadUnavailable });
+
+    act(() => {
+      stream.emitError(
+        new Error('HTTP 404: {"detail":"Thread or assistant not found."}')
+      );
+    });
+    act(() => {
+      queryState.switchTo!("0c4f1e2d-7a6b-4c5d-9e8f-1a2b3c4d5e6f");
+    });
+    await act(async () => {
+      pending.forEach((release) => release());
+    });
+
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(onThreadUnavailable).not.toHaveBeenCalled();
+  });
+
+  it("sends a handed-back message to the new chat with the draft", async () => {
+    threadGone();
+    const onThreadUnavailable = vi.fn();
+    const { result } = renderChat({ connected: true, onThreadUnavailable });
+    await waitFor(() => expect(result.current.canSend).toBe(true));
+    act(() => {
+      result.current.setRefusalHandler(() => {});
+    });
+
+    act(() => {
+      result.current.sendMessage("hello there");
+    });
+    const sent = stream.getSubmitCalls()[0]?.values as {
+      messages: Message[];
+    };
+    act(() => {
+      stream.setMessages([...sent.messages]);
+    });
+    act(() => {
+      stream.emitError(
+        new Error('HTTP 404: {"detail":"Thread or assistant not found."}')
+      );
+    });
+
+    // The page takes it with the composer's draft, so it isn't reported
+    // twice.
+    await waitFor(() =>
+      expect(onThreadUnavailable).toHaveBeenCalledWith({
+        threadId: "5f2c8e6a-9b1d-4c3e-8a7f-1d2e3c4b5a69",
+        unsentMessage: null,
+      })
+    );
+    // One toast: the conversation is gone, not the assistant.
+    expect(toast.error).toHaveBeenCalledTimes(1);
+    expect(toast.error).toHaveBeenCalledWith(
+      expect.stringContaining("no longer available")
+    );
   });
 });
 

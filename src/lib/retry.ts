@@ -5,15 +5,16 @@ export function sleep(ms: number, signal: AbortSignal): Promise<boolean> {
       resolve(false);
       return;
     }
-    const timer = setTimeout(() => resolve(true), ms);
-    signal.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timer);
-        resolve(false);
-      },
-      { once: true }
-    );
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve(false);
+    };
+    // The signal can outlive many waits: drop the listener when the timer wins.
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve(true);
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
   });
 }
 

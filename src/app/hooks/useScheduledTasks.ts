@@ -6,10 +6,7 @@ import { Client } from "@langchain/langgraph-sdk";
 import { getConfig } from "@/lib/config";
 import { browserTimeZone } from "@/lib/cronUtils";
 import { patchClientStreamModes } from "@/lib/streamMode";
-import {
-  isMissingThreadOrAssistantError,
-  isRunFolderMismatchError,
-} from "@/lib/streamError";
+import { getHttpStatus, isRunFolderMismatchError } from "@/lib/streamError";
 import { SCHEDULER_GRAPH_ID } from "@/lib/workspaceAssistant";
 import { useWorkspace } from "@/providers/WorkspaceProvider";
 import { assistantIdFor } from "@/lib/workspaceSession";
@@ -208,20 +205,22 @@ export function useServedFolder(): string | null {
 }
 
 /**
- * Handle a failed create or run: a 404 for the assistant means the backend
- * lost this folder's assistants (a fresh store), and a folder mismatch means
- * it serves another folder now; either way the folder is read again.
+ * Whether a failed create or run means the folder must be read again. Save
+ * and Run now create the cron or thread they run on, so a 404 can only be
+ * the assistant: the backend lost this folder's assistants (a fresh store).
+ * `crons.create` says so as `Assistant '<id>' not found`, a run as `Thread or
+ * assistant not found.`. A folder mismatch means it serves another folder.
  */
+export function assistantRecoveryNeeded(error: unknown): boolean {
+  return getHttpStatus(error) === 404 || isRunFolderMismatchError(error);
+}
+
+/** Handle a failed create or run: read the folder again when it needs to. */
 export function useAssistantRecovery(): (error: unknown) => void {
   const { refresh } = useWorkspace();
   return useCallback(
     (error: unknown) => {
-      if (
-        isMissingThreadOrAssistantError(error) ||
-        isRunFolderMismatchError(error)
-      ) {
-        void refresh();
-      }
+      if (assistantRecoveryNeeded(error)) void refresh();
     },
     [refresh]
   );

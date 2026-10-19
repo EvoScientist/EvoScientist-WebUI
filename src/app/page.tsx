@@ -12,7 +12,7 @@ import { useQueryState } from "nuqs";
 import { getConfig, saveConfig, DeploymentConfig } from "@/lib/config";
 import { ConfigDialog } from "@/app/components/ConfigDialog";
 import { Button } from "@/components/ui/button";
-import { ClientProvider } from "@/providers/ClientProvider";
+import { ClientProvider, useDeployment } from "@/providers/ClientProvider";
 import { WorkspaceProvider, useWorkspace } from "@/providers/WorkspaceProvider";
 import {
   Settings,
@@ -64,6 +64,9 @@ function HomePageInner({
   setConfigDialogOpen,
   handleSaveConfig,
 }: HomePageInnerProps) {
+  const { deploymentUrl, apiKey } = useDeployment();
+  // Panels that hold one backend's data start over on another.
+  const backendKey = `${deploymentUrl}\n${apiKey}`;
   const [threadId, setThreadId] = useQueryState("threadId");
   const [sidebar, setSidebar] = useQueryState("sidebar");
   const [view, setView] = useQueryState("view");
@@ -525,7 +528,10 @@ function HomePageInner({
                   />
                 )}
                 {view === "schedule" && (
-                  <ScheduledTasksPanel onOpenThread={selectThread} />
+                  <ScheduledTasksPanel
+                    key={backendKey}
+                    onOpenThread={selectThread}
+                  />
                 )}
               </ResizablePanel>
 
@@ -629,8 +635,6 @@ function HomePageContent() {
       apiKey={langsmithApiKey}
     >
       <WorkspaceProvider
-        // Its state belongs to one backend: another one remounts it.
-        key={`${config.deploymentUrl}\n${langsmithApiKey}`}
         deploymentUrl={config.deploymentUrl}
         apiKey={langsmithApiKey}
       >

@@ -96,9 +96,8 @@ import {
 import { useAutoApproveInterrupt } from "@/app/hooks/useAutoApproveInterrupt";
 import { useApprovalPolicy } from "@/app/hooks/useApprovalPolicy";
 import { useWorkspace } from "@/providers/WorkspaceProvider";
-import { CHAT_GRAPH_ID } from "@/lib/workspaceAssistant";
 import { localFilesAvailable } from "@/lib/workspaceSession";
-import { folderName } from "@/lib/workspaceAssistant";
+import { CHAT_GRAPH_ID, folderName } from "@/lib/workspaceAssistant";
 import { useDeployment } from "@/providers/ClientProvider";
 import { resolveApprovalDecisions } from "@/lib/hitlPolicy";
 import {
@@ -210,6 +209,24 @@ function formatMessageWithFiles(
           .join("\n")}`
       : "";
   return `${text}${workspaceFiles}`;
+}
+
+// Everything typed but not sent, in order: the queued messages, then the
+// draft, with their attachments once each.
+function unsentSnapshot(
+  queued: QueuedMessage[],
+  draft: string,
+  attached: UploadedWorkspaceFile[]
+): ComposerSnapshot {
+  const text = [...queued.map((m) => m.text), draft]
+    .map((t) => t.trim())
+    .filter(Boolean)
+    .join("\n\n");
+  const seen = new Set<string>();
+  const files = [...queued.flatMap((m) => m.files), ...attached].filter(
+    (f) => !seen.has(f.path) && seen.add(f.path)
+  );
+  return { text, files };
 }
 
 function parseToolArgs(rawArgs: unknown): Record<string, unknown> {
@@ -391,21 +408,13 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       const getSnapshot = (): ComposerSnapshot => {
         const { input: draft, pendingFiles: attached } =
           composerStateRef.current;
-        const queued = queuedMessagesRef.current;
-        const text = [...queued.map((m) => m.text), draft]
-          .map((t) => t.trim())
-          .filter(Boolean)
-          .join("\n\n");
-        const seen = new Set<string>();
-        const files = [...queued.flatMap((m) => m.files), ...attached].filter(
-          (f) => !seen.has(f.path) && seen.add(f.path)
-        );
-        return { text, files };
+        return unsentSnapshot(queuedMessagesRef.current, draft, attached);
       };
       onComposerSnapshotReadyRef.current?.(getSnapshot);
       return () => onComposerSnapshotReadyRef.current?.(null);
     }, []);
     const queueIdRef = useRef(0);
+
     const draggedQueuedMessageIdRef = useRef<number | null>(null);
     const [threadId] = useQueryState("threadId");
     // Auto-approve is per-thread and persisted (see lib/autoApprove): it follows
@@ -501,7 +510,24 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       canRunNow,
       binding,
       canSend,
+      setRefusalHandler,
     } = useChatContext();
+    // A message the backend refused comes back to the composer at the moment
+    // it is refused, followed by everything queued after it and then the
+    // draft, and the queue is left empty: the fold the page makes for a
+    // thread that is gone, here for the open one. Nothing goes out on its
+    // own, and the order holds.
+    useEffect(() => {
+      setRefusalHandler((text) => {
+        const { input: draft, pendingFiles: attached } =
+          composerStateRef.current;
+        const rest = unsentSnapshot(queuedMessagesRef.current, draft, attached);
+        setQueuedMessages([]);
+        setInput([text, rest.text].filter(Boolean).join("\n\n"));
+        setPendingFiles(rest.files);
+      });
+      return () => setRefusalHandler(null);
+    }, [setRefusalHandler]);
     // The docked file pane (inspector) shows this conversation's agent-state
     // files and re-reads open files when the agent may have written them.
     const filePane = useFilePane();
