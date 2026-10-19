@@ -1954,6 +1954,8 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
           {!isAtBottom && processedMessages.length > 0 && (
             <button
               type="button"
+              // A mouse press would move focus here, then lose it on unmount.
+              onMouseDown={(e) => e.preventDefault()}
               onClick={(e) => {
                 void scrollToBottom();
                 // Pressing the button unmounts it. A keyboard or screen-reader

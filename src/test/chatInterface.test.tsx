@@ -1296,6 +1296,22 @@ describe("ChatInterface composition", () => {
       expect(document.activeElement).toBe(screen.getByRole("textbox"));
     });
 
+    // Browsers focus a button on mouse press; the button then unmounts and the
+    // draft in the composer loses its caret. The press must not take focus.
+    it("does not take focus on a mouse press", () => {
+      stickToBottomStub.isAtBottom = false;
+      renderChatInterface();
+      act(() => {
+        stream.setMessages([humanTurn("hi"), aiTurn("hello")]);
+      });
+
+      const notCancelled = fireEvent.mouseDown(
+        screen.getByRole("button", { name: "Jump to latest message" })
+      );
+
+      expect(notCancelled).toBe(false);
+    });
+
     // A tap must not focus the composer: on a phone that opens the keyboard.
     it("leaves focus alone on a pointer click", () => {
       stickToBottomStub.isAtBottom = false;
