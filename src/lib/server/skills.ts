@@ -10,8 +10,10 @@
 
 import { homedir } from "os";
 import { dirname, join, resolve, sep } from "path";
-import { promises as fs } from "fs";
+import { constants, promises as fs } from "fs";
 import { randomUUID } from "crypto";
+import { CORE_SCHEMA, load as loadYaml } from "js-yaml";
+import { PY_SPACE, pyStrip } from "@/lib/pythonWhitespace";
 
 const REPO = "EvoScientist/EvoSkills";
 const BRANCH = "main";
@@ -250,6 +252,191 @@ function parseFrontmatter(md: string): {
 } {
   const { frontmatter } = splitFrontmatter(md);
   return frontmatter ? parseFields(frontmatter) : {};
+}
+
+/** A skill the composer's `/` menu offers: one the backend can pin by name. */
+export interface PinnableSkill {
+  name: string;
+  description: string;
+  /** The workspace's own skills/ folder (which wins a name) or the global tier. */
+  source: "workspace" | "global";
+}
+
+// EvoScientist pins `/name` words of lowercase letters, digits and single
+// hyphens, up to 64 characters (`message_meta._SKILL_SLASH`).
+const PIN_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const MAX_PIN_NAME = 64;
+// The WebUI's own commands: typed, they never reach the backend as a pin.
+const WEBUI_COMMANDS = new Set(["model"]);
+// The backend reads a SKILL.md of up to 10 MiB whole
+// (`skills_manager._MAX_SKILL_MD_BYTES`), strictly as UTF-8.
+const MAX_SKILL_MD_BYTES = 10 * 1024 * 1024;
+const UTF8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+// The agent sees the first 1024 characters of a description (deepagents'
+// `MAX_SKILL_DESCRIPTION_LENGTH`): the menu needs no more, and the answer
+// stays small.
+const MAX_DESCRIPTION = 1024;
+
+/** `<tier>/<dir>/SKILL.md` as the backend's merged skills folder serves it,
+ *  decoded: null when the tier has no such regular file inside it (the next
+ *  tier is tried), "" when it has one the backend won't index, over 10 MiB or
+ *  not UTF-8 (the folder is skipped). Opened without blocking and checked
+ *  before it is read, so a FIFO can't hang the listing. */
+async function readIndexedSkillMd(
+  tier: string,
+  dir: string
+): Promise<string | null> {
+  let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
+  try {
+    const real = await fs.realpath(join(tier, dir, "SKILL.md"));
+    const root = await fs.realpath(tier);
+    if (!real.startsWith(root + sep)) return null;
+    handle = await fs.open(real, constants.O_RDONLY | constants.O_NONBLOCK);
+    const info = await handle.stat();
+    if (!info.isFile()) return null;
+    if (info.size > MAX_SKILL_MD_BYTES) return "";
+    const buffer = Buffer.alloc(info.size);
+    let length = 0;
+    while (length < buffer.length) {
+      const { bytesRead } = await handle.read(
+        buffer,
+        length,
+        buffer.length - length,
+        length
+      );
+      if (bytesRead === 0) break;
+      length += bytesRead;
+    }
+    try {
+      // A byte order mark stays, as in Python, so the fence won't match.
+      return UTF8.decode(buffer.subarray(0, length));
+    } catch {
+      return "";
+    }
+  } catch {
+    return null;
+  } finally {
+    await handle?.close();
+  }
+}
+
+/** The frontmatter the backend's fence finds,
+ *  `^---\s*\n(.*?)\n---\s*\n` with DOTALL
+ *  (`skills_manager._INDEX_FRONTMATTER_RE`), in one pass: as a JS regex it
+ *  backtracks quadratically on a run of blank lines. The opening `\s*\n`
+ *  takes the blanks after the dashes up to their last newline; the block ends
+ *  at the first `\n---` followed by blanks that hold a newline. Blanks
+ *  are Python's, which leave out U+FEFF. */
+function frontmatterBlock(md: string): string | null {
+  if (!md.startsWith("---")) return null;
+  let start = -1;
+  for (let i = 3; i < md.length && PY_SPACE.test(md[i]); i++) {
+    if (md[i] === "\n") start = i + 1;
+  }
+  if (start === -1) return null;
+  for (
+    let end = md.indexOf("\n---", start);
+    end !== -1;
+    end = md.indexOf("\n---", end + 1)
+  ) {
+    for (let i = end + 4; i < md.length && PY_SPACE.test(md[i]); i++) {
+      if (md[i] === "\n") return md.slice(start, end);
+    }
+  }
+  return null;
+}
+
+/** The name and description the backend indexes for a SKILL.md
+ *  (`skills_manager._skill_name_and_description`): its frontmatter read as
+ *  YAML, then `str(...).strip()` of each; null when it indexes nothing. A
+ *  name must be text here, since `str()` of true or null reads "True" or
+ *  "None", which can't pin. A description of another kind (an empty one
+ *  reads "None") is indexed, and shown blank. js-yaml reads YAML 1.2 where
+ *  PyYAML reads 1.1, so a few rare spellings still differ: a bare yes, on or
+ *  off as the name, a number as the name, a merge key, a tab after a colon,
+ *  an impossible date (PyYAML rejects the whole frontmatter). */
+function indexedSkill(
+  md: string
+): { name: string; description: string } | null {
+  const block = frontmatterBlock(md);
+  if (block === null) return null;
+  let fields: unknown;
+  try {
+    // YAML 1.2's core types, where a date stays the text Python's str() of it
+    // reads; a repeated key keeps its last value, as in PyYAML.
+    fields = loadYaml(block, { schema: CORE_SCHEMA, json: true });
+  } catch {
+    return null;
+  }
+  if (typeof fields !== "object" || fields === null || Array.isArray(fields)) {
+    return null;
+  }
+  const own = (key: string) =>
+    Object.prototype.hasOwnProperty.call(fields, key)
+      ? (fields as Record<string, unknown>)[key]
+      : undefined;
+  const name = own("name");
+  const description = own("description");
+  if (typeof name !== "string" || description === undefined) return null;
+  const text = typeof description === "string" ? pyStrip(description) : "";
+  if (typeof description === "string" && !text) return null;
+  // By code point, as Python slices.
+  const shown = [...text.slice(0, 2 * MAX_DESCRIPTION)].slice(
+    0,
+    MAX_DESCRIPTION
+  );
+  return { name: pyStrip(name), description: shown.join("") };
+}
+
+/** The skills the backend can pin by `/name`, found the way its index finds
+ *  them (`skills_manager._build_skill_index` over
+ *  `backends.MergedSkillsBackend`): every folder in either tier, in path
+ *  order, its SKILL.md from the workspace when that folder has one there, else
+ *  from the global tier; a folder counts with a frontmatter name and
+ *  description, and a name declared twice goes to the later folder. Built-in
+ *  skills ship inside the backend's package, out of the WebUI's reach. */
+export async function listPinnableSkills(tiers: {
+  workspace: string | null;
+  global: string;
+}): Promise<PinnableSkill[]> {
+  const order = [
+    ["workspace", tiers.workspace],
+    ["global", tiers.global],
+  ] as const;
+  const folders = new Set<string>();
+  for (const [, tier] of order) {
+    if (!tier) continue;
+    try {
+      for (const entry of await fs.readdir(tier)) folders.add(entry);
+    } catch {
+      // no such tier
+    }
+  }
+  const found = new Map<string, PinnableSkill>();
+  // The backend's folder paths end in "/", which sorts after "-": "paper-x/"
+  // comes before "paper/". Python sorts by code point, as UTF-8 bytes do
+  // (UTF-16 units, JS's default, put surrogate pairs before U+E000 and up).
+  const paths = [...folders]
+    .map((folder) => `${folder}/`)
+    .sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b)));
+  for (const path of paths) {
+    for (const [source, tier] of order) {
+      if (!tier) continue;
+      const md = await readIndexedSkillMd(tier, path.slice(0, -1));
+      if (md === null) continue;
+      const skill = indexedSkill(md);
+      if (
+        skill &&
+        skill.name.length <= MAX_PIN_NAME &&
+        PIN_NAME.test(skill.name) &&
+        !WEBUI_COMMANDS.has(skill.name)
+      ) {
+        found.set(skill.name, { ...skill, source });
+      }
+      break; // the first tier with this SKILL.md decides
+    }
+  }
+  return [...found.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /** Compare dotted versions ("1.2.3"). Returns 1 if a>b, -1 if a<b, 0 if equal

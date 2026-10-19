@@ -1146,4 +1146,125 @@ describe("ChatInterface composition", () => {
       await waitFor(() => expect(pane!.refreshTick).toBe(1));
     });
   });
+
+  // The composer's `/` menu: installed skills to pin (useSlashMenu has the
+  // detail; this is the wiring into the real composer).
+  describe("ChatInterface `/` menu", () => {
+    beforeEach(() => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string) =>
+          String(url).endsWith("/api/skills/pinnable")
+            ? new Response(
+                JSON.stringify({
+                  skills: [
+                    {
+                      name: "paper-writing",
+                      description: "Write a paper",
+                      source: "global",
+                    },
+                  ],
+                })
+              )
+            : new Response("{}")
+        )
+      );
+    });
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    const typeInComposer = (container: HTMLElement, text: string) => {
+      const textarea = container.querySelector("textarea")!;
+      act(() => textarea.focus());
+      fireEvent.change(textarea, { target: { value: text } });
+      return textarea;
+    };
+
+    it("inserts a skill with Enter instead of sending", async () => {
+      const { container } = renderChatInterface();
+      const textarea = typeInComposer(container, "/pa");
+      await waitFor(() =>
+        expect(screen.getAllByRole("option")).toHaveLength(1)
+      );
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(textarea.value).toBe("/paper-writing ");
+      expect(stream.getSubmitCalls()).toHaveLength(0);
+    });
+
+    it("stays shut while the agent waits on an answer", async () => {
+      const { container } = renderChatInterface();
+      act(() => {
+        stream.setMessages([humanTurn("hi")]);
+        stream.setInterrupt(askUserInterrupt("what next?"));
+      });
+      typeInComposer(container, "/pa");
+      await act(async () => {});
+      expect(screen.queryByRole("listbox")).toBeNull();
+      // And opens once the answer is in.
+      act(() => stream.setInterrupt(undefined));
+      await waitFor(() =>
+        expect(screen.getAllByRole("option")).toHaveLength(1)
+      );
+    });
+
+    it("leaves /model to the model picker", async () => {
+      // A description that mentions models matches "model" too.
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          async () =>
+            new Response(
+              JSON.stringify({
+                skills: [
+                  {
+                    name: "evo-memory",
+                    description: "Remember model training runs",
+                    source: "global",
+                  },
+                ],
+              })
+            )
+        )
+      );
+      const { container } = renderChatInterface();
+      const textarea = typeInComposer(container, "/model");
+      await act(async () => {});
+      expect(screen.queryByRole("listbox")).toBeNull();
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(
+        screen.getByRole("dialog", { name: "Pick a model for this chat" })
+      ).toBeTruthy();
+      expect(stream.getSubmitCalls()).toHaveLength(0);
+    });
+
+    it("opens the Skills marketplace when nothing is installed", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => new Response(JSON.stringify({ skills: [] })))
+      );
+      const onNavigate = vi.fn();
+      const { container } = renderChatInterface({ onNavigate });
+      const textarea = typeInComposer(container, "/");
+      await waitFor(() =>
+        expect(screen.getAllByRole("option")).toHaveLength(1)
+      );
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(onNavigate).toHaveBeenCalledWith({ view: "skills" });
+    });
+
+    it("sends with Enter once the menu is closed", async () => {
+      const { container } = renderChatInterface();
+      const textarea = typeInComposer(container, "/pa");
+      await waitFor(() =>
+        expect(screen.getAllByRole("option")).toHaveLength(1)
+      );
+      fireEvent.keyDown(textarea, { key: "Escape" });
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      const calls = stream.getSubmitCalls();
+      expect(calls).toHaveLength(1);
+      const body = calls[0].values as { messages: Array<{ content: string }> };
+      expect(body.messages[0].content).toBe("/pa");
+    });
+  });
 });

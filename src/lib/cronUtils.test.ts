@@ -7,9 +7,11 @@ import {
   browserTimeZone,
   cronLabel,
   cronToSpec,
+  DEFAULT_SCHEDULE_SPEC,
   scheduleLabel,
   specToCron,
   timeZoneLabel,
+  validateCronExpression,
 } from "./cronUtils";
 
 // Captured before any spy, so a second stub in one test still reaches it.
@@ -76,6 +78,55 @@ describe("scheduleLabel", () => {
   it("keeps a custom cron expression as is", () => {
     expect(scheduleLabel("0 */2 * * *", "Europe/London")).toBe(
       "0 */2 * * * · Europe/London"
+    );
+  });
+});
+
+// The editor checks the shape only: five fields, or one of the shortcuts the
+// backend's cron parser (croniter) takes, in any case. The backend checks the
+// fields and answers 422 to, say, `0 9.5 * * *` or `@reboot`; it also takes
+// six or seven fields (seconds, a year), which the editor does not write.
+describe("validateCronExpression", () => {
+  it.each([
+    "@yearly",
+    "@annually",
+    "@monthly",
+    "@weekly",
+    "@daily",
+    "@midnight",
+    "@hourly",
+    "@DAILY",
+    " @daily ",
+  ])("accepts the shortcut %s", (cron) => {
+    expect(validateCronExpression(cron)).toBeNull();
+  });
+
+  it.each(["@reboot", "@ daily", "@dailyx", "@", "daily"])(
+    "rejects %s",
+    (cron) => {
+      expect(validateCronExpression(cron)).not.toBeNull();
+    }
+  );
+
+  it("otherwise asks for five fields", () => {
+    expect(validateCronExpression("0 9 * * *")).toBeNull();
+    expect(validateCronExpression("0 9 * *")).toBe(
+      "Use minute hour day month weekday, or @daily."
+    );
+    expect(validateCronExpression("0 9 * * * 30")).not.toBeNull();
+    expect(validateCronExpression("")).toBe("Enter a cron expression.");
+  });
+});
+
+describe("specToCron", () => {
+  it("writes whole numbers only", () => {
+    const at = { ...DEFAULT_SCHEDULE_SPEC, hour: 9.5, minute: 30.7 };
+    expect(specToCron({ ...at, frequency: "daily" })).toBe("30 9 * * *");
+    expect(specToCron({ ...at, frequency: "weekly", dayOfWeek: 2.5 })).toBe(
+      "30 9 * * 2"
+    );
+    expect(specToCron({ ...at, frequency: "monthly", dayOfMonth: 14.9 })).toBe(
+      "30 9 14 * *"
     );
   });
 });
@@ -168,6 +219,23 @@ describe("cronToSpec", () => {
     expect(cronToSpec("@daily")).toMatchObject({
       frequency: "custom",
       custom: "@daily",
+    });
+    expect(specToCron(cronToSpec("@daily"))).toBe("@daily");
+    expect(cronLabel("@daily")).toBe("@daily");
+  });
+
+  it("lends the builder the time a shortcut stands for", () => {
+    const midnight = { frequency: "custom", hour: 0, minute: 0 };
+    expect(cronToSpec("@daily")).toMatchObject(midnight);
+    expect(cronToSpec("@MIDNIGHT")).toMatchObject(midnight);
+    expect(cronToSpec("@weekly")).toMatchObject({ ...midnight, dayOfWeek: 0 });
+    expect(cronToSpec("@monthly")).toMatchObject({
+      ...midnight,
+      dayOfMonth: 1,
+    });
+    expect(cronToSpec("@yearly")).toMatchObject({
+      ...midnight,
+      dayOfMonth: 1,
     });
   });
 });

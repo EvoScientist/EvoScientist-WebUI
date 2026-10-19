@@ -468,6 +468,47 @@ button {
   }
 }
 
+/* How far down toasts open (ThemeProvider): just below the header on the phone
+   layout, whose header buttons span its width; over the middle of the header
+   on the desktop layout, which holds no controls there (below 1024px a toast
+   can reach the health light). Set here because sonner's own phone switch is
+   at 600px, not the app's 768px. */
+:root {
+  --toast-top: calc(env(safe-area-inset-top) + 4rem);
+}
+
+@media (min-width: 768px) {
+  :root {
+    --toast-top: calc(env(safe-area-inset-top) + 0.5rem);
+  }
+}
+
+/* While the header offers Reconnect (HealthIndicator), which can sit under the
+   middle of it, toasts open below the header. */
+:root[data-reconnect] {
+  --toast-top: calc(env(safe-area-inset-top) + 4rem);
+}
+
+/* Sonner draws a 20px toast close button, hanging 6px past the toast's corner.
+   Where the main pointer is coarse (touch), give it the 44px target the app's
+   phone buttons have, without changing how it looks: a 44px square from that
+   corner into the toast, so the extra area stays inside it and takes no taps
+   meant for what lies around it, in either text direction. Toasts stacked behind
+   the front one get it only once the stack is expanded: their square would
+   poke out below the front toast, where a tap means "expand". */
+@media (pointer: coarse) {
+  [data-sonner-toast][data-styled="true"]:is(
+      [data-front="true"],
+      [data-expanded="true"]
+    )
+    [data-close-button]::after {
+    content: "";
+    position: absolute;
+    inset-block: 6px -32px;
+    inset-inline: 6px -32px;
+  }
+}
+
 .mobile-composer textarea {
   field-sizing: content;
 }

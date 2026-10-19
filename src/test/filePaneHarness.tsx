@@ -1,5 +1,5 @@
 import React from "react";
-import { render } from "@testing-library/react";
+import { act, render } from "@testing-library/react";
 import { useQueryState } from "nuqs";
 import { NuqsTestingAdapter, type UrlUpdateEvent } from "nuqs/adapters/testing";
 import { FilePaneProvider } from "@/providers/FilePaneProvider";
@@ -19,21 +19,45 @@ import { TestWorkspaceProvider } from "@/test/mockWorkspace";
  *
  * Re-render state from inside `ui` (a small stateful host) rather than by
  * re-rendering the tree: the adapter clears nuqs' pending URL writes every
- * time it renders.
+ * time it renders. `setInspectorOpen` flips the provider's `inspectorOpen`
+ * that way (open by default, as in the app while the pane is on screen); pass
+ * `ui` as a function of it to mount the inspector only while it is open.
  */
 export function renderWithFilePane(
-  ui: React.ReactNode,
+  ui: React.ReactNode | ((inspectorOpen: boolean) => React.ReactNode),
   opts: {
     searchParams?: string;
     onReveal?: () => void;
+    inspectorOpen?: boolean;
+    inspectorToggleRef?: React.RefObject<HTMLElement | null>;
     workspace?: WorkspaceContextValue;
   } = {}
 ) {
   const urlUpdates: UrlUpdateEvent[] = [];
+  type InspectorState = { open: boolean; returnFocusOnClose: boolean };
   const ref: {
     pane: FilePaneContextValue | null;
     fileParam: string | null;
-  } = { pane: null, fileParam: null };
+    setInspector: ((state: InspectorState) => void) | null;
+  } = { pane: null, fileParam: null, setInspector: null };
+  function Host() {
+    const [inspector, setInspector] = React.useState<InspectorState>({
+      open: opts.inspectorOpen ?? true,
+      returnFocusOnClose: true,
+    });
+    ref.setInspector = setInspector;
+    return (
+      <FilePaneProvider
+        onReveal={opts.onReveal}
+        inspectorOpen={inspector.open}
+        inspectorToggleRef={opts.inspectorToggleRef}
+        returnFocusOnClose={inspector.returnFocusOnClose}
+      >
+        <Probe />
+        {typeof ui === "function" ? ui(inspector.open) : ui}
+      </FilePaneProvider>
+    );
+  }
   function Probe() {
     ref.pane = useFilePane();
     [ref.fileParam] = useQueryState("file");
@@ -46,10 +70,7 @@ export function renderWithFilePane(
       onUrlUpdate={(e) => urlUpdates.push(e)}
     >
       <TestWorkspaceProvider value={opts.workspace}>
-        <FilePaneProvider onReveal={opts.onReveal}>
-          <Probe />
-          {ui}
-        </FilePaneProvider>
+        <Host />
       </TestWorkspaceProvider>
     </NuqsTestingAdapter>
   );
@@ -60,9 +81,56 @@ export function renderWithFilePane(
       return ref.pane;
     },
     fileParam: () => ref.fileParam,
+    setInspectorOpen: (
+      open: boolean,
+      { returnFocusOnClose = true }: { returnFocusOnClose?: boolean } = {}
+    ) => act(() => ref.setInspector?.({ open, returnFocusOnClose })),
     lastFileParam: () =>
       urlUpdates.length > 0
         ? urlUpdates[urlUpdates.length - 1].searchParams.get("file")
         : undefined,
   };
+}
+
+// jsdom lays nothing out and has no `document.elementFromPoint`. Here it finds
+// nothing on screen until `onScreen` gives elements a box and hit-tests
+// against those boxes, for code that only hands focus to what the user can
+// see; `resetScreen` (afterEach) goes back to nothing on screen.
+const boxes = new Map<Element, DOMRect>();
+function hitTest(x: number, y: number): Element | null {
+  for (const [el, r] of boxes) {
+    if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) {
+      return el;
+    }
+  }
+  return null;
+}
+Object.defineProperty(document, "elementFromPoint", {
+  configurable: true,
+  value: hitTest,
+});
+export function onScreen(...els: HTMLElement[]) {
+  for (const el of els) {
+    const top = 10 + boxes.size * 40;
+    const rect = {
+      x: 10,
+      y: top,
+      left: 10,
+      top,
+      right: 110,
+      bottom: top + 30,
+      width: 100,
+      height: 30,
+      toJSON: () => ({}),
+    } as DOMRect;
+    boxes.set(el, rect);
+    el.getBoundingClientRect = () => rect;
+  }
+}
+export function resetScreen() {
+  boxes.clear();
+  Object.defineProperty(document, "elementFromPoint", {
+    configurable: true,
+    value: hitTest,
+  });
 }

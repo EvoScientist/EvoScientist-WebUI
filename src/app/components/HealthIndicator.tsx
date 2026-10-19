@@ -275,6 +275,15 @@ export function HealthIndicator({
   const canReconnect = onReconnect !== undefined && roomForReconnect;
   const showReconnect =
     status === "offline" && suggestedUrl !== null && canReconnect;
+  // On the desktop layout toasts open over the middle of the header, where
+  // Reconnect can sit (an error toast is likely just then): while it shows,
+  // globals.css moves them below the header.
+  useEffect(() => {
+    if (!showReconnect) return;
+    const root = document.documentElement;
+    root.setAttribute("data-reconnect", "");
+    return () => root.removeAttribute("data-reconnect");
+  }, [showReconnect]);
   const title =
     status === "online"
       ? `Connected to ${deploymentUrl}${

@@ -59,7 +59,7 @@ function HtmlPage({ content }: { content: string }) {
             onClick={() => setView(value)}
             aria-pressed={view === value}
             className={cn(
-              "rounded px-2 py-0.5 font-medium transition-colors max-sm:min-h-11 max-sm:px-3",
+              "rounded px-2 py-0.5 font-medium transition-colors max-md:min-h-11 max-md:px-3",
               view === value
                 ? "bg-background text-foreground shadow-sm"
                 : "text-muted-foreground hover:text-foreground"

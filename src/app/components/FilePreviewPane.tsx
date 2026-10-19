@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useId, useRef, useState } from "react";
 import { ArrowLeft, Bot, Brain, FileText, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -33,11 +33,16 @@ const SOURCE_ICON: Record<FileSource, typeof FileText> = {
 export function FilePreviewPane() {
   const pane = useFilePane();
   const [closing, setClosing] = useState<FileTab | null>(null);
+  const baseId = useId();
+  const tabRefs = useRef(new Map<string, HTMLButtonElement>());
+  // What had focus when the discard dialog opened, to give it back to.
+  const closeInvokerRef = useRef<HTMLElement | null>(null);
   if (!pane) return null;
   const {
     state,
     activate,
     close,
+    requestFocus,
     showTree,
     setDirty,
     refreshTick,
@@ -46,8 +51,56 @@ export function FilePreviewPane() {
     chat,
   } = pane;
 
-  const requestClose = (tab: FileTab) =>
-    tab.dirty ? setClosing(tab) : close(tab.id);
+  // A close that takes focus with it (the tab, or a close button the click
+  // focused) asks for it back: the inspector hands it to what shows next. With
+  // unsaved edits that waits for the dialog.
+  const requestClose = (tab: FileTab, hadFocus: boolean) => {
+    if (!tab.dirty) {
+      close(tab.id);
+      if (hadFocus) requestFocus();
+      return;
+    }
+    closeInvokerRef.current = document.activeElement as HTMLElement | null;
+    setClosing(tab);
+  };
+
+  const tabDomId = (id: string) => `${baseId}-tab-${encodeURIComponent(id)}`;
+  const panelDomId = (id: string) =>
+    `${baseId}-panel-${encodeURIComponent(id)}`;
+  // The tabs pattern: one tab stop, arrows and Home / End move and show,
+  // Delete closes (Backspace too: a Mac's Delete key).
+  const tabStopId = state.tabs.some((t) => t.id === state.activeId)
+    ? state.activeId
+    : state.tabs[0]?.id ?? null;
+  const onTabKeyDown = (e: React.KeyboardEvent, index: number) => {
+    const tabs = state.tabs;
+    const show = (to: number) => {
+      const next = tabs[(to + tabs.length) % tabs.length];
+      activate(next.id);
+      tabRefs.current.get(next.id)?.focus();
+    };
+    switch (e.key) {
+      case "ArrowRight":
+        show(index + 1);
+        break;
+      case "ArrowLeft":
+        show(index - 1);
+        break;
+      case "Home":
+        show(0);
+        break;
+      case "End":
+        show(tabs.length - 1);
+        break;
+      case "Delete":
+      case "Backspace":
+        requestClose(tabs[index], true);
+        break;
+      default:
+        return;
+    }
+    e.preventDefault();
+  };
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -55,7 +108,7 @@ export function FilePreviewPane() {
         <Button
           variant="ghost"
           size="sm"
-          className="h-7 shrink-0 px-2 max-sm:min-h-11"
+          className="h-7 shrink-0 px-2 max-md:min-h-11"
           onClick={showTree}
           aria-label="Back to files"
         >
@@ -70,13 +123,14 @@ export function FilePreviewPane() {
           aria-label="Open files"
           className="scrollbar-pretty flex min-w-0 flex-1 items-center gap-1 overflow-x-auto"
         >
-          {state.tabs.map((tab) => {
+          {state.tabs.map((tab, index) => {
             const Icon = SOURCE_ICON[tab.source];
             const selected = tab.id === state.activeId;
             const name = fileNameOf(tab.path);
             return (
               <div
                 key={tab.id}
+                role="presentation"
                 className={cn(
                   "flex max-w-[12rem] shrink-0 items-center rounded-md border text-xs",
                   selected
@@ -85,12 +139,20 @@ export function FilePreviewPane() {
                 )}
               >
                 <button
+                  ref={(el) => {
+                    if (el) tabRefs.current.set(tab.id, el);
+                    else tabRefs.current.delete(tab.id);
+                  }}
                   type="button"
                   role="tab"
+                  id={tabDomId(tab.id)}
                   aria-selected={selected}
+                  aria-controls={panelDomId(tab.id)}
+                  tabIndex={tab.id === tabStopId ? 0 : -1}
                   title={tab.path}
                   onClick={() => activate(tab.id)}
-                  className="flex min-w-0 items-center gap-1 py-1 pl-2 pr-1 max-sm:min-h-11"
+                  onKeyDown={(e) => onTabKeyDown(e, index)}
+                  className="flex min-w-0 items-center gap-1 py-1 pl-2 pr-1 max-md:min-h-11"
                 >
                   <Icon
                     className="size-3.5 shrink-0"
@@ -98,17 +160,28 @@ export function FilePreviewPane() {
                   />
                   <span className="truncate">{name}</span>
                   {tab.dirty && (
-                    <span
-                      className="size-1.5 shrink-0 rounded-full bg-[var(--brand)]"
-                      aria-label="Unsaved changes"
-                    />
+                    <>
+                      <span
+                        className="size-1.5 shrink-0 rounded-full bg-[var(--brand)]"
+                        aria-hidden="true"
+                      />
+                      <span className="sr-only">, unsaved changes</span>
+                    </>
                   )}
                 </button>
                 <button
                   type="button"
                   aria-label={`Close ${name}`}
-                  onClick={() => requestClose(tab)}
-                  className="rounded p-1 hover:bg-accent max-sm:min-h-11 max-sm:min-w-11"
+                  // Only the shown tab's: Tab goes from the tab to its close
+                  // button and out, and Delete closes any tab.
+                  tabIndex={selected ? 0 : -1}
+                  onClick={(e) =>
+                    requestClose(
+                      tab,
+                      e.currentTarget === document.activeElement
+                    )
+                  }
+                  className="rounded p-1 hover:bg-accent max-md:min-h-11 max-md:min-w-11"
                 >
                   <X
                     className="size-3"
@@ -128,6 +201,9 @@ export function FilePreviewPane() {
           return (
             <div
               key={tab.id}
+              id={panelDomId(tab.id)}
+              role="tabpanel"
+              aria-labelledby={tabDomId(tab.id)}
               hidden={!shown}
               className="h-full p-3"
             >
@@ -172,7 +248,22 @@ export function FilePreviewPane() {
           if (!open) setClosing(null);
         }}
       >
-        <DialogContent className="sm:max-w-md">
+        <DialogContent
+          className="sm:max-w-md"
+          // Radix gives focus back to the dialog's trigger, and this dialog
+          // has none: give it to what asked, or once that tab is gone, let
+          // the inspector pick.
+          onCloseAutoFocus={(e) => {
+            e.preventDefault();
+            const invoker = closeInvokerRef.current;
+            closeInvokerRef.current = null;
+            if (invoker?.isConnected && invoker !== document.body) {
+              invoker.focus();
+            } else {
+              requestFocus();
+            }
+          }}
+        >
           <DialogHeader>
             <DialogTitle>Discard unsaved changes?</DialogTitle>
             <DialogDescription>

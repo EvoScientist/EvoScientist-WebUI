@@ -97,6 +97,7 @@ interface RenderChatInterfaceOptions {
   ) => void;
   /** Wrap the provider tree, e.g. in a FilePaneProvider. */
   wrapper?: React.ComponentType<{ children: React.ReactNode }>;
+  onNavigate?: React.ComponentProps<typeof ChatInterface>["onNavigate"];
   /** The backend's folder; defaults to a backend without the route. */
   workspace?: WorkspaceContextValue;
 }
@@ -110,6 +111,7 @@ export function renderChatInterface(
         <ChatInterface
           draftSeed={opts.draftSeed}
           onComposerSnapshotReady={opts.onComposerSnapshotReady}
+          onNavigate={opts.onNavigate}
         />
       </ChatProvider>
     </TestWorkspaceProvider>,

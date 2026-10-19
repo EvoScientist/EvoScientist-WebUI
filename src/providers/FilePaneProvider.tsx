@@ -24,6 +24,18 @@ import {
   type FilePaneContextValue,
 } from "@/providers/filePaneContext";
 
+/** Whether the user can see `el`: laid out, in the window, and on top at its
+ *  centre (not in a hidden view, scrolled away, or under an overlay). */
+function isOnScreen(el: HTMLElement | null | undefined): el is HTMLElement {
+  if (!el?.isConnected) return false;
+  const r = el.getBoundingClientRect();
+  const hit = document.elementFromPoint(
+    r.left + r.width / 2,
+    r.top + r.height / 2
+  );
+  return hit !== null && el.contains(hit);
+}
+
 function sameBridge(
   a: ChatFilesBridge | null,
   b: ChatFilesBridge | null
@@ -52,10 +64,27 @@ function sameBridge(
 export function FilePaneProvider({
   children,
   onReveal,
+  inspectorOpen = true,
+  inspectorToggleRef,
+  returnFocusOnClose = true,
 }: {
   children: React.ReactNode;
   /** Show the inspector's Workspace tab, opening the inspector if needed. */
   onReveal?: () => void;
+  /**
+   * Whether the inspector is open. The `file` param names the shown file only
+   * while it is, so a reload after closing the inspector doesn't reopen it.
+   */
+  inspectorOpen?: boolean;
+  /** The control that opens and closes the inspector (see returnFocusOnClose). */
+  inspectorToggleRef?: React.RefObject<HTMLElement | null>;
+  /**
+   * When the inspector closes and takes focus with it, focus goes back to the
+   * link the file was opened from, or to the inspector toggle when the link
+   * is gone from sight. False while something else takes the inspector's
+   * place (the phone sidebar), whose focus is its own.
+   */
+  returnFocusOnClose?: boolean;
 }) {
   const [state, dispatch] = useReducer(filePaneReducer, initialFilePaneState);
   const [fileParam, setFileParam] = useQueryState("file");
@@ -71,15 +100,42 @@ export function FilePaneProvider({
   // Focus follows a file the user opened, not one restored from the URL.
   const [focusRequest, setFocusRequest] = useState(0);
   const focusPendingRef = useRef(false);
-  const reveal = useCallback((ref: FileRef, takeFocus: boolean) => {
-    dispatch({ type: "open", ref });
-    if (takeFocus) {
-      focusPendingRef.current = true;
-      setFocusRequest((n) => n + 1);
-    }
-    onRevealRef.current?.();
+  const requestFocus = useCallback(() => {
+    focusPendingRef.current = true;
+    setFocusRequest((n) => n + 1);
   }, []);
+  const reveal = useCallback(
+    (ref: FileRef, takeFocus: boolean) => {
+      dispatch({ type: "open", ref });
+      if (takeFocus) requestFocus();
+      onRevealRef.current?.();
+    },
+    [requestFocus]
+  );
   const open = useCallback((ref: FileRef) => reveal(ref, true), [reveal]);
+  // The link a file was opened from (say, in the chat), to give focus back to
+  // when the inspector closes and takes focus with it. A link inside the
+  // inspector keeps the earlier one: it goes away with the inspector.
+  const openerRef = useRef<HTMLElement | null>(null);
+  const inspectorWasOpenRef = useRef(inspectorOpen);
+  useEffect(() => {
+    const wasOpen = inspectorWasOpenRef.current;
+    inspectorWasOpenRef.current = inspectorOpen;
+    if (!wasOpen || inspectorOpen) return;
+    const opener = openerRef.current;
+    openerRef.current = null;
+    const focused = document.activeElement;
+    if (!returnFocusOnClose || (focused && focused !== document.body)) return;
+    // A link the chat scrolled away from, or in a view switched away from,
+    // can't show focus: the toggle can. Neither scrolls the page.
+    const toggle = inspectorToggleRef?.current;
+    const target = isOnScreen(opener)
+      ? opener
+      : isOnScreen(toggle)
+      ? toggle
+      : null;
+    target?.focus({ preventScroll: true });
+  }, [inspectorOpen, inspectorToggleRef, returnFocusOnClose]);
   const takeFocusRequest = useCallback(() => {
     const pending = focusPendingRef.current;
     focusPendingRef.current = false;
@@ -91,6 +147,9 @@ export function FilePaneProvider({
     const onOpenFile = (e: Event) => {
       const detail = (e as CustomEvent<FileLinkEventDetail>).detail;
       if (!detail) return;
+      if (detail.opener && !detail.opener.closest("[data-file-pane]")) {
+        openerRef.current = detail.opener;
+      }
       open({
         source: detail.kind === "memory" ? "memory" : "workspace",
         path: detail.path,
@@ -119,7 +178,8 @@ export function FilePaneProvider({
   }, [fileParam, reveal, setFileParam]);
 
   // Pane → URL: the file on show. Skipped on mount so the URL is read first.
-  const shown = state.mode === "preview" ? state.activeId : null;
+  const shown =
+    inspectorOpen && state.mode === "preview" ? state.activeId : null;
   const prevShownRef = useRef<string | null | undefined>(undefined);
   useEffect(() => {
     if (prevShownRef.current === undefined) {
@@ -192,6 +252,7 @@ export function FilePaneProvider({
       open,
       focusRequest,
       takeFocusRequest,
+      requestFocus,
       activate,
       close,
       showTree,
@@ -210,6 +271,7 @@ export function FilePaneProvider({
       open,
       focusRequest,
       takeFocusRequest,
+      requestFocus,
       activate,
       close,
       showTree,

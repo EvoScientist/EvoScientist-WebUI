@@ -44,7 +44,9 @@ describe("WorkspacePanel", () => {
       id: "workspace:a.md",
       size: 3,
     });
-    expect(screen.getByLabelText("Open in preview")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "a.md, open in preview" })
+    ).toBeTruthy();
 
     act(() => h.pane().showTree());
     fireEvent.click(

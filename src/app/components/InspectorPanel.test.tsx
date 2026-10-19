@@ -1,8 +1,13 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useState } from "react";
 import { act, fireEvent, screen } from "@testing-library/react";
-import { renderWithFilePane } from "@/test/filePaneHarness";
+import { MarkdownContent } from "@/app/components/MarkdownContent";
+import {
+  onScreen,
+  renderWithFilePane,
+  resetScreen,
+} from "@/test/filePaneHarness";
 
 vi.mock("@/app/components/WorkspacePanel", async () => {
   const { useFilePane } = await import("@/providers/filePaneContext");
@@ -92,6 +97,26 @@ describe("InspectorPanel", () => {
   });
 
   describe("focus", () => {
+    afterEach(resetScreen);
+
+    it("goes from a chat link to the file's tab and back when it closes", () => {
+      const h = renderWithFilePane((open) => (
+        <>
+          <MarkdownContent content="Saved to `./a.md`." />
+          {open && <InspectorPanel onClose={() => {}} />}
+        </>
+      ));
+      const link = screen.getByRole("button", { name: "./a.md" });
+      onScreen(link);
+      act(() => link.focus());
+      fireEvent.click(link);
+      expect(focused()).toBe("workspace:a.md");
+
+      h.setInspectorOpen(false);
+      expect(screen.queryByText("preview")).toBeNull();
+      expect(document.activeElement).toBe(link);
+    });
+
     it("moves to the file's tab when a link opens it", () => {
       const h = renderWithFilePane(
         <>
@@ -142,6 +167,24 @@ describe("InspectorPanel", () => {
       forward.focus();
       fireEvent.click(forward);
       expect(focused()).toBe("workspace:b.md");
+    });
+
+    it("takes a focus request to the side that is shown", () => {
+      const h = renderWithFilePane(
+        <>
+          <button>elsewhere</button>
+          <InspectorPanel onClose={() => {}} />
+        </>
+      );
+      act(() => h.pane().open({ source: "workspace", path: "a.md" }));
+      act(() => screen.getByText("elsewhere").focus());
+      act(() => h.pane().requestFocus());
+      expect(focused()).toBe("workspace:a.md");
+
+      act(() => h.pane().close("workspace:a.md"));
+      act(() => screen.getByText("elsewhere").focus());
+      act(() => h.pane().requestFocus());
+      expect(focused()).toBe("Back to preview");
     });
 
     it("lands on the next tab when the focused close button goes", () => {

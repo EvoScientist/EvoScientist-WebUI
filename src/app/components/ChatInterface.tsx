@@ -67,6 +67,8 @@ import {
 import { useChatContext } from "@/providers/ChatProvider";
 import { useTeams } from "@/app/hooks/useTeams";
 import { ExpertsPill } from "@/app/components/ExpertsPill";
+import { SlashSkillMenu } from "@/app/components/SlashSkillMenu";
+import { useSlashMenu } from "@/app/hooks/useSlashMenu";
 import { cn } from "@/lib/utils";
 import { formatModel } from "@/lib/model";
 import {
@@ -134,7 +136,8 @@ type DashboardNavTarget =
     }
   | { view: "schedule" }
   | { view: "workspace" }
-  | { view: "experts" };
+  | { view: "experts" }
+  | { view: "skills" };
 
 interface ChatInterfaceProps {
   // Open the right inspector on its Agents tab (composer "agents running" pulse).
@@ -317,6 +320,8 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     >(null);
     const tasksContainerRef = useRef<HTMLDivElement | null>(null);
     const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+    // The composer box, which the `/` menu sits above.
+    const composerRef = useRef<HTMLDivElement | null>(null);
     const uploadInputRef = useRef<HTMLInputElement | null>(null);
 
     const [input, setInput] = useState("");
@@ -1166,6 +1171,16 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       setQueuedMessages([]);
     }, []);
 
+    // The `/` menu: installed skills to pin while a leading `/name` is typed.
+    const slash = useSlashMenu({
+      textareaRef,
+      value: input,
+      setValue: setInput,
+      disabled: hasPendingInterrupt,
+      onBrowse: () => onNavigate?.({ view: "skills" }),
+    });
+    const slashKeyDown = slash.onKeyDown;
+
     const handleKeyDown = useCallback(
       (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
         // The composer is locked only when an interrupt is pending (the textarea
@@ -1175,6 +1190,8 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         // Don't submit while an IME is composing (e.g. pressing Enter to pick a
         // Chinese/Japanese/Korean candidate must confirm text, not send).
         if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+        // While the `/` menu is open, the arrows, Enter, Tab and Escape are its.
+        if (slashKeyDown(e)) return;
         // ↑ on an empty composer pulls the most recent queued message back to edit.
         if (
           e.key === "ArrowUp" &&
@@ -1191,7 +1208,13 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
           handleSubmit();
         }
       },
-      [handleSubmit, hasPendingInterrupt, input, editQueuedMessage]
+      [
+        handleSubmit,
+        hasPendingInterrupt,
+        input,
+        editQueuedMessage,
+        slashKeyDown,
+      ]
     );
 
     // Pull a previous user message back into the composer to edit/resend it,
@@ -2143,6 +2166,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
             </div>
           )}
           <div
+            ref={composerRef}
             className={cn(
               "relative z-10 mx-auto mb-2 flex w-[calc(100%-16px)] max-w-[960px] flex-shrink-0 flex-col overflow-hidden rounded-xl border border-border bg-background transition-colors duration-200 ease-in-out sm:mb-4 sm:w-[calc(100%-24px)]",
               "focus-within:ring-2 focus-within:ring-ring"
@@ -2501,8 +2525,12 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
               <textarea
                 ref={textareaRef}
                 value={input}
-                onChange={(e) => setInput(e.target.value)}
+                onChange={(e) => {
+                  setInput(e.target.value);
+                  slash.onChange(e);
+                }}
                 onKeyDown={handleKeyDown}
+                {...slash.textareaProps}
                 aria-label="Message"
                 disabled={hasPendingInterrupt || binding.kind === "readOnly"}
                 placeholder={
@@ -2520,6 +2548,10 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                 }
                 className="font-inherit field-sizing-content max-h-[min(30dvh,12rem)] min-h-12 flex-1 resize-none overflow-y-auto border-0 bg-transparent px-3.5 pb-2.5 pt-3 text-sm leading-6 text-primary outline-none placeholder:text-tertiary disabled:cursor-not-allowed sm:px-4"
                 rows={1}
+              />
+              <SlashSkillMenu
+                {...slash.menuProps}
+                anchorRef={composerRef}
               />
               <div className="flex items-center justify-between gap-2 p-2 sm:p-2.5">
                 <div className="flex items-center gap-1">

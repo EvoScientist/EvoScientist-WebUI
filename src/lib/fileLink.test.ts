@@ -108,6 +108,19 @@ describe("dispatchFileLink", () => {
     expect(ev.detail).toEqual(link);
     window.removeEventListener(FILE_LINK_EVENT, listener as EventListener);
   });
+
+  it("carries the control the link was opened from", () => {
+    const listener = vi.fn();
+    window.addEventListener(FILE_LINK_EVENT, listener as EventListener);
+    const opener = document.createElement("button");
+    dispatchFileLink(
+      { kind: "workspace", display: "a.md", path: "a.md" },
+      opener
+    );
+    const ev = listener.mock.calls[0][0] as CustomEvent;
+    expect(ev.detail.opener).toBe(opener);
+    window.removeEventListener(FILE_LINK_EVENT, listener as EventListener);
+  });
 });
 
 describe("rehypePathLinks", () => {
