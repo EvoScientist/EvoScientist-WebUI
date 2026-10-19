@@ -10,7 +10,7 @@ import React, {
 import { SubAgentIndicator } from "@/app/components/SubAgentIndicator";
 import { ToolCallBox } from "@/app/components/ToolCallBox";
 import { MarkdownContent } from "@/app/components/MarkdownContent";
-import { PinnedSkill } from "@/app/components/PinnedSkill";
+import { PANEL_HEADINGS, PinnedSkill } from "@/app/components/PinnedSkill";
 import { SubAgentSteps } from "@/app/components/SubAgentSteps";
 import type {
   SubAgent,
@@ -110,13 +110,53 @@ export const ChatMessage = React.memo<ChatMessageProps>(
     const messageContent = extractStringFromMessageContent(message);
     const hasContent = messageContent && messageContent.trim() !== "";
     const hasToolCalls = toolCalls.length > 0;
-    // Extended-thinking / reasoning text (Anthropic & friends store it here).
+    // Reasoning text: OpenAI-compatible routes (DeepSeek, OpenRouter) put it in
+    // `reasoning_content`; Anthropic in `thinking` blocks; OpenAI's Responses
+    // API in `reasoning` blocks as summary_text parts (langchain's standard
+    // block as a `reasoning` string). Like the backend CLI, the blocks are read
+    // only when the field is empty. Only OpenAI's summaries are written in
+    // Markdown; the rest is plain scratch text and shows as written.
     const reasoning = useMemo(() => {
       const r = (
         message.additional_kwargs as Record<string, unknown> | undefined
       )?.reasoning_content;
-      return typeof r === "string" && r.trim() ? r.trim() : null;
-    }, [message.additional_kwargs]);
+      if (typeof r === "string" && r.trim()) {
+        return { text: r.trim(), markdown: false };
+      }
+      const parts: { text: string; markdown: boolean }[] = [];
+      const add = (text: unknown, markdown: boolean) => {
+        if (typeof text === "string" && text.trim()) {
+          parts.push({ text: text.trim(), markdown });
+        }
+      };
+      if (Array.isArray(message.content)) {
+        for (const block of message.content as unknown[]) {
+          const b = block as {
+            type?: unknown;
+            thinking?: unknown;
+            reasoning?: unknown;
+            summary?: unknown;
+          } | null;
+          if (b?.type === "thinking") add(b.thinking, false);
+          if (b?.type === "reasoning") {
+            add(b.reasoning, false);
+            if (Array.isArray(b.summary)) {
+              for (const part of b.summary as {
+                type?: unknown;
+                text?: unknown;
+              }[]) {
+                if (part?.type === "summary_text") add(part.text, true);
+              }
+            }
+          }
+        }
+      }
+      if (parts.length === 0) return null;
+      return {
+        text: parts.map((p) => p.text).join("\n\n"),
+        markdown: parts.every((p) => p.markdown),
+      };
+    }, [message.additional_kwargs, message.content]);
     // An abnormal turn-end is otherwise invisible: the run finishes
     // server-side, the thread goes idle, and no interrupt is raised.
     const terminalError = useMemo(() => {
@@ -327,11 +367,21 @@ export const ChatMessage = React.memo<ChatMessageProps>(
                 />
                 Thinking
               </button>
-              {thinkingOpen && (
-                <div className="mt-2 whitespace-pre-wrap break-words border-l-2 border-border pl-3 text-sm leading-relaxed text-muted-foreground">
-                  {reasoning}
-                </div>
-              )}
+              {thinkingOpen &&
+                (reasoning.markdown ? (
+                  <div className="mt-2 border-l-2 border-border pl-3 text-sm text-muted-foreground">
+                    <MarkdownContent
+                      content={reasoning.text}
+                      isStreaming={isStreaming}
+                      rawHtml={false}
+                      className={PANEL_HEADINGS}
+                    />
+                  </div>
+                ) : (
+                  <div className="mt-2 whitespace-pre-wrap break-words border-l-2 border-border pl-3 text-sm leading-relaxed text-muted-foreground">
+                    {reasoning.text}
+                  </div>
+                ))}
             </div>
           )}
           {terminalError && terminalError.variant === "missing" && (

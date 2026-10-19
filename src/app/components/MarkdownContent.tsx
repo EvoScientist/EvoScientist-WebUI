@@ -27,6 +27,25 @@ interface MarkdownContentProps {
   className?: string;
   /** When true, defer expensive renders (e.g. mermaid) until streaming ends. */
   isStreaming?: boolean;
+  /** Parse inline HTML (on by default). Off for text not written for
+   *  Markdown, whose angle brackets would otherwise be read as tags and
+   *  dropped by the sanitizer; they then show as text. */
+  rawHtml?: boolean;
+}
+
+interface HtmlNode {
+  type: string;
+  children?: HtmlNode[];
+}
+
+/** Remark plugin for `rawHtml={false}`: HTML in the source becomes plain text,
+ *  so `Array<Message>` shows as written instead of a tag the sanitizer drops. */
+function remarkHtmlAsText() {
+  const walk = (node: HtmlNode): void => {
+    if (node.type === "html") node.type = "text";
+    node.children?.forEach(walk);
+  };
+  return (tree: HtmlNode) => walk(tree);
 }
 
 const sanitizeSchema = {
@@ -41,7 +60,7 @@ const sanitizeSchema = {
 };
 
 export const MarkdownContent = React.memo<MarkdownContentProps>(
-  ({ content, className = "", isStreaming = false }) => {
+  ({ content, className = "", isStreaming = false, rawHtml = true }) => {
     const { markdown, maths } = useMemo(
       () => extractLatexMath(content),
       [content]
@@ -59,6 +78,7 @@ export const MarkdownContent = React.memo<MarkdownContentProps>(
             remarkMath,
             remarkDisplayMath,
             [remarkLatexMath, maths],
+            ...(rawHtml ? [] : [remarkHtmlAsText]),
           ]}
           rehypePlugins={[
             rehypeRaw,
