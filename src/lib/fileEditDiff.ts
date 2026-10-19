@@ -49,8 +49,17 @@ function splitLines(text: string): string[] {
 
 const withoutCr = (line: string) => line.replace(/\r$/, "");
 
-const withFinalBreak = (text: string) =>
-  text === "" || text.endsWith("\n") ? text : text + "\n";
+// The line break a text ends with, or null.
+const finalBreak = (text: string) =>
+  text.endsWith("\r\n") ? "\r\n" : text.endsWith("\n") ? "\n" : null;
+
+// The line break that follows `text` in `other` when `other` continues it
+// ("a" → "a\r\nb"), or null.
+function breakAfter(text: string, other: string): string | null {
+  if (!other.startsWith(text)) return null;
+  if (other.startsWith("\r\n", text.length)) return "\r\n";
+  return other.startsWith("\n", text.length) ? "\n" : null;
+}
 
 const trimLineEnds = (text: string) =>
   text
@@ -87,21 +96,30 @@ export function fileEditDiff(
   // Sub-agent steps restored after a reload keep only the start of long args.
   if (before.endsWith(TRUNCATION_SUFFIX) || after.endsWith(TRUNCATION_SUFFIX))
     return null;
-  // An edit's text usually stops mid-file, without a final newline: compared
-  // as is, "a" against "a\nb" reads as "a" replaced. Diff whole lines, and
-  // say when only one text ends with a line break, which joins or splits the
-  // file's next line.
-  const oldText = withFinalBreak(before);
-  const newText = withFinalBreak(after);
+  // An edit's text usually stops mid-file, without a final line break:
+  // compared as is, "a" against "a\nb" reads as "a" replaced. Diff whole
+  // lines: a text without one gets the break the other text has at that point
+  // (after it, when the other continues it; else at its end; else the texts'
+  // own line ending), so an unchanged last line stays unchanged whatever the
+  // line endings. A note says when only one text ends with a line break,
+  // which joins or splits the file's next line.
+  const oldEnd = finalBreak(before);
+  const newEnd = finalBreak(after);
+  const lineEnd =
+    before.includes("\r\n") || after.includes("\r\n") ? "\r\n" : "\n";
+  const oldText =
+    before === "" || oldEnd
+      ? before
+      : before + (breakAfter(before, after) ?? newEnd ?? lineEnd);
+  const newText =
+    after === "" || newEnd
+      ? after
+      : after + (breakAfter(after, before) ?? oldEnd ?? lineEnd);
   const notes: DiffRow[] = [];
-  if (
-    before !== "" &&
-    after !== "" &&
-    before.endsWith("\n") !== after.endsWith("\n")
-  ) {
+  if (before !== "" && after !== "" && !oldEnd !== !newEnd) {
     notes.push({
       kind: "note",
-      text: after.endsWith("\n") ? ADDS_BREAK_NOTE : DROPS_BREAK_NOTE,
+      text: newEnd ? ADDS_BREAK_NOTE : DROPS_BREAK_NOTE,
     });
   }
   const replaces = ["old_string", "new_string"];

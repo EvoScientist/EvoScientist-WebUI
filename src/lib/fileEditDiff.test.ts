@@ -77,6 +77,21 @@ describe("fileEditDiff", () => {
     text: "The old text ended with a line break; the new one doesn't",
   };
 
+  it("shows a line added after an unchanged CRLF line as added only", () => {
+    const diff = fileEditDiff("edit_file", {
+      old_string: "a\r\nb",
+      new_string: "a\r\nb\r\nc",
+    });
+
+    expect(diff?.rows).toEqual([
+      { kind: "context", text: "a" },
+      { kind: "context", text: "b" },
+      { kind: "added", text: "c" },
+    ]);
+    expect(diff?.added).toBe(1);
+    expect(diff?.removed).toBe(0);
+  });
+
   it("compares whole lines, and says when only the new text ends with a line break", () => {
     const diff = fileEditDiff("edit_file", {
       old_string: "x = 1\ny = 2",
@@ -160,6 +175,74 @@ describe("fileEditDiff", () => {
         text: "Only line endings or trailing whitespace change",
       },
     ]);
+  });
+
+  // The line break added for the diff follows the texts' own line endings.
+  it.each([
+    ["a\r\nb", "a\r\nb\r\n", ["a", "b"]],
+    ["b", "b\r\n", ["b"]],
+  ])(
+    "says so when a CRLF edit only adds a final line break (%j → %j)",
+    (before, after, lastLines) => {
+      expect(
+        fileEditDiff("edit_file", { old_string: before, new_string: after })
+      ).toEqual({
+        rows: [
+          ...lastLines.map((text) => ({ kind: "context", text })),
+          ADDS_BREAK,
+        ],
+        added: 0,
+        removed: 0,
+        replaces: ["old_string", "new_string"],
+      });
+    }
+  );
+
+  // Mixed line endings: a text without a final break gets the break the
+  // other text has at that point, so an unchanged last line stays unchanged.
+  const ctx = (text: string) => ({ kind: "context", text });
+  const del = (text: string) => ({ kind: "removed", text });
+  const add = (text: string) => ({ kind: "added", text });
+  const WS = {
+    kind: "note",
+    text: "Only line endings or trailing whitespace change",
+  };
+  it.each([
+    ["a\r\nb", "a\r\nb\n", [ctx("a"), ctx("b"), ADDS_BREAK], 0, 0],
+    ["a\r\nb\n", "a\r\nb", [ctx("a"), ctx("b"), DROPS_BREAK], 0, 0],
+    [
+      "a\r\nb\nc",
+      "a\r\nb\nc\n",
+      [ctx("a"), ctx("b"), ctx("c"), ADDS_BREAK],
+      0,
+      0,
+    ],
+    ["a\r\nb", "a\r\nb\nc", [ctx("a"), ctx("b"), add("c")], 1, 0],
+    ["a\r\nb", "a\nb\n", [del("a"), add("a"), ctx("b"), WS, ADDS_BREAK], 1, 1],
+    ["a\nb", "a\r\nb", [del("a"), add("a"), ctx("b"), WS], 1, 1],
+    ["a\r\nb\r\nc", "a\r\nb", [ctx("a"), ctx("b"), del("c")], 0, 1],
+    ["a\r\nb", "c\r\nb\r\n", [del("a"), add("c"), ctx("b"), ADDS_BREAK], 1, 1],
+    ["c\r\nb\r\n", "a\r\nb", [del("c"), add("a"), ctx("b"), DROPS_BREAK], 1, 1],
+    ["a\nb", "A\nb\nc", [del("a"), add("A"), ctx("b"), add("c")], 2, 1],
+    ["b", "Z\r\nb\r\nc", [add("Z"), ctx("b"), add("c")], 2, 0],
+    ["Z\r\nb\r\nc", "b", [del("Z"), ctx("b"), del("c")], 0, 2],
+    ["a\r\nb", "A\r\nb\r\nc", [del("a"), add("A"), ctx("b"), add("c")], 2, 1],
+    [
+      "a\r\nb",
+      "Z\r\na\r\nb\r\nc",
+      [add("Z"), ctx("a"), ctx("b"), add("c")],
+      2,
+      0,
+    ],
+  ])("diffs %j → %j line by line", (before, after, rows, added, removed) => {
+    expect(
+      fileEditDiff("edit_file", { old_string: before, new_string: after })
+    ).toEqual({
+      rows,
+      added,
+      removed,
+      replaces: ["old_string", "new_string"],
+    });
   });
 
   it("adds no line-break note to text inserted into an empty old text", () => {
