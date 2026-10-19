@@ -26,6 +26,8 @@ interface MockStreamSnapshot<S> {
   interrupt: unknown | undefined;
   error: unknown;
   subagents: ReadonlyMap<string, { messages: unknown[] }>;
+  /** Checkpoints, oldest first, as the SDK orders them. */
+  history: Array<{ metadata?: Record<string, unknown> }>;
 }
 
 export interface SubmitCall {
@@ -42,6 +44,7 @@ function defaultSnapshot<S>(): MockStreamSnapshot<S> {
     interrupt: undefined,
     error: undefined,
     subagents: new Map(),
+    history: [],
   };
 }
 
@@ -92,6 +95,10 @@ export class MockStreamStore<
 
   setLoading(isLoading: boolean): void {
     this.update({ isLoading });
+  }
+
+  setHistory(history: Array<{ metadata?: Record<string, unknown> }>): void {
+    this.update({ history });
   }
 
   setThreadLoading(isThreadLoading: boolean): void {
@@ -233,7 +240,7 @@ export function useMockStreamHook(options: Record<string, unknown>) {
     // Fill-in stubs for UseStream fields useChat doesn't consume.
     branch: "main",
     setBranch: () => {},
-    history: [],
+    history: snap.history,
     experimental_branchTree: { items: [] },
     // Metadata-driven rendering (e.g. per-message branch info in
     // ChatMessage) is OUT OF SCOPE for this harness — callers get

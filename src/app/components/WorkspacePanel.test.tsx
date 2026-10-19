@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { mockWorkspace, readyWorkspace } from "@/test/mockWorkspace";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { WorkspacePanel } from "./WorkspacePanel";
@@ -60,5 +61,17 @@ describe("WorkspacePanel", () => {
     const before = listings();
     act(() => h.pane().bumpTreeRevision());
     await waitFor(() => expect(listings()).toBeGreaterThan(before));
+  });
+
+  it("lists nothing when this machine's folder is not the backend's", () => {
+    renderWithFilePane(<WorkspacePanel />, {
+      workspace: mockWorkspace({
+        ...readyWorkspace("/srv/remote/projA"),
+        local: { dir: "/home/you/other", sameFolder: false },
+      }),
+    });
+
+    expect(screen.getByText(/The files are on the backend/)).toBeTruthy();
+    expect(listings()).toBe(0);
   });
 });

@@ -116,6 +116,43 @@ describe("HealthIndicator on a localhost page", () => {
     });
   });
 
+  it("tells the page once when the backend answers again after being offline", async () => {
+    let version: string | null = null;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (String(url).endsWith("/info")) {
+          if (!version) throw new TypeError("Failed to fetch");
+          return new Response(JSON.stringify({ version }));
+        }
+        return new Response(
+          JSON.stringify({ port: 6174, deploymentUrl: BACKEND })
+        );
+      })
+    );
+    const onOnline = vi.fn();
+    render(
+      <HealthIndicator
+        deploymentUrl={BACKEND}
+        onOnline={onOnline}
+      />
+    );
+    const retry = await screen.findByRole("button", {
+      name: /Click to retry/,
+    });
+
+    version = "0.15.1";
+    fireEvent.click(retry);
+    await screen.findByRole("button", { name: /langgraph 0\.15\.1$/ });
+    expect(onOnline).toHaveBeenCalledTimes(1);
+
+    // A later check that finds it up again is not a return.
+    version = "0.15.2";
+    fireEvent(window, new Event("focus"));
+    await screen.findByRole("button", { name: /langgraph 0\.15\.2$/ });
+    expect(onOnline).toHaveBeenCalledTimes(1);
+  });
+
   it("says connected when /info answers", async () => {
     stubBackend("up");
     render(<HealthIndicator deploymentUrl={BACKEND} />);

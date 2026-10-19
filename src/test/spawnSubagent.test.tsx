@@ -50,7 +50,6 @@ vi.mock("sonner", () => ({
 }));
 
 import { renderChat } from "@/test/renderChat";
-import { fixtureAssistant } from "@/test/fixtures/assistants";
 
 const spawnInterrupt = {
   value: {
@@ -84,12 +83,12 @@ describe("spawn-subagent scenario", () => {
   });
 
   it("enables the SDK's native subagent message routing", () => {
-    renderChat({ activeAssistant: fixtureAssistant });
+    renderChat({ connected: true });
     expect(stream.getOptions()?.filterSubagentMessages).toBe(true);
   });
 
   it("exposes SDK-bound trace steps under the parent task tool-call id", () => {
-    const { result } = renderChat({ activeAssistant: fixtureAssistant });
+    const { result } = renderChat({ connected: true });
     act(() => {
       stream.setSubagents(
         new Map([
@@ -141,7 +140,7 @@ describe("spawn-subagent scenario", () => {
   });
 
   it("surfaces an action-requests interrupt to the chat context", () => {
-    const { result } = renderChat({ activeAssistant: fixtureAssistant });
+    const { result } = renderChat({ connected: true });
     act(() => {
       result.current.sendMessage("please draft the intro");
       stream.setLoading(true);
@@ -163,7 +162,7 @@ describe("spawn-subagent scenario", () => {
 
   it("resumeInterrupt submits null values with the resume command and pinned options", () => {
     const { result } = renderChat({
-      activeAssistant: fixtureAssistant,
+      connected: true,
       onHistoryRevalidate: () => historyRevalidate(),
     });
     act(() => {
@@ -203,7 +202,7 @@ describe("spawn-subagent scenario", () => {
   });
 
   it("propagates a reject decision verbatim through resumeInterrupt", () => {
-    const { result } = renderChat({ activeAssistant: fixtureAssistant });
+    const { result } = renderChat({ connected: true });
     act(() => {
       stream.setInterrupt(spawnInterrupt);
     });
@@ -224,7 +223,7 @@ describe("spawn-subagent scenario", () => {
   });
 
   it("propagates an edit decision (edited action rides along)", () => {
-    const { result } = renderChat({ activeAssistant: fixtureAssistant });
+    const { result } = renderChat({ connected: true });
     act(() => {
       stream.setInterrupt(spawnInterrupt);
     });
@@ -260,7 +259,7 @@ describe("spawn-subagent scenario", () => {
 
   it("kicks off a thread-list revalidate on resume", () => {
     const { result } = renderChat({
-      activeAssistant: fixtureAssistant,
+      connected: true,
       onHistoryRevalidate: () => historyRevalidate(),
     });
     act(() => {
@@ -275,7 +274,7 @@ describe("spawn-subagent scenario", () => {
   });
 
   it("clears the interrupt once the SDK stream drops it after resume", () => {
-    const { result } = renderChat({ activeAssistant: fixtureAssistant });
+    const { result } = renderChat({ connected: true });
     act(() => {
       stream.setInterrupt(spawnInterrupt);
     });
@@ -292,7 +291,7 @@ describe("spawn-subagent scenario", () => {
   });
 
   it("completes the round trip: send -> interrupt -> approve -> settled transcript", () => {
-    const { result } = renderChat({ activeAssistant: fixtureAssistant });
+    const { result } = renderChat({ connected: true });
 
     // 1. User asks a question.
     act(() => {

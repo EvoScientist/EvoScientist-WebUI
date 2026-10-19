@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { TestWorkspaceProvider } from "@/test/mockWorkspace";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
@@ -100,7 +101,9 @@ function setup(over: Partial<Props> = {}) {
     onTreeChanged: vi.fn(),
     ...over,
   };
-  const utils = render(<WorkspaceFileView {...props} />);
+  const utils = render(<WorkspaceFileView {...props} />, {
+    wrapper: TestWorkspaceProvider,
+  });
   const update = (p: Partial<Props>) =>
     utils.rerender(
       <WorkspaceFileView

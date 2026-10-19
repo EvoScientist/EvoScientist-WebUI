@@ -10,6 +10,7 @@ import { AgentsPanel } from "@/app/components/AgentsPanel";
 import { FilePreviewPane } from "@/app/components/FilePreviewPane";
 import type { MainChatReporter } from "@/lib/asyncAgents";
 import { useFilePane } from "@/providers/filePaneContext";
+import { useDeployment } from "@/providers/ClientProvider";
 
 interface InspectorPanelProps {
   onClose: () => void;
@@ -33,6 +34,7 @@ export function InspectorPanel({
   onClose,
   onReportToMainChat,
 }: InspectorPanelProps) {
+  const { deploymentUrl, apiKey } = useDeployment();
   const [tabParam, setTab] = useQueryState("inspectorTab");
   const tab: InspectorTab = tabParam === "agents" ? "agents" : "workspace";
   const pane = useFilePane();
@@ -139,7 +141,11 @@ export function InspectorPanel({
       </div>
       {tab === "agents" && (
         <div className="min-h-0 flex-1 overflow-hidden p-3">
-          <AgentsPanel onReportToMainChat={onReportToMainChat} />
+          <AgentsPanel
+            // Its task state is one backend's: another starts it over.
+            key={`${deploymentUrl}\n${apiKey}`}
+            onReportToMainChat={onReportToMainChat}
+          />
         </div>
       )}
       {/* Tree and preview both stay mounted: the tree keeps its expanded

@@ -19,7 +19,7 @@
 // Env:
 //   DEPLOYMENT_URL                 default http://127.0.0.1:$PORT
 //   EVOSCIENTIST_LANGGRAPH_DEV_PORT default 6606
-//   EVOSCIENTIST_ASSISTANT_ID       default EvoScientist (matches useThreads)
+//   EVOSCIENTIST_GRAPH_ID           default EvoScientist (the chat graph)
 //   LANGSMITH_API_KEY               optional; passed as X-Api-Key when set
 //
 // Safe to re-run: threads with both keys already set are skipped without a
@@ -30,10 +30,7 @@ import { Client } from "@langchain/langgraph-sdk";
 const PORT = process.env.EVOSCIENTIST_LANGGRAPH_DEV_PORT || "6606";
 const DEPLOYMENT_URL = process.env.DEPLOYMENT_URL || `http://127.0.0.1:${PORT}`;
 const API_KEY = process.env.LANGSMITH_API_KEY || "";
-const ASSISTANT_ID = process.env.EVOSCIENTIST_ASSISTANT_ID || "EvoScientist";
-
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const GRAPH_ID = process.env.EVOSCIENTIST_GRAPH_ID || "EvoScientist";
 
 function textOf(content) {
   if (typeof content === "string") return content;
@@ -74,15 +71,12 @@ async function main() {
     defaultHeaders: API_KEY ? { "X-Api-Key": API_KEY } : {},
   });
 
-  // Match useThreads's assistant filter: deployed UUIDs go into assistant_id,
-  // local-dev graph names go into graph_id.
-  const isUUID = UUID_RE.test(ASSISTANT_ID);
-  const metadataFilter = isUUID
-    ? { assistant_id: ASSISTANT_ID }
-    : { graph_id: ASSISTANT_ID };
+  // Every chat thread, whatever its folder or assistant: labels are per
+  // thread.
+  const metadataFilter = { graph_id: GRAPH_ID };
 
   console.log(
-    `Backfilling against ${DEPLOYMENT_URL}  assistant=${ASSISTANT_ID}  filter=${JSON.stringify(
+    `Backfilling against ${DEPLOYMENT_URL}  filter=${JSON.stringify(
       metadataFilter
     )}`
   );

@@ -14,6 +14,8 @@ import {
 import { nodeColor, type ObsGraphData } from "@/lib/observationGraph";
 import { listScheduledTasks } from "@/app/hooks/useScheduledTasks";
 import { useThreads } from "@/app/hooks/useThreads";
+import { useWorkspace } from "@/providers/WorkspaceProvider";
+import { localFilesAvailable } from "@/lib/workspaceSession";
 import { formatTime } from "@/lib/time";
 
 type MemoryTab = "identity" | "knowledge" | "history";
@@ -94,19 +96,19 @@ export function ResearchDashboard({
   const [activity, setActivity] = useState<ActivityItem[]>([]);
   const [ready, setReady] = useState(false);
   const reqRef = useRef(0);
+  // The workspace size counts this machine's folder, which is only the
+  // backend's when they resolve to the same place.
+  const filesHere = localFilesAvailable(useWorkspace().workspace);
 
   useEffect(() => {
     const reqId = ++reqRef.current;
     (async () => {
       try {
-        const [obsRes, execRes, wsRes, scheduled] = await Promise.all([
+        const [obsRes, execRes, scheduled] = await Promise.all([
           fetch("/api/memory/observations", { cache: "no-store" }).catch(
             () => null
           ),
           fetch("/api/memory/executions", { cache: "no-store" }).catch(
-            () => null
-          ),
-          fetch("/api/workspace?recursive=1", { cache: "no-store" }).catch(
             () => null
           ),
           listScheduledTasks().catch(() => []),
@@ -115,17 +117,8 @@ export function ResearchDashboard({
         const exec = execRes
           ? await readJson<{ entries?: ExecEntry[] }>(execRes)
           : null;
-        const ws = wsRes
-          ? await readJson<{ entries?: Array<{ size?: number }> }>(wsRes)
-          : null;
         if (reqRef.current !== reqId) return;
         setScheduledCount(scheduled.length);
-        setWsBytes(
-          (Array.isArray(ws?.entries) ? ws.entries : []).reduce(
-            (sum, f) => sum + (typeof f.size === "number" ? f.size : 0),
-            0
-          )
-        );
 
         const obsNodes = Array.isArray(obs?.nodes) ? obs.nodes : [];
         const execEntries = Array.isArray(exec?.entries) ? exec.entries : [];
@@ -161,6 +154,30 @@ export function ResearchDashboard({
       }
     })();
   }, []);
+
+  // The workspace size, from this machine's folder when it is the backend's.
+  useEffect(() => {
+    if (!filesHere) {
+      setWsBytes(0);
+      return;
+    }
+    let cancelled = false;
+    fetch("/api/workspace?recursive=1", { cache: "no-store" })
+      .then((res) => readJson<{ entries?: Array<{ size?: number }> }>(res))
+      .then((ws) => {
+        if (cancelled) return;
+        setWsBytes(
+          (Array.isArray(ws?.entries) ? ws.entries : []).reduce(
+            (sum, f) => sum + (typeof f.size === "number" ? f.size : 0),
+            0
+          )
+        );
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [filesHere]);
 
   const hasStats =
     ready &&

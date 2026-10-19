@@ -1,7 +1,6 @@
 "use client";
 
 import { ReactNode, createContext, useContext } from "react";
-import { Assistant } from "@langchain/langgraph-sdk";
 import {
   type StateType,
   type ThreadUnavailableInfo,
@@ -11,7 +10,6 @@ import type { UseStreamThread } from "@langchain/langgraph-sdk/react";
 
 interface ChatProviderProps {
   children: ReactNode;
-  activeAssistant: Assistant | null;
   onHistoryRevalidate?: () => void;
   onThreadUnavailable?: (info: ThreadUnavailableInfo) => void;
   thread?: UseStreamThread<StateType>;
@@ -19,13 +17,11 @@ interface ChatProviderProps {
 
 export function ChatProvider({
   children,
-  activeAssistant,
   onHistoryRevalidate,
   onThreadUnavailable,
   thread,
 }: ChatProviderProps) {
   const chat = useChat({
-    activeAssistant,
     onHistoryRevalidate,
     onThreadUnavailable,
     thread,

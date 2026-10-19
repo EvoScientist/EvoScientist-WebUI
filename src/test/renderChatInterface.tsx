@@ -82,16 +82,15 @@
 
 import type React from "react";
 import { render, type RenderResult } from "@testing-library/react";
-import type { Assistant } from "@langchain/langgraph-sdk";
 import {
   ChatInterface,
   type ComposerSnapshot,
 } from "@/app/components/ChatInterface";
 import { ChatProvider } from "@/providers/ChatProvider";
-import { fixtureAssistant } from "@/test/fixtures/assistants";
+import type { WorkspaceContextValue } from "@/providers/WorkspaceProvider";
+import { TestWorkspaceProvider, mockWorkspace } from "@/test/mockWorkspace";
 
 interface RenderChatInterfaceOptions {
-  assistant?: Assistant | null;
   draftSeed?: ComposerSnapshot | null;
   onComposerSnapshotReady?: (
     getSnapshot: (() => ComposerSnapshot) | null
@@ -99,21 +98,23 @@ interface RenderChatInterfaceOptions {
   /** Wrap the provider tree, e.g. in a FilePaneProvider. */
   wrapper?: React.ComponentType<{ children: React.ReactNode }>;
   onNavigate?: React.ComponentProps<typeof ChatInterface>["onNavigate"];
+  /** The backend's folder; defaults to a backend without the route. */
+  workspace?: WorkspaceContextValue;
 }
 
 export function renderChatInterface(
   opts: RenderChatInterfaceOptions = {}
 ): RenderResult {
-  const assistant = opts.assistant ?? fixtureAssistant;
   return render(
-    <ChatProvider activeAssistant={assistant}>
-      <ChatInterface
-        assistant={assistant}
-        draftSeed={opts.draftSeed}
-        onComposerSnapshotReady={opts.onComposerSnapshotReady}
-        onNavigate={opts.onNavigate}
-      />
-    </ChatProvider>,
+    <TestWorkspaceProvider value={opts.workspace ?? mockWorkspace()}>
+      <ChatProvider>
+        <ChatInterface
+          draftSeed={opts.draftSeed}
+          onComposerSnapshotReady={opts.onComposerSnapshotReady}
+          onNavigate={opts.onNavigate}
+        />
+      </ChatProvider>
+    </TestWorkspaceProvider>,
     opts.wrapper ? { wrapper: opts.wrapper } : undefined
   );
 }

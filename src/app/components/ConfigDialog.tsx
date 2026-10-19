@@ -12,7 +12,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
-import { DEFAULT_ASSISTANT_ID, DeploymentConfig } from "@/lib/config";
+import { DeploymentConfig } from "@/lib/config";
 import { useCollapseAgentActions } from "@/lib/uiSettings";
 
 interface ConfigDialogProps {
@@ -72,11 +72,7 @@ export function ConfigDialog({
       return;
     }
 
-    onSave({
-      deploymentUrl: url,
-      // Fixed to the EvoScientist main agent (see DEFAULT_ASSISTANT_ID).
-      assistantId: DEFAULT_ASSISTANT_ID,
-    });
+    onSave({ ...initialConfig, deploymentUrl: url });
     onOpenChange(false);
   };
 

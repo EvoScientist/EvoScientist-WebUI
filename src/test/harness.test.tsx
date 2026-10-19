@@ -85,7 +85,7 @@ describe("chat harness — smoke", () => {
   });
 
   it("records a submit call when sendMessage is invoked", () => {
-    const { result } = renderChat();
+    const { result } = renderChat({ connected: true });
     act(() => {
       result.current.sendMessage("hi");
     });

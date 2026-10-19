@@ -54,10 +54,10 @@ vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
 }));
 
+import { TestWorkspaceProvider } from "@/test/mockWorkspace";
 import { ChatProvider, useChatContext } from "@/providers/ChatProvider";
 import { useAutoApproveInterrupt } from "@/app/hooks/useAutoApproveInterrupt";
 import type { ApprovalPolicy } from "@/app/hooks/useApprovalPolicy";
-import { fixtureAssistant } from "@/test/fixtures/assistants";
 
 const makeExecuteInterrupt = (command: string, id = "int-1") => ({
   id,
@@ -95,9 +95,9 @@ function renderChatWithAutoApprove(
     {
       initialProps: initial,
       wrapper: ({ children }: { children: ReactNode }) => (
-        <ChatProvider activeAssistant={fixtureAssistant}>
-          {children}
-        </ChatProvider>
+        <TestWorkspaceProvider>
+          <ChatProvider>{children}</ChatProvider>
+        </TestWorkspaceProvider>
       ),
     }
   );
@@ -300,9 +300,11 @@ describe("auto-approve scenario", () => {
     const root = createRoot(el);
     root.render(
       <StrictMode>
-        <ChatProvider activeAssistant={fixtureAssistant}>
-          <StrictHarness />
-        </ChatProvider>
+        <TestWorkspaceProvider>
+          <ChatProvider>
+            <StrictHarness />
+          </ChatProvider>
+        </TestWorkspaceProvider>
       </StrictMode>
     );
     await new Promise((resolve) => setTimeout(resolve, 50));

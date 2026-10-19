@@ -115,6 +115,7 @@ vi.mock("@/app/components/TasksFilesSidebar", async () => {
   const m = await import("@/test/mocks/chatInterfaceStubs");
   return { FilesPopover: m.stubComponent("FilesPopover") };
 });
+import { mockWorkspace, readyWorkspace } from "@/test/mockWorkspace";
 import { renderChatInterface } from "@/test/renderChatInterface";
 import {
   getAllProps,
@@ -261,6 +262,122 @@ describe("ChatInterface composition", () => {
     expect(screen.getByTestId("stub-AskUserInterrupt")).toBeDefined();
     // Not an ActionGroup — this is the ask-user branch.
     expect(screen.queryAllByTestId("stub-ActionGroup")).toHaveLength(0);
+  });
+
+  it("keeps an ask_user form on the page, disabled, while the folder is read again", () => {
+    renderChatInterface({
+      workspace: {
+        ...mockWorkspace(),
+        refreshing: true,
+        isReady: () => false,
+      },
+    });
+    act(() => {
+      stream.setMessages([humanTurn("hi")]);
+      stream.setInterrupt(askUserInterrupt("what do you want?"));
+    });
+
+    // Unmounting it would drop what the user has typed.
+    expect(screen.getByTestId("stub-AskUserInterrupt")).toBeDefined();
+    expect(
+      getLastProps<{ isLoading: boolean }>("AskUserInterrupt")?.isLoading
+    ).toBe(true);
+  });
+
+  it("makes the chat read-only while a run-mode session holds the backend", () => {
+    const { container } = renderChatInterface({
+      workspace: mockWorkspace({
+        ...readyWorkspace("/home/you/projA"),
+        runDir: "/home/you/projA/runs/r1",
+      }),
+    });
+    const textarea = container.querySelector("textarea")!;
+    expect(textarea.disabled).toBe(true);
+    expect(textarea.placeholder).toMatch(/run folder/);
+
+    act(() => {
+      stream.setMessages([humanTurn("hi")]);
+      stream.setInterrupt(askUserInterrupt("what do you want?"));
+    });
+    expect(screen.queryByTestId("stub-AskUserInterrupt")).toBeNull();
+  });
+
+  // "first" refused, with "second" queued behind it while it ran and
+  // `draft` typed since.
+  async function refuseWithQueued(draft = "") {
+    const { container } = renderChatInterface({ workspace: mockWorkspace() });
+    const textarea = container.querySelector("textarea")!;
+    fireEvent.change(textarea, { target: { value: "first" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+    const sent = stream.getSubmitCalls()[0]?.values as {
+      messages: Message[];
+    };
+    act(() => {
+      stream.setMessages([...sent.messages]);
+      stream.setLoading(true);
+    });
+    fireEvent.change(textarea, { target: { value: "second" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+    fireEvent.change(textarea, { target: { value: draft } });
+    act(() => {
+      stream.emitError(
+        new Error('HTTP 404: {"detail":"Thread or assistant not found."}')
+      );
+      stream.setLoading(false);
+    });
+    return { container, textarea };
+  }
+  const submitted = () =>
+    stream
+      .getSubmitCalls()
+      .map(
+        (call) =>
+          (call.values as { messages: Message[] }).messages.at(-1)?.content
+      );
+
+  it("puts a refused message back in the composer with what was queued after it", async () => {
+    const { textarea } = await refuseWithQueued("my draft");
+
+    expect(textarea.value).toBe("first\n\nsecond\n\nmy draft");
+    expect(screen.queryByLabelText("Queued messages")).toBeNull();
+  });
+
+  it("sends nothing on its own after a refusal", async () => {
+    await refuseWithQueued();
+
+    // Runs from elsewhere come and go; what came back stays in the composer.
+    act(() => {
+      stream.setLoading(true);
+    });
+    act(() => {
+      stream.setLoading(false);
+    });
+
+    expect(submitted()).toEqual(["first"]);
+  });
+
+  it("keeps a queued message while the folder is being read again", () => {
+    let readyNow = true;
+    const { container } = renderChatInterface({
+      workspace: { ...mockWorkspace(), isReady: () => readyNow },
+    });
+    act(() => {
+      stream.setMessages([humanTurn("hi")]);
+      stream.setLoading(true);
+    });
+    const textarea = container.querySelector("textarea")!;
+    fireEvent.change(textarea, { target: { value: "follow-up" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    readyNow = false;
+    act(() => {
+      stream.setLoading(false);
+    });
+
+    expect(stream.getSubmitCalls()).toHaveLength(0);
+    expect(
+      screen.getAllByRole("button", { name: "Steer with this message next" })
+    ).toHaveLength(1);
   });
 
   it("disables the composer submit button while a run is in flight", () => {
@@ -1134,7 +1251,7 @@ describe("ChatInterface composition", () => {
       vi.stubGlobal(
         "fetch",
         vi.fn(async (url: string) =>
-          String(url).endsWith("/api/skills/pinnable")
+          String(url).includes("/api/skills/pinnable")
             ? new Response(
                 JSON.stringify({
                   skills: [
@@ -1170,6 +1287,23 @@ describe("ChatInterface composition", () => {
       fireEvent.keyDown(textarea, { key: "Enter" });
       expect(textarea.value).toBe("/paper-writing ");
       expect(stream.getSubmitCalls()).toHaveLength(0);
+    });
+
+    it("offers only the global skills when the backend's folder is elsewhere", async () => {
+      const { container } = renderChatInterface({
+        workspace: mockWorkspace({
+          ...readyWorkspace("/srv/projB"),
+          local: { dir: "/home/you/projA", sameFolder: false },
+        }),
+      });
+      typeInComposer(container, "/pa");
+      await waitFor(() =>
+        expect(screen.getAllByRole("option")).toHaveLength(1)
+      );
+      expect(fetch).toHaveBeenCalledWith(
+        "/api/skills/pinnable?workspace=0",
+        expect.anything()
+      );
     });
 
     it("stays shut while the agent waits on an answer", async () => {

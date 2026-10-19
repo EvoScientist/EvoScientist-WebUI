@@ -29,12 +29,16 @@ export function useSlashMenu({
   value,
   setValue,
   disabled = false,
+  workspaceSkills = true,
   onBrowse,
 }: {
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
   value: string;
   setValue: (value: string) => void;
   disabled?: boolean;
+  /** Offer the workspace's own skills: off when this machine's workspace
+   *  isn't the backend's folder, leaving the global tier. */
+  workspaceSkills?: boolean;
   /** Open the Skills marketplace (offered when none is installed). */
   onBrowse?: () => void;
 }) {
@@ -95,7 +99,12 @@ export function useSlashMenu({
     if (!wanted) return;
     setSkills(null);
     const id = ++request.current;
-    fetch("/api/skills/pinnable", { cache: "no-store" })
+    fetch(
+      workspaceSkills
+        ? "/api/skills/pinnable"
+        : "/api/skills/pinnable?workspace=0",
+      { cache: "no-store" }
+    )
       .then((res) => (res.ok ? res.json() : Promise.reject(res.status)))
       .then((data: { skills?: unknown }) => {
         if (id !== request.current) return;
@@ -106,7 +115,7 @@ export function useSlashMenu({
       .catch(() => {
         // A failed read leaves the menu shut.
       });
-  }, [wanted, focusCount]);
+  }, [wanted, focusCount, workspaceSkills]);
 
   // An Escape holds only while the word it closed on stays as it was.
   useEffect(() => {
