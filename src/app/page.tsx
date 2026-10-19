@@ -12,8 +12,8 @@ import { useQueryState } from "nuqs";
 import { getConfig, saveConfig, DeploymentConfig } from "@/lib/config";
 import { ConfigDialog } from "@/app/components/ConfigDialog";
 import { Button } from "@/components/ui/button";
-import { Assistant } from "@langchain/langgraph-sdk";
-import { ClientProvider, useClient } from "@/providers/ClientProvider";
+import { ClientProvider, useDeployment } from "@/providers/ClientProvider";
+import { WorkspaceProvider, useWorkspace } from "@/providers/WorkspaceProvider";
 import {
   Settings,
   SquarePen,
@@ -64,7 +64,9 @@ function HomePageInner({
   setConfigDialogOpen,
   handleSaveConfig,
 }: HomePageInnerProps) {
-  const client = useClient();
+  const { deploymentUrl, apiKey } = useDeployment();
+  // Panels that hold one backend's data start over on another.
+  const backendKey = `${deploymentUrl}\n${apiKey}`;
   const [threadId, setThreadId] = useQueryState("threadId");
   const [sidebar, setSidebar] = useQueryState("sidebar");
   const [view, setView] = useQueryState("view");
@@ -76,7 +78,6 @@ function HomePageInner({
 
   const [mutateThreads, setMutateThreads] = useState<(() => void) | null>(null);
   const [interruptCount, setInterruptCount] = useState(0);
-  const [assistant, setAssistant] = useState<Assistant | null>(null);
   const [isDesktopLayout, setIsDesktopLayout] = useState<boolean | null>(null);
   const [chatSessionRevision, setChatSessionRevision] = useState(0);
   // "Submit a message on the main thread" — registered by ChatInterface (only
@@ -86,65 +87,8 @@ function HomePageInner({
     null
   );
 
-  const fetchAssistant = useCallback(async () => {
-    const isUUID =
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-        config.assistantId
-      );
-
-    const resolve = async (): Promise<Assistant> => {
-      // A UUID addresses one assistant directly; otherwise list the graph's
-      // assistants and prefer the system default (fall back to the first).
-      if (isUUID) {
-        return await client.assistants.get(config.assistantId);
-      }
-      const assistants = await client.assistants.search({
-        graphId: config.assistantId,
-        limit: 100,
-      });
-      const found =
-        assistants.find((a) => a.metadata?.["created_by"] === "system") ??
-        assistants[0];
-      if (!found) throw new Error("No assistant found for this graph.");
-      return found;
-    };
-
-    // The langgraph backend may not be ready the instant the page mounts — the
-    // request then fails with "Failed to fetch". Retry a few times so a transient
-    // startup race self-heals instead of surfacing a scary console error.
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      try {
-        setAssistant(await resolve());
-        return;
-      } catch (error) {
-        if (attempt < 2) {
-          await new Promise((r) => setTimeout(r, 700));
-          continue;
-        }
-        console.warn(
-          "Couldn't resolve the EvoScientist assistant; addressing the graph by id instead. Is the backend running?",
-          error
-        );
-      }
-    }
-
-    // Fallback: address the graph directly by id (works on `langgraph dev`).
-    setAssistant({
-      assistant_id: config.assistantId,
-      graph_id: config.assistantId,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      config: {},
-      metadata: {},
-      version: 1,
-      name: config.assistantId,
-      context: {},
-    });
-  }, [client, config.assistantId]);
-
-  useEffect(() => {
-    fetchAssistant();
-  }, [fetchAssistant]);
+  const { refresh: refreshWorkspace, refreshing: workspaceRefreshing } =
+    useWorkspace();
 
   useEffect(() => {
     const mediaQuery = window.matchMedia("(min-width: 768px)");
@@ -403,6 +347,11 @@ function HomePageInner({
               onReconnect={(url) =>
                 handleSaveConfig({ ...config, deploymentUrl: url })
               }
+              // A read already in progress (the first one, retrying while the
+              // backend was down) answers for this reconnect too.
+              onOnline={() => {
+                if (!workspaceRefreshing) void refreshWorkspace();
+              }}
             />
             <ThemeToggle />
             <Button
@@ -544,12 +493,10 @@ function HomePageInner({
                 >
                   <ChatProvider
                     key={chatSessionRevision}
-                    activeAssistant={assistant}
                     onHistoryRevalidate={() => mutateThreads?.()}
                     onThreadUnavailable={handleThreadUnavailable}
                   >
                     <ChatInterface
-                      assistant={assistant}
                       draftSeed={composerSeed}
                       onComposerSnapshotReady={(getSnapshot) => {
                         composerSnapshotRef.current = getSnapshot;
@@ -581,7 +528,10 @@ function HomePageInner({
                   />
                 )}
                 {view === "schedule" && (
-                  <ScheduledTasksPanel onOpenThread={selectThread} />
+                  <ScheduledTasksPanel
+                    key={backendKey}
+                    onOpenThread={selectThread}
+                  />
                 )}
               </ResizablePanel>
 
@@ -618,29 +568,17 @@ function HomePageContent() {
   const [config, setConfig] = useState<DeploymentConfig | null>(null);
   const [configLoaded, setConfigLoaded] = useState(false);
   const [configDialogOpen, setConfigDialogOpen] = useState(false);
-  const [assistantId, setAssistantId] = useQueryState("assistantId");
 
   // On mount, check for saved config, otherwise show config dialog
   useEffect(() => {
     const savedConfig = getConfig();
     if (savedConfig) {
       setConfig(savedConfig);
-      if (!assistantId) {
-        setAssistantId(savedConfig.assistantId);
-      }
     } else {
       setConfigDialogOpen(true);
     }
     setConfigLoaded(true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  // If config changes, update the assistantId
-  useEffect(() => {
-    if (config && !assistantId) {
-      setAssistantId(config.assistantId);
-    }
-  }, [config, assistantId, setAssistantId]);
 
   const handleSaveConfig = useCallback((newConfig: DeploymentConfig) => {
     saveConfig(newConfig);
@@ -696,12 +634,17 @@ function HomePageContent() {
       deploymentUrl={config.deploymentUrl}
       apiKey={langsmithApiKey}
     >
-      <HomePageInner
-        config={config}
-        configDialogOpen={configDialogOpen}
-        setConfigDialogOpen={setConfigDialogOpen}
-        handleSaveConfig={handleSaveConfig}
-      />
+      <WorkspaceProvider
+        deploymentUrl={config.deploymentUrl}
+        apiKey={langsmithApiKey}
+      >
+        <HomePageInner
+          config={config}
+          configDialogOpen={configDialogOpen}
+          setConfigDialogOpen={setConfigDialogOpen}
+          handleSaveConfig={handleSaveConfig}
+        />
+      </WorkspaceProvider>
     </ClientProvider>
   );
 }

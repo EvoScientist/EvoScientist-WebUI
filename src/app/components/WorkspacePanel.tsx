@@ -1,5 +1,7 @@
 "use client";
 
+import { useWorkspace } from "@/providers/WorkspaceProvider";
+import { localFilesNotice } from "@/lib/workspaceSession";
 import React, {
   useCallback,
   useEffect,
@@ -143,6 +145,18 @@ for (const cat of CATEGORIES) {
 type ViewMode = "tree" | "type";
 
 export function WorkspacePanel() {
+  const notice = localFilesNotice(useWorkspace().workspace);
+  if (notice) return <LocalFilesNotice message={notice} />;
+  return <WorkspaceTree />;
+}
+
+/** Shown instead of the WebUI's own file views when they can't show the
+ *  backend's folder (see `localFilesNotice`). */
+export function LocalFilesNotice({ message }: { message: string }) {
+  return <p className="p-4 text-sm text-muted-foreground">{message}</p>;
+}
+
+function WorkspaceTree() {
   const [view, setView] = useState<ViewMode>("tree");
 
   // --- Tree view state (listing cache keyed by dir path; "" = root) ---

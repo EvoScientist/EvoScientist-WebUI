@@ -16,11 +16,15 @@ export async function GET(request: NextRequest) {
       { status: 403, headers: NO_STORE_HEADERS }
     );
   }
-  // No backend running means no workspace: the global tier alone.
-  const workspace = await getWorkspaceDir().then(
-    (dir) => join(dir, "skills"),
-    () => null
-  );
+  // The global tier alone when no backend runs here, or when `?workspace=0`
+  // says the backend's folder isn't this machine's workspace.
+  const workspace =
+    request.nextUrl.searchParams.get("workspace") === "0"
+      ? null
+      : await getWorkspaceDir().then(
+          (dir) => join(dir, "skills"),
+          () => null
+        );
   try {
     const skills = await listPinnableSkills({
       workspace,

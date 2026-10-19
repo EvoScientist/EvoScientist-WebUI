@@ -14,8 +14,8 @@ import { GET } from "./route";
 import { getWorkspaceDir } from "@/lib/server/workspace";
 import { listPinnableSkills, SKILLS_INSTALL_DIR } from "@/lib/server/skills";
 
-const request = (site = "same-origin") =>
-  new NextRequest("http://localhost:4716/api/skills/pinnable", {
+const request = (site = "same-origin", query = "") =>
+  new NextRequest(`http://localhost:4716/api/skills/pinnable${query}`, {
     headers: { host: "localhost:4716", "sec-fetch-site": site },
   });
 const skill = {
@@ -47,6 +47,17 @@ describe("GET /api/skills/pinnable", () => {
     vi.mocked(getWorkspaceDir).mockRejectedValue(new Error("No workspace"));
     vi.mocked(listPinnableSkills).mockResolvedValue([skill]);
     const res = await GET(request());
+    expect(res.status).toBe(200);
+    expect(listPinnableSkills).toHaveBeenCalledWith({
+      workspace: null,
+      global: SKILLS_INSTALL_DIR,
+    });
+  });
+
+  it("lists the global tier alone when the backend's folder is elsewhere", async () => {
+    vi.mocked(getWorkspaceDir).mockResolvedValue("/ws");
+    vi.mocked(listPinnableSkills).mockResolvedValue([skill]);
+    const res = await GET(request("same-origin", "?workspace=0"));
     expect(res.status).toBe(200);
     expect(listPinnableSkills).toHaveBeenCalledWith({
       workspace: null,

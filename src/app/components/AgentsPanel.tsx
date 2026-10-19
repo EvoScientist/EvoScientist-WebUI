@@ -14,6 +14,21 @@ import {
 import { useQueryState } from "nuqs";
 import { toast } from "sonner";
 import { useClient } from "@/providers/ClientProvider";
+import { useWorkspace } from "@/providers/WorkspaceProvider";
+import { assistantIdFor } from "@/lib/workspaceSession";
+import { stampThreadWorkspace } from "@/app/hooks/useThreads";
+import {
+  AGENT_GRAPHS,
+  canRun,
+  threadBinding,
+  threadFolders,
+  type ThreadFolders,
+} from "@/lib/threadBinding";
+import {
+  assistantIsMissing,
+  isMissingThreadOrAssistantError,
+  isRunFolderMismatchError,
+} from "@/lib/streamError";
 import { cn } from "@/lib/utils";
 import { extractStringFromMessageContent } from "@/app/utils/utils";
 import {
@@ -107,12 +122,23 @@ interface AgentsPanelProps {
 
 export function AgentsPanel({ onReportToMainChat }: AgentsPanelProps) {
   const client = useClient();
+  const { workspace, isReady, refresh: refreshWorkspace } = useWorkspace();
   const [threadId] = useQueryState("threadId");
   const { tasks, loaded, error, refresh } = useAsyncAgents(threadId);
   const [now, setNow] = useState(() => Date.now());
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [details, setDetails] = useState<Record<string, TaskDetail>>({});
   const terminalDetailSignaturesRef = useRef(new Map<string, string>());
+  // Each task thread's graph and folders, for its follow-up box. They don't
+  // change, so they are read once; the ref lets the detail fetch see them.
+  const [taskFolders, setTaskFolders] = useState<Record<string, ThreadFolders>>(
+    {}
+  );
+  const taskFoldersRef = useRef(taskFolders);
+  const rememberFolders = (taskId: string, folders: ThreadFolders) => {
+    taskFoldersRef.current = { ...taskFoldersRef.current, [taskId]: folders };
+    setTaskFolders(taskFoldersRef.current);
+  };
   // Which tasks have been reported to the main chat this session (so the button
   // flips to "Reported" and we don't double-poke the main agent).
   const [reported, setReported] = useState<Record<string, boolean>>({});
@@ -147,10 +173,26 @@ export function AgentsPanel({ onReportToMainChat }: AgentsPanelProps) {
   const sendToAgent = async (task: EnrichedAsyncTask) => {
     const text = (chatInput[task.task_id] ?? "").trim();
     if (!text || chatBusy[task.task_id]) return;
+    // The follow-up runs on the workspace assistant of the task thread's own
+    // graph, and only where that thread may run (see `threadBinding`).
+    const folders = taskFolders[task.task_id];
+    if (!folders?.graphId) return;
+    const binding = threadBinding(workspace, folders, AGENT_GRAPHS, null);
+    if (!canRun(binding)) return;
+    // Computed from the folder answer this render carries; the gate opens
+    // only after that answer has rendered.
+    const assistantId = assistantIdFor(workspace, folders.graphId);
+    if (!assistantId || !isReady()) return;
+    // A task thread with no folder joins the backend's, as in the chat.
+    if (binding.kind === "unbound" && workspace.status === "ready") {
+      const key = workspace.key;
+      void stampThreadWorkspace(task.thread_id, key).catch(() => {});
+      rememberFolders(task.task_id, { ...folders, workspaceDir: key });
+    }
     setChatBusy((b) => ({ ...b, [task.task_id]: true }));
     setChatError((e) => ({ ...e, [task.task_id]: null }));
     try {
-      const values = (await client.runs.wait(task.thread_id, task.agent_name, {
+      const values = (await client.runs.wait(task.thread_id, assistantId, {
         input: { messages: [{ type: "human", content: text }] },
       })) as { messages?: unknown[] } | null;
       if (!mountedRef.current) return;
@@ -171,10 +213,24 @@ export function AgentsPanel({ onReportToMainChat }: AgentsPanelProps) {
       const { prompt, steps } = buildDetail(messages);
       setDetails((prev) => ({
         ...prev,
-        [task.task_id]: { loading: false, error: null, prompt, steps },
+        [task.task_id]: {
+          loading: false,
+          error: null,
+          prompt,
+          steps,
+        },
       }));
     } catch (err) {
       if (!mountedRef.current) return;
+      // The same 404 covers a missing assistant and a missing thread: only a
+      // thread that still exists means the assistants are gone.
+      const assistantsGone =
+        isMissingThreadOrAssistantError(err) &&
+        (await assistantIsMissing(client, task.thread_id));
+      if (!mountedRef.current) return;
+      if (assistantsGone || isRunFolderMismatchError(err)) {
+        void refreshWorkspace();
+      }
       // The SDK raises run errors as plain Errors ("<error>: <message>") and
       // transport problems as HTTPError (numeric status) / TypeError (fetch) —
       // tell the user which side failed.
@@ -185,7 +241,13 @@ export function AgentsPanel({ onReportToMainChat }: AgentsPanelProps) {
           typeof (err as { status?: unknown }).status === "number");
       setChatError((e) => ({
         ...e,
-        [task.task_id]: transport
+        [task.task_id]: isRunFolderMismatchError(err)
+          ? "The backend serves another folder than this agent's."
+          : assistantsGone
+          ? "The backend lost this folder's assistants; they are being recreated. Try again."
+          : isMissingThreadOrAssistantError(err)
+          ? "This agent's conversation no longer exists."
+          : transport
           ? "Couldn't reach this agent — try again."
           : "The agent hit an error processing this follow-up.",
       }));
@@ -219,6 +281,8 @@ export function AgentsPanel({ onReportToMainChat }: AgentsPanelProps) {
     toast.error(
       result === "wrong-thread"
         ? "The active conversation changed — reopen this task and try again."
+        : result === "read-only"
+        ? "The main chat is read-only here."
         : "Main chat is busy — try again when it's idle."
     );
   };
@@ -269,12 +333,30 @@ export function AgentsPanel({ onReportToMainChat }: AgentsPanelProps) {
     }));
     (async () => {
       try {
-        const state = (await client.threads.getState(task.thread_id)) as {
-          values?: { messages?: unknown[] };
-        };
+        const known = taskFoldersRef.current[expandedId];
+        const [state, thread] = await Promise.all([
+          client.threads.getState(task.thread_id) as Promise<{
+            values?: { messages?: unknown[] };
+            metadata?: Record<string, unknown>;
+          }>,
+          known ? null : client.threads.get(task.thread_id).catch(() => null),
+        ]);
         if (cancelled) return;
         const { prompt, steps } = buildDetail(state.values?.messages ?? []);
-        if (!running) {
+        // Kept only once the thread itself was read: the checkpoint alone
+        // may lack the graph.
+        if (!known && thread) {
+          rememberFolders(
+            expandedId,
+            threadFolders(
+              thread.metadata as Record<string, unknown>,
+              state.metadata
+            )
+          );
+        }
+        // A finished task is not read again, so it counts as loaded only once
+        // its folders are known.
+        if (!running && (known || thread)) {
           terminalDetailSignaturesRef.current.set(
             expandedId,
             terminalSignature
@@ -532,6 +614,19 @@ export function AgentsPanel({ onReportToMainChat }: AgentsPanelProps) {
                         const running =
                           normalizeAsyncStatus(task.liveStatus) === "running";
                         const busy = !!chatBusy[task.task_id];
+                        const followUp = threadBinding(
+                          workspace,
+                          taskFolders[task.task_id],
+                          AGENT_GRAPHS,
+                          null
+                        );
+                        if (followUp.kind === "readOnly") {
+                          return (
+                            <p className="mt-1 border-t border-border pt-2 text-[11px] text-muted-foreground">
+                              {followUp.reason}
+                            </p>
+                          );
+                        }
                         return (
                           <div className="mt-1 border-t border-border pt-2">
                             <p className="mb-1 text-[11px] text-muted-foreground">
@@ -566,7 +661,7 @@ export function AgentsPanel({ onReportToMainChat }: AgentsPanelProps) {
                                     e.preventDefault();
                                   }
                                 }}
-                                disabled={running || busy}
+                                disabled={running || busy || !canRun(followUp)}
                                 placeholder={
                                   running
                                     ? "Agent is working…"
@@ -580,6 +675,7 @@ export function AgentsPanel({ onReportToMainChat }: AgentsPanelProps) {
                                 disabled={
                                   running ||
                                   busy ||
+                                  !canRun(followUp) ||
                                   !(chatInput[task.task_id] ?? "").trim()
                                 }
                                 aria-label="Send"

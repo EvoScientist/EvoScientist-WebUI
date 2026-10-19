@@ -21,6 +21,9 @@ interface UseAutoApproveInterruptArgs {
    *  command never prompts in the TUI either); without it only the local
    *  auto-approve policy applies. */
   policy?: ApprovalPolicy;
+  /** Whether a resume may start now; checked before the interrupt is marked
+   *  handled, so a refused resume is tried again. */
+  canResumeNow?: () => boolean;
 }
 
 export function useAutoApproveInterrupt({
@@ -30,6 +33,7 @@ export function useAutoApproveInterrupt({
   isLoading,
   resetKey,
   policy,
+  canResumeNow = alwaysReady,
 }: UseAutoApproveInterruptArgs): void {
   const approvedIdsRef = useRef<Set<string>>(new Set());
   // Interrupts resumed with the deployment's decision. Kept apart from the set
@@ -79,8 +83,9 @@ export function useAutoApproveInterrupt({
     );
     if (decisions === null) return;
     if (serverResolvedRef.current.has(key)) return;
+    if (serverDecisions === null && approvedIdsRef.current.has(key)) return;
+    if (!canResumeNow()) return;
     if (serverDecisions !== null) serverResolvedRef.current.add(key);
-    else if (approvedIdsRef.current.has(key)) return;
     approvedIdsRef.current.add(key);
     resumeInterrupt(buildToolApprovalResume(interruptIdOf(ir), { decisions }));
   }, [
@@ -92,5 +97,8 @@ export function useAutoApproveInterrupt({
     policyKey,
     policyChecking,
     policyDecisions,
+    canResumeNow,
   ]);
 }
+
+const alwaysReady = () => true;

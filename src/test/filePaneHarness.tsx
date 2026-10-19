@@ -7,6 +7,8 @@ import {
   useFilePane,
   type FilePaneContextValue,
 } from "@/providers/filePaneContext";
+import type { WorkspaceContextValue } from "@/providers/WorkspaceProvider";
+import { TestWorkspaceProvider } from "@/test/mockWorkspace";
 
 /**
  * Render `ui` under a FilePaneProvider with in-memory URL state. `pane()` is
@@ -28,6 +30,7 @@ export function renderWithFilePane(
     onReveal?: () => void;
     inspectorOpen?: boolean;
     inspectorToggleRef?: React.RefObject<HTMLElement | null>;
+    workspace?: WorkspaceContextValue;
   } = {}
 ) {
   const urlUpdates: UrlUpdateEvent[] = [];
@@ -66,7 +69,9 @@ export function renderWithFilePane(
       hasMemory
       onUrlUpdate={(e) => urlUpdates.push(e)}
     >
-      <Host />
+      <TestWorkspaceProvider value={opts.workspace}>
+        <Host />
+      </TestWorkspaceProvider>
     </NuqsTestingAdapter>
   );
   return {

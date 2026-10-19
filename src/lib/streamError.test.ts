@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatStreamError } from "@/app/hooks/useChat";
+import { formatStreamError } from "@/lib/streamError";
 
 describe("formatStreamError", () => {
   it("renders the provider error envelope with status and code", () => {

@@ -41,7 +41,12 @@ import {
   deleteScheduledTask,
   runScheduledTaskNow,
   updateScheduledTask,
+  otherFolderReason,
   useScheduledTasks,
+  useSchedulerTarget,
+  useServedFolder,
+  useAssistantRecovery,
+  useSchedulerGate,
   type ScheduledTask,
 } from "@/app/hooks/useScheduledTasks";
 import {
@@ -442,8 +447,22 @@ function TaskForm({
     name.trim() !== initialTask.name.trim() ||
     prompt.trim() !== initialTask.prompt.trim() ||
     cron !== initialTask.schedule.trim();
+  const target = useSchedulerTarget();
+  // Saving re-creates the task on this folder's scheduler: never for a task
+  // of another folder.
+  const servedFolder = useServedFolder();
+  const recoverAssistant = useAssistantRecovery();
+  const gateOpen = useSchedulerGate();
+  const elsewhere = initialTask
+    ? otherFolderReason(initialTask, servedFolder)
+    : null;
   const canSave = Boolean(
-    name.trim() && prompt.trim() && !cronError && hasChanges
+    !elsewhere &&
+      target &&
+      name.trim() &&
+      prompt.trim() &&
+      !cronError &&
+      hasChanges
   );
 
   useEffect(() => {
@@ -464,7 +483,7 @@ function TaskForm({
       toast.error(cronError);
       return;
     }
-    if (!hasChanges) return;
+    if (!hasChanges || !target || elsewhere || !gateOpen()) return;
 
     setSaving(true);
     try {
@@ -475,6 +494,7 @@ function TaskForm({
           prompt: prompt.trim(),
           schedule: cron,
           timezone: initialTask.timezone,
+          target,
         });
         if (result.oldTaskDeleted) {
           toast.success(`"${name.trim()}" updated.`);
@@ -489,11 +509,13 @@ function TaskForm({
           name: name.trim(),
           prompt: prompt.trim(),
           schedule: cron,
+          target,
         });
         toast.success(`"${name.trim()}" scheduled.`);
         onSaved();
       }
     } catch (err) {
+      recoverAssistant(err);
       toast.error(
         err instanceof Error
           ? err.message
@@ -628,20 +650,26 @@ function TaskDetail({
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const nextRunTitle = formatLongDate(task.next_run_date);
+  const target = useSchedulerTarget();
+  const elsewhere = otherFolderReason(task, useServedFolder());
+  const recoverAssistant = useAssistantRecovery();
+  const gateOpen = useSchedulerGate();
 
   const handleRunNow = useCallback(async () => {
+    if (!target || elsewhere || !gateOpen()) return;
     setRunning(true);
     try {
-      await runScheduledTaskNow(task);
+      await runScheduledTaskNow(task, target);
       toast.success(`"${task.name}" started.`);
     } catch (err) {
+      recoverAssistant(err);
       toast.error(
         err instanceof Error ? err.message : "Failed to start the task."
       );
     } finally {
       setRunning(false);
     }
-  }, [task]);
+  }, [task, target, elsewhere, recoverAssistant, gateOpen]);
 
   const handleDelete = useCallback(async () => {
     setDeleting(true);
@@ -683,7 +711,10 @@ function TaskDetail({
           <Button
             size="sm"
             onClick={handleRunNow}
-            disabled={running || !task.prompt.trim()}
+            disabled={
+              running || !target || Boolean(elsewhere) || !task.prompt.trim()
+            }
+            title={elsewhere ?? undefined}
           >
             {running ? (
               <Loader2 className="size-3.5 animate-spin" />
@@ -756,13 +787,15 @@ function TaskDetail({
 
         <div className="flex flex-shrink-0 items-center justify-between gap-2 border-t border-border bg-background px-3 py-2.5 sm:px-5">
           <p className="hidden truncate text-xs text-muted-foreground sm:block">
-            Manual runs create a scheduler thread immediately.
+            {elsewhere ?? "Manual runs create a scheduler thread immediately."}
           </p>
           <div className="ml-auto flex items-center gap-2">
             <Button
               variant="outline"
               size="sm"
               onClick={onEdit}
+              disabled={Boolean(elsewhere)}
+              title={elsewhere ?? undefined}
               aria-label={`Edit scheduled task "${task.name}"`}
             >
               <Pencil className="size-3.5" />

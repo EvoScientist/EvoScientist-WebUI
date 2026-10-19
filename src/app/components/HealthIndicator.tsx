@@ -20,6 +20,9 @@ interface HealthIndicatorProps {
   // Switch the app to a newly-detected backend URL (saves config + reconnects).
   // When omitted, the "reconnect to detected backend" affordance is hidden.
   onReconnect?: (url: string) => void;
+  // The saved backend answered again after being offline, e.g. after a
+  // restart in another folder.
+  onOnline?: () => void;
 }
 
 const POLL_INTERVAL_MS = 10_000;
@@ -112,8 +115,13 @@ async function probeInfo(base: string): Promise<boolean> {
 export function HealthIndicator({
   deploymentUrl,
   onReconnect,
+  onOnline,
 }: HealthIndicatorProps) {
   const [status, setStatus] = useState<HealthStatus>("checking");
+  const statusRef = useRef<HealthStatus>("checking");
+  statusRef.current = status;
+  const onOnlineRef = useRef(onOnline);
+  onOnlineRef.current = onOnline;
   const [info, setInfo] = useState<BackendInfo | null>(null);
   // A different, reachable backend URL detected while the saved one is dead.
   const [suggestedUrl, setSuggestedUrl] = useState<string | null>(null);
@@ -218,6 +226,7 @@ export function HealthIndicator({
         .catch(() => null)) as BackendInfo | null;
       if (requestId !== requestRef.current || !mountedRef.current) return;
       setInfo(data);
+      if (statusRef.current === "offline") onOnlineRef.current?.();
       setStatus("online");
       // Connected — drop any stale reconnect suggestion.
       setSuggestedUrl(null);
