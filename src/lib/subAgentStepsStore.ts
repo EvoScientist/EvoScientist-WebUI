@@ -8,7 +8,7 @@ const MAX_STEPS_PER_TASK = 200;
 const MAX_TEXT_LENGTH = 10_000;
 const MAX_ARG_STRING_LENGTH = 5_000;
 const MAX_ARG_DEPTH = 8;
-const TRUNCATION_SUFFIX = "…[truncated]";
+export const TRUNCATION_SUFFIX = "…[truncated]";
 
 interface StoredThreadSteps {
   updatedAt: number;

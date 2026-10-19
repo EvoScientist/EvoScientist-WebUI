@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { SubAgentSteps } from "./SubAgentSteps";
 import type { SubAgentStep } from "@/lib/subAgentActivity";
 
@@ -30,5 +30,32 @@ describe("SubAgentSteps", () => {
     );
     expect(container.querySelector(".animate-spin")).toBeNull();
     expect(screen.getAllByLabelText("Did not finish")).toHaveLength(1);
+  });
+
+  it("shows a sub-agent's file edit as a compact diff", () => {
+    render(
+      <SubAgentSteps
+        compact
+        steps={[
+          {
+            kind: "tool_call",
+            id: "e1",
+            name: "edit_file",
+            args: { file_path: "/ws/a.py", old_string: "a", new_string: "b" },
+          },
+          {
+            kind: "tool_result",
+            toolCallId: "e1",
+            name: "edit_file",
+            text: "Successfully replaced 1 instance(s) of the string in '/ws/a.py'",
+          },
+        ]}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^edit_file/ }));
+
+    expect(screen.getByRole("list", { name: "Changes" }).className).toContain(
+      "text-[11px]"
+    );
   });
 });
