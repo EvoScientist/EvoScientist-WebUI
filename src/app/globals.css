@@ -20,6 +20,12 @@
     --color-success: #3f7a52;
     --color-warning: #946618;
     --color-error: #c0392b;
+    /* Line diffs of file edits (ToolCallBox): sign and count colors, and row
+       backgrounds; each color is at least 4.5:1 on its row and the page. */
+    --color-diff-added: #2e6b41;
+    --color-diff-added-bg: #e7f3ea;
+    --color-diff-removed: #a3301f;
+    --color-diff-removed-bg: #fbeae7;
     --color-background: #faf8f3;
     --color-subagent-hover: #efe7da;
     --color-surface: #ffffff;
@@ -159,6 +165,10 @@
     --color-success: #5dbe85;
     --color-warning: #e0a94a;
     --color-error: #e0796b;
+    --color-diff-added: #6fca95;
+    --color-diff-added-bg: #1f3427;
+    --color-diff-removed: #ec8b7e;
+    --color-diff-removed-bg: #40241f;
     --color-background: #23211d;
     --color-subagent-hover: #3a2e27;
     --color-surface: #2c2a25;
