@@ -73,11 +73,18 @@ export const useAvailableModelsMock = () => ({
   error: null,
 });
 
+// Tests of the scrolled-up state set `isAtBottom` to false before rendering and
+// put it back afterwards; `scrollToBottom` can be swapped for a spy.
+export const stickToBottomStub = {
+  isAtBottom: true,
+  scrollToBottom: (): void => {},
+};
+
 export const useStickToBottomMock = () => ({
   scrollRef: { current: null },
   contentRef: { current: null },
-  scrollToBottom: () => {},
-  isAtBottom: true,
+  scrollToBottom: stickToBottomStub.scrollToBottom,
+  isAtBottom: stickToBottomStub.isAtBottom,
 });
 
 export const useCollapseAgentActionsMock = () => ({

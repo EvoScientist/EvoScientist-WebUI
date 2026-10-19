@@ -121,6 +121,7 @@ import {
   getAllProps,
   getLastProps,
   resetComponentSpy,
+  stickToBottomStub,
 } from "@/test/mocks/chatInterfaceStubs";
 import {
   humanTurn,
@@ -1378,6 +1379,105 @@ describe("ChatInterface composition", () => {
       expect(calls).toHaveLength(1);
       const body = calls[0].values as { messages: Array<{ content: string }> };
       expect(body.messages[0].content).toBe("/pa");
+    });
+  });
+
+  describe("jump to the latest message", () => {
+    const scrollToBottom = vi.fn();
+
+    beforeEach(() => {
+      scrollToBottom.mockClear();
+      stickToBottomStub.scrollToBottom = scrollToBottom;
+    });
+
+    afterEach(() => {
+      stickToBottomStub.isAtBottom = true;
+      stickToBottomStub.scrollToBottom = () => {};
+    });
+
+    const jumpButton = () =>
+      screen.queryByRole("button", { name: "Jump to latest message" });
+
+    it("appears when the user has scrolled up and scrolls down on click", () => {
+      stickToBottomStub.isAtBottom = false;
+      renderChatInterface();
+      act(() => {
+        stream.setMessages([humanTurn("hi"), aiTurn("hello")]);
+      });
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "Jump to latest message" })
+      );
+
+      expect(scrollToBottom).toHaveBeenCalledTimes(1);
+    });
+
+    // At the bottom the button unmounts, which would drop a keyboard user's
+    // focus on <body>. A keyboard press fires a click with `detail` 0.
+    it("hands focus to the composer when pressed from the keyboard", () => {
+      stickToBottomStub.isAtBottom = false;
+      renderChatInterface();
+      act(() => {
+        stream.setMessages([humanTurn("hi"), aiTurn("hello")]);
+      });
+      const button = screen.getByRole("button", {
+        name: "Jump to latest message",
+      });
+      button.focus();
+
+      fireEvent.click(button, { detail: 0 });
+
+      expect(document.activeElement).toBe(screen.getByRole("textbox"));
+    });
+
+    // Browsers focus a button on mouse press; the button then unmounts and the
+    // draft in the composer loses its caret. The press must not take focus.
+    it("does not take focus on a mouse press", () => {
+      stickToBottomStub.isAtBottom = false;
+      renderChatInterface();
+      act(() => {
+        stream.setMessages([humanTurn("hi"), aiTurn("hello")]);
+      });
+
+      const notCancelled = fireEvent.mouseDown(
+        screen.getByRole("button", { name: "Jump to latest message" })
+      );
+
+      expect(notCancelled).toBe(false);
+    });
+
+    // A tap must not focus the composer: on a phone that opens the keyboard.
+    it("leaves focus alone on a pointer click", () => {
+      stickToBottomStub.isAtBottom = false;
+      renderChatInterface();
+      act(() => {
+        stream.setMessages([humanTurn("hi"), aiTurn("hello")]);
+      });
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "Jump to latest message" }),
+        { detail: 1 }
+      );
+
+      expect(document.activeElement).not.toBe(screen.getByRole("textbox"));
+    });
+
+    it("stays hidden at the bottom", () => {
+      renderChatInterface();
+      act(() => {
+        stream.setMessages([humanTurn("hi"), aiTurn("hello")]);
+      });
+
+      expect(jumpButton()).toBeNull();
+    });
+
+    // The empty state's dashboard can be taller than the window; there is no
+    // message to jump to while it is scrolled.
+    it("stays hidden in an empty conversation", () => {
+      stickToBottomStub.isAtBottom = false;
+      renderChatInterface();
+
+      expect(jumpButton()).toBeNull();
     });
   });
 });
