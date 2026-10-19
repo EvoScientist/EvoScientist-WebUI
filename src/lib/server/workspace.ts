@@ -13,12 +13,14 @@ import {
   promises as fs,
 } from "fs";
 import type { FileHandle } from "fs/promises";
-import { homedir, tmpdir } from "os";
+import { homedir, networkInterfaces, tmpdir } from "os";
 import { basename, dirname, join, relative, resolve, sep } from "path";
 import type { Readable } from "stream";
 import { ZipFile } from "yazl";
 import { randomUUID } from "crypto";
 import type { NextRequest } from "next/server";
+import { isLoopbackHost } from "@/lib/backendBoundary";
+import { readCoreConfig } from "@/lib/server/coreConfig";
 
 // The backend's runtime folder (`DEFAULT_PID_DIR` in langgraph_dev/manager.py)
 // is always ~/.config/evoscientist: unlike config.yaml it does not follow
@@ -452,34 +454,91 @@ export async function safeResolve(
   return realTarget;
 }
 
+// The machine's own addresses change with Wi-Fi and VPN, so they are re-read
+// after a few seconds rather than once at startup.
+const ADDRESSES_TTL_MS = 5000;
+let addressCache: { at: number; names: Set<string> } | null = null;
+
+/** Test hook: forget the cached interface addresses. */
+export function resetMachineAddressCache(): void {
+  addressCache = null;
+}
+
+/** The IP literals of this machine's interfaces, lowercase, IPv6 without
+ *  brackets (Node reports an IPv6 zone in `scopeid`, not in the address). */
+function machineAddresses(now: number): Set<string> {
+  if (addressCache && now - addressCache.at < ADDRESSES_TTL_MS) {
+    return addressCache.names;
+  }
+  const names = new Set<string>();
+  for (const list of Object.values(networkInterfaces())) {
+    for (const entry of list ?? []) names.add(entry.address.toLowerCase());
+  }
+  addressCache = { at: now, names };
+  return names;
+}
+
+/** The host name in a `Host` header (`name`, `name:port`, `[v6]:port`),
+ *  lowercase, IPv6 without brackets; null when it is malformed. */
+export function hostHeaderName(host: string): string | null {
+  const m = /^(?:\[([0-9a-fA-F:.]+)\]|([^:[\]]+))(?::(\d{1,5}))?$/.exec(host);
+  if (!m) return null;
+  return (m[1] ?? m[2]).toLowerCase();
+}
+
 /**
- * Reject cross-site requests to the workspace APIs. Browsers omit `Origin` on
- * same-origin GETs and on direct navigations (open-in-tab / downloads), so we
- * trust `Sec-Fetch-Site` when present and otherwise compare `Origin` against
- * the request's own `Host`. Requests without a `Host` header are rejected
- * outright — HTTP/1.1 requires it, so only hand-crafted clients omit it.
+ * Whether a page may be served on this host name: a loopback name, one of the
+ * machine's own IP literals, or the host of an origin in
+ * `backend_allowed_origins`, on any port. The same names the backend's browser
+ * boundary trusts (langgraph_dev/boundary.py), so a WebUI opened by a name the
+ * user allowed for the backend keeps working. A name that DNS rebinding points
+ * at this machine is none of these.
+ */
+export function isTrustedHostName(name: string, now = Date.now()): boolean {
+  if (isLoopbackHost(name)) return true;
+  if (machineAddresses(now).has(name)) return true;
+  return readCoreConfig(now).allowedOrigins.some((origin) => {
+    const host = new URL(origin).hostname.toLowerCase();
+    return host.replace(/^\[|\]$/g, "") === name;
+  });
+}
+
+/**
+ * Reject cross-site requests to the WebUI's own API routes.
+ *
+ * - `Host` must name a trusted host (`isTrustedHostName`), which stops DNS
+ *   rebinding: a rebinding page sends its own name as `Host`.
+ * - `Sec-Fetch-Site`, when present, must be `same-origin` or `none` (a direct
+ *   navigation); `same-site` is a page on another port of the same machine.
+ * - `Origin`, when present, must equal `Host`. Browsers omit it on same-origin
+ *   GETs and on direct navigations (open-in-tab / downloads).
+ *
  * Never compare against `nextUrl.origin`: the standalone server derives it
  * from the configured HOSTNAME, not from the address the browser used, so it
- * can never match when binding a wildcard (#35 — with HOSTNAME=0.0.0.0 every
+ * can never match when binding a wildcard (#35 - with HOSTNAME=0.0.0.0 every
  * write from every page was rejected).
  */
 export function isCrossOrigin(request: NextRequest): boolean {
   const host = request.headers.get("host");
   if (!host) {
+    return true; // HTTP/1.1 requires Host; only hand-crafted clients omit it
+  }
+  const name = hostHeaderName(host);
+  if (name === null || !isTrustedHostName(name)) {
     return true;
   }
   const site = request.headers.get("sec-fetch-site");
-  if (site) {
-    return site !== "same-origin" && site !== "same-site" && site !== "none";
+  if (site && site !== "same-origin" && site !== "none") {
+    return true;
   }
   const origin = request.headers.get("origin");
   if (!origin) {
     return false;
   }
   try {
-    return new URL(origin).host !== host;
+    return new URL(origin).host !== host.toLowerCase();
   } catch {
-    return true; // malformed or opaque ("null") Origin — treat as cross-site
+    return true; // malformed or opaque ("null") Origin - treat as cross-site
   }
 }
 

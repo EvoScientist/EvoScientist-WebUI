@@ -38,6 +38,7 @@
   },
   "scripts": {
     "dev": "next dev --turbopack --port 4716",
+    "dev:local": "node scripts/dev-local.mjs",
     "build": "next build && node scripts/assemble-standalone.mjs",
     "start": "next start --port 4716",
     "start:dist": "node dist/server.js",
