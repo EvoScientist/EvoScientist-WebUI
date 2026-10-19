@@ -6,9 +6,17 @@
 // the agent's in-memory `files` state — that lives in thread state and is
 // managed through the SDK.
 
-import { promises as fs } from "fs";
-import { homedir } from "os";
+import {
+  type BigIntStats,
+  constants as fsConstants,
+  type Dirent,
+  promises as fs,
+} from "fs";
+import type { FileHandle } from "fs/promises";
+import { homedir, tmpdir } from "os";
 import { basename, dirname, join, relative, resolve, sep } from "path";
+import type { Readable } from "stream";
+import { ZipFile } from "yazl";
 import { randomUUID } from "crypto";
 import type { NextRequest } from "next/server";
 
@@ -75,17 +83,239 @@ export function isHiddenEntry(name: string): boolean {
   return IGNORED_SUFFIXES.some((suffix) => name.endsWith(suffix));
 }
 
-/** `zip -x` exclude args derived from the same ignore lists, so the download
- *  archive contains exactly what the tree shows. */
-export function zipExcludeArgs(): string[] {
-  const patterns = [".*", "*/.*"]; // dotfiles at root and nested
-  for (const name of IGNORED_NAMES) {
-    patterns.push(`${name}/*`, `*/${name}/*`, name, `*/${name}`);
+// Not defined on Windows, where the check after each open is the guard.
+const O_NOFOLLOW = fsConstants.O_NOFOLLOW ?? 0;
+// Opening a FIFO for reading would otherwise wait for a writer.
+const O_NONBLOCK = fsConstants.O_NONBLOCK ?? 0;
+
+/** Errors that leave one entry out of the archive: gone, now a link, a path
+ *  too long to resolve, or not permitted (Windows answers EPERM for a file
+ *  being deleted). Any other error, such as EIO, fails the download instead of
+ *  quietly losing files. */
+const SKIPPABLE_CODES = new Set([
+  "ENOENT",
+  "ENOTDIR",
+  "ELOOP",
+  "ENAMETOOLONG",
+  "EACCES",
+  "EPERM",
+  "EBUSY",
+]);
+
+/** Whether `error` leaves one entry out rather than failing the download: a
+ *  refused path (outside or hidden; when resolving it failed, only a listed
+ *  code), or an error with a listed code. */
+function leavesOut(error: unknown): boolean {
+  const reason = error instanceof PathRefusedError ? error.cause : error;
+  if (reason === undefined) return true;
+  return SKIPPABLE_CODES.has((reason as NodeJS.ErrnoException).code ?? "");
+}
+
+/** The error to fail with: the disk error behind a safeResolve refusal. */
+const failure = (error: unknown) =>
+  (error as { cause?: unknown }).cause ?? error;
+
+/** Where the download route writes its archive. The dot name keeps it out of
+ *  listings, direct access and other downloads' archives when the temp dir
+ *  lies inside the workspace. */
+export function workspaceArchivePath(dir = tmpdir()): string {
+  return join(dir, `.evoscientist-workspace-${randomUUID()}.zip`);
+}
+
+interface ZipRun {
+  zip: ZipFile;
+  root: string;
+  /** The archive itself, in case its path is inside the workspace. */
+  self: BigIntStats;
+  stopped: () => boolean;
+  reading: (stream: Readable | null) => void;
+}
+
+// Some SMB shares give every file ino 0: never take that for the archive (and
+// there `stillInside` can only compare the volume).
+const sameFile = (a: BigIntStats, b: BigIntStats) =>
+  a.ino !== BigInt(0) && a.dev === b.dev && a.ino === b.ino;
+
+/** True while `rel` still resolves inside the workspace to the file `st`
+ *  describes. Checked after the open: a folder on the way swapped for a link
+ *  between the earlier check and the open would have led outside. */
+async function stillInside(
+  run: ZipRun,
+  rel: string,
+  st: BigIntStats
+): Promise<boolean> {
+  try {
+    const now = await fs.lstat(await safeResolve(run.root, rel), {
+      bigint: true,
+    });
+    return now.dev === st.dev && now.ino === st.ino;
+  } catch (error) {
+    if (leavesOut(error)) return false;
+    throw failure(error);
   }
-  for (const suffix of IGNORED_SUFFIXES) {
-    patterns.push(`*${suffix}`);
+}
+
+/** Opens a file for the archive right before it is added, or returns null when
+ *  it is gone, not permitted, outside the workspace, or no longer a regular
+ *  file (renamed, or swapped for a link or a FIFO since the walk). */
+async function openForZip(
+  run: ZipRun,
+  rel: string
+): Promise<{ handle: FileHandle; st: BigIntStats } | null> {
+  let real: string;
+  try {
+    real = await safeResolve(run.root, rel);
+  } catch (error) {
+    if (leavesOut(error)) return null;
+    throw failure(error);
   }
-  return patterns.flatMap((pattern) => ["-x", pattern]);
+  let handle: FileHandle;
+  try {
+    handle = await fs.open(
+      real,
+      fsConstants.O_RDONLY | O_NOFOLLOW | O_NONBLOCK
+    );
+  } catch (error) {
+    if (leavesOut(error)) return null;
+    throw error;
+  }
+  let kept = false;
+  try {
+    const st = await handle.stat({ bigint: true });
+    if (
+      st.isFile() &&
+      !sameFile(st, run.self) &&
+      (await stillInside(run, rel, st))
+    ) {
+      kept = true;
+      return { handle, st };
+    }
+    return null;
+  } finally {
+    if (!kept) await handle.close();
+  }
+}
+
+/** Adds what the tree shows under `rel`, one file at a time: hidden entries and
+ *  links left out, empty folders kept. Returns whether it added anything, or
+ *  null when a sub-folder can't be read (skipped, as `zip -r` does). */
+async function addTree(run: ZipRun, rel: string): Promise<boolean | null> {
+  let dirents: Dirent[];
+  try {
+    // A sub-folder is re-resolved inside the workspace, so one swapped for a
+    // link since its parent was read isn't followed out.
+    const dir = rel ? await safeResolve(run.root, rel) : run.root;
+    dirents = await fs.readdir(dir, { withFileTypes: true });
+  } catch (error) {
+    // A sub-folder may be left out; the workspace itself must be read.
+    if (rel && leavesOut(error)) return null;
+    throw failure(error);
+  }
+  let added = false;
+  for (const dirent of dirents) {
+    if (run.stopped()) break;
+    // A link could point outside the workspace. A zip can't hold `\` (a path
+    // separator there) or a leading `C:` (read as a drive), so those names go.
+    if (
+      isHiddenEntry(dirent.name) ||
+      dirent.isSymbolicLink() ||
+      dirent.name.includes("\\") ||
+      (!rel && /^[a-zA-Z]:/.test(dirent.name))
+    ) {
+      continue;
+    }
+    const childRel = rel ? `${rel}/${dirent.name}` : dirent.name;
+    if (dirent.isDirectory()) {
+      const sub = await addTree(run, childRel);
+      if (sub === false) run.zip.addEmptyDirectory(childRel);
+      if (sub !== null) added = true;
+    } else if (dirent.isFile()) {
+      const opened = await openForZip(run, childRel);
+      if (!opened) continue;
+      if (run.stopped()) {
+        // The client left while this file was being opened.
+        await opened.handle.close();
+        break;
+      }
+      const stream = opened.handle.createReadStream();
+      // yazl leaves a stream's errors to its caller; unhandled, one would be
+      // an uncaught exception in the server.
+      stream.on("error", (error) => run.zip.emit("error", error));
+      const closed = new Promise<void>((done) =>
+        stream.once("close", () => done())
+      );
+      run.zip.addReadStream(stream, childRel, {
+        mtime: opened.st.mtime,
+        mode: Number(opened.st.mode),
+      });
+      run.reading(stream);
+      await closed;
+      run.reading(null);
+      added = true;
+    }
+  }
+  return added;
+}
+
+/** Zips what the workspace tree shows into `outFile`, in process (no OS `zip`,
+ *  which Windows lacks). Rejects if `signal` fires, e.g. the client leaves. */
+export async function zipWorkspace(
+  root: string,
+  outFile: string,
+  signal?: AbortSignal
+): Promise<void> {
+  if (signal?.aborted) throw new Error("Request aborted.");
+  const realRoot = await fs.realpath(root);
+  // Owner-only: the temp dir may be shared with other users of the machine.
+  const target = await fs.open(outFile, "wx", 0o600);
+  let self: BigIntStats;
+  try {
+    self = await target.stat({ bigint: true });
+  } catch (error) {
+    await target.close();
+    throw error;
+  }
+  const out = target.createWriteStream();
+  const zip = new ZipFile();
+  return new Promise((resolvePromise, reject) => {
+    let reading: Readable | null = null;
+    let settled = false;
+    const fail = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener("abort", onAbort);
+      reading?.destroy();
+      // A PassThrough; @types/yazl types it as a plain ReadableStream.
+      (zip.outputStream as Readable).destroy();
+      out.destroy();
+      // The caller deletes the archive next; Windows can't while it is open.
+      if (out.closed) reject(error);
+      else out.once("close", () => reject(error));
+    };
+    const onAbort = () => fail(new Error("Request aborted."));
+    zip.on("error", fail);
+    out.on("error", fail);
+    out.on("close", () => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener("abort", onAbort);
+      resolvePromise();
+    });
+    // The client may have left while the archive was being set up.
+    if (signal?.aborted) return onAbort();
+    signal?.addEventListener("abort", onAbort, { once: true });
+    zip.outputStream.pipe(out);
+    const run: ZipRun = {
+      zip,
+      root: realRoot,
+      self,
+      stopped: () => settled,
+      reading: (stream) => (reading = stream),
+    };
+    addTree(run, "").then(() => {
+      if (!settled) zip.end();
+    }, fail);
+  });
 }
 
 /** True if a process with `pid` is currently running (signal 0 = existence probe). */
@@ -143,6 +373,10 @@ export async function getWorkspaceDir(): Promise<string> {
   return fs.realpath(resolved);
 }
 
+/** A path the file routes refuse (outside the workspace, hidden, or not
+ *  resolvable); `cause` holds the disk error when resolving it failed. */
+export class PathRefusedError extends Error {}
+
 /**
  * Resolve a caller-supplied relative path against `workspaceDir` and guarantee
  * the result stays inside it (no `..` escape, no absolute-path override, no
@@ -153,7 +387,7 @@ export async function getWorkspaceDir(): Promise<string> {
  */
 export function resolveInside(workspaceDir: string, relPath: string): string {
   if (hasControlChar(relPath)) {
-    throw new Error("Invalid path.");
+    throw new PathRefusedError("Invalid path.");
   }
   // Normalize separators and strip any leading slashes so the path is always
   // interpreted relative to the workspace root.
@@ -163,12 +397,12 @@ export function resolveInside(workspaceDir: string, relPath: string): string {
   // just unlisted — so a crafted `?path=.langgraph_api` or `?path=large_tool_results`
   // can't read them. `..` is also caught here (and by the boundary check below).
   if (cleaned.split("/").some((seg) => seg !== "" && isHiddenEntry(seg))) {
-    throw new Error("Path is not accessible.");
+    throw new PathRefusedError("Path is not accessible.");
   }
   const target = resolve(workspaceDir, cleaned);
   // Must be the workspace dir itself or strictly within it.
   if (target !== workspaceDir && !target.startsWith(workspaceDir + sep)) {
-    throw new Error("Path is outside the workspace.");
+    throw new PathRefusedError("Path is outside the workspace.");
   }
   return target;
 }
@@ -192,15 +426,16 @@ export async function safeResolve(
   let realTarget: string;
   try {
     realTarget = await fs.realpath(target);
-  } catch {
-    // Missing file or a broken/looping symlink — treat as inaccessible.
-    throw new Error("Path is not accessible.");
+  } catch (error) {
+    // Missing file or a broken/looping symlink — treat as inaccessible. The
+    // cause lets the download-all walk tell a gone file from a disk error.
+    throw new PathRefusedError("Path is not accessible.", { cause: error });
   }
   if (
     realTarget !== workspaceDir &&
     !realTarget.startsWith(workspaceDir + sep)
   ) {
-    throw new Error("Path is not accessible.");
+    throw new PathRefusedError("Path is not accessible.");
   }
   // A symlink could point at a hidden/internal entry that lives inside the
   // workspace (e.g. `foo -> .langgraph_api`); re-check the canonical segments.
@@ -209,7 +444,7 @@ export async function safeResolve(
     realRel &&
     realRel.split(sep).some((seg) => seg !== "" && isHiddenEntry(seg))
   ) {
-    throw new Error("Path is not accessible.");
+    throw new PathRefusedError("Path is not accessible.");
   }
   return realTarget;
 }
