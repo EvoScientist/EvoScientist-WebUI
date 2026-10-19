@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import {
   Square,
   ArrowUp,
+  ArrowDown,
   CheckCircle,
   Clock,
   Circle,
@@ -1949,7 +1950,28 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
           </div>
         </div>
 
-        <div className="flex-shrink-0 bg-background">
+        <div className="relative flex-shrink-0 bg-background">
+          {!isAtBottom && processedMessages.length > 0 && (
+            <button
+              type="button"
+              onClick={(e) => {
+                void scrollToBottom();
+                // Pressing the button unmounts it. A keyboard or screen-reader
+                // press (detail 0) gets the composer; a tap must not open the phone keyboard.
+                if (e.detail === 0) {
+                  textareaRef.current?.focus({ preventScroll: true });
+                }
+              }}
+              aria-label="Jump to latest message"
+              title="Jump to latest message"
+              className="absolute bottom-full left-1/2 z-10 mb-3 flex h-9 w-9 -translate-x-1/2 items-center justify-center rounded-full border border-border bg-card text-foreground shadow-md transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-md:h-11 max-md:w-11"
+            >
+              <ArrowDown
+                className="h-4 w-4"
+                aria-hidden="true"
+              />
+            </button>
+          )}
           {queuedMessages.length > 0 && (
             <div
               aria-label="Queued messages"
