@@ -1177,6 +1177,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       value: input,
       setValue: setInput,
       disabled: hasPendingInterrupt,
+      workspaceSkills: filesHere,
       onBrowse: () => onNavigate?.({ view: "skills" }),
     });
     const slashKeyDown = slash.onKeyDown;

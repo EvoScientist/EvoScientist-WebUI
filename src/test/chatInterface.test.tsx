@@ -115,7 +115,7 @@ vi.mock("@/app/components/TasksFilesSidebar", async () => {
   const m = await import("@/test/mocks/chatInterfaceStubs");
   return { FilesPopover: m.stubComponent("FilesPopover") };
 });
-import { mockWorkspace } from "@/test/mockWorkspace";
+import { mockWorkspace, readyWorkspace } from "@/test/mockWorkspace";
 import { renderChatInterface } from "@/test/renderChatInterface";
 import {
   getAllProps,
@@ -1154,7 +1154,7 @@ describe("ChatInterface composition", () => {
       vi.stubGlobal(
         "fetch",
         vi.fn(async (url: string) =>
-          String(url).endsWith("/api/skills/pinnable")
+          String(url).includes("/api/skills/pinnable")
             ? new Response(
                 JSON.stringify({
                   skills: [
@@ -1190,6 +1190,23 @@ describe("ChatInterface composition", () => {
       fireEvent.keyDown(textarea, { key: "Enter" });
       expect(textarea.value).toBe("/paper-writing ");
       expect(stream.getSubmitCalls()).toHaveLength(0);
+    });
+
+    it("offers only the global skills when the backend's folder is elsewhere", async () => {
+      const { container } = renderChatInterface({
+        workspace: mockWorkspace({
+          ...readyWorkspace("/srv/projB"),
+          local: { dir: "/home/you/projA", sameFolder: false },
+        }),
+      });
+      typeInComposer(container, "/pa");
+      await waitFor(() =>
+        expect(screen.getAllByRole("option")).toHaveLength(1)
+      );
+      expect(fetch).toHaveBeenCalledWith(
+        "/api/skills/pinnable?workspace=0",
+        expect.anything()
+      );
     });
 
     it("stays shut while the agent waits on an answer", async () => {
