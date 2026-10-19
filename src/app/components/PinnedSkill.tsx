@@ -6,10 +6,11 @@ import { MarkdownContent } from "@/app/components/MarkdownContent";
 import { pinnedSkillBody } from "@/lib/pinnedSkill";
 import { cn } from "@/lib/utils";
 
-// Headings in a SKILL.md read at body size, bold, like the rest of the panel.
+// Headings in a SKILL.md (and in a model's reasoning, ChatMessage) read at
+// body size, bold, like the rest of the panel.
 // Same variants as MarkdownContent's own heading rules so tailwind-merge drops
 // its font-semibold in favour of font-bold.
-const PANEL_HEADINGS =
+export const PANEL_HEADINGS =
   "[&_h1]:text-sm [&_h1]:font-bold [&_h2]:text-sm [&_h2]:font-bold [&_h3]:text-sm [&_h3]:font-bold";
 
 interface PinnedSkillProps {

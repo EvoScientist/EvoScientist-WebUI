@@ -184,6 +184,127 @@ describe("ChatMessage thinking", () => {
     expect(thinkingButton()).toBeTruthy();
   });
 
+  // DeepSeek's and Claude's reasoning is plain scratch text: shown exactly as
+  // written (line breaks kept, nothing read as HTML, math or emphasis).
+  const PLAIN =
+    "Step 1: 17×20 = 340\nStep 2: 17×3 = 51\nIf x<y and z>w swap them; $5 and $10; 2*3*4 = 24";
+  it.each([
+    ["reasoning_content", aiMessage("391", { reasoning_content: PLAIN })],
+    [
+      "a thinking block",
+      aiMessage([
+        { type: "thinking", thinking: PLAIN },
+        { type: "text", text: "391" },
+      ] as unknown as Message["content"]),
+    ],
+    [
+      "a standard reasoning block",
+      aiMessage([
+        { type: "reasoning", reasoning: PLAIN },
+        { type: "text", text: "391" },
+      ] as unknown as Message["content"]),
+    ],
+  ])("shows %s exactly as written", (_label, message) => {
+    renderMessage(message);
+
+    fireEvent.click(thinkingButton()!);
+    const panel = thinkingButton()!.nextElementSibling as HTMLElement;
+    expect(panel.textContent).toBe(PLAIN);
+    expect(panel.querySelector(".katex, em, strong")).toBeNull();
+  });
+
+  // OpenAI's Responses API (ChatGPT sign-in, API-key OpenAI) returns only a
+  // reasoning summary: a title and a paragraph as summary_text parts, next to
+  // encrypted reasoning (shape recorded with gpt-6.1-sol on 2026-10-14).
+  it("shows an OpenAI reasoning summary, its parts in order", () => {
+    renderMessage(
+      aiMessage([
+        {
+          type: "reasoning",
+          id: "rs_0a1b2c",
+          encrypted_content: "gAAAAABo",
+          summary: [
+            {
+              type: "summary_text",
+              text: "**Multiplying 17 by 23**",
+              index: 0,
+            },
+            {
+              type: "summary_text",
+              text: `${THOUGHT} It returns Array<Message>.`,
+              index: 1,
+            },
+          ],
+          index: 0,
+        },
+        { type: "text", text: "391", index: 1 },
+      ] as unknown as Message["content"])
+    );
+
+    fireEvent.click(thinkingButton()!);
+    // Rendered as Markdown: the title is bold, not wrapped in asterisks, and
+    // comes before the paragraph.
+    const title = screen.getByText("Multiplying 17 by 23");
+    expect(title.tagName).toBe("STRONG");
+    const text = (title.closest(".prose") as HTMLElement).textContent ?? "";
+    expect(text).not.toContain("**");
+    // Angle brackets stay text, not HTML that the sanitizer would drop.
+    expect(text).toContain("Array<Message>");
+    expect(text.indexOf("Multiplying 17 by 23")).toBeLessThan(
+      text.indexOf(THOUGHT)
+    );
+  });
+
+  // Headings in a summary read at body size, as in the pinned-skill panel.
+  it("keeps headings in a reasoning summary at body size", () => {
+    renderMessage(
+      aiMessage([
+        {
+          type: "reasoning",
+          summary: [{ type: "summary_text", text: "## Plan\n\nMultiply." }],
+        },
+        { type: "text", text: "391" },
+      ] as unknown as Message["content"])
+    );
+
+    fireEvent.click(thinkingButton()!);
+    const panel = screen.getByRole("heading", { name: "Plan" })
+      .parentElement as HTMLElement;
+    expect(panel.className.split(/\s+/)).toEqual(
+      expect.arrayContaining(["[&_h2]:text-sm", "[&_h2]:font-bold"])
+    );
+  });
+
+  // langchain's standard block carries the same text in a `reasoning` string.
+  it("shows a standard reasoning block", () => {
+    renderMessage(
+      aiMessage([
+        { type: "reasoning", reasoning: THOUGHT },
+        { type: "text", text: "391" },
+      ] as unknown as Message["content"])
+    );
+
+    fireEvent.click(thinkingButton()!);
+    expect(screen.getByText(THOUGHT)).toBeTruthy();
+  });
+
+  // Reasoning OpenAI keeps encrypted, with no summary, has nothing to show.
+  it("shows nothing for a reasoning block without a summary", () => {
+    renderMessage(
+      aiMessage([
+        {
+          type: "reasoning",
+          id: "rs_0a1b2c",
+          encrypted_content: "gAAAAABo",
+          summary: [],
+        },
+        { type: "text", text: "391" },
+      ] as unknown as Message["content"])
+    );
+
+    expect(thinkingButton()).toBeNull();
+  });
+
   // Anthropic encrypts some thinking; it carries no text to show.
   it("shows nothing for redacted thinking", () => {
     renderMessage(

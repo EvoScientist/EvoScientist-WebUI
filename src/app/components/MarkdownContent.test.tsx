@@ -234,3 +234,26 @@ describe("MarkdownContent math", () => {
     expect(render("见 \\[1\\]。")).toContain("见 [1]。");
   });
 });
+
+describe("MarkdownContent raw HTML", () => {
+  it("renders inline HTML by default", () => {
+    expect(render("Press <kbd>Ctrl</kbd> to copy.")).toContain(
+      "<kbd>Ctrl</kbd>"
+    );
+  });
+
+  // Text that isn't written for Markdown (a model's reasoning) can hold angle
+  // brackets; read as HTML, the sanitizer would drop them and their words.
+  it("shows angle brackets as text when raw HTML is off", () => {
+    const html = renderToStaticMarkup(
+      <MarkdownContent
+        content="It returns Array<Message>; if a<b and c>d stop."
+        rawHtml={false}
+      />
+    );
+
+    expect(html).toContain(
+      "It returns Array&lt;Message&gt;; if a&lt;b and c&gt;d stop."
+    );
+  });
+});
