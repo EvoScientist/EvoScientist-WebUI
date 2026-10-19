@@ -20,6 +20,9 @@ import { ZipFile } from "yazl";
 import { randomUUID } from "crypto";
 import type { NextRequest } from "next/server";
 
+// The backend's runtime folder (`DEFAULT_PID_DIR` in langgraph_dev/manager.py)
+// is always ~/.config/evoscientist: unlike config.yaml it does not follow
+// XDG_CONFIG_HOME, so neither does this path.
 export const WORKSPACE_SIDECAR = join(
   homedir(),
   ".config",

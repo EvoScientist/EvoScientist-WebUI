@@ -3,6 +3,7 @@ import { spawn, execSync } from "child_process";
 import { dirname, join, resolve } from "path";
 import { fileURLToPath } from "url";
 import { readFileSync } from "fs";
+import { absoluteFolderEnv } from "./absolute-folders.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkgDir = resolve(__dirname, "..");
@@ -49,7 +50,7 @@ console.log(`  ⏳ Starting EvoScientist Web UI on ${url} …`);
 const child = spawn(process.execPath, [serverEntry], {
   stdio: "inherit",
   env: {
-    ...process.env,
+    ...absoluteFolderEnv(process.env, process.cwd()),
     PORT: String(port),
     HOSTNAME: process.env.HOSTNAME || "127.0.0.1",
     NODE_ENV: "production",

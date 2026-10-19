@@ -16,6 +16,8 @@ const LOOPBACK_NAMES = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
 // Any such name counts: a quick tunnel gets a new name on every start, so a
 // dead one is far likelier than a refusal, and the plain text fits it better.
 const QUICK_TUNNEL = /\.trycloudflare\.com$/;
+// The backend writes its log to its runtime folder (`DEFAULT_PID_DIR` in
+// langgraph_dev/manager.py), which does not follow XDG_CONFIG_HOME.
 const BACKEND_LOG = "~/.config/evoscientist/langgraph_dev.log";
 
 export function isLoopbackHost(hostname: string): boolean {
