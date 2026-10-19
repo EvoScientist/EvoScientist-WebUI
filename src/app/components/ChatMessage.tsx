@@ -110,13 +110,25 @@ export const ChatMessage = React.memo<ChatMessageProps>(
     const messageContent = extractStringFromMessageContent(message);
     const hasContent = messageContent && messageContent.trim() !== "";
     const hasToolCalls = toolCalls.length > 0;
-    // Extended-thinking / reasoning text (Anthropic & friends store it here).
+    // Reasoning text: OpenAI-compatible routes (DeepSeek, OpenRouter) put it in
+    // `reasoning_content`, Anthropic's extended thinking in `thinking` blocks.
+    // Like the backend CLI, the blocks are read only when the field is empty.
     const reasoning = useMemo(() => {
       const r = (
         message.additional_kwargs as Record<string, unknown> | undefined
       )?.reasoning_content;
-      return typeof r === "string" && r.trim() ? r.trim() : null;
-    }, [message.additional_kwargs]);
+      if (typeof r === "string" && r.trim()) return r.trim();
+      const parts: string[] = [];
+      if (Array.isArray(message.content)) {
+        for (const block of message.content as unknown[]) {
+          const b = block as { type?: unknown; thinking?: unknown } | null;
+          if (b?.type === "thinking" && typeof b.thinking === "string") {
+            if (b.thinking.trim()) parts.push(b.thinking.trim());
+          }
+        }
+      }
+      return parts.length > 0 ? parts.join("\n\n") : null;
+    }, [message.additional_kwargs, message.content]);
     // An abnormal turn-end is otherwise invisible: the run finishes
     // server-side, the thread goes idle, and no interrupt is raised.
     const terminalError = useMemo(() => {

@@ -134,3 +134,130 @@ describe("ChatMessage pinned skill", () => {
     expect(screen.getByLabelText("Edit message")).toBeTruthy();
   });
 });
+
+// Models put their reasoning in one of two places: OpenAI-compatible routes
+// (DeepSeek, OpenRouter) in `additional_kwargs.reasoning_content`, Anthropic's
+// extended thinking in `thinking` content blocks ahead of the text (the shape
+// below is what claude-sonnet-5-5 returned through the backend on 2026-10-19).
+describe("ChatMessage thinking", () => {
+  const THOUGHT =
+    "17 × 23: breaking it down as 17×20 plus 17×3 gives 340+51=391.";
+  const aiMessage = (
+    content: Message["content"],
+    additional_kwargs: Record<string, unknown> = {}
+  ): Message =>
+    ({
+      id: "a1",
+      type: "ai",
+      content,
+      additional_kwargs,
+    } as unknown as Message);
+  const thinkingButton = () =>
+    screen.queryByRole("button", { name: "Thinking" });
+
+  it("shows Claude's thinking block, collapsed, apart from the answer", () => {
+    renderMessage(
+      aiMessage([
+        {
+          type: "thinking",
+          thinking: THOUGHT,
+          signature: "EqQBCkYIBxgC",
+          index: 0,
+        },
+        { type: "text", text: "391", index: 1 },
+      ] as unknown as Message["content"])
+    );
+
+    expect(screen.getByText("391")).toBeTruthy();
+    expect(screen.queryByText(THOUGHT)).toBeNull();
+    fireEvent.click(thinkingButton()!);
+    expect(screen.getByText(THOUGHT)).toBeTruthy();
+  });
+
+  it("shows the thinking while it is all that has streamed so far", () => {
+    renderMessage(
+      aiMessage([
+        { type: "thinking", thinking: "Working out 17 × 23", index: 0 },
+      ] as unknown as Message["content"])
+    );
+
+    expect(thinkingButton()).toBeTruthy();
+  });
+
+  // Anthropic encrypts some thinking; it carries no text to show.
+  it("shows nothing for redacted thinking", () => {
+    renderMessage(
+      aiMessage([
+        { type: "redacted_thinking", data: "EmwKAhgBEgy3va" },
+        { type: "text", text: "391" },
+      ] as unknown as Message["content"])
+    );
+
+    expect(screen.getByText("391")).toBeTruthy();
+    expect(thinkingButton()).toBeNull();
+  });
+
+  it("shows reasoning_content as before", () => {
+    renderMessage(aiMessage("391", { reasoning_content: THOUGHT }));
+
+    fireEvent.click(thinkingButton()!);
+    expect(screen.getByText(THOUGHT)).toBeTruthy();
+  });
+
+  // While streaming, the block opens empty (thinking "" and an empty
+  // signature) and fills in; the control appears once there is text.
+  it("shows the thinking once the streamed block has text", () => {
+    // Only the content changes between the two renders, as in a stream.
+    const kwargs = {};
+    const { rerender } = renderMessage(
+      aiMessage(
+        [
+          { type: "thinking", thinking: "", signature: "", index: 0 },
+        ] as unknown as Message["content"],
+        kwargs
+      )
+    );
+    expect(thinkingButton()).toBeNull();
+
+    rerender(
+      <ChatMessage
+        message={aiMessage(
+          [
+            {
+              type: "thinking",
+              thinking: "Working out",
+              signature: "",
+              index: 0,
+            },
+          ] as unknown as Message["content"],
+          kwargs
+        )}
+        toolCalls={[]}
+      />
+    );
+    expect(thinkingButton()).toBeTruthy();
+  });
+
+  // The backend CLI reads reasoning_content first and the blocks only when it
+  // is empty; a message carrying both shows its reasoning once.
+  it("prefers reasoning_content over thinking blocks, as the CLI does", () => {
+    renderMessage(
+      aiMessage(
+        [
+          { type: "thinking", thinking: THOUGHT },
+          { type: "text", text: "391" },
+        ] as unknown as Message["content"],
+        { reasoning_content: THOUGHT }
+      )
+    );
+
+    fireEvent.click(thinkingButton()!);
+    expect(screen.getAllByText(THOUGHT)).toHaveLength(1);
+  });
+
+  it("shows no Thinking control when there is no reasoning", () => {
+    renderMessage(aiMessage("391"));
+
+    expect(thinkingButton()).toBeNull();
+  });
+});
