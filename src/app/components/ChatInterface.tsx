@@ -89,7 +89,7 @@ import {
 } from "@/lib/asyncAgents";
 import { useAsyncAgents } from "@/app/hooks/useAsyncAgents";
 import { useAutoNotify } from "@/app/hooks/useAutoNotify";
-import type { SubAgentStep } from "@/lib/subAgentActivity";
+import { taskSubAgentName, type SubAgentStep } from "@/lib/subAgentActivity";
 import {
   loadThreadSubAgentSteps,
   saveThreadSubAgentSteps,
@@ -1509,7 +1509,12 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
             }
             data.toolCalls[toolCallIndex] = {
               ...data.toolCalls[toolCallIndex],
-              status: "completed" as const,
+              // The backend marks a failed tool (or a rejected approval)
+              // with status "error" on the tool message.
+              status:
+                message.status === "error"
+                  ? ("error" as const)
+                  : ("completed" as const),
               result: extractStringFromMessageContent(message),
             };
             break;
@@ -1675,9 +1680,14 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     const subAgentRequester = useMemo(() => {
       const types = new Set(
         lastAiToolCalls
-          .filter((tc) => tc.name === "task" && tc.status !== "completed")
-          .map((tc) => tc.args["subagent_type"])
-          .filter((t): t is string => typeof t === "string" && t.length > 0)
+          .filter(
+            (tc) =>
+              tc.name === "task" &&
+              tc.status !== "completed" &&
+              tc.status !== "error"
+          )
+          .map((tc) => taskSubAgentName(tc.args))
+          .filter((t): t is string => t !== null)
       );
       return types.size === 1 ? [...types][0] : null;
     }, [lastAiToolCalls]);

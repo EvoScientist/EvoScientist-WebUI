@@ -40,7 +40,7 @@ vi.mock("./CompactionSummary", () => ({
 const makeItem = (
   id: string,
   toolNames: string[] = ["execute"],
-  status: "pending" | "interrupted" = "pending"
+  status: "pending" | "interrupted" | "completed" | "error" = "pending"
 ): GroupedActionItem => ({
   message: {
     id,
@@ -130,6 +130,40 @@ describe("ActionGroup header", () => {
       <ActionGroup {...defaultProps({ isStreaming: false })} />
     );
     expect(settled.container.textContent).toMatch(/last:/i);
+  });
+
+  it("counts failed calls in the header", () => {
+    render(
+      <ActionGroup
+        {...defaultProps({
+          items: [
+            makeItem("m1", ["edit_file", "ls"], "error"),
+            makeItem("m2", ["write_file"], "completed"),
+          ],
+        })}
+      />
+    );
+    const failed = screen.getByText("2 failed");
+    expect(
+      failed.querySelector("svg.text-destructive")?.getAttribute("aria-hidden")
+    ).toBe("true");
+    expect(
+      screen.getByRole("button", {
+        name: "Expand 3 actions — last: write_file, 2 failed",
+      })
+    ).toBeTruthy();
+  });
+
+  it("says nothing about failures when none failed", () => {
+    const { container } = render(
+      <ActionGroup
+        {...defaultProps({ items: [makeItem("m1", ["ls"], "completed")] })}
+      />
+    );
+    expect(container.textContent).not.toMatch(/failed/);
+    expect(
+      screen.getByRole("button", { name: "Expand 1 action — last: ls" })
+    ).toBeTruthy();
   });
 
   it("toggles open state on click", () => {

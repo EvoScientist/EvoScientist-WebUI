@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronRight, ChevronUp, Loader2 } from "lucide-react";
+import { AlertCircle, ChevronRight, ChevronUp, Loader2 } from "lucide-react";
 import type { Message } from "@langchain/langgraph-sdk";
 import type { SubAgentStep } from "@/lib/subAgentActivity";
 import type { ActionRequest, ReviewConfig, ToolCall } from "@/app/types/types";
@@ -144,14 +144,22 @@ export const ActionGroup = React.memo<ActionGroupProps>(function ActionGroup({
   const headerText = isStreaming
     ? `${count} action${count === 1 ? "" : "s"} running — ${toolName}`
     : `${count} action${count === 1 ? "" : "s"} — last: ${toolName}`;
+  // Failed calls show on their own rows, which a collapsed group hides.
+  const failed = items.reduce(
+    (total, item) =>
+      total + item.toolCalls.filter((tc) => tc.status === "error").length,
+    0
+  );
+  const failedText = failed > 0 ? `${failed} failed` : null;
+  const label = failedText ? `${headerText}, ${failedText}` : headerText;
 
   return (
     <div className="my-2">
       <button
         type="button"
         aria-expanded={open}
-        aria-label={`${open ? "Collapse" : "Expand"} ${headerText}`}
-        title={headerText}
+        aria-label={`${open ? "Collapse" : "Expand"} ${label}`}
+        title={label}
         onClick={handleToggle}
         className={cn(
           "group flex w-full items-center gap-2 rounded-md border border-border bg-[var(--color-surface)] px-3 py-2 text-left text-sm text-muted-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -171,6 +179,15 @@ export const ActionGroup = React.memo<ActionGroupProps>(function ActionGroup({
           />
         )}
         <span className="truncate">{headerText}</span>
+        {failedText && (
+          <span className="flex shrink-0 items-center gap-1">
+            <AlertCircle
+              aria-hidden="true"
+              className="size-3.5 text-destructive"
+            />
+            {failedText}
+          </span>
+        )}
       </button>
       {/* Collapsed approval preview — renders the single approval-bearing
           message so the user can act without expanding the full timeline.

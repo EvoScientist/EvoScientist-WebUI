@@ -24,9 +24,12 @@ export function SubAgentSteps({
   running?: boolean;
 }) {
   const resultByCallId = new Map<string, string>();
+  const failedCallIds = new Set<string>();
   for (const s of steps) {
     if (s.kind === "tool_result" && s.toolCallId) {
       resultByCallId.set(s.toolCallId, s.text);
+      if (s.failed) failedCallIds.add(s.toolCallId);
+      else failedCallIds.delete(s.toolCallId);
     }
   }
   // The sub-agent's final text is sometimes shown separately as the task Output;
@@ -50,7 +53,9 @@ export function SubAgentSteps({
             name: s.name,
             args: s.args,
             result: resultByCallId.get(s.id),
-            status: resultByCallId.has(s.id)
+            status: failedCallIds.has(s.id)
+              ? "error"
+              : resultByCallId.has(s.id)
               ? "completed"
               : running
               ? "pending"

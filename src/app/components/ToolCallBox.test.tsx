@@ -493,6 +493,24 @@ describe("ToolCallBox file edits", () => {
     expect(screen.getByText("old_string:")).toBeTruthy();
   });
 
+  it("labels a failed call and keeps its args", () => {
+    render(
+      <ToolCallBox
+        toolCall={{
+          ...editCall({ old_string: "a", new_string: "b" }),
+          status: "error",
+          result: "Error: String not found in file: 'a'",
+        }}
+      />
+    );
+
+    expect(screen.getByLabelText("Failed")).toBeTruthy();
+    expect(header().textContent).not.toMatch(/[+−]\d/);
+    fireEvent.click(header());
+    expect(screen.queryByRole("list", { name: "Changes" })).toBeNull();
+    expect(screen.getByText("old_string:")).toBeTruthy();
+  });
+
   it("leaves other tools as they were", () => {
     render(
       <ToolCallBox

@@ -19,7 +19,7 @@ import type {
   ReviewConfig,
 } from "@/app/types/types";
 import { Message } from "@langchain/langgraph-sdk";
-import type { SubAgentStep } from "@/lib/subAgentActivity";
+import { taskSubAgentName, type SubAgentStep } from "@/lib/subAgentActivity";
 import { isAsyncUpdateMessage } from "@/lib/asyncAgents";
 import { bindActionRequestsToToolCalls } from "@/lib/hitl";
 import { pinnedSkillDescription, pinnedSkillName } from "@/lib/pinnedSkill";
@@ -85,6 +85,11 @@ function normalizeFinishReason(raw: string): string {
     }
   }
   return lowered;
+}
+
+// A `task` call shows as a sub-agent card once it names its sub-agent.
+function showsAsSubAgent(toolCall: ToolCall): boolean {
+  return toolCall.name === "task" && taskSubAgentName(toolCall.args) !== null;
 }
 
 export const ChatMessage = React.memo<ChatMessageProps>(
@@ -174,41 +179,32 @@ export const ChatMessage = React.memo<ChatMessageProps>(
       return { finishReason: raw, variant };
     }, [isUser, hasContent, hasToolCalls, message.response_metadata]);
     const subAgents = useMemo(() => {
-      return toolCalls
-        .filter((toolCall: ToolCall) => {
-          return (
-            toolCall.name === "task" &&
-            toolCall.args["subagent_type"] &&
-            toolCall.args["subagent_type"] !== "" &&
-            toolCall.args["subagent_type"] !== null
-          );
-        })
-        .map((toolCall: ToolCall) => {
-          const subagentType = (toolCall.args as Record<string, unknown>)[
-            "subagent_type"
-          ] as string;
-          const status: SubAgent["status"] =
-            toolCall.status === "completed"
-              ? "completed"
-              : toolCall.status === "error"
-              ? "error"
-              : toolCall.status === "pending"
-              ? "pending"
-              : toolCall.status === "stopped"
-              ? "stopped"
-              : "active";
-          return {
-            id: toolCall.id,
-            name: toolCall.name,
-            subAgentName: subagentType,
-            input: toolCall.args,
-            output:
-              toolCall.result !== undefined && toolCall.result !== null
-                ? toolCall.result
-                : undefined,
-            status,
-          } satisfies SubAgent;
-        });
+      return toolCalls.filter(showsAsSubAgent).map((toolCall: ToolCall) => {
+        const subagentType = (toolCall.args as Record<string, unknown>)[
+          "subagent_type"
+        ] as string;
+        const status: SubAgent["status"] =
+          toolCall.status === "completed"
+            ? "completed"
+            : toolCall.status === "error"
+            ? "error"
+            : toolCall.status === "pending"
+            ? "pending"
+            : toolCall.status === "stopped"
+            ? "stopped"
+            : "active";
+        return {
+          id: toolCall.id,
+          name: toolCall.name,
+          subAgentName: subagentType,
+          input: toolCall.args,
+          output:
+            toolCall.result !== undefined && toolCall.result !== null
+              ? toolCall.result
+              : undefined,
+          status,
+        } satisfies SubAgent;
+      });
     }, [toolCalls]);
 
     const actionRequestByToolCallId = useMemo(
@@ -500,7 +496,13 @@ export const ChatMessage = React.memo<ChatMessageProps>(
           {hasToolCalls && (
             <div className="mt-4 flex w-full flex-col">
               {toolCalls.map((toolCall: ToolCall) => {
-                if (toolCall.name === "task") return null;
+                // A task that settled without naming its sub-agent (it failed
+                // validation) shows as a row; while it streams, neither.
+                if (
+                  toolCall.name === "task" &&
+                  (showsAsSubAgent(toolCall) || toolCall.status === "pending")
+                )
+                  return null;
                 const toolCallGenUiComponent = ui?.find(
                   (u) => u.metadata?.tool_call_id === toolCall.id
                 );
@@ -584,7 +586,10 @@ export const ChatMessage = React.memo<ChatMessageProps>(
                                   subAgent.status === "pending" ||
                                   subAgent.status === "active"
                                 }
+                                // A failed task's output is the error, not
+                                // the sub-agent's last text.
                                 hideFinalText={
+                                  subAgent.status === "completed" &&
                                   subAgent.output !== undefined &&
                                   subAgent.output !== null
                                 }
