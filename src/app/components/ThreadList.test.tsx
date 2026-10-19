@@ -40,6 +40,7 @@ const threadFixtures: ThreadItem[] = [
 ];
 
 const pinThread = vi.fn(async (..._args: unknown[]) => {});
+const renameThread = vi.fn(async (..._args: unknown[]) => {});
 const exportThread = vi.fn(async (..._args: unknown[]) => {});
 const mutate = vi.fn();
 
@@ -53,7 +54,7 @@ vi.mock("@/app/hooks/useThreads", () => ({
     error: undefined,
   }),
   deleteThread: vi.fn(async () => {}),
-  renameThread: vi.fn(async () => {}),
+  renameThread: (...args: unknown[]) => renameThread(...args),
   pinThread: (...args: unknown[]) => pinThread(...args),
   exportThread: (...args: unknown[]) => exportThread(...args),
 }));
@@ -78,6 +79,7 @@ describe("ThreadList per-thread actions menu", () => {
 
   beforeEach(() => {
     pinThread.mockClear();
+    renameThread.mockClear();
     exportThread.mockClear();
   });
 
@@ -146,6 +148,46 @@ describe("ThreadList per-thread actions menu", () => {
     ).toBe("Protein folding survey");
     await closeDialog();
   });
+
+  const openRenameWith = async (value: string) => {
+    render(<ThreadList onThreadSelect={vi.fn()} />);
+    openMenu("Protein folding survey");
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Rename" }));
+    const input = await screen.findByPlaceholderText("Enter a title…");
+    fireEvent.change(input, { target: { value } });
+    return input;
+  };
+
+  it("renames on Enter", async () => {
+    const input = await openRenameWith("Folding survey v2");
+
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() =>
+      expect(renameThread).toHaveBeenCalledWith("t-1", "Folding survey v2")
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  // Typing letters with a Chinese or Japanese IME and pressing Enter to put
+  // them in the field must not submit the half-typed title. Chrome and Firefox
+  // flag that Enter with `isComposing`; Safari sends it after compositionend
+  // with keyCode 229 instead.
+  it.each([
+    ["isComposing", { isComposing: true }],
+    ["keyCode 229", { keyCode: 229 }],
+  ])(
+    "keeps the dialog open on an Enter that ends IME composition (%s)",
+    async (_label, init) => {
+      const input = await openRenameWith("xin");
+
+      fireEvent.keyDown(input, { key: "Enter", ...init });
+
+      expect(screen.getByRole("dialog")).toBeTruthy();
+      expect(renameThread).not.toHaveBeenCalled();
+      await closeDialog();
+    }
+  );
 
   // The menu item that opened the dialog is unmounted by the time it closes, so
   // Radix has nothing to restore focus to and would drop it on <body>.

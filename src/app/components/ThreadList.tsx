@@ -987,6 +987,8 @@ export function ThreadList({
             value={renameValue}
             onChange={(e) => setRenameValue(e.target.value)}
             onKeyDown={(e) => {
+              // An Enter that ends IME composition only confirms the text.
+              if (e.nativeEvent.isComposing || e.keyCode === 229) return;
               if (e.key === "Enter") {
                 e.preventDefault();
                 submitRename();
