@@ -367,6 +367,7 @@ export const ToolCallBox = React.memo<ToolCallBoxProps>(
             <AlertCircle
               size={14}
               className="text-destructive"
+              aria-label="Failed"
             />
           );
         case "pending":

@@ -2,7 +2,13 @@
 
 import React from "react";
 import { Button } from "@/components/ui/button";
-import { Bot, ChevronDown, ChevronUp, Loader2 } from "lucide-react";
+import {
+  AlertCircle,
+  Bot,
+  ChevronDown,
+  ChevronUp,
+  Loader2,
+} from "lucide-react";
 import type { SubAgent } from "@/app/types/types";
 
 interface SubAgentIndicatorProps {
@@ -37,6 +43,11 @@ export const SubAgentIndicator = React.memo<SubAgentIndicatorProps>(
             {running ? (
               <Loader2
                 className="size-3.5 animate-spin"
+                aria-hidden="true"
+              />
+            ) : status === "failed" ? (
+              <AlertCircle
+                className="size-3.5 text-destructive"
                 aria-hidden="true"
               />
             ) : (

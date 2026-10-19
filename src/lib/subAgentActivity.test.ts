@@ -2,7 +2,21 @@ import { describe, expect, it } from "vitest";
 import {
   messagesToSubAgentSteps,
   subAgentStreamsToSteps,
+  taskSubAgentName,
 } from "./subAgentActivity";
+
+describe("taskSubAgentName", () => {
+  it.each([
+    [{ subagent_type: "code-agent" }, "code-agent"],
+    [{ subagent_type: "  " }, null],
+    [{ subagent_type: "" }, null],
+    [{ subagent_type: {} }, null],
+    [{ subagent_type: ["code-agent"] }, null],
+    [{}, null],
+  ])("reads %j as %j", (args, name) => {
+    expect(taskSubAgentName(args)).toBe(name);
+  });
+});
 
 describe("messagesToSubAgentSteps", () => {
   it("emits ai text before its tool calls", () => {
@@ -229,5 +243,34 @@ describe("subAgentStreamsToSteps", () => {
         ])
       )
     ).toEqual({ "task-1": [{ kind: "text", text: "still works" }] });
+  });
+
+  it("marks a tool result that failed", () => {
+    const steps = messagesToSubAgentSteps([
+      {
+        type: "tool",
+        name: "edit_file",
+        tool_call_id: "tc1",
+        content: "Error: String not found",
+        status: "error",
+      },
+      {
+        type: "tool",
+        name: "ls",
+        tool_call_id: "tc2",
+        content: "a.txt",
+        status: "success",
+      },
+    ]);
+    expect(steps).toEqual([
+      {
+        kind: "tool_result",
+        toolCallId: "tc1",
+        name: "edit_file",
+        text: "Error: String not found",
+        failed: true,
+      },
+      { kind: "tool_result", toolCallId: "tc2", name: "ls", text: "a.txt" },
+    ]);
   });
 });

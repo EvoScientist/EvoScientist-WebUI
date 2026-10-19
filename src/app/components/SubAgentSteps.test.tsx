@@ -58,4 +58,63 @@ describe("SubAgentSteps", () => {
       "text-[11px]"
     );
   });
+
+  it("shows a step that failed as failed, with its args", () => {
+    render(
+      <SubAgentSteps
+        steps={[
+          {
+            kind: "tool_call",
+            id: "e1",
+            name: "edit_file",
+            args: { file_path: "/ws/a.py", old_string: "a", new_string: "b" },
+          },
+          {
+            kind: "tool_result",
+            toolCallId: "e1",
+            name: "edit_file",
+            text: "Error: String not found",
+            failed: true,
+          },
+        ]}
+      />
+    );
+    expect(screen.getByLabelText("Failed")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /edit_file/ }));
+    expect(screen.queryByRole("list", { name: "Changes" })).toBeNull();
+    expect(screen.getByText("old_string:")).toBeTruthy();
+  });
+
+  it("shows a call's later successful result as completed", () => {
+    const { container } = render(
+      <SubAgentSteps
+        steps={[
+          {
+            kind: "tool_call",
+            id: "r1",
+            name: "execute",
+            args: { command: "ls" },
+          },
+          {
+            kind: "tool_result",
+            toolCallId: "r1",
+            name: "execute",
+            text: "Error: busy",
+            failed: true,
+          },
+          {
+            kind: "tool_result",
+            toolCallId: "r1",
+            name: "execute",
+            text: "a.txt",
+          },
+        ]}
+      />
+    );
+    expect(screen.queryByLabelText("Failed")).toBeNull();
+    expect(screen.queryByLabelText("Did not finish")).toBeNull();
+    expect(container.querySelector(".animate-spin")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /execute/ }));
+    expect(screen.getByText("a.txt")).toBeTruthy();
+  });
 });

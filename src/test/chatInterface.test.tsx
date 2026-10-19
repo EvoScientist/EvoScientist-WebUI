@@ -985,6 +985,92 @@ describe("ChatInterface composition", () => {
     expect(statusOf("t2")).toBe("pending");
   });
 
+  it("marks a tool call whose result failed as an error", () => {
+    renderChatInterface();
+    act(() => {
+      stream.setMessages([
+        humanTurn("edit it", "h1"),
+        aiToolCallTurn("edit_file", { old_string: "a", new_string: "b" }, "t1"),
+        {
+          ...toolResultTurn("Error: String not found", "t1r", "t1c"),
+          status: "error",
+        } as unknown as Message,
+        aiToolCallTurn("ls", { path: "/ws" }, "t2"),
+        {
+          ...toolResultTurn("a.txt", "t2r", "t2c"),
+          status: "success",
+        } as unknown as Message,
+        // A tool message without a status is a success.
+        aiToolCallTurn("read_file", { file_path: "/ws/a.txt" }, "t3"),
+        toolResultTurn("hello", "t3r", "t3c"),
+      ]);
+    });
+    const groups = getAllProps<{
+      items: Array<{
+        message: { id: string };
+        toolCalls: Array<{ status: string }>;
+      }>;
+    }>("ActionGroup");
+    const statusOf = (messageId: string) =>
+      [...groups]
+        .reverse()
+        .flatMap((g) => g.items)
+        .find((item) => item.message.id === messageId)?.toolCalls[0].status;
+    expect(statusOf("t1")).toBe("error");
+    expect(statusOf("t3")).toBe("completed");
+    expect(statusOf("t2")).toBe("completed");
+  });
+
+  it("names the one sub-agent with a name on the fallback approval", () => {
+    renderChatInterface();
+    act(() => {
+      stream.setMessages([
+        humanTurn("go"),
+        {
+          id: "t1",
+          type: "ai",
+          content: "",
+          tool_calls: [
+            { id: "b1", name: "task", args: { subagent_type: "  " } },
+            { id: "c1", name: "task", args: { subagent_type: "code-agent" } },
+          ],
+        } as unknown as Message,
+      ]);
+      stream.setInterrupt(executeInterrupt("ls"));
+    });
+
+    expect(screen.getByText("Approval requested by code-agent")).toBeTruthy();
+  });
+
+  it("names the sub-agent still running, not one that failed, on the fallback approval", () => {
+    renderChatInterface();
+    act(() => {
+      stream.setMessages([
+        humanTurn("go"),
+        {
+          id: "t1",
+          type: "ai",
+          content: "",
+          tool_calls: [
+            {
+              id: "w1",
+              name: "task",
+              args: { subagent_type: "writing-agent" },
+            },
+            { id: "c1", name: "task", args: { subagent_type: "code-agent" } },
+          ],
+        } as unknown as Message,
+        {
+          ...toolResultTurn("Error: writing-agent failed", "w1r", "w1"),
+          status: "error",
+        } as unknown as Message,
+      ]);
+      stream.setInterrupt(executeInterrupt("ls"));
+    });
+
+    expect(screen.getByText("Approval requested by code-agent")).toBeTruthy();
+  });
+
   it("gives a new turn's approval to its own tool call, not to a stopped one of the same name", () => {
     // Statuses are dealt out by tool name, oldest message first. A dead
     // `execute` left behind by Stop must not claim the next turn's approval.

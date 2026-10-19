@@ -124,7 +124,8 @@ function isStoredStep(value: unknown): value is SubAgentStep {
     return (
       typeof step.toolCallId === "string" &&
       typeof step.name === "string" &&
-      typeof step.text === "string"
+      typeof step.text === "string" &&
+      (step.failed === undefined || step.failed === true)
     );
   }
   return step.kind === "text" && typeof step.text === "string";

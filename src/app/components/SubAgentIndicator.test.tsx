@@ -34,4 +34,25 @@ describe("SubAgentIndicator", () => {
     expect(container.querySelector(".animate-spin")).toBeNull();
     expect(screen.getByLabelText("code-agent subagent stopped")).toBeTruthy();
   });
+
+  it("marks a failed sub-agent with the error icon", () => {
+    const { container } = render(
+      <SubAgentIndicator
+        subAgent={subAgent("error")}
+        onToggle={() => {}}
+      />
+    );
+    expect(screen.getByLabelText("code-agent subagent failed")).toBeTruthy();
+    expect(container.querySelector(".text-destructive")).not.toBeNull();
+  });
+
+  it("keeps the agent icon for a finished sub-agent", () => {
+    const { container } = render(
+      <SubAgentIndicator
+        subAgent={subAgent("completed")}
+        onToggle={() => {}}
+      />
+    );
+    expect(container.querySelector(".text-destructive")).toBeNull();
+  });
 });

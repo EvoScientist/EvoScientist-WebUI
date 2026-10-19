@@ -111,6 +111,53 @@ describe("subAgentStepsStore", () => {
     expect(loadThreadSubAgentSteps("t1")).toEqual({ good: steps });
   });
 
+  it("keeps a failed step's mark across a reload", () => {
+    const failed: SubAgentStep[] = [
+      {
+        kind: "tool_call",
+        id: "tc1",
+        name: "edit_file",
+        args: { old_string: "a", new_string: "b" },
+      },
+      {
+        kind: "tool_result",
+        toolCallId: "tc1",
+        name: "edit_file",
+        text: "Error: String not found",
+        failed: true,
+      },
+    ];
+    saveThreadSubAgentSteps("t1", { task_a: failed });
+    expect(loadThreadSubAgentSteps("t1")).toEqual({ task_a: failed });
+  });
+
+  it("drops a task whose stored failure mark isn't true", () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        threads: {
+          t1: {
+            updatedAt: 1,
+            tasks: {
+              good: steps,
+              bad: [
+                {
+                  kind: "tool_result",
+                  toolCallId: "tc1",
+                  name: "execute",
+                  text: "x",
+                  failed: "yes",
+                },
+              ],
+            },
+          },
+        },
+      })
+    );
+    expect(loadThreadSubAgentSteps("t1")).toEqual({ good: steps });
+  });
+
   it("degrades safely when browser storage access is blocked", () => {
     const getItem = vi
       .spyOn(Storage.prototype, "getItem")

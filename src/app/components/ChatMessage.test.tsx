@@ -382,3 +382,110 @@ describe("ChatMessage thinking", () => {
     expect(thinkingButton()).toBeNull();
   });
 });
+
+describe("ChatMessage sub-agent", () => {
+  const args = { subagent_type: "code-agent", description: "do it" };
+  const taskMessage = {
+    id: "a1",
+    type: "ai",
+    content: "",
+    tool_calls: [{ id: "tc1", name: "task", args }],
+  } as unknown as Message;
+  const LAST = "LAST-WORDS from the sub-agent";
+  const renderTask = (status: "completed" | "error", result: string) =>
+    render(
+      <ChatMessage
+        message={taskMessage}
+        toolCalls={[{ id: "tc1", name: "task", args, status, result }]}
+        subAgentSteps={{ tc1: [{ kind: "text", text: LAST }] }}
+      />
+    );
+
+  // A failed task's output is the error, not the sub-agent's last text.
+  it("shows a failed sub-agent's last text next to the error", () => {
+    renderTask("error", "Error: code-agent crashed");
+    fireEvent.click(
+      screen.getByRole("button", { name: "code-agent subagent failed" })
+    );
+    expect(screen.queryByRole("button", { name: /task/ })).toBeNull();
+
+    expect(screen.getByText(LAST)).toBeTruthy();
+    expect(screen.getByText("Error: code-agent crashed")).toBeTruthy();
+  });
+
+  it("shows a finished sub-agent's last text once, as its output", () => {
+    renderTask("completed", LAST);
+    fireEvent.click(
+      screen.getByRole("button", { name: "code-agent subagent finished" })
+    );
+    expect(screen.queryByRole("button", { name: /task/ })).toBeNull();
+
+    expect(screen.getAllByText(LAST)).toHaveLength(1);
+  });
+
+  // deepagents requires subagent_type; a call without it fails validation.
+  const bareTask = (
+    status: "pending" | "error" | "stopped" | "interrupted",
+    args: Record<string, unknown> = { description: "do it" }
+  ) => {
+    const call = { id: "tc2", name: "task", args };
+    return render(
+      <ChatMessage
+        message={
+          {
+            id: "a2",
+            type: "ai",
+            content: "",
+            tool_calls: [call],
+          } as unknown as Message
+        }
+        toolCalls={[
+          {
+            ...call,
+            status,
+            result:
+              status === "error"
+                ? "Error: subagent_type is a required field"
+                : undefined,
+          },
+        ]}
+      />
+    );
+  };
+
+  it("shows a task call that never named its sub-agent as a tool row", () => {
+    bareTask("error");
+
+    expect(screen.getByLabelText("Failed")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /task/ })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /subagent/ })).toBeNull();
+  });
+
+  it("shows no row for a task call still streaming in", () => {
+    bareTask("pending");
+
+    expect(screen.queryByRole("button", { name: /task/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /subagent/ })).toBeNull();
+  });
+
+  it.each(["stopped", "interrupted"] as const)(
+    "shows a %s task call that never named its sub-agent as a row",
+    (status) => {
+      bareTask(status);
+
+      expect(screen.getByRole("button", { name: /task/ })).toBeTruthy();
+      expect(screen.queryByRole("button", { name: /subagent/ })).toBeNull();
+    }
+  );
+
+  // A model can send a sub-agent that isn't a name; a card would crash on it.
+  it.each([[{}], [["code-agent"]], [true], ["  "]])(
+    "shows a task call whose subagent_type is %j as a tool row",
+    (subagentType) => {
+      bareTask("error", { description: "do it", subagent_type: subagentType });
+
+      expect(screen.getByLabelText("Failed")).toBeTruthy();
+      expect(screen.queryByRole("button", { name: /subagent/ })).toBeNull();
+    }
+  );
+});

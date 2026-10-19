@@ -9,7 +9,14 @@ export type SubAgentStep =
       name: string;
       args: Record<string, unknown>;
     }
-  | { kind: "tool_result"; toolCallId: string; name: string; text: string }
+  | {
+      kind: "tool_result";
+      toolCallId: string;
+      name: string;
+      text: string;
+      /** The tool failed (or its approval was rejected). */
+      failed?: true;
+    }
   | { kind: "text"; text: string };
 
 function extractText(content: unknown): string {
@@ -71,6 +78,13 @@ function normalizeToolCalls(m: {
   return out;
 }
 
+/** The sub-agent a `task` call's args name, or null when `subagent_type`
+ *  isn't a name: missing, blank, or not text (a model can send anything). */
+export function taskSubAgentName(args: Record<string, unknown>): string | null {
+  const name = args.subagent_type;
+  return typeof name === "string" && name.trim() !== "" ? name : null;
+}
+
 /**
  * Parse a PERSISTED flat messages array (e.g. an async sub-agent's own thread
  * state from `threads.getState`) into the same renderable steps as the live
@@ -87,6 +101,7 @@ export function messagesToSubAgentSteps(messages: unknown[]): SubAgentStep[] {
       content?: unknown;
       name?: string;
       tool_call_id?: string;
+      status?: string;
       tool_calls?: { id?: string; name?: string; args?: unknown }[];
       additional_kwargs?: {
         tool_calls?: {
@@ -132,6 +147,7 @@ export function messagesToSubAgentSteps(messages: unknown[]): SubAgentStep[] {
         toolCallId: m.tool_call_id ?? "",
         name: m.name ?? "tool",
         text: extractText(m.content).trim(),
+        ...(m.status === "error" ? { failed: true as const } : {}),
       });
     }
     // human messages: skipped (prompt is extracted separately)
