@@ -31,6 +31,11 @@ import {
 import { ThreadList } from "@/app/components/ThreadList";
 import { ChatProvider } from "@/providers/ChatProvider";
 import type { ThreadUnavailableInfo } from "@/app/hooks/useChat";
+import { refreshModelRegistry } from "@/app/hooks/useAvailableModels";
+import {
+  refreshBackendLists,
+  useBackendListsRefresh,
+} from "@/app/hooks/useBackendListsRefresh";
 import {
   ChatInterface,
   type ComposerSnapshot,
@@ -68,6 +73,7 @@ function HomePageInner({
   const { deploymentUrl, apiKey } = useDeployment();
   // Panels that hold one backend's data start over on another.
   const backendKey = `${deploymentUrl}\n${apiKey}`;
+  useBackendListsRefresh(deploymentUrl);
   const [threadId, setThreadId] = useQueryState("threadId");
   const [sidebar, setSidebar] = useQueryState("sidebar");
   const [view, setView] = useQueryState("view");
@@ -345,12 +351,18 @@ function HomePageInner({
           <div className="flex shrink-0 items-center gap-1 sm:gap-2">
             <HealthIndicator
               deploymentUrl={config.deploymentUrl}
-              onReconnect={(url) =>
-                handleSaveConfig({ ...config, deploymentUrl: url })
-              }
-              // A read already in progress (the first one, retrying while the
-              // backend was down) answers for this reconnect too.
+              // Reconnect shows while this backend is down, and the one it
+              // offers may have restarted since this page last read it.
+              onReconnect={(url) => {
+                refreshModelRegistry(url);
+                handleSaveConfig({ ...config, deploymentUrl: url });
+              }}
+              // The backend may have restarted with other models or experts,
+              // or not have been up when the page loaded. A folder read
+              // already in progress (the first one, retrying while the
+              // backend was down) answers for this return too.
               onOnline={() => {
+                refreshBackendLists(deploymentUrl);
                 if (!workspaceRefreshing) void refreshWorkspace();
               }}
             />

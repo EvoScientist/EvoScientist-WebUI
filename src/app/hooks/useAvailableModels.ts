@@ -28,12 +28,29 @@ interface RegistryResponse {
 
 const EMPTY: ModelRegistry = { entries: [], defaultEntry: null };
 
-// Module-level cache keyed by normalised deploymentUrl and API key. The
-// registry is static between deployment restarts — one network round-trip per
-// deployment per page load is enough regardless of how many times
-// ChatInterface mounts/unmounts or the backend is switched back and forth.
-// Failed fetches are evicted so the next read retries.
+// Module-level cache keyed by normalised deploymentUrl and API key, so
+// remounting ChatInterface or switching back in Settings doesn't ask again. The registry changes only when its backend restarts;
+// `refreshModelRegistry` drops a deployment's entries when the page has reason
+// to think it did. Failed fetches are evicted so the next read retries.
 const cache = new Map<string, Promise<ModelRegistry>>();
+
+const CHANGE_EVENT = "evo-models-change";
+
+/**
+ * Drops what this page has read from a deployment's `/api/models`, under every
+ * key, and makes every mounted reader ask again; readers keep showing what
+ * they have until the new answer comes. For a backend that may have changed
+ * under the same URL: see `refreshBackendLists`, and Reconnect in page.tsx.
+ */
+export function refreshModelRegistry(deploymentUrl: string): void {
+  const prefix = `${deploymentUrl.replace(/\/$/, "")}\n`;
+  for (const key of [...cache.keys()]) {
+    if (key.startsWith(prefix)) cache.delete(key);
+  }
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event(CHANGE_EVENT));
+  }
+}
 
 function fetchRegistry(
   deploymentUrl: string,
@@ -89,7 +106,8 @@ function fetchRegistry(
       return { entries, defaultEntry } as ModelRegistry;
     })
     .catch((err: unknown) => {
-      cache.delete(key);
+      // A refresh may have replaced this request; leave the newer one.
+      if (cache.get(key) === p) cache.delete(key);
       throw err;
     });
 
@@ -105,7 +123,7 @@ function fetchRegistry(
  *
  * Failures are non-fatal: the picker falls back to its curated
  * `COMMON_MODELS` list when `entries` is empty. Failed fetches are evicted
- * from the cache, so the next mount or a switch back reads again.
+ * from the cache, so the next mount, a switch back or a refresh reads again.
  */
 export function useAvailableModels(): {
   registry: ModelRegistry;
@@ -126,6 +144,15 @@ export function useAvailableModels(): {
   if (loaded.key !== key) {
     setLoaded({ key, registry: null, error: null });
   }
+  // Bumped by refreshModelRegistry; the registry shown stays until the
+  // re-read answers.
+  const [revision, setRevision] = useState(0);
+
+  useEffect(() => {
+    const onChange = () => setRevision((n) => n + 1);
+    window.addEventListener(CHANGE_EVENT, onChange);
+    return () => window.removeEventListener(CHANGE_EVENT, onChange);
+  }, []);
 
   useEffect(() => {
     if (!deploymentUrl) return;
@@ -143,7 +170,7 @@ export function useAvailableModels(): {
     return () => {
       cancelled = true;
     };
-  }, [deploymentUrl, apiKey, key]);
+  }, [deploymentUrl, apiKey, key, revision]);
 
   return {
     registry: loaded.registry ?? EMPTY,
