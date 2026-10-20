@@ -6,7 +6,12 @@ const COLLAPSE_AGENT_ACTIONS_KEY = "evosci.ui.collapseAgentActions";
 
 function readCollapseAgentActions(): boolean {
   if (typeof window === "undefined") return true;
-  const raw = window.localStorage.getItem(COLLAPSE_AGENT_ACTIONS_KEY);
+  let raw: string | null = null;
+  try {
+    raw = localStorage.getItem(COLLAPSE_AGENT_ACTIONS_KEY);
+  } catch {
+    // Storage is blocked; use the default.
+  }
   if (raw === null) return true; // default: collapse
   return raw === "true";
 }
@@ -36,7 +41,11 @@ export function useCollapseAgentActions(): {
   const setValue = useCallback((next: boolean) => {
     setValueState(next);
     if (typeof window !== "undefined") {
-      window.localStorage.setItem(COLLAPSE_AGENT_ACTIONS_KEY, String(next));
+      try {
+        localStorage.setItem(COLLAPSE_AGENT_ACTIONS_KEY, String(next));
+      } catch {
+        // Not saved when storage is blocked or full.
+      }
     }
   }, []);
 

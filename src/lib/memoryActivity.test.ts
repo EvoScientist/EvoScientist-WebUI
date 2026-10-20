@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   MEMORY_RECENT_MS,
   getMemorySeenAt,
@@ -29,6 +29,21 @@ describe("getMemorySeenAt", () => {
     localStorage.setItem(SEEN_KEY, "not a number");
     expect(getMemorySeenAt()).toBe(0);
   });
+
+  describe("with storage blocked", () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it("returns 0", () => {
+      const getItem = vi.fn(() => {
+        throw new DOMException("Storage is disabled.", "SecurityError");
+      });
+      vi.stubGlobal("localStorage", { getItem });
+      expect(getMemorySeenAt()).toBe(0);
+      expect(getItem).toHaveBeenCalled();
+    });
+  });
 });
 
 describe("setMemorySeenAt", () => {
@@ -41,13 +56,18 @@ describe("setMemorySeenAt", () => {
     expect(localStorage.getItem(SEEN_KEY)).toBe("1700000000000");
   });
 
+  // A prototype swap never runs on Node 25's storage, so the global is swapped.
   it("survives localStorage failure silently", () => {
-    const original = Storage.prototype.setItem;
-    Storage.prototype.setItem = () => {
-      throw new Error("quota");
-    };
-    expect(() => setMemorySeenAt(123)).not.toThrow();
-    Storage.prototype.setItem = original;
+    const setItem = vi.fn(() => {
+      throw new DOMException("The quota was exceeded.", "QuotaExceededError");
+    });
+    vi.stubGlobal("localStorage", { setItem });
+    try {
+      expect(() => setMemorySeenAt(123)).not.toThrow();
+      expect(setItem).toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 

@@ -10,6 +10,7 @@ import React, {
 import Image from "next/image";
 import { useQueryState } from "nuqs";
 import { getConfig, saveConfig, DeploymentConfig } from "@/lib/config";
+import { toast } from "sonner";
 import { ConfigDialog } from "@/app/components/ConfigDialog";
 import { Button } from "@/components/ui/button";
 import { ClientProvider, useDeployment } from "@/providers/ClientProvider";
@@ -581,7 +582,11 @@ function HomePageContent() {
   }, []);
 
   const handleSaveConfig = useCallback((newConfig: DeploymentConfig) => {
-    saveConfig(newConfig);
+    if (!saveConfig(newConfig)) {
+      toast.error(
+        "Couldn't save the settings: this browser's storage is full or blocked. They apply until the page is reloaded."
+      );
+    }
     setConfig(newConfig);
   }, []);
 

@@ -14,8 +14,12 @@ export const MEMORY_RECENT_MS = 10 * 60 * 1000;
 /** Epoch ms of the newest memory file the user has already seen (0 if never). */
 export function getMemorySeenAt(): number {
   if (typeof window === "undefined") return 0;
-  const v = Number(localStorage.getItem(SEEN_KEY));
-  return Number.isFinite(v) ? v : 0;
+  try {
+    const v = Number(localStorage.getItem(SEEN_KEY));
+    return Number.isFinite(v) ? v : 0;
+  } catch {
+    return 0;
+  }
 }
 
 export function setMemorySeenAt(ts: number): void {

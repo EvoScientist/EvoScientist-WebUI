@@ -47,6 +47,16 @@ function save(store: StoreShape): void {
   }
 }
 
+/** Removes the stored workflows, the first thing to go when storage runs out. */
+export function clearWorkflowCache(): void {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // Storage is blocked; there is nothing to clear.
+  }
+}
+
 function isStoredDispatch(value: unknown): value is WorkflowDispatch {
   if (!value || typeof value !== "object") return false;
   const d = value as Record<string, unknown>;
