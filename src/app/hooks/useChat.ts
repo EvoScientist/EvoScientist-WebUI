@@ -32,6 +32,7 @@ import { subAgentStreamsToSteps } from "@/lib/subAgentActivity";
 import { toast } from "sonner";
 import { parseFallbackNotice } from "@/lib/middlewareEvents";
 import { createRetryToasts, ModelRetryTracker } from "@/lib/modelRetry";
+import { createThinkingClock, streamedModel } from "@/lib/thinkingTimer";
 import {
   MODEL_OVERRIDE_METADATA_KEY,
   type ModelOverride,
@@ -606,6 +607,19 @@ export function useChat({
     wasLoadingRef.current = stream.isLoading;
   }, [stream.isLoading, retryTracker]);
 
+  // Times the reasoning of the replies to runs started here (thinkingTimer),
+  // from the live stream: `messages` below can lag behind `isLoading`.
+  const [thinkingClock] = useState(() =>
+    createThinkingClock((message) =>
+      streamedModel(
+        streamRef.current.getMessagesMetadata(message)?.streamMetadata
+      )
+    )
+  );
+  useEffect(() => {
+    thinkingClock.observe(stream.messages, stream.isLoading);
+  }, [thinkingClock, stream.messages, stream.isLoading]);
+
   useEffect(() => {
     const previousThreadId = workflowThreadIdRef.current;
     workflowThreadIdRef.current = threadId;
@@ -1067,6 +1081,7 @@ export function useChat({
       retryTracker.reset();
       const newMessage: Message = { id: uuidv4(), type: "human", content };
       lastSubmittedHumanIdRef.current = newMessage.id ?? null;
+      thinkingClock.runStarting();
       streamRef.current.submit(
         { messages: [newMessage] },
         {
@@ -1087,7 +1102,14 @@ export function useChat({
       onHistoryRevalidate?.();
       return true;
     },
-    [buildRunConfig, canRunNow, onHistoryRevalidate, retryTracker, startRun]
+    [
+      buildRunConfig,
+      canRunNow,
+      onHistoryRevalidate,
+      retryTracker,
+      startRun,
+      thinkingClock,
+    ]
   );
 
   const setFiles = useCallback(
@@ -1121,6 +1143,7 @@ export function useChat({
       recoveryRunRef.current += 1;
       retryTracker.reset();
       lastSubmittedHumanIdRef.current = null;
+      thinkingClock.runStarting();
       streamRef.current.submit(null, {
         command: { resume: value },
         config: buildRunConfig(),
@@ -1133,7 +1156,14 @@ export function useChat({
       onHistoryRevalidate?.();
       return true;
     },
-    [buildRunConfig, canRunNow, onHistoryRevalidate, retryTracker, startRun]
+    [
+      buildRunConfig,
+      canRunNow,
+      onHistoryRevalidate,
+      retryTracker,
+      startRun,
+      thinkingClock,
+    ]
   );
 
   // Abandon the current run when the user hits Stop and hand control back to

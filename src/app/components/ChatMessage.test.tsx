@@ -6,9 +6,10 @@
 // bubble; opening it reveals the description and the SKILL.md body.
 
 import { describe, it, expect } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { Message } from "@langchain/langgraph-sdk";
 import { ChatMessage } from "./ChatMessage";
+import { createThinkingClock } from "@/lib/thinkingTimer";
 
 const DESCRIPTION = "Self-review a draft across five aspects before submission";
 const SKILL_BODY =
@@ -153,7 +154,7 @@ describe("ChatMessage thinking", () => {
       additional_kwargs,
     } as unknown as Message);
   const thinkingButton = () =>
-    screen.queryByRole("button", { name: "Thinking" });
+    screen.queryByRole("button", { name: /^(Thinking…|Thought)/ });
 
   it("shows Claude's thinking block, collapsed, apart from the answer", () => {
     renderMessage(
@@ -374,6 +375,116 @@ describe("ChatMessage thinking", () => {
 
     fireEvent.click(thinkingButton()!);
     expect(screen.getAllByText(THOUGHT)).toHaveLength(1);
+  });
+
+  // While the model still thinks the row says so; once the answer or a tool
+  // call starts, it says how long it took (timed by useChat's clock).
+  describe("progress", () => {
+    const thinking = (id: string) =>
+      ({
+        id,
+        type: "ai",
+        content: [{ type: "thinking", thinking: THOUGHT, index: 0 }],
+      } as unknown as Message);
+    const answered = (id: string) =>
+      ({
+        id,
+        type: "ai",
+        content: [
+          { type: "thinking", thinking: THOUGHT, index: 0 },
+          { type: "text", text: "391", index: 1 },
+        ],
+      } as unknown as Message);
+    // Times a reply the way useChat does: a run started here, its reply
+    // thinking at 0 s and answering `seconds` later.
+    const timeReply = (id: string, seconds: number) => {
+      const clock = createThinkingClock();
+      clock.runStarting();
+      clock.observe([thinking(id)], true, 0);
+      clock.observe([answered(id)], true, seconds * 1000);
+    };
+
+    it("says Thinking… while the reasoning streams", () => {
+      render(
+        <ChatMessage
+          message={thinking("p1")}
+          toolCalls={[]}
+          isStreaming
+        />
+      );
+
+      const button = screen.getByRole("button", { name: "Thinking…" });
+      expect(button.querySelector(".thinking-shimmer")).not.toBeNull();
+    });
+
+    it("says how long it thought", () => {
+      timeReply("p2", 12);
+      render(
+        <ChatMessage
+          message={answered("p2")}
+          toolCalls={[]}
+          isStreaming
+        />
+      );
+
+      expect(
+        screen.getByRole("button", { name: "Thought for 12s" })
+      ).toBeTruthy();
+      expect(document.querySelector(".thinking-shimmer")).toBeNull();
+    });
+
+    // useChat records the time from the live stream, which can be after the
+    // reply rendered.
+    it("shows the time once it is recorded", () => {
+      render(
+        <ChatMessage
+          message={answered("p3")}
+          toolCalls={[]}
+          isStreaming
+        />
+      );
+      expect(screen.getByRole("button", { name: "Thought" })).toBeTruthy();
+
+      act(() => timeReply("p3", 7));
+
+      expect(
+        screen.getByRole("button", { name: "Thought for 7s" })
+      ).toBeTruthy();
+    });
+
+    it("stops saying Thinking… once a tool call starts", () => {
+      render(
+        <ChatMessage
+          message={thinking("p6")}
+          toolCalls={[{ id: "c1", name: "ls", args: {}, status: "pending" }]}
+          isStreaming
+        />
+      );
+
+      expect(screen.getByRole("button", { name: "Thought" })).toBeTruthy();
+    });
+
+    it("says Thought for a reply stopped while it thought", () => {
+      render(
+        <ChatMessage
+          message={thinking("p5")}
+          toolCalls={[]}
+        />
+      );
+
+      expect(screen.getByRole("button", { name: "Thought" })).toBeTruthy();
+    });
+
+    it("says Thought for a message loaded from history", () => {
+      render(
+        <ChatMessage
+          message={answered("p4")}
+          toolCalls={[]}
+        />
+      );
+
+      expect(screen.getByRole("button", { name: "Thought" })).toBeTruthy();
+    });
   });
 
   it("shows no Thinking control when there is no reasoning", () => {

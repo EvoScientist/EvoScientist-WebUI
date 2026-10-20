@@ -375,6 +375,38 @@ button {
   border-width: 0;
 }
 
+/* "Thinking…" while a model reasons (ChatMessage): a light passing over the
+   muted text. Without motion it is the plain muted text. */
+@keyframes thinking-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+
+.thinking-shimmer {
+  background: linear-gradient(
+    90deg,
+    hsl(var(--muted-foreground)) 35%,
+    hsl(var(--foreground)) 50%,
+    hsl(var(--muted-foreground)) 65%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: thinking-shimmer 2s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .thinking-shimmer {
+    background: none;
+    color: inherit;
+  }
+}
+
 /* Optimization Window animations */
 @keyframes fadeIn {
   from {

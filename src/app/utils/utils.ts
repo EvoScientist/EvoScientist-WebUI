@@ -60,6 +60,73 @@ export function extractStringFromMessageContent(message: Message): string {
     : "";
 }
 
+function parseToolArgs(rawArgs: unknown): Record<string, unknown> {
+  if (rawArgs && typeof rawArgs === "object") {
+    return rawArgs as Record<string, unknown>;
+  }
+  if (typeof rawArgs !== "string") {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(rawArgs);
+    return parsed && typeof parsed === "object"
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+export function getMessageToolCalls(message: Message): Array<{
+  id?: string;
+  name: string;
+  args: Record<string, unknown>;
+}> {
+  const messageWithTools = message as Message & {
+    tool_calls?: Array<{ name?: string }>;
+  };
+  const toolCalls: Array<{
+    id?: string;
+    function?: { name?: string; arguments?: unknown };
+    name?: string;
+    type?: string;
+    args?: unknown;
+    input?: unknown;
+  }> = [];
+
+  if (
+    message.additional_kwargs?.tool_calls &&
+    Array.isArray(message.additional_kwargs.tool_calls)
+  ) {
+    toolCalls.push(...message.additional_kwargs.tool_calls);
+  } else if (
+    messageWithTools.tool_calls &&
+    Array.isArray(messageWithTools.tool_calls)
+  ) {
+    toolCalls.push(
+      ...messageWithTools.tool_calls.filter(
+        (toolCall: { name?: string }) => toolCall.name !== ""
+      )
+    );
+  } else if (Array.isArray(message.content)) {
+    toolCalls.push(
+      ...message.content.filter(
+        (block: { type?: string }) => block.type === "tool_use"
+      )
+    );
+  }
+
+  return toolCalls.map((toolCall) => {
+    const rawArgs =
+      toolCall.function?.arguments || toolCall.args || toolCall.input || {};
+    return {
+      id: toolCall.id,
+      name: toolCall.function?.name || toolCall.name || toolCall.type || "",
+      args: parseToolArgs(rawArgs),
+    };
+  });
+}
+
 export function extractSubAgentContent(data: unknown): string {
   if (typeof data === "string") {
     return data;
