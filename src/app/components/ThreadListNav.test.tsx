@@ -10,6 +10,13 @@ import { fireEvent, render, screen } from "@testing-library/react";
 const nav = vi.hoisted(() => ({
   view: null as string | null,
   setView: vi.fn(),
+  // What useSettings() reports: undefined before an answer and against an
+  // EvoScientist without /api/settings.
+  settings: undefined as object | undefined,
+}));
+
+vi.mock("@/app/hooks/useSettings", () => ({
+  useSettings: () => ({ payload: nav.settings }),
 }));
 
 vi.mock("nuqs", async () => {
@@ -49,6 +56,7 @@ import { ThreadList } from "./ThreadList";
 
 beforeEach(() => {
   nav.view = null;
+  nav.settings = undefined;
   nav.setView.mockClear();
 });
 
@@ -72,6 +80,37 @@ describe("left rail Experts entry", () => {
     nav.view = "experts";
     renderRail();
     fireEvent.click(screen.getByRole("button", { name: /^experts$/i }));
+    expect(nav.setView).toHaveBeenCalledWith(null);
+  });
+});
+
+describe("left rail Setup entry", () => {
+  const renderRail = () =>
+    render(
+      <ThreadList
+        onThreadSelect={vi.fn()}
+        onMutateReady={vi.fn()}
+        onInterruptCountChange={vi.fn()}
+      />
+    );
+
+  it("is hidden while the deployment has no settings to show (404 included)", () => {
+    renderRail();
+    expect(screen.queryByRole("button", { name: /^setup$/i })).toBeNull();
+  });
+
+  it("opens the Setup view once the deployment answered", () => {
+    nav.settings = { setup_needed: false };
+    renderRail();
+    fireEvent.click(screen.getByRole("button", { name: /^setup$/i }));
+    expect(nav.setView).toHaveBeenCalledWith("setup");
+  });
+
+  it("returns to the conversation when the active entry is clicked again", () => {
+    nav.settings = { setup_needed: false };
+    nav.view = "setup";
+    renderRail();
+    fireEvent.click(screen.getByRole("button", { name: /^setup$/i }));
     expect(nav.setView).toHaveBeenCalledWith(null);
   });
 });

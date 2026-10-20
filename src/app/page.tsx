@@ -15,6 +15,9 @@ import { ConfigDialog } from "@/app/components/ConfigDialog";
 import { Button } from "@/components/ui/button";
 import { ClientProvider, useDeployment } from "@/providers/ClientProvider";
 import { WorkspaceProvider, useWorkspace } from "@/providers/WorkspaceProvider";
+import { SetupNotice } from "@/app/components/SetupNotice";
+import { SetupView } from "@/app/components/SetupView";
+import { useSetupGate } from "@/app/hooks/useSetupGate";
 import {
   Settings,
   SquarePen,
@@ -83,6 +86,8 @@ function HomePageInner({
   const [memoryExec, setMemoryExec] = useQueryState("memoryExec");
   const [inspector, setInspector] = useQueryState("inspector");
   const [inspectorTab, setInspectorTab] = useQueryState("inspectorTab");
+
+  useSetupGate(view, setView);
 
   const [mutateThreads, setMutateThreads] = useState<(() => void) | null>(null);
   const [interruptCount, setInterruptCount] = useState(0);
@@ -495,6 +500,7 @@ function HomePageInner({
                     view !== null && "hidden"
                   )}
                 >
+                  <SetupNotice onOpenSetup={() => void setView("setup")} />
                   <ChatProvider
                     key={chatSessionRevision}
                     onHistoryRevalidate={() => mutateThreads?.()}
@@ -515,6 +521,9 @@ function HomePageInner({
                     />
                   </ChatProvider>
                 </div>
+                {view === "setup" && (
+                  <SetupView onClose={() => void setView(null)} />
+                )}
                 {view === "skills" && <SkillsMarketplace />}
                 {view === "experts" && <ExpertsPanel />}
                 {view === "memory" && (
