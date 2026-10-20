@@ -227,6 +227,87 @@ describe("ChatInterface composition", () => {
     expect(group?.autoApprove).toBe(false);
   });
 
+  // A malformed message can hold null entries. One in
+  // additional_kwargs.tool_calls, which the backend stores as given, blanked
+  // the whole chat; the others are read here too.
+  it("passes on the tool calls of messages with null entries", () => {
+    renderChatInterface();
+    act(() => {
+      stream.setSubagents(
+        new Map([
+          ["task-1", { messages: [{ type: "ai", content: "Reading." }] }],
+          ["task-2", { messages: [{ type: "ai", content: "Looking." }] }],
+        ])
+      );
+      stream.setMessages([
+        humanTurn("run ls"),
+        {
+          id: "a1",
+          type: "ai",
+          content: "",
+          additional_kwargs: {
+            tool_calls: [
+              null,
+              { id: "c1", function: { name: "ls", arguments: "{}" } },
+            ],
+          },
+          tool_calls: [{ id: "c1", name: "ls", args: {} }],
+        } as unknown as Message,
+        toolResultTurn("ok", "r1", "c1"),
+        {
+          id: "a2",
+          type: "ai",
+          content: [null],
+          tool_calls: [
+            null,
+            {
+              id: "task-1",
+              name: "task",
+              args: { description: "Read", subagent_type: "research-agent" },
+            },
+          ],
+        } as unknown as Message,
+        {
+          id: "a3",
+          type: "ai",
+          content: [
+            null,
+            { type: "tool_use", id: "c3", name: "ls", input: {} },
+          ],
+        } as unknown as Message,
+        // The task shows from its content; its steps follow it there.
+        {
+          id: "a4",
+          type: "ai",
+          content: [
+            {
+              type: "tool_use",
+              id: "task-2",
+              name: "task",
+              input: { description: "Look", subagent_type: "research-agent" },
+            },
+          ],
+          tool_calls: [null],
+        } as unknown as Message,
+      ]);
+    });
+
+    const group = getLastProps<{
+      items: Array<{ toolCalls: Array<{ id: string }> }>;
+      subAgentSteps: Record<string, unknown[]>;
+    }>("ActionGroup");
+    expect(
+      group?.items.map((item) => item.toolCalls.map((tc) => tc.id))
+    ).toEqual([["c1"], ["task-1"], ["c3"], ["task-2"]]);
+    // The tasks after a null still get their sub-agents' steps.
+    expect(group?.subAgentSteps["task-1"]).toEqual([
+      { kind: "text", text: "Reading." },
+    ]);
+    expect(group?.subAgentSteps["task-2"]).toEqual([
+      { kind: "text", text: "Looking." },
+    ]);
+  });
+
   it("hands a partially bound interrupt to the fallback instead of stranding a request", () => {
     // The main agent's own `execute` is still running (no result yet) next to
     // a `task`, and the sub-agent asks to approve two `execute` calls. Only one

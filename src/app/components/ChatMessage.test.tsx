@@ -487,6 +487,22 @@ describe("ChatMessage thinking", () => {
     });
   });
 
+  // A malformed message can hold null entries; the reasoning reader skips
+  // them (it already did; this keeps it so).
+  it("shows a reply whose content holds null entries", () => {
+    renderMessage(
+      aiMessage([
+        null,
+        { type: "thinking", thinking: THOUGHT },
+        { type: "text", text: "391" },
+      ] as unknown as Message["content"])
+    );
+
+    expect(screen.getByText("391")).toBeTruthy();
+    fireEvent.click(thinkingButton()!);
+    expect(screen.getByText(THOUGHT)).toBeTruthy();
+  });
+
   it("shows no Thinking control when there is no reasoning", () => {
     renderMessage(aiMessage("391"));
 

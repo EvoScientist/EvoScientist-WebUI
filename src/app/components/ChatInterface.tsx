@@ -535,10 +535,8 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       const ids = new Set<string>();
       for (const message of messages) {
         if (message.type !== "ai") continue;
-        const toolCalls = (
-          message as { tool_calls?: Array<{ id?: string; name?: string }> }
-        ).tool_calls;
-        for (const toolCall of toolCalls ?? []) {
+        // The calls the chat shows, so a task's steps follow its card.
+        for (const toolCall of getMessageToolCalls(message)) {
           if (toolCall.name === "task" && toolCall.id) ids.add(toolCall.id);
         }
       }

@@ -83,7 +83,7 @@ export function getMessageToolCalls(message: Message): Array<{
   args: Record<string, unknown>;
 }> {
   const messageWithTools = message as Message & {
-    tool_calls?: Array<{ name?: string }>;
+    tool_calls?: Array<{ name?: string } | null>;
   };
   const toolCalls: Array<{
     id?: string;
@@ -92,38 +92,50 @@ export function getMessageToolCalls(message: Message): Array<{
     type?: string;
     args?: unknown;
     input?: unknown;
-  }> = [];
+  } | null> = [];
+
+  // A malformed message can hold null or other non-object entries; a list of
+  // nothing else isn't where its calls are, but an empty one still is.
+  const holdsCalls = (list: unknown[]) =>
+    list.length === 0 ||
+    list.some((entry) => typeof entry === "object" && entry !== null);
 
   if (
     message.additional_kwargs?.tool_calls &&
-    Array.isArray(message.additional_kwargs.tool_calls)
+    Array.isArray(message.additional_kwargs.tool_calls) &&
+    holdsCalls(message.additional_kwargs.tool_calls)
   ) {
     toolCalls.push(...message.additional_kwargs.tool_calls);
   } else if (
     messageWithTools.tool_calls &&
-    Array.isArray(messageWithTools.tool_calls)
+    Array.isArray(messageWithTools.tool_calls) &&
+    holdsCalls(messageWithTools.tool_calls)
   ) {
     toolCalls.push(
       ...messageWithTools.tool_calls.filter(
-        (toolCall: { name?: string }) => toolCall.name !== ""
+        (toolCall: { name?: string } | null) => toolCall?.name !== ""
       )
     );
   } else if (Array.isArray(message.content)) {
     toolCalls.push(
       ...message.content.filter(
-        (block: { type?: string }) => block.type === "tool_use"
+        (block: { type?: string } | null) => block?.type === "tool_use"
       )
     );
   }
 
-  return toolCalls.map((toolCall) => {
+  // Reading a null entry in additional_kwargs.tool_calls blanked the chat.
+  return toolCalls.flatMap((toolCall) => {
+    if (typeof toolCall !== "object" || toolCall === null) return [];
     const rawArgs =
       toolCall.function?.arguments || toolCall.args || toolCall.input || {};
-    return {
-      id: toolCall.id,
-      name: toolCall.function?.name || toolCall.name || toolCall.type || "",
-      args: parseToolArgs(rawArgs),
-    };
+    return [
+      {
+        id: toolCall.id,
+        name: toolCall.function?.name || toolCall.name || toolCall.type || "",
+        args: parseToolArgs(rawArgs),
+      },
+    ];
   });
 }
 
