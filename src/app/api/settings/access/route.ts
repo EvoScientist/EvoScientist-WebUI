@@ -2,21 +2,11 @@ import { NextResponse, type NextRequest } from "next/server";
 import {
   forwardToBackend,
   instanceOf,
+  localBackendPort,
   readLocalSecret,
   relayGate,
-  type RelayRefusal,
 } from "@/lib/server/settingsRelay";
-
-export type SettingsAccess =
-  | {
-      writable: true;
-      /** The backend `instance` this relay writes to (WebUI#55, point 4). */
-      instance: string;
-      /** The `revision` that backend reports; the page compares it with its
-       *  own GET when the backend has no `instance` field yet. */
-      revision: string | null;
-    }
-  | { writable: false; reason: RelayRefusal };
+import type { SettingsAccess } from "@/lib/settings";
 
 function answer(access: SettingsAccess): NextResponse {
   return NextResponse.json(access, {
@@ -51,6 +41,7 @@ export async function GET(request: NextRequest) {
   }
   return answer({
     writable: true,
+    port: localBackendPort(),
     instance: instanceOf(secret),
     revision: await backendRevision(),
   });

@@ -55,6 +55,7 @@ import {
 } from "@/app/components/FilePaneSizer";
 import { setThreadAutoApprove } from "@/lib/autoApprove";
 import type { MainChatReporter } from "@/lib/asyncAgents";
+import type { NavTarget } from "@/lib/navTarget";
 import { cn } from "@/lib/utils";
 
 interface HomePageInnerProps {
@@ -209,19 +210,7 @@ function HomePageInner({
     [startNewChat]
   );
   const handleDashboardNav = useCallback(
-    (
-      target:
-        | {
-            view: "memory";
-            tab: "identity" | "knowledge" | "history";
-            obsId?: string;
-            execId?: string;
-          }
-        | { view: "schedule" }
-        | { view: "workspace" }
-        | { view: "experts" }
-        | { view: "skills" }
-    ) => {
+    (target: NavTarget) => {
       if (target.view === "memory") {
         setMemoryTab(target.tab);
         setMemoryObs(target.obsId ?? null);
@@ -233,6 +222,8 @@ function HomePageInner({
         setView("experts");
       } else if (target.view === "skills") {
         setView("skills");
+      } else if (target.view === "setup") {
+        setView("setup");
       } else {
         if (inspector && inspectorTab !== "agents") {
           closeInspector();

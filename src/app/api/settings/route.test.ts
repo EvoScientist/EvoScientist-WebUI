@@ -259,6 +259,7 @@ describe("GET /api/settings/access", () => {
       .slice(0, 16);
     expect(await res.json()).toEqual({
       writable: true,
+      port: 6606,
       instance: expected,
       revision: "abc",
     });

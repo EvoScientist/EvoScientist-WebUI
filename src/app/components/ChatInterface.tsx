@@ -127,24 +127,13 @@ import {
   type ModelOverride,
 } from "@/lib/modelCommand";
 import { useAvailableModels } from "@/app/hooks/useAvailableModels";
-
-type DashboardNavTarget =
-  | {
-      view: "memory";
-      tab: "identity" | "knowledge" | "history";
-      obsId?: string;
-      execId?: string;
-    }
-  | { view: "schedule" }
-  | { view: "workspace" }
-  | { view: "experts" }
-  | { view: "skills" };
+import type { NavTarget } from "@/lib/navTarget";
 
 interface ChatInterfaceProps {
   // Open the right inspector on its Agents tab (composer "agents running" pulse).
   onShowAgents?: () => void;
   // Navigate to a memory tab / the schedule view from the empty-state dashboard.
-  onNavigate?: (target: DashboardNavTarget) => void;
+  onNavigate?: (target: NavTarget) => void;
   // Open a pinned thread from the empty-state dashboard.
   onOpenThread?: (id: string) => void;
   // Whether the workspace inspector is currently visible.

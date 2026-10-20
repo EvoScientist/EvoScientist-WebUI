@@ -13,6 +13,7 @@ import { join } from "path";
 import { NextResponse, type NextRequest } from "next/server";
 import { isLoopbackHost } from "@/lib/backendBoundary";
 import { readCoreConfig } from "@/lib/server/coreConfig";
+import type { RelayRefusal } from "@/lib/settings";
 import { globalDataDir } from "@/lib/server/paths";
 import { hostHeaderName, isCrossOrigin } from "@/lib/server/workspace";
 
@@ -26,19 +27,6 @@ export const FORWARD_TIMEOUT_MS = 120_000;
 // The values `HOSTNAME` takes when the packaged server listens on loopback
 // only. Unset is not one of them: the standalone server then binds 0.0.0.0.
 const LOOPBACK_BIND_NAMES = new Set(["127.0.0.1", "::1", "localhost"]);
-
-/** Why the relay refuses a request; also the `reason` of GET
- *  /api/settings/access, so the page can say why settings are read-only. */
-export type RelayRefusal =
-  | "not_loopback"
-  | "host_not_loopback"
-  | "cross_origin"
-  | "json_required"
-  | "secret_missing"
-  | "secret_rejected"
-  | "backend_unreachable"
-  | "backend_timeout"
-  | "unsupported";
 
 const REFUSAL_STATUS: Record<RelayRefusal, number> = {
   not_loopback: 403,
@@ -124,7 +112,12 @@ export function instanceOf(secret: string): string {
 
 /** The local backend's base URL, from this server's own configuration. */
 export function localBackendUrl(): string {
-  return `http://127.0.0.1:${readCoreConfig().port}`;
+  return `http://127.0.0.1:${localBackendPort()}`;
+}
+
+/** The local backend's port: the environment, else config.yaml, else 6174. */
+export function localBackendPort(): number {
+  return readCoreConfig().port;
 }
 
 export type ForwardResult =
