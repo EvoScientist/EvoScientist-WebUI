@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getConfig } from "@/lib/config";
+import { useDeployment } from "@/providers/ClientProvider";
 
 export interface ModelRegistryEntry {
   /** Short name as the user types in `/model <name>`. */
@@ -28,24 +28,27 @@ interface RegistryResponse {
 
 const EMPTY: ModelRegistry = { entries: [], defaultEntry: null };
 
-// Module-level cache keyed by normalised deploymentUrl. The registry is static
-// between deployment restarts — one network round-trip per URL per page load
-// is enough regardless of how many times ChatInterface mounts/unmounts.
-// Failed fetches are evicted so the next mount retries.
+// Module-level cache keyed by normalised deploymentUrl and API key. The
+// registry is static between deployment restarts — one network round-trip per
+// deployment per page load is enough regardless of how many times
+// ChatInterface mounts/unmounts or the backend is switched back and forth.
+// Failed fetches are evicted so the next read retries.
 const cache = new Map<string, Promise<ModelRegistry>>();
 
 function fetchRegistry(
   deploymentUrl: string,
   apiKey: string
 ): Promise<ModelRegistry> {
-  const key = deploymentUrl.replace(/\/$/, "");
+  const url = deploymentUrl.replace(/\/$/, "");
+  // A request sent with another key isn't this key's answer.
+  const key = `${url}\n${apiKey}`;
   const hit = cache.get(key);
   if (hit) return hit;
 
   const headers: Record<string, string> = {};
   if (apiKey) headers["X-Api-Key"] = apiKey;
 
-  const p = fetch(`${key}/api/models`, { headers })
+  const p = fetch(`${url}/api/models`, { headers })
     .then(async (r) => {
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const body = (await r.json()) as RegistryResponse;
@@ -102,46 +105,49 @@ function fetchRegistry(
  *
  * Failures are non-fatal: the picker falls back to its curated
  * `COMMON_MODELS` list when `entries` is empty. Failed fetches are evicted
- * from the cache so the next mount retries.
+ * from the cache, so the next mount or a switch back reads again.
  */
 export function useAvailableModels(): {
   registry: ModelRegistry;
   loading: boolean;
   error: string | null;
 } {
-  const [registry, setRegistry] = useState<ModelRegistry>(EMPTY);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  // Reconnect or a new URL in Settings swaps the deployment without remounting
+  // the chat, so the registry follows the client's deployment. A switch, a
+  // return included, resets it during render: React drops that render and
+  // draws again, so nothing of the last deployment's shows.
+  const { deploymentUrl, apiKey } = useDeployment();
+  const key = `${deploymentUrl}\n${apiKey}`;
+  const [loaded, setLoaded] = useState<{
+    key: string;
+    registry: ModelRegistry | null;
+    error: string | null;
+  }>({ key, registry: null, error: null });
+  if (loaded.key !== key) {
+    setLoaded({ key, registry: null, error: null });
+  }
 
   useEffect(() => {
-    const cfg = getConfig();
-    if (!cfg) {
-      setLoading(false);
-      return;
-    }
+    if (!deploymentUrl) return;
     let cancelled = false;
-    const apiKey =
-      cfg.langsmithApiKey || process.env.NEXT_PUBLIC_LANGSMITH_API_KEY || "";
-
-    fetchRegistry(cfg.deploymentUrl, apiKey)
-      .then((result) => {
-        if (cancelled) return;
-        setRegistry(result);
-        setError(null);
+    fetchRegistry(deploymentUrl, apiKey)
+      .then((registry) => {
+        if (!cancelled) setLoaded({ key, registry, error: null });
       })
       .catch((err: unknown) => {
         if (cancelled) return;
-        setError(err instanceof Error ? err.message : "Failed to load models.");
-        setRegistry(EMPTY);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
+        const error =
+          err instanceof Error ? err.message : "Failed to load models.";
+        setLoaded({ key, registry: EMPTY, error });
       });
-
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [deploymentUrl, apiKey, key]);
 
-  return { registry, loading, error };
+  return {
+    registry: loaded.registry ?? EMPTY,
+    loading: !!deploymentUrl && !loaded.registry,
+    error: loaded.error,
+  };
 }
