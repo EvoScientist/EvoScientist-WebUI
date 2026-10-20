@@ -407,7 +407,7 @@ describe("the setup wizard", () => {
       target: { value: "http://127.0.0.1:11434" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
-    await waitFor(() => expect(server.testKey).toHaveBeenCalledOnce());
+    expect(await screen.findByText("The server answers.")).toBeTruthy();
     expect(server.testKey.mock.calls[0][0]).toEqual({
       provider: "ollama",
       base_url: "http://127.0.0.1:11434",

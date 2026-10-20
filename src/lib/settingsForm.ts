@@ -187,13 +187,27 @@ export interface KeyCheckResult {
   models?: string[];
 }
 
-export const KEY_STATUS_TEXT: Record<KeyStatus, string> = {
+const KEY_STATUS_TEXT: Record<KeyStatus, string> = {
   valid: "The key works.",
   invalid: "The key was refused.",
   inconclusive: "The key could not be checked; you can still save it.",
   unavailable: "There is no check for this key; you can still save it.",
   empty: "There is no key to check.",
 };
+
+// A provider without a key (Ollama) checks only that its server answers.
+const CONNECTION_STATUS_TEXT: Record<KeyStatus, string> = {
+  valid: "The server answers.",
+  invalid: "The server refused the connection.",
+  inconclusive: "The server could not be reached; you can still save.",
+  unavailable: "There is no check for this server; you can still save.",
+  empty: "There is nothing to check.",
+};
+
+/** The words for a check's `status`, for a key or a keyless server. */
+export function keyStatusText(status: KeyStatus, keyless: boolean): string {
+  return (keyless ? CONNECTION_STATUS_TEXT : KEY_STATUS_TEXT)[status];
+}
 
 const REFUSAL_TEXT: Record<RelayRefusal | "other_backend", string> = {
   not_loopback:

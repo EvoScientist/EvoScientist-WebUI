@@ -18,8 +18,8 @@ import {
   type FieldContext,
 } from "@/app/components/setupFieldContext";
 import {
-  KEY_STATUS_TEXT,
   currentText,
+  keyStatusText,
   fieldLabel,
   isMaskedSecret,
   sourceNote,
@@ -321,9 +321,12 @@ export function KeyCheckButton({
 export function KeyCheckResultText({
   ctx,
   provider,
+  keyless = false,
 }: {
   ctx: FieldContext;
   provider: string;
+  /** The check proves a server, not a key (Ollama). */
+  keyless?: boolean;
 }) {
   const result = ctx.draft.checks[provider];
   if (!result) return null;
@@ -350,7 +353,7 @@ export function KeyCheckResultText({
           "text-amber-700 dark:text-amber-300"
       )}
     >
-      {KEY_STATUS_TEXT[result.status]}
+      {keyStatusText(result.status, keyless)}
       {result.message ? ` ${result.message}` : ""}
     </p>
   );
@@ -401,6 +404,7 @@ export function ProviderAccessFields({
             <KeyCheckResultText
               ctx={ctx}
               provider={provider}
+              keyless
             />
           </div>
         )
