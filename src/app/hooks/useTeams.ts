@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { getConfig } from "@/lib/config";
 import { parseTeams, type TeamEntry } from "@/lib/teams";
+import { useDeployment } from "@/providers/ClientProvider";
 
 // The Experts view and the chat composer each hold their own instance, and
 // the chat stays mounted behind the view. Installing a skill in one must
@@ -11,6 +11,9 @@ import { parseTeams, type TeamEntry } from "@/lib/teams";
 // reload — same cross-component signal the auto-approve and auto-notify
 // stores already use.
 const CHANGE_EVENT = "evo-teams-change";
+
+// One empty list, so consumers that memoize on it don't redo work per render.
+const NO_TEAMS: TeamEntry[] = [];
 
 /** Tell every mounted `useTeams` to re-read the list. Call after anything that
  *  installs or removes a skill — an expert can be installed from the skills
@@ -39,10 +42,24 @@ export function useTeams(): {
   error: string | null;
   refresh: () => void;
 } {
-  const [teams, setTeams] = useState<TeamEntry[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  // Reconnect or a new URL in Settings swaps the deployment without remounting
+  // the chat. A switch, a return included, resets the list during render
+  // (React drops that render and draws again), so none shows until the
+  // deployment answers; a refresh of the same deployment keeps the list up
+  // while it re-reads.
+  const { deploymentUrl, apiKey } = useDeployment();
+  const key = `${deploymentUrl}\n${apiKey}`;
   const [revision, setRevision] = useState(0);
+  const [loaded, setLoaded] = useState<{
+    key: string;
+    // The refresh this list answers; null until the deployment answers.
+    revision: number | null;
+    teams: TeamEntry[];
+    error: string | null;
+  }>({ key, revision: null, teams: NO_TEAMS, error: null });
+  if (loaded.key !== key) {
+    setLoaded({ key, revision: null, teams: NO_TEAMS, error: null });
+  }
 
   const refresh = useCallback(() => notifyTeamsChanged(), []);
 
@@ -53,44 +70,31 @@ export function useTeams(): {
   }, []);
 
   useEffect(() => {
-    const cfg = getConfig();
-    if (!cfg) {
-      setLoading(false);
-      return;
-    }
+    if (!deploymentUrl) return;
     let cancelled = false;
-    setLoading(true);
-
     const headers: Record<string, string> = {};
-    const apiKey =
-      cfg.langsmithApiKey || process.env.NEXT_PUBLIC_LANGSMITH_API_KEY || "";
     if (apiKey) headers["X-Api-Key"] = apiKey;
-
-    fetch(`${cfg.deploymentUrl.replace(/\/$/, "")}/api/teams`, { headers })
+    fetch(`${deploymentUrl.replace(/\/$/, "")}/api/teams`, { headers })
       .then(async (r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return parseTeams(await r.json());
       })
-      .then((entries) => {
-        if (cancelled) return;
-        setTeams(entries);
-        setError(null);
+      .then((teams) => {
+        if (!cancelled) setLoaded({ key, revision, teams, error: null });
       })
       .catch((err: unknown) => {
         if (cancelled) return;
-        setError(
-          err instanceof Error ? err.message : "Failed to load experts."
-        );
-        setTeams([]);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
+        const error =
+          err instanceof Error ? err.message : "Failed to load experts.";
+        setLoaded({ key, revision, teams: NO_TEAMS, error });
       });
-
     return () => {
       cancelled = true;
     };
-  }, [revision]);
+  }, [deploymentUrl, apiKey, key, revision]);
+
+  const { teams, error } = loaded;
+  const loading = !!deploymentUrl && loaded.revision !== revision;
 
   return { teams, loading, error, refresh };
 }
