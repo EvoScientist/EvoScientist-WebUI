@@ -28,6 +28,8 @@ interface MockStreamSnapshot<S> {
   subagents: ReadonlyMap<string, { messages: unknown[] }>;
   /** Checkpoints, oldest first, as the SDK orders them. */
   history: Array<{ metadata?: Record<string, unknown> }>;
+  /** Stream metadata by message id, as the SDK keeps it for streamed chunks. */
+  messagesMetadata: Record<string, Record<string, unknown>>;
 }
 
 export interface SubmitCall {
@@ -45,6 +47,7 @@ function defaultSnapshot<S>(): MockStreamSnapshot<S> {
     error: undefined,
     subagents: new Map(),
     history: [],
+    messagesMetadata: {},
   };
 }
 
@@ -99,6 +102,12 @@ export class MockStreamStore<
 
   setHistory(history: Array<{ metadata?: Record<string, unknown> }>): void {
     this.update({ history });
+  }
+
+  setMessagesMetadata(
+    messagesMetadata: Record<string, Record<string, unknown>>
+  ): void {
+    this.update({ messagesMetadata });
   }
 
   setThreadLoading(isThreadLoading: boolean): void {
@@ -248,7 +257,12 @@ export function useMockStreamHook(options: Record<string, unknown>) {
     // has to be tested elsewhere. If a scenario needs to distinguish
     // messages by first-seen-thread-state, expose a store hook and
     // seed it explicitly instead of relying on the mock's silence.
-    getMessagesMetadata: () => undefined,
+    getMessagesMetadata: (message: Message) => {
+      const streamMetadata = message.id
+        ? store.getSnapshot().messagesMetadata[message.id]
+        : undefined;
+      return streamMetadata ? { streamMetadata } : undefined;
+    },
     joinStream: async () => {},
     client: options?.client ?? {},
     assistantId: (options?.assistantId as string | undefined) ?? "",

@@ -23,6 +23,7 @@ import { taskSubAgentName, type SubAgentStep } from "@/lib/subAgentActivity";
 import { isAsyncUpdateMessage } from "@/lib/asyncAgents";
 import { bindActionRequestsToToolCalls } from "@/lib/hitl";
 import { pinnedSkillDescription, pinnedSkillName } from "@/lib/pinnedSkill";
+import { thoughtLabel, useThoughtSeconds } from "@/lib/thinkingTimer";
 import {
   AlertTriangle,
   Bell,
@@ -260,6 +261,10 @@ export const ChatMessage = React.memo<ChatMessageProps>(
     );
 
     const [thinkingOpen, setThinkingOpen] = useState(false);
+    // Still thinking: the answer and the tool calls haven't started.
+    const thinking =
+      !!isStreaming && !!reasoning && !hasContent && !hasToolCalls;
+    const thought = useThoughtSeconds(message.id);
     const [copied, setCopied] = useState(false);
     const copyResetTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
       undefined
@@ -361,7 +366,11 @@ export const ChatMessage = React.memo<ChatMessageProps>(
                   className="h-3.5 w-3.5"
                   aria-hidden="true"
                 />
-                Thinking
+                {thinking ? (
+                  <span className="thinking-shimmer">Thinking…</span>
+                ) : (
+                  thoughtLabel(thought)
+                )}
               </button>
               {thinkingOpen &&
                 (reasoning.markdown ? (
