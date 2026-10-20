@@ -1,13 +1,13 @@
 // @vitest-environment jsdom
 //
-// The deployment's model registry. It is cached per deployment URL and key for
-// the page's life, so a switch reads the new deployment once and a return to
-// one already read reuses it.
+// The deployment's model registry. It is cached per deployment URL and key
+// until a refresh drops it, so a switch reads the new deployment once and a
+// return to one already read reuses it.
 
 import { StrictMode } from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, waitFor, act } from "@testing-library/react";
-import { useAvailableModels } from "./useAvailableModels";
+import { refreshModelRegistry, useAvailableModels } from "./useAvailableModels";
 
 // The deployment the SDK client talks to; a switch changes it in place.
 const deployment = vi.hoisted(() => ({
@@ -38,8 +38,8 @@ afterEach(() => vi.unstubAllGlobals());
 
 // Each request waits until the test answers it. `answer` and `fail` answer the
 // latest request to a deployment (`fail` with an error status); `answerCall`
-// answers one by the order it was sent in, so answers can come back out of
-// order.
+// and `failCall` answer one by the order it was sent in, so answers can come
+// back out of order.
 function deferredRegistry() {
   const pending: {
     url: string;
@@ -69,7 +69,9 @@ function deferredRegistry() {
     act(async () => latest(url)?.resolve({}, status));
   const answerCall = (n: number, body: unknown) =>
     act(async () => pending[n]?.resolve(body));
-  return { fetchMock, answer, fail, answerCall };
+  const failCall = (n: number, status: number) =>
+    act(async () => pending[n]?.resolve({}, status));
+  return { fetchMock, answer, fail, answerCall, failCall };
 }
 
 describe("useAvailableModels", () => {
@@ -222,5 +224,118 @@ describe("useAvailableModels", () => {
 
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+// refreshModelRegistry runs when the backend may have changed under the same
+// URL: it may have restarted with other models, or not have been up when the
+// page loaded.
+describe("useAvailableModels after the backend comes back", () => {
+  it("reads again and keeps the registry up meanwhile", async () => {
+    const { fetchMock, answer } = deferredRegistry();
+    const { result } = renderHook(() => useAvailableModels());
+    await answer(A, registry("model-a"));
+
+    act(() => refreshModelRegistry(`${A}/`));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.current.registry.defaultEntry?.name).toBe("model-a");
+    expect(result.current.loading).toBe(false);
+
+    await answer(A, registry("model-b"));
+    expect(result.current.registry.defaultEntry?.name).toBe("model-b");
+    expect(result.current.loading).toBe(false);
+  });
+
+  it("recovers from a read that failed while the backend was down", async () => {
+    const { answer, fail } = deferredRegistry();
+    const { result } = renderHook(() => useAvailableModels());
+    await fail(A, 502);
+    expect(result.current.error).toContain("502");
+
+    act(() => refreshModelRegistry(A));
+    await answer(A, registry("model-a"));
+    expect(result.current.error).toBeNull();
+    expect(result.current.registry.defaultEntry?.name).toBe("model-a");
+  });
+
+  it("drops what the address said under every key", async () => {
+    const { fetchMock, answer } = deferredRegistry();
+    const { result, rerender } = renderHook(() => useAvailableModels());
+    await answer(A, registry("model-a"));
+    deployment.value = { deploymentUrl: A, apiKey: "other-key" };
+    rerender();
+    await answer(A, registry("model-a"));
+
+    act(() => refreshModelRegistry(A));
+    await answer(A, registry("model-b"));
+    deployment.value = { deploymentUrl: A, apiKey: "" };
+    rerender();
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    await answer(A, registry("model-b"));
+    expect(result.current.registry.defaultEntry?.name).toBe("model-b");
+  });
+
+  it("leaves the shown registry alone when another address is refreshed", async () => {
+    const { fetchMock, answer } = deferredRegistry();
+    const { result } = renderHook(() => useAvailableModels());
+    await answer(A, registry("model-a"));
+
+    await act(async () => refreshModelRegistry(B));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result.current.registry.defaultEntry?.name).toBe("model-a");
+  });
+
+  // `http://host:7000` is not `http://host:70000`.
+  it("leaves an address that only starts the same alone", async () => {
+    deployment.value = { deploymentUrl: `${A}0`, apiKey: "" };
+    const { fetchMock, answer } = deferredRegistry();
+    const { result } = renderHook(() => useAvailableModels());
+    await answer(`${A}0`, registry("model-a"));
+
+    await act(async () => refreshModelRegistry(A));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result.current.registry.defaultEntry?.name).toBe("model-a");
+  });
+
+  it("keeps the newer answer when two refreshes come back out of order", async () => {
+    const { answerCall } = deferredRegistry();
+    const { result } = renderHook(() => useAvailableModels());
+    await answerCall(0, registry("model-a"));
+
+    act(() => refreshModelRegistry(A));
+    act(() => refreshModelRegistry(A));
+    await answerCall(2, registry("model-c"));
+    await answerCall(1, registry("model-b"));
+    expect(result.current.registry.defaultEntry?.name).toBe("model-c");
+  });
+
+  // A refresh drops a request still in flight; that request failing later
+  // must not take the newer one out of the cache.
+  it("keeps the newer request cached when a dropped one fails", async () => {
+    const { fetchMock, answerCall, failCall } = deferredRegistry();
+    renderHook(() => useAvailableModels());
+    act(() => refreshModelRegistry(A));
+    await answerCall(1, registry("model-b"));
+    await failCall(0, 502);
+
+    const later = renderHook(() => useAvailableModels());
+    await waitFor(() =>
+      expect(later.result.current.registry.defaultEntry?.name).toBe("model-b")
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("sends one request for all mounted readers", async () => {
+    const { fetchMock, answer } = deferredRegistry();
+    const first = renderHook(() => useAvailableModels());
+    const second = renderHook(() => useAvailableModels());
+    await answer(A, registry("model-a"));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    act(() => refreshModelRegistry(A));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await answer(A, registry("model-b"));
+    expect(first.result.current.registry.defaultEntry?.name).toBe("model-b");
+    expect(second.result.current.registry.defaultEntry?.name).toBe("model-b");
   });
 });
