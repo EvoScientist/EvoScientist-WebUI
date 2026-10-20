@@ -45,12 +45,53 @@ const TYPE_MAX_CHARS = 60;
 const LABEL_FALLBACK_MAX_CHARS = 60;
 const STORED_ERROR_MAX_CHARS = 2000;
 
+// Whitespace and what draws nothing: the default-ignorable characters (zero-
+// width spaces and joiners, fillers, soft hyphens) and the blank braille cell.
+const LEADING_BLANKS = /^[\s\p{Default_Ignorable_Code_Point}\u2800]+/u;
+
+/** A space, or the first half of a character with nothing after it. */
+function isLooseEnd(code: number): boolean {
+  return code === 0x20 || (code >= 0xd800 && code <= 0xdbff);
+}
+
+/** One line of untrusted text: empty, or starting with something that shows. */
 export function sanitizeLine(text: string, maxChars: number): string {
-  return text
+  const line = text
     .replace(CONTROL_AND_BIDI, " ")
     .replace(/\s+/g, " ")
-    .trim()
+    .replace(LEADING_BLANKS, "")
     .slice(0, maxChars);
+  // Spaces and half characters (a cut can leave one) go from the end in one
+  // pass, so cleaning the result again changes nothing.
+  let end = line.length;
+  while (end > 0 && isLooseEnd(line.charCodeAt(end - 1))) end--;
+  return line.slice(0, end);
+}
+
+/** A dispatch's type, or "subagent" when it has none that shows. */
+export function dispatchType(type: unknown): string {
+  return (
+    (typeof type === "string" && sanitizeLine(type, TYPE_MAX_CHARS)) ||
+    "subagent"
+  );
+}
+
+/**
+ * The first of a dispatch's names that shows anything, else its type. The id
+ * is shown whole, so ids that differ only at the end stay apart.
+ */
+export function dispatchLabel(
+  label: string,
+  description: string,
+  id: string,
+  subagentType: string
+): string {
+  return (
+    sanitizeLine(label, LABEL_MAX_CHARS) ||
+    sanitizeLine(description, LABEL_FALLBACK_MAX_CHARS) ||
+    sanitizeLine(id, Infinity) ||
+    subagentType
+  );
 }
 
 function isTerminal(status: DispatchStatus): boolean {
@@ -73,20 +114,18 @@ export function parseSubagentEvent(data: unknown): SubagentEvent | null {
       typeof raw.description === "string"
         ? sanitizeLine(raw.description, LABEL_MAX_CHARS)
         : "";
-    const explicitLabel =
-      typeof raw.label === "string"
-        ? sanitizeLine(raw.label, LABEL_MAX_CHARS)
-        : "";
+    const subagentType = dispatchType(raw.subagent_type);
     return {
       phase: "start",
       id,
       evalId,
-      subagentType:
-        typeof raw.subagent_type === "string" && raw.subagent_type
-          ? sanitizeLine(raw.subagent_type, TYPE_MAX_CHARS)
-          : "subagent",
-      label:
-        explicitLabel || description.slice(0, LABEL_FALLBACK_MAX_CHARS) || id,
+      subagentType,
+      label: dispatchLabel(
+        typeof raw.label === "string" ? raw.label : "",
+        description,
+        id,
+        subagentType
+      ),
       description,
     };
   }
@@ -175,7 +214,7 @@ export function applySubagentEvent(
     const evalData = map[event.evalId];
     const orphan: WorkflowDispatch = {
       id: event.id,
-      label: event.id,
+      label: dispatchLabel("", "", event.id, "subagent"),
       subagentType: "subagent",
       description: "",
       status: "error",

@@ -1,7 +1,10 @@
-import type {
-  WorkflowDispatch,
-  WorkflowEval,
-  WorkflowMap,
+import {
+  dispatchLabel,
+  dispatchType,
+  sanitizeLine,
+  type WorkflowDispatch,
+  type WorkflowEval,
+  type WorkflowMap,
 } from "@/lib/dynamicWorkflow";
 
 const STORAGE_KEY = "evoscientist-dynamic-workflows";
@@ -86,7 +89,20 @@ export function loadThreadWorkflows(threadId: string): WorkflowMap {
     if (isStoredEval(value)) {
       out[key] = {
         ...value,
-        dispatches: value.dispatches.slice(-MAX_DISPATCHES_PER_EVAL),
+        dispatches: value.dispatches
+          .slice(-MAX_DISPATCHES_PER_EVAL)
+          // Older versions stored blank types and labels. A label that shows
+          // anything stays whole, like the id it can come from.
+          .map((d) => {
+            const subagentType = dispatchType(d.subagentType);
+            return {
+              ...d,
+              subagentType,
+              label:
+                sanitizeLine(d.label, Infinity) ||
+                dispatchLabel("", d.description, d.id, subagentType),
+            };
+          }),
       };
     }
   }

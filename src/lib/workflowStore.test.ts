@@ -1,7 +1,13 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it } from "vitest";
 import { loadThreadWorkflows, saveThreadWorkflows } from "./workflowStore";
-import type { WorkflowDispatch, WorkflowMap } from "./dynamicWorkflow";
+import {
+  applySubagentEvent,
+  parseSubagentEvent,
+  type SubagentEvent,
+  type WorkflowDispatch,
+  type WorkflowMap,
+} from "./dynamicWorkflow";
 
 const STORAGE_KEY = "evoscientist-dynamic-workflows";
 
@@ -18,6 +24,16 @@ function dispatch(
     startedAt: 0,
     durationMs: status === "running" ? undefined : 10,
   };
+}
+
+function event(raw: Record<string, unknown>): SubagentEvent {
+  const parsed = parseSubagentEvent({
+    type: "subagent",
+    eval_id: "call_1",
+    ...raw,
+  });
+  if (!parsed) throw new Error("not a subagent event");
+  return parsed;
 }
 
 function mapWith(dispatches: WorkflowDispatch[]): WorkflowMap {
@@ -99,6 +115,120 @@ describe("workflowStore", () => {
       JSON.stringify({ t1: { updatedAt: 1, evals: { call_1: malformed } } })
     );
     expect(loadThreadWorkflows("t1")).toEqual({});
+  });
+
+  // Written before a blank type fell back to "subagent".
+  it("loads a dispatch stored with a blank type as subagent", () => {
+    const blank = { ...dispatch("a", "done"), subagentType: "" };
+    const invisible = {
+      ...dispatch("b", "done"),
+      subagentType: String.fromCharCode(0x200b, 0x200b),
+    };
+    const typed = { ...dispatch("c", "done"), subagentType: "research-agent" };
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        t1: { updatedAt: 1, evals: mapWith([blank, invisible, typed]) },
+      })
+    );
+
+    expect(loadThreadWorkflows("t1")["call_1"].dispatches).toEqual([
+      { ...blank, subagentType: "subagent" },
+      { ...invisible, subagentType: "subagent" },
+      typed,
+    ]);
+  });
+
+  // Saved rows are named again on load, which must not change them.
+  it.each([
+    [
+      "cut after a space",
+      { subagent_type: "a".repeat(59) + " b", label: "a".repeat(199) + " b" },
+      { subagentType: "a".repeat(59), label: "a".repeat(199) },
+    ],
+    [
+      "typed with half a character before a space",
+      { subagent_type: String.fromCharCode(0xd800) + " " },
+      { subagentType: "subagent" },
+    ],
+  ])("loads a dispatch %s as it was saved", (_label, fields, expected) => {
+    const started = applySubagentEvent(
+      {},
+      event({ phase: "start", id: "d1", ...fields }),
+      1
+    );
+    const done = applySubagentEvent(
+      started,
+      event({ phase: "complete", id: "d1", duration_ms: 5 }),
+      2
+    );
+    expect(done["call_1"].dispatches[0]).toMatchObject(expected);
+    saveThreadWorkflows("t1", done);
+
+    expect(loadThreadWorkflows("t1")).toEqual(done);
+  });
+
+  // Main kept invisible characters at the start of a label.
+  it("loads a label stored with an invisible start the same way twice", () => {
+    const stored = {
+      ...dispatch("a", "done"),
+      label: String.fromCharCode(0x200b) + "Review",
+    };
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ t1: { updatedAt: 1, evals: mapWith([stored]) } })
+    );
+    const loaded = loadThreadWorkflows("t1");
+    expect(loaded["call_1"].dispatches[0].label).toBe("Review");
+
+    saveThreadWorkflows("t1", loaded);
+    expect(loadThreadWorkflows("t1")).toEqual(loaded);
+  });
+
+  // Two long ids that differ only at the end got one label after a reload.
+  it("loads dispatches labelled by long ids as they were saved", () => {
+    let map: WorkflowMap = {};
+    for (const id of ["x".repeat(10_000) + "A", "x".repeat(10_000) + "B"]) {
+      map = applySubagentEvent(map, event({ phase: "start", id }), 1);
+      map = applySubagentEvent(
+        map,
+        event({ phase: "complete", id, duration_ms: 5 }),
+        2
+      );
+    }
+    saveThreadWorkflows("t1", map);
+
+    expect(loadThreadWorkflows("t1")).toEqual(map);
+  });
+
+  // Written before a label with nothing to show fell back to the next name.
+  it("loads a dispatch stored with a blank label under its first name that shows", () => {
+    const byDescription = {
+      ...dispatch("a", "done"),
+      label: "",
+      description: "Review idea 3",
+    };
+    const byId = {
+      ...dispatch("b", "done"),
+      label: String.fromCharCode(0x200b),
+    };
+    const byType = {
+      ...dispatch("   ", "done"),
+      label: "   ",
+      subagentType: "research-agent",
+    };
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        t1: { updatedAt: 1, evals: mapWith([byDescription, byId, byType]) },
+      })
+    );
+
+    expect(loadThreadWorkflows("t1")["call_1"].dispatches).toEqual([
+      { ...byDescription, label: "Review idea 3" },
+      { ...byId, label: "b" },
+      { ...byType, label: "research-agent" },
+    ]);
   });
 
   it("caps oversized data even when storage was written externally", () => {
