@@ -1,6 +1,10 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it } from "vitest";
-import { loadThreadWorkflows, saveThreadWorkflows } from "./workflowStore";
+import {
+  clearWorkflowCache,
+  loadThreadWorkflows,
+  saveThreadWorkflows,
+} from "./workflowStore";
 import {
   applySubagentEvent,
   parseSubagentEvent,
@@ -229,6 +233,12 @@ describe("workflowStore", () => {
       { ...byId, label: "b" },
       { ...byType, label: "research-agent" },
     ]);
+  });
+
+  it("clears the cache", () => {
+    saveThreadWorkflows("t1", mapWith([dispatch("a", "done")]));
+    clearWorkflowCache();
+    expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
   });
 
   it("caps oversized data even when storage was written externally", () => {

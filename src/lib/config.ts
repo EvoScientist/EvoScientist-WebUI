@@ -1,3 +1,6 @@
+import { clearSubAgentStepsCache } from "@/lib/subAgentStepsStore";
+import { clearWorkflowCache } from "@/lib/workflowStore";
+
 export interface DeploymentConfig {
   deploymentUrl: string;
   langsmithApiKey?: string;
@@ -5,10 +8,20 @@ export interface DeploymentConfig {
 
 const CONFIG_KEY = "evoscientist-config";
 
+// A config the browser wouldn't keep: every reader gets it until the page is
+// reloaded, so none of them talks to the stored deployment instead.
+let unsavedConfig: DeploymentConfig | null = null;
+
 export function getConfig(): DeploymentConfig | null {
   if (typeof window === "undefined") return null;
+  if (unsavedConfig) return unsavedConfig;
 
-  const stored = localStorage.getItem(CONFIG_KEY);
+  let stored: string | null;
+  try {
+    stored = localStorage.getItem(CONFIG_KEY);
+  } catch {
+    return null;
+  }
   if (!stored) return null;
 
   try {
@@ -28,7 +41,35 @@ export function getConfig(): DeploymentConfig | null {
   }
 }
 
-export function saveConfig(config: DeploymentConfig): void {
-  if (typeof window === "undefined") return;
-  localStorage.setItem(CONFIG_KEY, JSON.stringify(config));
+function isQuotaError(error: unknown): boolean {
+  const name = (error as { name?: unknown } | null)?.name;
+  // Older Firefox names it NS_ERROR_DOM_QUOTA_REACHED.
+  return name === "QuotaExceededError" || name === "NS_ERROR_DOM_QUOTA_REACHED";
+}
+
+function store(value: string): boolean {
+  try {
+    localStorage.setItem(CONFIG_KEY, value);
+    return true;
+  } catch (error) {
+    if (!isQuotaError(error)) return false;
+  }
+  // Settings matter more than the trace caches, which can make room.
+  clearSubAgentStepsCache();
+  clearWorkflowCache();
+  try {
+    localStorage.setItem(CONFIG_KEY, value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Stores the config; false when the browser wouldn't keep it, in which case
+ *  `getConfig` returns it until the page is reloaded. */
+export function saveConfig(config: DeploymentConfig): boolean {
+  if (typeof window === "undefined") return true;
+  const saved = store(JSON.stringify(config));
+  unsavedConfig = saved ? null : config;
+  return saved;
 }
