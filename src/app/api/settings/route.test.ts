@@ -50,6 +50,8 @@ beforeEach(() => {
   dataDir = mkdtempSync(join(tmpdir(), "evo data ą-"));
   vi.stubEnv("EVOSCIENTIST_DATA_DIR", dataDir);
   vi.stubEnv("HOSTNAME", "127.0.0.1");
+  // What dist/server.js and npm run dev:local set (scripts/bind-marker.mjs).
+  vi.stubEnv("EVOSCIENTIST_WEBUI_BINDS_HOSTNAME", "1");
   vi.stubEnv("EVOSCIENTIST_LANGGRAPH_DEV_PORT", "6606");
   resetCoreConfigCache();
   writeSecret();
@@ -125,6 +127,17 @@ describe("PATCH /api/settings", () => {
       expect(fetchMock).not.toHaveBeenCalled();
     }
   );
+
+  it("refuses a loopback HOSTNAME from a server that does not bind it (next dev, next start)", async () => {
+    // `HOSTNAME=localhost npm run dev` listens on every interface; only the
+    // standalone server and dev:local carry the marker.
+    delete process.env.EVOSCIENTIST_WEBUI_BINDS_HOSTNAME;
+    vi.stubEnv("HOSTNAME", "localhost");
+    const res = await PATCH(request("/api/settings"));
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "not_loopback" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 
   it.each(["::1", "localhost"])("accepts HOSTNAME=%s", async (hostname) => {
     vi.stubEnv("HOSTNAME", hostname);

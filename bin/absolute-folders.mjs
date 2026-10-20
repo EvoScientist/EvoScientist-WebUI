@@ -2,7 +2,7 @@ import { resolve, sep } from "path";
 
 // Python whitespace (`str.isspace()`), as in src/lib/pythonWhitespace.ts: the
 // backend treats a value of only these characters as unset.
-const PY_BLANK =
+export const PY_BLANK =
   /^[\t\n\v\f\r\x1c-\x1f \x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]*$/;
 
 /** The folders the backend finds from the environment (EvoScientist/paths.py). */

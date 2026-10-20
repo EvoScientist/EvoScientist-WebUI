@@ -8,6 +8,7 @@
 
 import { spawn } from "child_process";
 import { createRequire } from "module";
+import { BIND_MARKER } from "./bind-marker.mjs";
 
 const LOOPBACK = "127.0.0.1";
 const args = process.argv.slice(2);
@@ -36,7 +37,10 @@ const child = spawn(
     LOOPBACK,
     ...args,
   ],
-  { stdio: "inherit", env: { ...process.env, HOSTNAME: LOOPBACK } }
+  {
+    stdio: "inherit",
+    env: { ...process.env, HOSTNAME: LOOPBACK, [BIND_MARKER]: "1" },
+  }
 );
 
 child.on("exit", (code, signal) => process.exit(code ?? (signal ? 1 : 0)));

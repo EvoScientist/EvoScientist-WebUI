@@ -295,6 +295,62 @@ describe("the Setup form", () => {
     expect(screen.queryByText(/could not be checked/)).toBeNull();
   });
 
+  it("clears a key check's result on Discard", async () => {
+    renderView();
+    await screen.findByText("Saved: …abcd");
+    fireEvent.change(keyInput(), { target: { value: "sk-a-12345678" } });
+    fireEvent.click(screen.getAllByRole("button", { name: "Test key" })[0]);
+    await screen.findByText(/The key works/);
+    fireEvent.click(screen.getByRole("button", { name: "Discard changes" }));
+    expect(screen.queryByText(/The key works/)).toBeNull();
+  });
+
+  it("explains the backend's own refusal of the local secret", async () => {
+    server.patch.mockImplementationOnce(() =>
+      json({ error: "local_secret_required" }, 403)
+    );
+    renderView();
+    const model = (await screen.findByLabelText("Model")) as HTMLInputElement;
+    fireEvent.change(model, { target: { value: "gpt-4.1" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(
+      await screen.findByText(/refused this machine's local secret/)
+    ).toBeTruthy();
+  });
+
+  it("treats a save answered without a readable body as saved", async () => {
+    server.patch.mockImplementationOnce(
+      () => new Response("not json", { status: 200 })
+    );
+    renderView();
+    const model = (await screen.findByLabelText("Model")) as HTMLInputElement;
+    fireEvent.change(model, { target: { value: "gpt-4.1" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText("Saved.")).toBeTruthy();
+  });
+
+  it("offers Restart now again when other fields start to wait", async () => {
+    window.evoscientistDesktop = {
+      restartBackend: async () => ({ ok: false, code: "not_owned" }),
+    };
+    server.settings = settings({
+      restart_required: true,
+      restart_fields: ["model"],
+    });
+    renderView();
+    fireEvent.click(await screen.findByRole("button", { name: "Restart now" }));
+    await screen.findByText(/did not start this EvoScientist/);
+    expect(screen.queryByRole("button", { name: "Restart now" })).toBeNull();
+    server.settings = settings({
+      restart_required: true,
+      restart_fields: ["model", "tavily_api_key"],
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Reload" }));
+    expect(
+      await screen.findByRole("button", { name: "Restart now" })
+    ).toBeTruthy();
+  });
+
   it("keeps the edits and names EvoSci onboard on config_locked", async () => {
     server.patch.mockImplementationOnce(() =>
       json({ error: "config_locked", detail: "locked" }, 409)

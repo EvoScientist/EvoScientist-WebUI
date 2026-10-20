@@ -108,6 +108,8 @@ export function useSettingsDraft(
   const discard = useCallback(() => {
     setEdits({});
     setServerErrors({});
+    setWarnings({});
+    setChecks({});
     setMessage(null);
     baseRevision.current = null;
   }, []);
@@ -155,11 +157,19 @@ export function useSettingsDraft(
       }
       const body: unknown = await res.json().catch(() => null);
       if (res.ok) {
-        const result = body as SaveResult;
+        // A 200 without the expected body still saved; read what is there.
+        const raw = (body ?? {}) as Partial<SaveResult>;
+        const result: SaveResult = {
+          revision: raw.revision ?? null,
+          changed: raw.changed ?? [],
+          restart_required: raw.restart_required === true,
+          restart_fields: raw.restart_fields ?? [],
+          warnings: raw.warnings ?? {},
+        };
         setEdits({});
         baseRevision.current = null;
         setServerErrors({});
-        setWarnings(result.warnings ?? {});
+        setWarnings(result.warnings);
         setChecks({});
         await refresh();
         refreshModelRegistry(deploymentUrl);

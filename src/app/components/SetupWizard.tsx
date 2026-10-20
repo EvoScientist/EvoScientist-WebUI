@@ -2,8 +2,8 @@
 
 // The first-run setup wizard: the Setup view's fields one step at a time,
 // then one save. It opens by itself when GET /api/settings says
-// `setup_needed` and the page can save (page.tsx); "Configure later" goes
-// back to the chat, which then shows a notice that links here.
+// `setup_needed` and the page can save (useSetupGate); "Configure later"
+// goes back to the chat, which then shows a notice that links here.
 
 import { useState } from "react";
 import { Loader2 } from "lucide-react";

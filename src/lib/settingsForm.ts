@@ -273,7 +273,7 @@ export function saveErrorText(body: unknown, status: number): string {
   const code = typeof b.error === "string" ? b.error : "";
   switch (code) {
     case "revision_mismatch":
-      return "The configuration changed elsewhere, for example in a terminal. The page now shows the saved values; save again to apply your changes.";
+      return "The configuration changed elsewhere, for example in a terminal. Fields you did not change now show the saved values; save again to apply your changes.";
     case "config_locked":
       return "EvoSci onboard is running in a terminal and holds the configuration. Your changes are kept; save again when it is done.";
     case "config_unreadable":
@@ -282,6 +282,9 @@ export function saveErrorText(body: unknown, status: number): string {
       }${
         typeof b.detail === "string" ? `: ${b.detail}` : ""
       }. Fix the file, then save again.`;
+    case "local_secret_required":
+      // The backend's own refusal: it reads another secret than the relay.
+      return REFUSAL_TEXT.secret_rejected;
     case "config_write_failed":
       return `config.yaml could not be written${
         typeof b.detail === "string" ? `: ${b.detail}` : ""

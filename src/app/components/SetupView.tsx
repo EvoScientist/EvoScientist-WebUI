@@ -138,6 +138,9 @@ export function SetupView({ onClose }: SetupViewProps) {
         )}
         {payload.config_error && <ConfigErrorNotice payload={payload} />}
         <RestartNotice
+          // A new set of waiting fields starts the notice afresh, so an
+          // earlier "restarting" answer does not hide Restart now.
+          key={payload.restart_fields.join(",")}
           payload={payload}
           onRestarted={refresh}
         />

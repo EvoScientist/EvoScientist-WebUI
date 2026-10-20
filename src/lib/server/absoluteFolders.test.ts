@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import { resolve, sep } from "path";
 import {
   FOLDER_VARIABLES,
+  PY_BLANK,
   absoluteFolderEnv,
 } from "../../../bin/absolute-folders.mjs";
+import { PY_SPACE } from "@/lib/pythonWhitespace";
 
 describe("absoluteFolderEnv (bin launcher)", () => {
   const cwd = resolve("/work/start here");
@@ -34,5 +36,14 @@ describe("absoluteFolderEnv (bin launcher)", () => {
       "EVOSCIENTIST_DATA_DIR",
       "XDG_CONFIG_HOME",
     ]);
+  });
+});
+
+describe("the launcher's whitespace", () => {
+  it("is the server's Python whitespace, character for character", () => {
+    for (let code = 0; code <= 0xffff; code++) {
+      const ch = String.fromCharCode(code);
+      expect([code, PY_BLANK.test(ch)]).toEqual([code, PY_SPACE.test(ch)]);
+    }
   });
 });

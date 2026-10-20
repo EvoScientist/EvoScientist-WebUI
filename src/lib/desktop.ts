@@ -8,7 +8,8 @@ export type RestartResult =
   | { ok: false; code: string };
 
 export interface DesktopBridge {
-  /** Restart the backend the app started. */
+  /** Restart the backend the app started. Resolves once the restarted
+   *  backend answers again: the page reads the settings right after. */
   restartBackend?: () => Promise<RestartResult>;
   /** The folder the app suggests for new work, e.g. Documents/EvoScientist. */
   defaultFolder?: string;

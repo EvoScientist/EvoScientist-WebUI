@@ -1,7 +1,9 @@
 // The WebUI's relay for the EvoScientist settings routes that need the local
 // secret (PATCH /api/settings, POST /api/settings/test-key). The browser never
-// holds the secret: these routes read it from the server home and add it,
-// only for requests from this machine, and only toward the local backend.
+// holds the secret: these routes read it from the server home and add it only
+// when this server listens on loopback (so only this machine reaches it) and
+// the request names a loopback host from this WebUI's own page, and send it
+// only toward the local backend.
 //
 // SECURITY: the target is built from this server's own environment and
 // config.yaml (coreConfig.ts), never from the request's URL, Host or headers,
@@ -48,12 +50,22 @@ export function refusal(code: RelayRefusal): NextResponse {
   );
 }
 
+/** Set by the servers that listen exactly on `HOSTNAME`: the standalone
+ *  `dist/server.js` (scripts/assemble-standalone.mjs writes it at its top)
+ *  and `npm run dev:local` (scripts/bind-marker.mjs). */
+export const BIND_MARKER = "EVOSCIENTIST_WEBUI_BINDS_HOSTNAME";
+
 /** Whether this server listens on loopback only, as far as a route can tell:
- *  the packaged server binds `HOSTNAME`, and `npm run dev:local` sets it to
- *  the address it passes to `next dev`. */
+ *  `HOSTNAME` is a loopback name and the server is one that binds it. Plain
+ *  `next dev` and `next start` ignore `HOSTNAME` and listen on every
+ *  interface, so a loopback `HOSTNAME` alone proves nothing there. */
 export function boundToLoopback(env = process.env): boolean {
   const host = env.HOSTNAME?.trim().toLowerCase();
-  return host !== undefined && LOOPBACK_BIND_NAMES.has(host);
+  return (
+    env[BIND_MARKER] === "1" &&
+    host !== undefined &&
+    LOOPBACK_BIND_NAMES.has(host)
+  );
 }
 
 /**
