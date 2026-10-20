@@ -10,8 +10,9 @@ import React, {
 import { SubAgentIndicator } from "@/app/components/SubAgentIndicator";
 import { ToolCallBox } from "@/app/components/ToolCallBox";
 import { MarkdownContent } from "@/app/components/MarkdownContent";
-import { PANEL_HEADINGS, PinnedSkill } from "@/app/components/PinnedSkill";
+import { PinnedSkill } from "@/app/components/PinnedSkill";
 import { SubAgentSteps } from "@/app/components/SubAgentSteps";
+import { ThinkingRow } from "@/app/components/ThinkingRow";
 import type {
   SubAgent,
   ToolCall,
@@ -23,16 +24,9 @@ import { taskSubAgentName, type SubAgentStep } from "@/lib/subAgentActivity";
 import { isAsyncUpdateMessage } from "@/lib/asyncAgents";
 import { bindActionRequestsToToolCalls } from "@/lib/hitl";
 import { pinnedSkillDescription, pinnedSkillName } from "@/lib/pinnedSkill";
+import { messageReasoning } from "@/lib/reasoning";
 import { thoughtLabel, useThoughtSeconds } from "@/lib/thinkingTimer";
-import {
-  AlertTriangle,
-  Bell,
-  Brain,
-  Check,
-  ChevronRight,
-  Copy,
-  Pencil,
-} from "lucide-react";
+import { AlertTriangle, Bell, Check, Copy, Pencil } from "lucide-react";
 import {
   extractStringFromMessageContent,
   extractSubAgentContent,
@@ -116,53 +110,14 @@ export const ChatMessage = React.memo<ChatMessageProps>(
     const messageContent = extractStringFromMessageContent(message);
     const hasContent = messageContent && messageContent.trim() !== "";
     const hasToolCalls = toolCalls.length > 0;
-    // Reasoning text: OpenAI-compatible routes (DeepSeek, OpenRouter) put it in
-    // `reasoning_content`; Anthropic in `thinking` blocks; OpenAI's Responses
-    // API in `reasoning` blocks as summary_text parts (langchain's standard
-    // block as a `reasoning` string). Like the backend CLI, the blocks are read
-    // only when the field is empty. Only OpenAI's summaries are written in
-    // Markdown; the rest is plain scratch text and shows as written.
-    const reasoning = useMemo(() => {
-      const r = (
-        message.additional_kwargs as Record<string, unknown> | undefined
-      )?.reasoning_content;
-      if (typeof r === "string" && r.trim()) {
-        return { text: r.trim(), markdown: false };
-      }
-      const parts: { text: string; markdown: boolean }[] = [];
-      const add = (text: unknown, markdown: boolean) => {
-        if (typeof text === "string" && text.trim()) {
-          parts.push({ text: text.trim(), markdown });
-        }
-      };
-      if (Array.isArray(message.content)) {
-        for (const block of message.content as unknown[]) {
-          const b = block as {
-            type?: unknown;
-            thinking?: unknown;
-            reasoning?: unknown;
-            summary?: unknown;
-          } | null;
-          if (b?.type === "thinking") add(b.thinking, false);
-          if (b?.type === "reasoning") {
-            add(b.reasoning, false);
-            if (Array.isArray(b.summary)) {
-              for (const part of b.summary as {
-                type?: unknown;
-                text?: unknown;
-              }[]) {
-                if (part?.type === "summary_text") add(part.text, true);
-              }
-            }
-          }
-        }
-      }
-      if (parts.length === 0) return null;
-      return {
-        text: parts.map((p) => p.text).join("\n\n"),
-        markdown: parts.every((p) => p.markdown),
-      };
-    }, [message.additional_kwargs, message.content]);
+    const reasoning = useMemo(
+      () =>
+        messageReasoning({
+          additional_kwargs: message.additional_kwargs,
+          content: message.content,
+        }),
+      [message.additional_kwargs, message.content]
+    );
     // An abnormal turn-end is otherwise invisible: the run finishes
     // server-side, the thread goes idle, and no interrupt is raised.
     const terminalError = useMemo(() => {
@@ -260,7 +215,6 @@ export const ChatMessage = React.memo<ChatMessageProps>(
       [actionRequests, onResumeInterrupt]
     );
 
-    const [thinkingOpen, setThinkingOpen] = useState(false);
     // Still thinking: the answer and the tool calls haven't started.
     const thinking =
       !!isStreaming && !!reasoning && !hasContent && !hasToolCalls;
@@ -348,46 +302,13 @@ export const ChatMessage = React.memo<ChatMessageProps>(
           )}
         >
           {!isUser && reasoning && (
-            <div className="mt-4">
-              <button
-                type="button"
-                onClick={() => setThinkingOpen((v) => !v)}
-                aria-expanded={thinkingOpen}
-                className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground"
-              >
-                <ChevronRight
-                  className={cn(
-                    "h-3.5 w-3.5 transition-transform",
-                    thinkingOpen && "rotate-90"
-                  )}
-                  aria-hidden="true"
-                />
-                <Brain
-                  className="h-3.5 w-3.5"
-                  aria-hidden="true"
-                />
-                {thinking ? (
-                  <span className="thinking-shimmer">Thinking…</span>
-                ) : (
-                  thoughtLabel(thought)
-                )}
-              </button>
-              {thinkingOpen &&
-                (reasoning.markdown ? (
-                  <div className="mt-2 border-l-2 border-border pl-3 text-sm text-muted-foreground">
-                    <MarkdownContent
-                      content={reasoning.text}
-                      isStreaming={isStreaming}
-                      rawHtml={false}
-                      className={PANEL_HEADINGS}
-                    />
-                  </div>
-                ) : (
-                  <div className="mt-2 whitespace-pre-wrap break-words border-l-2 border-border pl-3 text-sm leading-relaxed text-muted-foreground">
-                    {reasoning.text}
-                  </div>
-                ))}
-            </div>
+            <ThinkingRow
+              className="mt-4"
+              reasoning={reasoning}
+              thinking={thinking}
+              label={thoughtLabel(thought)}
+              isStreaming={isStreaming}
+            />
           )}
           {terminalError && terminalError.variant === "missing" && (
             <div className="mt-4 flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-foreground">

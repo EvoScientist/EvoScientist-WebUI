@@ -158,6 +158,43 @@ describe("subAgentStepsStore", () => {
     expect(loadThreadSubAgentSteps("t1")).toEqual({ good: steps });
   });
 
+  it("keeps a reasoning step through a reload", () => {
+    const reasoning: SubAgentStep[] = [
+      { kind: "reasoning", text: "**Plan**", markdown: true },
+      { kind: "text", text: "done" },
+    ];
+    saveThreadSubAgentSteps("t1", { task_a: reasoning });
+    expect(loadThreadSubAgentSteps("t1")).toEqual({ task_a: reasoning });
+  });
+
+  it("caps long reasoning like text", () => {
+    saveThreadSubAgentSteps("t1", {
+      task_a: [
+        { kind: "reasoning", text: "r".repeat(12_000), markdown: false },
+      ],
+    });
+    const [step] = loadThreadSubAgentSteps("t1").task_a;
+    expect(step).toEqual({
+      kind: "reasoning",
+      text: "r".repeat(10_000) + "…[truncated]",
+      markdown: false,
+    });
+  });
+
+  it.each([
+    ["no Markdown flag", { kind: "reasoning", text: "x" }],
+    ["text that isn't text", { kind: "reasoning", text: 5, markdown: false }],
+  ])("drops a task whose reasoning step has %s", (_label, step) => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        threads: { t1: { updatedAt: 1, tasks: { task_a: [step] } } },
+      })
+    );
+    expect(loadThreadSubAgentSteps("t1")).toEqual({});
+  });
+
   it("degrades safely when browser storage access is blocked", () => {
     const getItem = vi
       .spyOn(Storage.prototype, "getItem")

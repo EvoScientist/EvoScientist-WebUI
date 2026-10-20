@@ -308,6 +308,53 @@ describe("ChatInterface composition", () => {
     ]);
   });
 
+  it("passes on a sub-agent's reasoning as a step before its text", () => {
+    renderChatInterface();
+    act(() => {
+      stream.setSubagents(
+        new Map([
+          [
+            "task-1",
+            {
+              messages: [
+                {
+                  type: "ai",
+                  content: [
+                    { type: "thinking", thinking: "Read the paper first." },
+                    { type: "text", text: "Reading." },
+                  ],
+                },
+              ],
+            },
+          ],
+        ])
+      );
+      stream.setMessages([
+        humanTurn("review it"),
+        {
+          id: "a1",
+          type: "ai",
+          content: "",
+          tool_calls: [
+            {
+              id: "task-1",
+              name: "task",
+              args: { description: "Read", subagent_type: "research-agent" },
+            },
+          ],
+        } as unknown as Message,
+      ]);
+    });
+
+    const group = getLastProps<{
+      subAgentSteps: Record<string, unknown[]>;
+    }>("ActionGroup");
+    expect(group?.subAgentSteps["task-1"]).toEqual([
+      { kind: "reasoning", text: "Read the paper first.", markdown: false },
+      { kind: "text", text: "Reading." },
+    ]);
+  });
+
   it("hands a partially bound interrupt to the fallback instead of stranding a request", () => {
     // The main agent's own `execute` is still running (no result yet) next to
     // a `task`, and the sub-agent asks to approve two `execute` calls. Only one

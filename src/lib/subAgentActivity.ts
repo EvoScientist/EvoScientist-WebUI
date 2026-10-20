@@ -2,6 +2,8 @@
 // agent transcripts. The LangGraph SDK owns live namespace/tool-call binding;
 // this module only converts its message streams into renderable steps.
 
+import { messageReasoning } from "@/lib/reasoning";
+
 export type SubAgentStep =
   | {
       kind: "tool_call";
@@ -17,7 +19,9 @@ export type SubAgentStep =
       /** The tool failed (or its approval was rejected). */
       failed?: true;
     }
-  | { kind: "text"; text: string };
+  | { kind: "text"; text: string }
+  /** The model's reasoning, shown collapsed. */
+  | { kind: "reasoning"; text: string; markdown: boolean };
 
 function extractText(content: unknown): string {
   if (typeof content === "string") return content;
@@ -119,7 +123,9 @@ export function messagesToSubAgentSteps(messages: unknown[]): SubAgentStep[] {
       };
     };
     if (m.type === "ai") {
-      // Reasoning text first, then the tool calls it issued (natural order).
+      // Its reasoning, its text, then the tool calls it issued (natural order).
+      const reasoning = messageReasoning(m);
+      if (reasoning) steps.push({ kind: "reasoning", ...reasoning });
       const text = extractText(m.content).trim();
       if (text) steps.push({ kind: "text", text });
       // Same duplicated-SSE-chunk artifact the main transcript collapses in
