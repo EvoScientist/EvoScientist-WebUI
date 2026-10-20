@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { refreshModelRegistry } from "@/app/hooks/useAvailableModels";
 import { useDeployment } from "@/providers/ClientProvider";
 import type { SettingsPayload } from "@/lib/settings";
@@ -70,13 +70,37 @@ export function useSettingsDraft(
   const [checks, setChecks] = useState<SettingsDraft["checks"]>({});
   const [checking, setChecking] = useState<Record<string, boolean>>({});
 
+  // The revision the unsaved changes were made against. The settings are
+  // read again whenever the tab gets focus, so the latest revision would
+  // let a save overwrite a change made elsewhere meanwhile; this one makes
+  // the backend refuse it (409 revision_mismatch).
+  const baseRevision = useRef<{ revision: string | null } | null>(null);
+
   const setField = useCallback(
     (field: string, value: string | null, secret: boolean) => {
       if (!payload) return;
-      setEdits((e) => applyEdit(e, payload, field, value, { secret }));
-      // A changed value answers the error and the warning it had.
+      setEdits((e) => {
+        if (Object.keys(e).length === 0 && baseRevision.current === null) {
+          baseRevision.current = { revision: payload.revision };
+        }
+        return applyEdit(e, payload, field, value, { secret });
+      });
+      // A changed value answers the error and the warning it had, and the
+      // check of a key or address that changed no longer applies.
       setServerErrors(({ [field]: _e, ...rest }) => rest);
       setWarnings(({ [field]: _w, ...rest }) => rest);
+      setChecks((c) =>
+        Object.fromEntries(
+          Object.entries(c).filter(([provider]) => {
+            const info = payload.providers[provider];
+            const fields =
+              provider === "tavily"
+                ? ["tavily_api_key"]
+                : [info?.key_field, info?.base_url_field];
+            return !fields.includes(field);
+          })
+        )
+      );
     },
     [payload]
   );
@@ -85,6 +109,7 @@ export function useSettingsDraft(
     setEdits({});
     setServerErrors({});
     setMessage(null);
+    baseRevision.current = null;
   }, []);
 
   // What a save sends: the selected provider's key fields, not another's.
@@ -117,7 +142,12 @@ export function useSettingsDraft(
         res = await fetch("/api/settings", {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(patchBody(sendable, payload.revision)),
+          body: JSON.stringify(
+            patchBody(
+              sendable,
+              (baseRevision.current ?? { revision: payload.revision }).revision
+            )
+          ),
         });
       } catch {
         setMessage("The WebUI server did not answer. Nothing was saved.");
@@ -127,8 +157,10 @@ export function useSettingsDraft(
       if (res.ok) {
         const result = body as SaveResult;
         setEdits({});
+        baseRevision.current = null;
         setServerErrors({});
         setWarnings(result.warnings ?? {});
+        setChecks({});
         await refresh();
         refreshModelRegistry(deploymentUrl);
         return { ok: true, result };
@@ -140,6 +172,15 @@ export function useSettingsDraft(
         return { ok: false, fieldErrors: byField };
       }
       setMessage(saveErrorText(body, res.status));
+      const conflict = body as { error?: unknown; revision?: unknown } | null;
+      if (conflict?.error === "revision_mismatch") {
+        // The refresh below shows the change; the next save is made against
+        // that revision, so a further change elsewhere is caught again.
+        baseRevision.current = {
+          revision:
+            typeof conflict.revision === "string" ? conflict.revision : null,
+        };
+      }
       // A conflict or a refusal: show what is saved now, keep the edits.
       await refresh();
       return { ok: false, fieldErrors: {} };

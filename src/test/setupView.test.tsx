@@ -253,6 +253,48 @@ describe("the Setup form", () => {
     expect(model.value).toBe("gpt-4.1");
   });
 
+  it("saves against the revision the edits started from, not one read later", async () => {
+    renderView();
+    const model = (await screen.findByLabelText("Model")) as HTMLInputElement;
+    fireEvent.change(model, { target: { value: "gpt-4.1" } });
+    // Someone edits config.yaml in a terminal; the page reads it again (as
+    // it does when the tab gets focus).
+    server.settings = settings({ revision: "rev-2" });
+    const before = server.gets;
+    fireEvent.click(screen.getByRole("button", { name: "Reload" }));
+    await waitFor(() => expect(server.gets).toBeGreaterThan(before));
+    server.patch.mockImplementationOnce(() =>
+      json({ error: "revision_mismatch", revision: "rev-2" }, 409)
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(server.patch).toHaveBeenCalledOnce());
+    expect(server.patch.mock.calls[0][0]).toEqual({
+      model: "gpt-4.1",
+      revision: "rev-1",
+    });
+    expect(await screen.findByText(/changed elsewhere/)).toBeTruthy();
+    // Saving again goes against the revision the conflict reported.
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(server.patch).toHaveBeenCalledTimes(2));
+    expect(server.patch.mock.calls[1][0]).toEqual({
+      model: "gpt-4.1",
+      revision: "rev-2",
+    });
+  });
+
+  it("drops a key check's result once the key changes or is saved", async () => {
+    server.testKey.mockImplementationOnce(() =>
+      json({ ok: null, status: "inconclusive", message: "offline" })
+    );
+    renderView();
+    await screen.findByText("Saved: …abcd");
+    fireEvent.change(keyInput(), { target: { value: "sk-a-12345678" } });
+    fireEvent.click(screen.getAllByRole("button", { name: "Test key" })[0]);
+    await screen.findByText(/could not be checked/);
+    fireEvent.change(keyInput(), { target: { value: "sk-b-12345678" } });
+    expect(screen.queryByText(/could not be checked/)).toBeNull();
+  });
+
   it("keeps the edits and names EvoSci onboard on config_locked", async () => {
     server.patch.mockImplementationOnce(() =>
       json({ error: "config_locked", detail: "locked" }, 409)
