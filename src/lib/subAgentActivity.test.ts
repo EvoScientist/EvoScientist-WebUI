@@ -38,6 +38,76 @@ describe("messagesToSubAgentSteps", () => {
     ]);
   });
 
+  // A malformed message can hold null or other non-object entries; reading
+  // one threw.
+  const steps2 = [
+    { kind: "tool_call", id: "tc1", name: "execute", args: { cmd: "ls" } },
+    { kind: "tool_call", id: "tc2", name: "read", args: { path: "/" } },
+  ];
+  it.each([
+    [
+      "tool_calls",
+      {
+        tool_calls: [
+          { id: "tc1", name: "execute", args: { cmd: "ls" } },
+          null,
+          "oops",
+          { id: "tc2", name: "read", args: { path: "/" } },
+        ],
+      },
+    ],
+    [
+      "additional_kwargs.tool_calls",
+      {
+        additional_kwargs: {
+          tool_calls: [
+            {
+              id: "tc1",
+              function: { name: "execute", arguments: '{"cmd":"ls"}' },
+            },
+            null,
+            "oops",
+            {
+              id: "tc2",
+              function: { name: "read", arguments: '{"path":"/"}' },
+            },
+          ],
+        },
+      },
+    ],
+  ])("skips bad entries in %s", (_label, fields) => {
+    const steps = messagesToSubAgentSteps([
+      { type: "ai", content: "", ...fields },
+    ]);
+
+    expect(steps).toEqual(steps2);
+  });
+
+  // tool_calls first, unless it holds no call: empty, or only bad entries.
+  const kwargs2 = [
+    { id: "tc1", function: { name: "execute", arguments: '{"cmd":"ls"}' } },
+    { id: "tc2", function: { name: "read", arguments: '{"path":"/"}' } },
+  ];
+  it.each([
+    ["holds only bad entries", [null, "oops"], kwargs2, steps2],
+    ["is empty", [], kwargs2, steps2],
+    ["and additional_kwargs both hold only bad entries", [null], [null, 7], []],
+  ])(
+    "reads additional_kwargs when tool_calls %s",
+    (_label, toolCalls, kwargs, expected) => {
+      const steps = messagesToSubAgentSteps([
+        {
+          type: "ai",
+          content: "",
+          tool_calls: toolCalls,
+          additional_kwargs: { tool_calls: kwargs },
+        },
+      ]);
+
+      expect(steps).toEqual(expected);
+    }
+  );
+
   it("normalizes OpenAI-style additional_kwargs.tool_calls (string args)", () => {
     const steps = messagesToSubAgentSteps([
       {

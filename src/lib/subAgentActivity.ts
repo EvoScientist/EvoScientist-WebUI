@@ -36,17 +36,24 @@ function extractText(content: unknown): string {
 /** Normalize a single AI message's tool calls (top-level `tool_calls` or the
  *  OpenAI-style `additional_kwargs.tool_calls`) into {id, name, args}. */
 function normalizeToolCalls(m: {
-  tool_calls?: { id?: string; name?: string; args?: unknown }[];
+  tool_calls?: ({ id?: string; name?: string; args?: unknown } | null)[];
   additional_kwargs?: {
-    tool_calls?: {
+    tool_calls?: ({
       id?: string;
       function?: { name?: string; arguments?: unknown };
-    }[];
+    } | null)[];
   };
 }): { id: string; name: string; args: Record<string, unknown> }[] {
   const out: { id: string; name: string; args: Record<string, unknown> }[] = [];
-  if (Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
+  // A list of nothing but bad entries (a malformed message) isn't where the
+  // calls are.
+  if (
+    Array.isArray(m.tool_calls) &&
+    m.tool_calls.some((tc) => typeof tc === "object" && tc !== null)
+  ) {
     for (const tc of m.tool_calls) {
+      // A malformed message can hold null entries.
+      if (typeof tc !== "object" || tc === null) continue;
       out.push({
         id: tc.id ?? "",
         name: tc.name ?? "tool",
@@ -61,6 +68,7 @@ function normalizeToolCalls(m: {
   const ak = m.additional_kwargs?.tool_calls;
   if (Array.isArray(ak)) {
     for (const tc of ak) {
+      if (typeof tc !== "object" || tc === null) continue;
       let args: Record<string, unknown> = {};
       const raw = tc.function?.arguments;
       if (raw && typeof raw === "object") args = raw as Record<string, unknown>;
@@ -102,12 +110,12 @@ export function messagesToSubAgentSteps(messages: unknown[]): SubAgentStep[] {
       name?: string;
       tool_call_id?: string;
       status?: string;
-      tool_calls?: { id?: string; name?: string; args?: unknown }[];
+      tool_calls?: ({ id?: string; name?: string; args?: unknown } | null)[];
       additional_kwargs?: {
-        tool_calls?: {
+        tool_calls?: ({
           id?: string;
           function?: { name?: string; arguments?: unknown };
-        }[];
+        } | null)[];
       };
     };
     if (m.type === "ai") {

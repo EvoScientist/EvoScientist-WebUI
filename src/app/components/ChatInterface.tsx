@@ -536,10 +536,12 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       for (const message of messages) {
         if (message.type !== "ai") continue;
         const toolCalls = (
-          message as { tool_calls?: Array<{ id?: string; name?: string }> }
+          message as {
+            tool_calls?: Array<{ id?: string; name?: string } | null>;
+          }
         ).tool_calls;
         for (const toolCall of toolCalls ?? []) {
-          if (toolCall.name === "task" && toolCall.id) ids.add(toolCall.id);
+          if (toolCall?.name === "task" && toolCall.id) ids.add(toolCall.id);
         }
       }
       return ids;
