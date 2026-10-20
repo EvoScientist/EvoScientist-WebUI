@@ -236,6 +236,7 @@ describe("ChatInterface composition", () => {
       stream.setSubagents(
         new Map([
           ["task-1", { messages: [{ type: "ai", content: "Reading." }] }],
+          ["task-2", { messages: [{ type: "ai", content: "Looking." }] }],
         ])
       );
       stream.setMessages([
@@ -274,6 +275,20 @@ describe("ChatInterface composition", () => {
             { type: "tool_use", id: "c3", name: "ls", input: {} },
           ],
         } as unknown as Message,
+        // The task shows from its content; its steps follow it there.
+        {
+          id: "a4",
+          type: "ai",
+          content: [
+            {
+              type: "tool_use",
+              id: "task-2",
+              name: "task",
+              input: { description: "Look", subagent_type: "research-agent" },
+            },
+          ],
+          tool_calls: [null],
+        } as unknown as Message,
       ]);
     });
 
@@ -283,10 +298,13 @@ describe("ChatInterface composition", () => {
     }>("ActionGroup");
     expect(
       group?.items.map((item) => item.toolCalls.map((tc) => tc.id))
-    ).toEqual([["c1"], ["task-1"], ["c3"]]);
-    // The task after the null still gets its sub-agent's steps.
+    ).toEqual([["c1"], ["task-1"], ["c3"], ["task-2"]]);
+    // The tasks after a null still get their sub-agents' steps.
     expect(group?.subAgentSteps["task-1"]).toEqual([
       { kind: "text", text: "Reading." },
+    ]);
+    expect(group?.subAgentSteps["task-2"]).toEqual([
+      { kind: "text", text: "Looking." },
     ]);
   });
 
