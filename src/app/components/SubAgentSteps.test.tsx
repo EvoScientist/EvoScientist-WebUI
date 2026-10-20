@@ -117,4 +117,104 @@ describe("SubAgentSteps", () => {
     fireEvent.click(screen.getByRole("button", { name: /execute/ }));
     expect(screen.getByText("a.txt")).toBeTruthy();
   });
+
+  describe("reasoning", () => {
+    const plain: SubAgentStep = {
+      kind: "reasoning",
+      text: "Look at **a.txt** first.",
+      markdown: false,
+    };
+
+    it("shows the reasoning as a collapsed Thought row that opens", () => {
+      render(
+        <SubAgentSteps
+          steps={[plain, { kind: "text", text: "Done." }]}
+          running={false}
+        />
+      );
+      const row = screen.getByRole("button", { name: "Thought" });
+      expect(row.getAttribute("aria-expanded")).toBe("false");
+      expect(screen.queryByText(plain.text)).toBeNull();
+
+      fireEvent.click(row);
+      expect(row.getAttribute("aria-expanded")).toBe("true");
+      // Plain reasoning shows as written.
+      expect(screen.getByText(plain.text)).toBeTruthy();
+    });
+
+    it("renders a reasoning summary as Markdown", () => {
+      const { container } = render(
+        <SubAgentSteps
+          steps={[{ ...plain, markdown: true }]}
+          running={false}
+        />
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Thought" }));
+      expect(container.querySelector("strong")?.textContent).toBe("a.txt");
+    });
+
+    it("says Thinking… while the reasoning is a running sub-agent's latest step", () => {
+      render(<SubAgentSteps steps={[plain]} />);
+      const label = screen.getByText("Thinking…");
+      expect(label.className).toContain("thinking-shimmer");
+    });
+
+    it.each([
+      [
+        "a step follows it",
+        [plain, { kind: "tool_call", id: "c1", name: "ls", args: {} }],
+        true,
+      ],
+      ["the sub-agent has stopped", [plain], false],
+    ] as [string, SubAgentStep[], boolean][])(
+      "says Thought once %s",
+      (_label, list, running) => {
+        render(
+          <SubAgentSteps
+            steps={list}
+            running={running}
+          />
+        );
+        expect(screen.getByRole("button", { name: "Thought" })).toBeTruthy();
+        expect(screen.queryByText("Thinking…")).toBeNull();
+      }
+    );
+
+    // MarkdownContent sets its own size, so the wrapper's alone didn't apply.
+    it.each([
+      ["plain reasoning", false],
+      ["a reasoning summary", true],
+    ])("opens %s to the compact text size in the board", (_label, markdown) => {
+      const { container } = render(
+        <SubAgentSteps
+          compact
+          steps={[{ ...plain, markdown }]}
+          running={false}
+        />
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Thought" }));
+      const text = markdown
+        ? container.querySelector("strong")!.closest("div")!
+        : screen.getByText(plain.text);
+      expect(text.classList.contains("text-xs")).toBe(true);
+      expect(text.classList.contains("leading-5")).toBe(true);
+      expect(text.classList.contains("text-sm")).toBe(false);
+      // As in the chat, a summary's headings stay smaller than an answer's.
+      if (markdown) {
+        expect(text.classList.contains("[&_h1]:text-sm")).toBe(true);
+      }
+    });
+
+    it("keeps the reasoning when the final text is shown as the output", () => {
+      render(
+        <SubAgentSteps
+          steps={[plain, { kind: "text", text: "The answer." }]}
+          running={false}
+          hideFinalText
+        />
+      );
+      expect(screen.getByRole("button", { name: "Thought" })).toBeTruthy();
+      expect(screen.queryByText("The answer.")).toBeNull();
+    });
+  });
 });

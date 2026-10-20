@@ -128,6 +128,9 @@ function isStoredStep(value: unknown): value is SubAgentStep {
       (step.failed === undefined || step.failed === true)
     );
   }
+  if (step.kind === "reasoning") {
+    return typeof step.text === "string" && typeof step.markdown === "boolean";
+  }
   return step.kind === "text" && typeof step.text === "string";
 }
 

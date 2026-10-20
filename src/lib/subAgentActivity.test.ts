@@ -207,6 +207,68 @@ describe("messagesToSubAgentSteps", () => {
   });
 });
 
+describe("messagesToSubAgentSteps reasoning", () => {
+  it("puts a message's reasoning before its text and tool calls", () => {
+    const steps = messagesToSubAgentSteps([
+      {
+        type: "ai",
+        content: [
+          { type: "thinking", thinking: "Look first." },
+          { type: "text", text: "Listing files." },
+        ],
+        tool_calls: [{ id: "c1", name: "ls", args: {} }],
+      },
+    ]);
+    expect(steps).toEqual([
+      { kind: "reasoning", text: "Look first.", markdown: false },
+      { kind: "text", text: "Listing files." },
+      { kind: "tool_call", id: "c1", name: "ls", args: {} },
+    ]);
+  });
+
+  it("reads reasoning the way the chat does", () => {
+    const steps = messagesToSubAgentSteps([
+      {
+        type: "ai",
+        content: "",
+        additional_kwargs: { reasoning_content: "Plain plan." },
+      },
+      {
+        type: "ai",
+        content: [
+          {
+            type: "reasoning",
+            summary: [{ type: "summary_text", text: "**Summary**" }],
+          },
+        ],
+      },
+    ]);
+    expect(steps).toEqual([
+      { kind: "reasoning", text: "Plain plan.", markdown: false },
+      { kind: "reasoning", text: "**Summary**", markdown: true },
+    ]);
+  });
+
+  // While the sub-agent thinks, its reasoning is all there is to show.
+  it("keeps a task whose sub-agent has only reasoned so far", () => {
+    const out = subAgentStreamsToSteps(
+      new Map([
+        [
+          "task-1",
+          {
+            messages: [
+              { type: "ai", content: [{ type: "thinking", thinking: "Hm." }] },
+            ],
+          },
+        ],
+      ])
+    );
+    expect(out).toEqual({
+      "task-1": [{ kind: "reasoning", text: "Hm.", markdown: false }],
+    });
+  });
+});
+
 describe("messagesToSubAgentSteps tool-call dedupe", () => {
   it("collapses a repeated tool_call id within one ai message", () => {
     const steps = messagesToSubAgentSteps([
