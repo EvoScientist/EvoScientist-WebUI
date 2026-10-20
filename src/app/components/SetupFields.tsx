@@ -455,3 +455,30 @@ export function MirrorField({ ctx }: { ctx: FieldContext }) {
     </div>
   );
 }
+
+/** Save errors for fields this view does not show (a wizard step or the
+ *  form left them out), so a refused save is never silent. */
+export function UnplacedErrors({
+  ctx,
+  shown,
+}: {
+  ctx: FieldContext;
+  shown: (field: string) => boolean;
+}) {
+  const unplaced = Object.entries(ctx.draft.fieldErrors).filter(
+    ([field]) => !shown(field)
+  );
+  if (unplaced.length === 0) return null;
+  return (
+    <div
+      role="alert"
+      className="space-y-1 text-sm text-destructive"
+    >
+      {unplaced.map(([field, error]) => (
+        <p key={field}>
+          {fieldLabel(field, ctx.payload.providers)}: {error}
+        </p>
+      ))}
+    </div>
+  );
+}

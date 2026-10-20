@@ -69,6 +69,36 @@ export function applyEdit(
   return next;
 }
 
+/**
+ * The changes a save sends: a key or base URL typed for a provider other
+ * than the selected one stays in the form but is not sent. Sent, it would be
+ * checked online and could refuse the whole save over a field the page no
+ * longer shows. A field two providers share (DashScope and its coding plan)
+ * counts as the selected provider's.
+ */
+export function sendableEdits(
+  edits: Edits,
+  providers: Record<string, ProviderInfo>,
+  provider: string
+): Edits {
+  const own = new Set(
+    [
+      providers[provider]?.key_field,
+      providers[provider]?.base_url_field,
+    ].filter((f): f is string => !!f)
+  );
+  const providerFields = new Set(
+    Object.values(providers).flatMap((p) =>
+      [p.key_field, p.base_url_field].filter((f): f is string => !!f)
+    )
+  );
+  return Object.fromEntries(
+    Object.entries(edits).filter(
+      ([field]) => own.has(field) || !providerFields.has(field)
+    )
+  );
+}
+
 /** The PATCH body: only the changed fields, and the revision the page read. */
 export function patchBody(
   edits: Edits,

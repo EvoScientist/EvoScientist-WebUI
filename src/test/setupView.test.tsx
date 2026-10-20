@@ -226,6 +226,19 @@ describe("the Setup form", () => {
     expect(keyInput().value).toBe("sk-bad-key-0000");
   });
 
+  it("shows a save error for a field the form does not show", async () => {
+    server.patch.mockImplementationOnce(() =>
+      json({ errors: { show_thinking: "expected true or false" } }, 400)
+    );
+    renderView();
+    const model = (await screen.findByLabelText("Model")) as HTMLInputElement;
+    fireEvent.change(model, { target: { value: "gpt-4.1" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(
+      await screen.findByText("Show thinking: expected true or false")
+    ).toBeTruthy();
+  });
+
   it("reloads the values on revision_mismatch and asks to save again", async () => {
     server.patch.mockImplementationOnce(() =>
       json({ error: "revision_mismatch", revision: "rev-9" }, 409)
@@ -385,6 +398,53 @@ describe("the setup wizard", () => {
       mirror: "cn",
       revision: "rev-1",
     });
+  });
+
+  it("does not send a key typed for a provider the user switched away from", async () => {
+    renderView();
+    await screen.findByRole("region", { name: "Setup wizard" });
+    next();
+    next();
+    fireEvent.change(keyInput(), { target: { value: "sk-wrong-0000" } });
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.change(screen.getByLabelText("Provider"), {
+      target: { value: "ollama" },
+    });
+    next();
+    next();
+    fireEvent.change(screen.getByLabelText("Model"), {
+      target: { value: "llama3.2" },
+    });
+    next();
+    fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+    next();
+    fireEvent.click(screen.getByRole("button", { name: "Finish" }));
+    await waitFor(() => expect(server.patch).toHaveBeenCalledOnce());
+    expect(server.patch.mock.calls[0][0]).toEqual({
+      provider: "ollama",
+      model: "llama3.2",
+      revision: "rev-1",
+    });
+  });
+
+  it("shows a save error for a field no step holds, on the summary", async () => {
+    server.patch.mockImplementationOnce(() =>
+      json({ errors: { show_thinking: "expected true or false" } }, 400)
+    );
+    renderView();
+    await screen.findByRole("region", { name: "Setup wizard" });
+    next();
+    next();
+    fireEvent.change(keyInput(), { target: { value: "sk-new-key-1234" } });
+    next();
+    fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+    next();
+    fireEvent.click(screen.getByRole("button", { name: "Finish" }));
+    expect(
+      await screen.findByText("Show thinking: expected true or false")
+    ).toBeTruthy();
+    expect(screen.getByText("Check and finish")).toBeTruthy();
   });
 
   it("asks Ollama for its address first and offers the models it lists", async () => {

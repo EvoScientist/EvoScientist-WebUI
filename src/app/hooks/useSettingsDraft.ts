@@ -7,8 +7,10 @@ import type { SettingsPayload } from "@/lib/settings";
 import {
   applyEdit,
   draftErrors,
+  currentText,
   patchBody,
   saveErrorText,
+  sendableEdits,
   type Edits,
   type KeyCheckResult,
 } from "@/lib/settingsForm";
@@ -35,6 +37,8 @@ export interface SettingsDraft {
   /** A message about the whole save (a conflict, a refusal). */
   message: string | null;
   saving: boolean;
+  /** The page's own checks refuse a save (see draftErrors). */
+  blocked: boolean;
   /** Key checks by provider (or "tavily"), and which are running. */
   checks: Record<string, KeyCheckResult | { error: string }>;
   checking: Record<string, boolean>;
@@ -83,14 +87,27 @@ export function useSettingsDraft(
     setMessage(null);
   }, []);
 
+  // What a save sends: the selected provider's key fields, not another's.
+  const sendable = useMemo(
+    () =>
+      payload
+        ? sendableEdits(
+            edits,
+            payload.providers,
+            currentText(payload, edits, "provider")
+          )
+        : edits,
+    [payload, edits]
+  );
+
   const fieldErrors = useMemo(
-    () => ({ ...serverErrors, ...draftErrors(edits) }),
-    [serverErrors, edits]
+    () => ({ ...serverErrors, ...draftErrors(sendable) }),
+    [serverErrors, sendable]
   );
 
   const save = useCallback(async (): Promise<SaveOutcome> => {
     if (!payload) return { ok: false, fieldErrors: {} };
-    const local = draftErrors(edits);
+    const local = draftErrors(sendable);
     if (Object.keys(local).length > 0) return { ok: false, fieldErrors: local };
     setSaving(true);
     setMessage(null);
@@ -100,7 +117,7 @@ export function useSettingsDraft(
         res = await fetch("/api/settings", {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(patchBody(edits, payload.revision)),
+          body: JSON.stringify(patchBody(sendable, payload.revision)),
         });
       } catch {
         setMessage("The WebUI server did not answer. Nothing was saved.");
@@ -129,7 +146,7 @@ export function useSettingsDraft(
     } finally {
       setSaving(false);
     }
-  }, [edits, payload, refresh, deploymentUrl]);
+  }, [sendable, payload, refresh, deploymentUrl]);
 
   const testKey = useCallback(
     async ({
@@ -187,6 +204,7 @@ export function useSettingsDraft(
     warnings,
     message,
     saving,
+    blocked: Object.keys(draftErrors(sendable)).length > 0,
     checks,
     checking,
     setField,

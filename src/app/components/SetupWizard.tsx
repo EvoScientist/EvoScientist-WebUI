@@ -16,6 +16,7 @@ import {
   ProviderField,
   SecretField,
   TextField,
+  UnplacedErrors,
 } from "@/app/components/SetupFields";
 import {
   currentProvider,
@@ -190,6 +191,12 @@ export function SetupWizard({
           {ctx.draft.message}
         </p>
       )}
+      <div className="mt-4">
+        <UnplacedErrors
+          ctx={ctx}
+          shown={(field) => stepOfField(field, info) !== "summary"}
+        />
+      </div>
       {stepBlocker && (
         <p className="mt-4 text-xs text-muted-foreground">{stepBlocker}</p>
       )}

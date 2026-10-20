@@ -7,6 +7,7 @@ import {
   patchBody,
   readOnlyReason,
   saveErrorText,
+  sendableEdits,
   sourceNote,
   stepOfField,
   wizardSteps,
@@ -99,6 +100,45 @@ describe("patchBody", () => {
       model: "gpt-4",
       revision: "rev-1",
     });
+  });
+});
+
+describe("sendableEdits", () => {
+  const dashscope: ProviderInfo = {
+    ...openai,
+    label: "DashScope",
+    key_field: "dashscope_api_key",
+  };
+  const providers = {
+    ...payload.providers,
+    dashscope,
+    "dashscope-code": { ...dashscope, label: "DashScope Coding Plan" },
+  };
+
+  it("leaves out a key typed for a provider that is no longer selected", () => {
+    expect(
+      sendableEdits(
+        { openai_api_key: "sk-wrong", provider: "ollama", model: "m" },
+        providers,
+        "ollama"
+      )
+    ).toEqual({ provider: "ollama", model: "m" });
+  });
+
+  it("keeps the selected provider's key and base URL, and other settings", () => {
+    const edits = {
+      custom_openai_api_key: "k",
+      custom_openai_base_url: "http://h/v1",
+      tavily_api_key: "t",
+      mirror: "cn",
+    };
+    expect(sendableEdits(edits, providers, "custom-openai")).toEqual(edits);
+  });
+
+  it("keeps a key field two providers share", () => {
+    expect(
+      sendableEdits({ dashscope_api_key: "k" }, providers, "dashscope-code")
+    ).toEqual({ dashscope_api_key: "k" });
   });
 });
 

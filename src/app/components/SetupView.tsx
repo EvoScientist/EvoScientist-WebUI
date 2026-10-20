@@ -22,6 +22,7 @@ import {
   ProviderField,
   SecretField,
   TextField,
+  UnplacedErrors,
 } from "@/app/components/SetupFields";
 import {
   currentProvider,
@@ -30,7 +31,7 @@ import {
 import { SetupWizard } from "@/app/components/SetupWizard";
 import { desktopBridge } from "@/lib/desktop";
 import { isSetupDeferred } from "@/lib/setupDeferral";
-import { draftErrors, fieldLabel, readOnlyReason } from "@/lib/settingsForm";
+import { fieldLabel, readOnlyReason } from "@/lib/settingsForm";
 import type { SettingsPayload } from "@/lib/settings";
 import { useDeployment } from "@/providers/ClientProvider";
 
@@ -271,7 +272,18 @@ function SetupForm({
   const changed = Object.keys(draft.edits).length > 0;
   // The page's own checks block a save; the backend's errors show until
   // their field changes, and a save may try again.
-  const blocked = Object.keys(draftErrors(draft.edits)).length > 0;
+  const blocked = draft.blocked;
+  const formFields = new Set(
+    [
+      "provider",
+      "model",
+      info?.key_field,
+      info?.base_url_field,
+      "tavily_api_key",
+      "default_workdir",
+      "mirror",
+    ].filter((f): f is string => !!f)
+  );
   const [saved, setSaved] = useState(false);
 
   const save = async () => {
@@ -330,6 +342,10 @@ function SetupForm({
           {draft.message}
         </p>
       )}
+      <UnplacedErrors
+        ctx={ctx}
+        shown={(field) => formFields.has(field)}
+      />
       {saved && !changed && !draft.message && (
         <p
           role="status"
