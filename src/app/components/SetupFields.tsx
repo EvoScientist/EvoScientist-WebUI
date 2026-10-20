@@ -4,8 +4,14 @@
 // reads the saved value from GET /api/settings, shows the unsaved change
 // from the draft, and explains why it cannot be edited when it cannot.
 
-import { Loader2 } from "lucide-react";
+import { Check, ChevronDown, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { ModelRegistryEntry } from "@/app/hooks/useAvailableModels";
@@ -135,31 +141,73 @@ export function ModelField({
   registry: ReadonlyArray<ModelRegistryEntry>;
 }) {
   const suggestions = modelSuggestions(ctx, registry);
+  const value = currentText(ctx.payload, ctx.draft.edits, "model");
+  const editable = isEditable(ctx, "model");
+  // A menu of every suggestion next to a free text field: a <datalist>
+  // shows only the options that match what the field already holds, so a
+  // prefilled model hid the whole list.
   return (
     <FieldShell
       ctx={ctx}
       field="model"
       label="Model"
-      description="Pick a suggestion or type a model name."
+      description="Pick one from the list or type a model name."
     >
-      <Input
-        id="setting-model"
-        list="setting-model-suggestions"
-        autoComplete="off"
-        spellCheck={false}
-        value={currentText(ctx.payload, ctx.draft.edits, "model")}
-        disabled={!isEditable(ctx, "model")}
-        onChange={(e) => ctx.draft.setField("model", e.target.value, false)}
-        aria-invalid={ctx.draft.fieldErrors.model ? true : undefined}
-      />
-      <datalist id="setting-model-suggestions">
-        {suggestions.map((name) => (
-          <option
-            key={name}
-            value={name}
-          />
-        ))}
-      </datalist>
+      <div className="flex gap-2">
+        <Input
+          id="setting-model"
+          autoComplete="off"
+          spellCheck={false}
+          value={value}
+          disabled={!editable}
+          onChange={(e) => ctx.draft.setField("model", e.target.value, false)}
+          aria-invalid={ctx.draft.fieldErrors.model ? true : undefined}
+        />
+        <DropdownMenu modal={false}>
+          <DropdownMenuTrigger asChild>
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              disabled={!editable || suggestions.length === 0}
+              aria-label="Choose from the model list"
+              title={
+                suggestions.length === 0
+                  ? "No models listed for this provider; type a name"
+                  : "Choose from the model list"
+              }
+              className="shrink-0"
+            >
+              <ChevronDown
+                className="size-4"
+                aria-hidden="true"
+              />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            align="end"
+            className="max-h-72"
+          >
+            {suggestions.map((name) => (
+              <DropdownMenuItem
+                key={name}
+                onSelect={() => ctx.draft.setField("model", name, false)}
+                className={cn("font-mono", name === value && "font-semibold")}
+              >
+                {name === value ? (
+                  <Check aria-hidden="true" />
+                ) : (
+                  <span
+                    className="size-4"
+                    aria-hidden="true"
+                  />
+                )}
+                {name}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
     </FieldShell>
   );
 }

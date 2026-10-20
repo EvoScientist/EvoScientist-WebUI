@@ -516,10 +516,20 @@ describe("the setup wizard", () => {
     });
     next();
     expect(screen.getByText("Choose a model")).toBeTruthy();
-    const options = [
-      ...document.querySelectorAll("#setting-model-suggestions option"),
-    ].map((o) => (o as HTMLOptionElement).value);
-    expect(options).toEqual(["llama3.2", "qwen3"]);
+    // The list shows every suggestion, whatever the field holds.
+    fireEvent.change(screen.getByLabelText("Model"), {
+      target: { value: "claude-sonnet-5-5" },
+    });
+    fireEvent.keyDown(
+      screen.getByRole("button", { name: "Choose from the model list" }),
+      { key: "Enter" }
+    );
+    const items = await screen.findAllByRole("menuitem");
+    expect(items.map((i) => i.textContent)).toEqual(["llama3.2", "qwen3"]);
+    fireEvent.click(items[1]);
+    expect((screen.getByLabelText("Model") as HTMLInputElement).value).toBe(
+      "qwen3"
+    );
     // A name the server did not list can be typed.
     fireEvent.change(screen.getByLabelText("Model"), {
       target: { value: "my-model:latest" },
