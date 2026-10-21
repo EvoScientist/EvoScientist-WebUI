@@ -343,7 +343,7 @@ export function saveErrorText(body: unknown, status: number): string {
     case "revision_mismatch":
       return "The configuration changed elsewhere, for example in a terminal. Fields you did not change now show the saved values; save again to apply your changes.";
     case "config_locked":
-      return "EvoSci onboard is running in a terminal and holds the configuration. Your changes are kept; save again when it is done.";
+      return "Another EvoScientist command holds the configuration, for example EvoSci onboard, EvoSci configure or EvoSci channel setup in a terminal. Your changes are kept; save again when it is done.";
     case "config_unreadable":
       return `config.yaml cannot be read${
         typeof b.path === "string" ? ` (${b.path})` : ""

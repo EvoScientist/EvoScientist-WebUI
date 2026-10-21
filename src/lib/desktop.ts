@@ -29,8 +29,23 @@ export function desktopBridge(): DesktopBridge | null {
   const candidate = raw as Record<string, unknown>;
   const bridge: DesktopBridge = {};
   if (typeof candidate.restartBackend === "function") {
-    const restart = candidate.restartBackend as () => Promise<RestartResult>;
-    bridge.restartBackend = () => restart.call(raw);
+    const restart = candidate.restartBackend as () => unknown;
+    // An older or broken app may throw or answer another shape.
+    bridge.restartBackend = async () => {
+      try {
+        const result = (await restart.call(raw)) as {
+          ok?: unknown;
+          code?: unknown;
+        } | null;
+        if (result?.ok === true) return { ok: true };
+        return {
+          ok: false,
+          code: typeof result?.code === "string" ? result.code : "failed",
+        };
+      } catch {
+        return { ok: false, code: "failed" };
+      }
+    };
   }
   if (typeof candidate.defaultFolder === "string" && candidate.defaultFolder) {
     bridge.defaultFolder = candidate.defaultFolder;

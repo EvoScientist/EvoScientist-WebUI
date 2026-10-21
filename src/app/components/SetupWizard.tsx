@@ -5,7 +5,7 @@
 // `setup_needed` and the page can save (useSetupGate); "Configure later"
 // goes back to the chat, which then shows a notice that links here.
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { ModelRegistryEntry } from "@/app/hooks/useAvailableModels";
@@ -20,12 +20,15 @@ import {
 } from "@/app/components/SetupFields";
 import {
   currentProvider,
+  isEditable,
+  shadowOf,
   type FieldContext,
 } from "@/app/components/setupFieldContext";
 import {
   currentText,
   fieldLabel,
   isMaskedSecret,
+  sourceNote,
   stepOfField,
   wizardSteps,
   type WizardStep,
@@ -79,6 +82,8 @@ export function SetupWizard({
   };
 
   const blocker = (s: WizardStep): string | null => {
+    // A saved provider EvoScientist no longer knows has no key step.
+    if (s === "provider" && !info) return "Choose a provider.";
     if (s === "key" && info) {
       if (
         info.needs_base_url &&
@@ -102,18 +107,42 @@ export function SetupWizard({
   const stepBlocker = blocker(step);
 
   const goTo = (s: WizardStep) => setStepName(s);
+  const offeredFolder = useRef(false);
   const next = () => {
-    // The desktop app suggests a folder; offer it when none is saved.
+    // The desktop app suggests a folder; offer it once when none is saved,
+    // so a folder the user emptied stays empty.
     const nextStep = steps[index + 1];
     if (
       nextStep === "folder" &&
       defaultFolder &&
+      !offeredFolder.current &&
+      isEditable(ctx, "default_workdir") &&
       !currentText(ctx.payload, edits, "default_workdir")
     ) {
+      offeredFolder.current = true;
       ctx.draft.setField("default_workdir", defaultFolder, false);
     }
     goTo(nextStep);
   };
+
+  // The model step offers what the server lists (Ollama, the custom
+  // endpoints): check it on the way in unless that was done on the step
+  // before.
+  const { checks, checking, testKey } = ctx.draft;
+  const listModels =
+    step === "model" &&
+    info?.lists_models === true &&
+    info.has_check &&
+    !checks[provider] &&
+    !checking[provider];
+  useEffect(() => {
+    if (!listModels || !info) return;
+    void testKey({
+      provider,
+      keyField: info.key_field,
+      baseUrlField: info.base_url_field,
+    });
+  }, [listModels, info, provider, testKey]);
 
   const finish = async () => {
     const outcome = await ctx.draft.save();
@@ -265,6 +294,8 @@ function Summary({
   const secretText = (field: string) => {
     if (typeof edits[field] === "string") return "new key entered";
     if (field in edits) return "will be removed";
+    const shadow = shadowOf(ctx, field);
+    if (shadow) return `set by ${sourceNote(shadow)}`;
     const saved = ctx.payload.settings[field];
     if (isMaskedSecret(saved) && saved.set) {
       return `saved (${saved.hint ?? "set"})`;

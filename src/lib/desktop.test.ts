@@ -31,6 +31,21 @@ describe("desktopBridge", () => {
       defaultFolder: "C:\\Docs\\EvoScientist",
     });
   });
+  it("answers failed when the app throws or answers another shape", async () => {
+    for (const restartBackend of [
+      () => {
+        throw new Error("ipc");
+      },
+      async () => undefined,
+      async () => ({ ok: false }),
+    ]) {
+      window.evoscientistDesktop = { restartBackend };
+      await expect(desktopBridge()?.restartBackend?.()).resolves.toEqual({
+        ok: false,
+        code: "failed",
+      });
+    }
+  });
 });
 
 describe("setupDeferral", () => {

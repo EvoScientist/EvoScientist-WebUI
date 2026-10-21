@@ -352,7 +352,7 @@ describe("the Setup form", () => {
     ).toBeTruthy();
   });
 
-  it("keeps the edits and names EvoSci onboard on config_locked", async () => {
+  it("keeps the edits and names the commands that lock on config_locked", async () => {
     server.patch.mockImplementationOnce(() =>
       json({ error: "config_locked", detail: "locked" }, 409)
     );
@@ -360,7 +360,11 @@ describe("the Setup form", () => {
     const model = (await screen.findByLabelText("Model")) as HTMLInputElement;
     fireEvent.change(model, { target: { value: "gpt-4.1" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    expect(await screen.findByText(/EvoSci onboard is running/)).toBeTruthy();
+    expect(
+      await screen.findByText(
+        /EvoSci onboard, EvoSci configure or EvoSci channel setup/
+      )
+    ).toBeTruthy();
     expect(model.value).toBe("gpt-4.1");
   });
 
@@ -644,6 +648,39 @@ describe("the Setup form", () => {
       revision: "rev-9",
     });
   });
+  it("explains a failed restart from the desktop app", async () => {
+    window.evoscientistDesktop = {
+      restartBackend: () => {
+        throw new Error("ipc");
+      },
+    };
+    server.settings = settings({
+      restart_required: true,
+      restart_fields: ["model"],
+    });
+    renderView();
+    fireEvent.click(await screen.findByRole("button", { name: "Restart now" }));
+    expect(
+      await screen.findByText("The restart failed (failed).")
+    ).toBeTruthy();
+  });
+
+  it("shows a save's warning next to its field", async () => {
+    server.patch.mockImplementationOnce(() =>
+      json({
+        revision: "rev-2",
+        changed: ["openai_api_key"],
+        restart_required: false,
+        restart_fields: [],
+        warnings: { openai_api_key: "Saved without a check." },
+      })
+    );
+    renderView();
+    await screen.findByText("Saved: …abcd");
+    fireEvent.change(keyInput(), { target: { value: "sk-new-key-1234" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText("Saved without a check.")).toBeTruthy();
+  });
 });
 
 describe("the setup wizard", () => {
@@ -847,6 +884,156 @@ describe("the setup wizard", () => {
         .disabled
     ).toBe(true);
   });
+  it("does not go on with a provider EvoScientist does not know", async () => {
+    server.settings = settings({
+      setup_needed: true,
+      settings: { ...settings().settings, provider: "gone-provider" },
+    });
+    renderView();
+    await screen.findByRole("region", { name: "Setup wizard" });
+    expect(
+      (screen.getByRole("button", { name: "Next" }) as HTMLButtonElement)
+        .disabled
+    ).toBe(true);
+  });
+
+  it("offers the desktop app's folder once", async () => {
+    window.evoscientistDesktop = { defaultFolder: "/home/u/Documents/Evo" };
+    renderView();
+    await screen.findByRole("region", { name: "Setup wizard" });
+    next();
+    next();
+    fireEvent.change(keyInput(), { target: { value: "sk-new-key-1234" } });
+    next();
+    fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+    const folder = () =>
+      screen.getByLabelText("Default folder") as HTMLInputElement;
+    fireEvent.change(folder(), { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+    expect(folder().value).toBe("");
+  });
+
+  it("does not fill in a folder set by a flag of the running EvoSci", async () => {
+    window.evoscientistDesktop = { defaultFolder: "/home/u/Documents/Evo" };
+    server.settings = settings({
+      setup_needed: true,
+      sources: { default_workdir: { source: "cli", shadowed: true } },
+      settings: { ...settings().settings, openai_api_key: { set: false } },
+    });
+    renderView();
+    await screen.findByRole("region", { name: "Setup wizard" });
+    next();
+    next();
+    fireEvent.change(keyInput(), { target: { value: "sk-new-key-1234" } });
+    next();
+    fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+    expect(
+      (screen.getByLabelText("Default folder") as HTMLInputElement).value
+    ).toBe("");
+  });
+
+  it("lists the server's models on the model step without a test first", async () => {
+    server.testKey.mockImplementationOnce(() =>
+      json({ ok: true, status: "valid", message: "", models: ["llama3.2"] })
+    );
+    renderView();
+    fireEvent.change(await screen.findByLabelText("Provider"), {
+      target: { value: "ollama" },
+    });
+    next();
+    fireEvent.change(screen.getByLabelText("Ollama base URL"), {
+      target: { value: "http://127.0.0.1:11434" },
+    });
+    next();
+    await waitFor(() => expect(server.testKey).toHaveBeenCalledOnce());
+    expect(server.testKey.mock.calls[0][0]).toEqual({
+      provider: "ollama",
+      base_url: "http://127.0.0.1:11434",
+    });
+    fireEvent.keyDown(
+      screen.getByRole("button", { name: "Choose from the model list" }),
+      { key: "Enter" }
+    );
+    const items = await screen.findAllByRole("menuitem");
+    expect(items.map((i) => i.textContent)).toEqual(["llama3.2"]);
+  });
+
+  it("says on the summary that a key is set by the environment", async () => {
+    server.settings = settings({
+      setup_needed: true,
+      sources: { openai_api_key: { source: "env", shadowed: true } },
+      settings: { ...settings().settings, openai_api_key: { set: false } },
+    });
+    renderView();
+    await screen.findByRole("region", { name: "Setup wizard" });
+    next();
+    next();
+    next();
+    fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+    next();
+    expect(screen.getByText("Check and finish")).toBeTruthy();
+    expect(screen.getByText("set by an environment variable")).toBeTruthy();
+  });
+
+  it("shows the form, not the wizard, when the page cannot save", async () => {
+    server.access = { writable: false, reason: "not_loopback" };
+    renderView();
+    await screen.findByLabelText("Provider");
+    expect(screen.queryByRole("region", { name: "Setup wizard" })).toBeNull();
+  });
+
+  it("asks a custom endpoint for its address and key first, then offers its models", async () => {
+    server.settings = settings({
+      setup_needed: true,
+      providers: {
+        ...PROVIDERS,
+        "custom-openai": {
+          label: "OpenAI-compatible",
+          key_field: "custom_openai_api_key",
+          base_url_field: "custom_openai_base_url",
+          needs_key: true,
+          needs_base_url: true,
+          has_check: true,
+          lists_models: true,
+        },
+      },
+    });
+    server.testKey.mockImplementationOnce(() =>
+      json({ ok: true, status: "valid", message: "", models: ["m1", "m2"] })
+    );
+    renderView();
+    fireEvent.change(await screen.findByLabelText("Provider"), {
+      target: { value: "custom-openai" },
+    });
+    next();
+    const nextButton = () =>
+      screen.getByRole("button", { name: "Next" }) as HTMLButtonElement;
+    expect(screen.getByText("Connect to it")).toBeTruthy();
+    expect(nextButton().disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText("OpenAI-compatible base URL"), {
+      target: { value: "http://h.example/v1" },
+    });
+    expect(nextButton().disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText("OpenAI-compatible API key"), {
+      target: { value: "sk-custom-1234" },
+    });
+    fireEvent.click(screen.getAllByRole("button", { name: "Test key" })[0]);
+    await screen.findByText(/The key works/);
+    expect(server.testKey.mock.calls[0][0]).toEqual({
+      provider: "custom-openai",
+      key: "sk-custom-1234",
+      base_url: "http://h.example/v1",
+    });
+    next();
+    expect(screen.getByText("Choose a model")).toBeTruthy();
+    fireEvent.keyDown(
+      screen.getByRole("button", { name: "Choose from the model list" }),
+      { key: "Enter" }
+    );
+    const items = await screen.findAllByRole("menuitem");
+    expect(items.map((i) => i.textContent)).toEqual(["m1", "m2"]);
+  });
 });
 
 describe("the chat notice", () => {
@@ -973,5 +1160,23 @@ describe("the first-run gate", () => {
     await act(() => result.current.refresh());
     await act(async () => {});
     expect(setView).not.toHaveBeenCalled();
+  });
+  it("does not open again after Configure later, also after a reload", async () => {
+    deferSetup(DEPLOYMENT);
+    server.settings = settings({ setup_needed: true });
+    const { setView } = renderGate();
+    await waitFor(() => expect(server.gets).toBeGreaterThan(0));
+    await act(async () => {});
+    expect(setView).not.toHaveBeenCalled();
+  });
+
+  it("waits for the chat when another view is open", async () => {
+    server.settings = settings({ setup_needed: true });
+    const { setView, hook } = renderGate("memory");
+    await waitFor(() => expect(server.gets).toBeGreaterThan(0));
+    await act(async () => {});
+    expect(setView).not.toHaveBeenCalled();
+    hook.rerender({ v: null });
+    await waitFor(() => expect(setView).toHaveBeenCalledWith("setup"));
   });
 });
