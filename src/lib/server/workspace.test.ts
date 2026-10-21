@@ -3,12 +3,22 @@ import { execFileSync } from "child_process";
 import { type Dirent, promises as fs } from "fs";
 import type { FileHandle } from "fs/promises";
 import { Readable } from "stream";
-import { tmpdir } from "os";
 import { basename, join } from "path";
 import { inflateRawSync } from "zlib";
 import { NextRequest } from "next/server";
+
+vi.mock("os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("os")>();
+  return { ...actual, networkInterfaces: vi.fn() };
+});
+vi.mock("@/lib/server/coreConfig", () => ({ readCoreConfig: vi.fn() }));
+
+import { networkInterfaces, tmpdir } from "os";
+import { readCoreConfig } from "@/lib/server/coreConfig";
 import {
+  hostHeaderName,
   isCrossOrigin,
+  resetMachineAddressCache,
   workspaceArchivePath,
   zipWorkspace,
 } from "@/lib/server/workspace";
@@ -24,6 +34,68 @@ function req(headers: Record<string, string>) {
   });
 }
 
+beforeEach(() => {
+  resetMachineAddressCache();
+  vi.mocked(networkInterfaces).mockReturnValue({
+    lo: [
+      {
+        address: "127.0.0.1",
+        family: "IPv4",
+        internal: true,
+        netmask: "255.0.0.0",
+        mac: "00:00:00:00:00:00",
+        cidr: "127.0.0.1/8",
+      },
+    ],
+    eth0: [
+      {
+        address: "192.168.1.10",
+        family: "IPv4",
+        internal: false,
+        netmask: "255.255.255.0",
+        mac: "02:00:00:00:00:01",
+        cidr: "192.168.1.10/24",
+      },
+      {
+        address: "fe80::1",
+        family: "IPv6",
+        internal: false,
+        netmask: "ffff:ffff:ffff:ffff::",
+        mac: "02:00:00:00:00:01",
+        cidr: "fe80::1/64",
+        scopeid: 2,
+      },
+    ],
+  });
+  vi.mocked(readCoreConfig).mockReturnValue({
+    port: 6174,
+    allowedOrigins: [],
+  });
+});
+
+afterEach(() => {
+  vi.mocked(networkInterfaces).mockReset();
+  vi.mocked(readCoreConfig).mockReset();
+});
+
+describe("hostHeaderName", () => {
+  it.each([
+    ["localhost:4716", "localhost"],
+    ["127.0.0.1", "127.0.0.1"],
+    ["[::1]:4716", "::1"],
+    ["Box.LAN:4716", "box.lan"],
+  ])("reads %s as %s", (host, name) => {
+    expect(hostHeaderName(host)).toBe(name);
+  });
+
+  it.each(["", ":4716", "a:b:c", "[::1", "box:99999x"])(
+    "refuses the malformed %j",
+    (host) => {
+      expect(hostHeaderName(host)).toBeNull();
+    }
+  );
+});
+
 describe("isCrossOrigin", () => {
   it("allows same-origin writes when nextUrl is pinned to a wildcard HOSTNAME (#35)", () => {
     expect(
@@ -33,15 +105,70 @@ describe("isCrossOrigin", () => {
     ).toBe(false);
   });
 
-  it("allows LAN visitors whose Origin matches the Host they connected to", () => {
+  it.each(["127.0.0.1:5150", "localhost:4716", "[::1]:4716"])(
+    "allows the loopback name %s on any port",
+    (host) => {
+      expect(
+        isCrossOrigin(
+          req({
+            host,
+            origin: `http://${host}`,
+            "sec-fetch-site": "same-origin",
+          })
+        )
+      ).toBe(false);
+    }
+  );
+
+  it("allows LAN visitors on one of the machine's own addresses", () => {
     expect(
       isCrossOrigin(
         req({ host: "192.168.1.10:4716", origin: "http://192.168.1.10:4716" })
       )
     ).toBe(false);
+    expect(
+      isCrossOrigin(req({ host: "[fe80::1]:4716", "sec-fetch-site": "none" }))
+    ).toBe(false);
   });
 
-  it("trusts Sec-Fetch-Site: same-origin without consulting Origin", () => {
+  it("refuses an address that is not on this machine", () => {
+    expect(
+      isCrossOrigin(
+        req({ host: "192.168.1.99:4716", origin: "http://192.168.1.99:4716" })
+      )
+    ).toBe(true);
+  });
+
+  it("refuses a DNS name, as a rebinding page sends", () => {
+    expect(
+      isCrossOrigin(
+        req({
+          host: "attacker.example:4716",
+          origin: "http://attacker.example:4716",
+          "sec-fetch-site": "same-origin",
+        })
+      )
+    ).toBe(true);
+  });
+
+  it("allows a name the user listed in backend_allowed_origins, on any port", () => {
+    vi.mocked(readCoreConfig).mockReturnValue({
+      port: 6174,
+      allowedOrigins: ["https://evo.example.com", "http://[fd00::5]:8080"],
+    });
+    expect(
+      isCrossOrigin(
+        req({
+          host: "evo.example.com:4716",
+          origin: "http://evo.example.com:4716",
+        })
+      )
+    ).toBe(false);
+    expect(isCrossOrigin(req({ host: "[fd00::5]:4716" }))).toBe(false);
+    expect(isCrossOrigin(req({ host: "other.example.com" }))).toBe(true);
+  });
+
+  it("trusts Sec-Fetch-Site: same-origin together with a matching Origin", () => {
     expect(
       isCrossOrigin(
         req({
@@ -53,13 +180,31 @@ describe("isCrossOrigin", () => {
     ).toBe(false);
   });
 
-  it.each(["same-site", "none"])("allows Sec-Fetch-Site: %s", (site) => {
+  it("allows Sec-Fetch-Site: none (a direct navigation)", () => {
     expect(
-      isCrossOrigin(req({ "sec-fetch-site": site, host: "localhost:4716" }))
+      isCrossOrigin(req({ "sec-fetch-site": "none", host: "localhost:4716" }))
     ).toBe(false);
   });
 
-  it("rejects Sec-Fetch-Site: cross-site even when Origin matches Host", () => {
+  it("refuses Sec-Fetch-Site: same-site, a page on another port", () => {
+    expect(
+      isCrossOrigin(
+        req({
+          "sec-fetch-site": "same-site",
+          host: "localhost:4716",
+          origin: "http://localhost:3000",
+        })
+      )
+    ).toBe(true);
+    // Also without Origin, as an image or a download link sends it.
+    expect(
+      isCrossOrigin(
+        req({ "sec-fetch-site": "same-site", host: "localhost:4716" })
+      )
+    ).toBe(true);
+  });
+
+  it("refuses Sec-Fetch-Site: cross-site even when Origin matches Host", () => {
     expect(
       isCrossOrigin(
         req({
@@ -71,10 +216,19 @@ describe("isCrossOrigin", () => {
     ).toBe(true);
   });
 
-  it("rejects an Origin whose host differs from the request Host", () => {
+  it("refuses an Origin that differs from Host, also with same-origin claimed", () => {
     expect(
       isCrossOrigin(
         req({ host: "localhost:4716", origin: "http://evil.example" })
+      )
+    ).toBe(true);
+    expect(
+      isCrossOrigin(
+        req({
+          host: "localhost:4716",
+          origin: "http://localhost:3000",
+          "sec-fetch-site": "same-origin",
+        })
       )
     ).toBe(true);
   });
@@ -83,18 +237,42 @@ describe("isCrossOrigin", () => {
     expect(isCrossOrigin(req({ host: "localhost:4716" }))).toBe(false);
   });
 
-  it("rejects an opaque or malformed Origin", () => {
+  it("refuses an opaque or malformed Origin", () => {
     expect(isCrossOrigin(req({ host: "localhost:4716", origin: "null" }))).toBe(
       true
     );
   });
 
-  it("rejects a missing Host even when Sec-Fetch-Site claims same-origin", () => {
+  it("refuses a missing Host even when Sec-Fetch-Site claims same-origin", () => {
     expect(isCrossOrigin(req({ "sec-fetch-site": "same-origin" }))).toBe(true);
   });
 
-  it("rejects a request with no Host header at all", () => {
+  it("refuses a request with no Host header at all", () => {
     expect(isCrossOrigin(req({}))).toBe(true);
+  });
+
+  it("re-reads the machine's addresses after a few seconds", () => {
+    vi.useFakeTimers();
+    try {
+      expect(isCrossOrigin(req({ host: "10.0.0.7:4716" }))).toBe(true);
+      vi.mocked(networkInterfaces).mockReturnValue({
+        wlan0: [
+          {
+            address: "10.0.0.7",
+            family: "IPv4",
+            internal: false,
+            netmask: "255.0.0.0",
+            mac: "02:00:00:00:00:02",
+            cidr: "10.0.0.7/8",
+          },
+        ],
+      });
+      expect(isCrossOrigin(req({ host: "10.0.0.7:4716" }))).toBe(true);
+      vi.advanceTimersByTime(5001);
+      expect(isCrossOrigin(req({ host: "10.0.0.7:4716" }))).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

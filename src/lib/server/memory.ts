@@ -18,22 +18,16 @@ import { homedir } from "os";
 import { join, dirname, relative, resolve, sep } from "path";
 import { randomUUID } from "crypto";
 import { hasControlChar } from "@/lib/server/workspace";
+import { globalDataDir } from "@/lib/server/paths";
 import type { ObsGraphData, ObsNode, ObsEdge } from "@/lib/observationGraph";
 
 // Re-export so memory API routes can share the workspace cross-origin guard.
 export { isCrossOrigin } from "@/lib/server/workspace";
 
-/** EvoScientist's global data dir — `~/.evoscientist` by default (paths.py
- *  DATA_DIR), relocatable via EVOSCIENTIST_DATA_DIR. Mirrors skills.ts so both
- *  resolve the backend's data root the same way. */
+/** A memories-folder override, read like the backend's `_env_path()` in
+ *  paths.py (`~` expanded), unlike the data folder's stricter rule. */
 function expandHome(p: string): string {
   return p.startsWith("~") ? join(homedir(), p.slice(1)) : resolve(p);
-}
-
-function globalDataDir(): string {
-  const env = process.env.EVOSCIENTIST_DATA_DIR;
-  if (env && env.trim()) return expandHome(env);
-  return join(homedir(), ".evoscientist");
 }
 
 /**

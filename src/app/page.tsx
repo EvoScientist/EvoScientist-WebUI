@@ -15,6 +15,9 @@ import { ConfigDialog } from "@/app/components/ConfigDialog";
 import { Button } from "@/components/ui/button";
 import { ClientProvider, useDeployment } from "@/providers/ClientProvider";
 import { WorkspaceProvider, useWorkspace } from "@/providers/WorkspaceProvider";
+import { SetupNotice } from "@/app/components/SetupNotice";
+import { SetupView } from "@/app/components/SetupView";
+import { useSetupGate } from "@/app/hooks/useSetupGate";
 import {
   Settings,
   SquarePen,
@@ -55,6 +58,7 @@ import {
 } from "@/app/components/FilePaneSizer";
 import { setThreadAutoApprove } from "@/lib/autoApprove";
 import type { MainChatReporter } from "@/lib/asyncAgents";
+import type { NavTarget } from "@/lib/navTarget";
 import { cn } from "@/lib/utils";
 
 interface HomePageInnerProps {
@@ -82,6 +86,8 @@ function HomePageInner({
   const [memoryExec, setMemoryExec] = useQueryState("memoryExec");
   const [inspector, setInspector] = useQueryState("inspector");
   const [inspectorTab, setInspectorTab] = useQueryState("inspectorTab");
+
+  useSetupGate(view, setView);
 
   const [mutateThreads, setMutateThreads] = useState<(() => void) | null>(null);
   const [interruptCount, setInterruptCount] = useState(0);
@@ -209,19 +215,7 @@ function HomePageInner({
     [startNewChat]
   );
   const handleDashboardNav = useCallback(
-    (
-      target:
-        | {
-            view: "memory";
-            tab: "identity" | "knowledge" | "history";
-            obsId?: string;
-            execId?: string;
-          }
-        | { view: "schedule" }
-        | { view: "workspace" }
-        | { view: "experts" }
-        | { view: "skills" }
-    ) => {
+    (target: NavTarget) => {
       if (target.view === "memory") {
         setMemoryTab(target.tab);
         setMemoryObs(target.obsId ?? null);
@@ -233,6 +227,8 @@ function HomePageInner({
         setView("experts");
       } else if (target.view === "skills") {
         setView("skills");
+      } else if (target.view === "setup") {
+        setView("setup");
       } else {
         if (inspector && inspectorTab !== "agents") {
           closeInspector();
@@ -504,6 +500,7 @@ function HomePageInner({
                     view !== null && "hidden"
                   )}
                 >
+                  <SetupNotice onOpenSetup={() => void setView("setup")} />
                   <ChatProvider
                     key={chatSessionRevision}
                     onHistoryRevalidate={() => mutateThreads?.()}
@@ -524,6 +521,12 @@ function HomePageInner({
                     />
                   </ChatProvider>
                 </div>
+                {view === "setup" && (
+                  <SetupView
+                    key={backendKey}
+                    onClose={() => void setView(null)}
+                  />
+                )}
                 {view === "skills" && <SkillsMarketplace />}
                 {view === "experts" && <ExpertsPanel />}
                 {view === "memory" && (

@@ -14,6 +14,10 @@ vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
 }));
 
+vi.mock("@/app/hooks/useSettings", () => ({
+  useSettings: () => ({ payload: undefined }),
+}));
+
 vi.mock("@/app/hooks/useMemoryActivity", () => ({
   useMemoryActivity: () => ({ unseenCount: 0, markSeen: vi.fn() }),
 }));

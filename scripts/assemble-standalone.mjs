@@ -4,9 +4,10 @@
 //   .next/static/      (NOT inside standalone — must be copied)
 // We copy everything into dist/ so the published package ships one folder that
 // `node dist/server.js` can run.
-import { cp, rm, readdir } from "fs/promises";
+import { cp, readFile, rm, readdir, writeFile } from "fs/promises";
 import { existsSync } from "fs";
 import { sep } from "path";
+import { markStandaloneServer } from "./bind-marker.mjs";
 
 const STANDALONE = ".next/standalone";
 const STATIC = ".next/static";
@@ -41,6 +42,16 @@ for (const entry of await readdir(OUT)) {
   if (!KEEP.has(entry)) {
     await rm(`${OUT}/${entry}`, { recursive: true, force: true });
   }
+}
+
+// Mark the server as one that listens exactly on HOSTNAME (bind-marker.mjs);
+// the settings routes refuse to attach the local secret without it.
+const SERVER = `${OUT}/server.js`;
+try {
+  await writeFile(SERVER, markStandaloneServer(await readFile(SERVER, "utf8")));
+} catch (error) {
+  console.error(`✗ ${error.message}`);
+  process.exit(1);
 }
 
 // Strip source maps (*.map): debug-only artifacts the published runtime never

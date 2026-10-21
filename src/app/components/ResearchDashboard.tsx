@@ -16,13 +16,8 @@ import { listScheduledTasks } from "@/app/hooks/useScheduledTasks";
 import { useThreads } from "@/app/hooks/useThreads";
 import { useWorkspace } from "@/providers/WorkspaceProvider";
 import { localFilesAvailable } from "@/lib/workspaceSession";
+import type { NavTarget } from "@/lib/navTarget";
 import { formatTime } from "@/lib/time";
-
-type MemoryTab = "identity" | "knowledge" | "history";
-type NavTarget =
-  | { view: "memory"; tab: MemoryTab; obsId?: string; execId?: string }
-  | { view: "schedule" }
-  | { view: "workspace" };
 
 interface ExecEntry {
   id: string;

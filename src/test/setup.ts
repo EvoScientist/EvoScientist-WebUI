@@ -8,6 +8,16 @@
 
 import { afterEach } from "vitest";
 import { cleanup } from "@testing-library/react";
+import { join } from "path";
+import { tmpdir } from "os";
+
+// Server code reads EvoScientist's config.yaml (src/lib/server/coreConfig.ts);
+// point it at a folder that does not exist, so no test reads the developer's
+// real configuration. Tests that need a file stub XDG_CONFIG_HOME themselves.
+process.env.XDG_CONFIG_HOME = join(
+  tmpdir(),
+  "evoscientist-webui-tests-no-config"
+);
 
 function createMemoryStorage(): Storage {
   const store = new Map<string, string>();

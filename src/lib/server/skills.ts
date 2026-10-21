@@ -13,21 +13,12 @@ import { dirname, join, resolve, sep } from "path";
 import { constants, promises as fs } from "fs";
 import { randomUUID } from "crypto";
 import { CORE_SCHEMA, load as loadYaml } from "js-yaml";
+import { globalDataDir } from "@/lib/server/paths";
 import { PY_SPACE, pyStrip } from "@/lib/pythonWhitespace";
 
 const REPO = "EvoScientist/EvoSkills";
 const BRANCH = "main";
 const SKILLS_PREFIX = "skills/";
-
-/** EvoScientist's global data dir — `~/.evoscientist` by default (paths.py
- *  DATA_DIR), relocatable via EVOSCIENTIST_DATA_DIR, exactly like the backend. */
-function globalDataDir(): string {
-  const env = process.env.EVOSCIENTIST_DATA_DIR;
-  if (env && env.trim()) {
-    return env.startsWith("~") ? join(homedir(), env.slice(1)) : resolve(env);
-  }
-  return join(homedir(), ".evoscientist");
-}
 
 /**
  * Where skills install: EvoScientist's GLOBAL skills tier
@@ -38,7 +29,9 @@ function globalDataDir(): string {
 export const SKILLS_INSTALL_DIR = join(globalDataDir(), "skills");
 
 /** Tiers scanned to decide whether a skill is already installed: the global
- *  dir first, then the legacy ~/.config path as a harmless fallback. */
+ *  dir first, then the legacy ~/.config path as a harmless fallback. The
+ *  backend no longer reads that folder (`_skills_tier_paths()` in backends.py),
+ *  so it stays as it was and does not follow XDG_CONFIG_HOME. */
 export const SKILL_DIRS = [
   SKILLS_INSTALL_DIR,
   join(homedir(), ".config", "evoscientist", "skills"),
