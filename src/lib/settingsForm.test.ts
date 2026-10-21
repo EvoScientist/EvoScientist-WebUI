@@ -4,6 +4,8 @@ import {
   currentText,
   draftErrors,
   fieldLabel,
+  keyedBaseUrlErrors,
+  modelForProvider,
   patchBody,
   readOnlyReason,
   saveErrorText,
@@ -160,6 +162,84 @@ describe("draftErrors", () => {
   it("accepts a URL typed in full", () => {
     expect(
       draftErrors({ http_proxy: "http://me:pw@proxy.example:3129" })
+    ).toEqual({});
+  });
+
+  it("asks for a model instead of removing it", () => {
+    expect(draftErrors({ model: null })).toHaveProperty("model");
+    expect(draftErrors({ model: "gpt-5" })).toEqual({});
+  });
+});
+
+describe("modelForProvider", () => {
+  it("keeps the current model, then the saved one, when the provider lists it", () => {
+    expect(modelForProvider(["gpt-5", "x"], openai, ["gpt-4.1", "gpt-5"])).toBe(
+      "gpt-5"
+    );
+    expect(modelForProvider(["x", "gpt-5"], openai, ["gpt-4.1", "gpt-5"])).toBe(
+      "gpt-5"
+    );
+  });
+
+  it("takes the provider's first model when it lists neither", () => {
+    expect(
+      modelForProvider(["claude-sonnet-5-5"], openai, ["gpt-4.1", "gpt-5"])
+    ).toBe("gpt-4.1");
+  });
+
+  it("leaves the choice to the user where the check lists the models", () => {
+    expect(
+      modelForProvider(["claude-sonnet-5-5"], customOpenai, ["gpt-6-luna"])
+    ).toBe("");
+    expect(modelForProvider(["claude-sonnet-5-5"], ollama, [])).toBe("");
+  });
+});
+
+describe("keyedBaseUrlErrors", () => {
+  const withCustom: SettingsPayload = {
+    ...payload,
+    settings: {
+      ...payload.settings,
+      custom_openai_api_key: { set: true, hint: "…wxyz" },
+      custom_openai_base_url: "http://a.example/v1",
+    },
+  };
+
+  it("asks for the saved key again when its endpoint's address changes", () => {
+    expect(
+      keyedBaseUrlErrors(
+        { custom_openai_base_url: "http://b.example/v1" },
+        withCustom
+      )
+    ).toHaveProperty("custom_openai_api_key");
+    expect(
+      keyedBaseUrlErrors({ custom_openai_base_url: null }, withCustom)
+    ).toHaveProperty("custom_openai_api_key");
+  });
+
+  it("is satisfied by a new key or its removal", () => {
+    for (const key of ["sk-new-0000", null]) {
+      expect(
+        keyedBaseUrlErrors(
+          {
+            custom_openai_base_url: "http://b.example/v1",
+            custom_openai_api_key: key,
+          },
+          withCustom
+        )
+      ).toEqual({});
+    }
+  });
+
+  it("asks nothing without a saved key, or for an address without a key", () => {
+    expect(
+      keyedBaseUrlErrors(
+        { custom_openai_base_url: "http://b.example/v1" },
+        payload
+      )
+    ).toEqual({});
+    expect(
+      keyedBaseUrlErrors({ ollama_base_url: "http://h:11434" }, withCustom)
     ).toEqual({});
   });
 });

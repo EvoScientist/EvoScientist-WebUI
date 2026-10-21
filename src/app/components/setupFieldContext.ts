@@ -5,7 +5,7 @@
 import type { ModelRegistryEntry } from "@/app/hooks/useAvailableModels";
 import type { SettingsDraft } from "@/app/hooks/useSettingsDraft";
 import type { SettingsPayload } from "@/lib/settings";
-import { currentText } from "@/lib/settingsForm";
+import { currentText, isMaskedSecret } from "@/lib/settingsForm";
 
 export interface FieldContext {
   payload: SettingsPayload;
@@ -19,13 +19,29 @@ export function shadowOf(ctx: FieldContext, field: string) {
   return source?.shadowed ? source : null;
 }
 
+/** For a base URL whose key is saved and also set elsewhere (the
+ *  environment, a .env file): where that key comes from. EvoScientist then
+ *  refuses a new address, which the key from there would be sent to. */
+export function keyShadowOf(ctx: FieldContext, field: string) {
+  const info = Object.values(ctx.payload.providers).find(
+    (p) => p.base_url_field === field && p.key_field
+  );
+  if (!info?.key_field) return null;
+  const saved = ctx.payload.settings[info.key_field];
+  return isMaskedSecret(saved) && saved.set
+    ? shadowOf(ctx, info.key_field)
+    : null;
+}
+
 /** Whether a field takes input: the page can save, the backend lets this
- *  API change it, and no override hides the saved value. */
+ *  API change it, and no override hides the saved value or the saved key
+ *  it goes with. */
 export function isEditable(ctx: FieldContext, field: string): boolean {
   return (
     ctx.writable &&
     !ctx.payload.read_only.includes(field) &&
-    shadowOf(ctx, field) === null
+    shadowOf(ctx, field) === null &&
+    keyShadowOf(ctx, field) === null
   );
 }
 

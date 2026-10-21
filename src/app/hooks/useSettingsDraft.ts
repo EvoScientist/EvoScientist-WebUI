@@ -7,6 +7,7 @@ import type { SettingsPayload } from "@/lib/settings";
 import {
   applyEdit,
   draftErrors,
+  keyedBaseUrlErrors,
   currentText,
   patchBody,
   saveErrorText,
@@ -127,15 +128,24 @@ export function useSettingsDraft(
     [payload, edits]
   );
 
+  const localErrors = useMemo(
+    () => ({
+      ...draftErrors(sendable),
+      ...(payload ? keyedBaseUrlErrors(sendable, payload) : {}),
+    }),
+    [payload, sendable]
+  );
+
   const fieldErrors = useMemo(
-    () => ({ ...serverErrors, ...draftErrors(sendable) }),
-    [serverErrors, sendable]
+    () => ({ ...serverErrors, ...localErrors }),
+    [serverErrors, localErrors]
   );
 
   const save = useCallback(async (): Promise<SaveOutcome> => {
     if (!payload) return { ok: false, fieldErrors: {} };
-    const local = draftErrors(sendable);
-    if (Object.keys(local).length > 0) return { ok: false, fieldErrors: local };
+    if (Object.keys(localErrors).length > 0) {
+      return { ok: false, fieldErrors: localErrors };
+    }
     setSaving(true);
     setMessage(null);
     try {
@@ -197,7 +207,7 @@ export function useSettingsDraft(
     } finally {
       setSaving(false);
     }
-  }, [sendable, payload, refresh, deploymentUrl]);
+  }, [sendable, localErrors, payload, refresh, deploymentUrl]);
 
   const testKey = useCallback(
     async ({
@@ -255,7 +265,7 @@ export function useSettingsDraft(
     warnings,
     message,
     saving,
-    blocked: Object.keys(draftErrors(sendable)).length > 0,
+    blocked: Object.keys(localErrors).length > 0,
     checks,
     checking,
     setField,

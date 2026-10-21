@@ -14,11 +14,15 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import type { ModelRegistryEntry } from "@/app/hooks/useAvailableModels";
+import {
+  useAvailableModels,
+  type ModelRegistryEntry,
+} from "@/app/hooks/useAvailableModels";
 import type { ProviderInfo } from "@/lib/settings";
 import {
   currentProvider,
   isEditable,
+  keyShadowOf,
   modelSuggestions,
   shadowOf,
   type FieldContext,
@@ -28,6 +32,8 @@ import {
   keyStatusText,
   fieldLabel,
   isMaskedSecret,
+  modelForProvider,
+  savedText,
   sourceNote,
 } from "@/lib/settingsForm";
 import { cn } from "@/lib/utils";
@@ -37,6 +43,7 @@ const selectClass =
 
 function FieldNotes({ ctx, field }: { ctx: FieldContext; field: string }) {
   const shadow = shadowOf(ctx, field);
+  const keyShadow = keyShadowOf(ctx, field);
   const error = ctx.draft.fieldErrors[field];
   const warning = ctx.draft.warnings[field];
   return (
@@ -45,6 +52,12 @@ function FieldNotes({ ctx, field }: { ctx: FieldContext; field: string }) {
         <p className="text-xs text-muted-foreground">
           Set by {sourceNote(shadow)}, which overrides the saved value. Change
           it there.
+        </p>
+      )}
+      {keyShadow && (
+        <p className="text-xs text-muted-foreground">
+          Its API key is set by {sourceNote(keyShadow)}, so the address is
+          changed only with EvoSci config set.
         </p>
       )}
       {ctx.payload.read_only.includes(field) && (
@@ -102,8 +115,24 @@ function FieldShell({
 }
 
 export function ProviderField({ ctx }: { ctx: FieldContext }) {
+  const { registry } = useAvailableModels();
   const value = currentProvider(ctx);
   const providers = Object.entries(ctx.payload.providers);
+  // A new provider gets a model it serves, as EvoSci onboard picks it; the
+  // one kept from the last provider would be asked of the new one.
+  const choose = (provider: string) => {
+    ctx.draft.setField("provider", provider, false);
+    if (!isEditable(ctx, "model")) return;
+    const model = modelForProvider(
+      [
+        currentText(ctx.payload, ctx.draft.edits, "model"),
+        savedText(ctx.payload, "model"),
+      ],
+      ctx.payload.providers[provider],
+      registry.entries.filter((e) => e.provider === provider).map((e) => e.name)
+    );
+    ctx.draft.setField("model", model, false);
+  };
   return (
     <FieldShell
       ctx={ctx}
@@ -114,7 +143,7 @@ export function ProviderField({ ctx }: { ctx: FieldContext }) {
         id="setting-provider"
         value={value}
         disabled={!isEditable(ctx, "provider")}
-        onChange={(e) => ctx.draft.setField("provider", e.target.value, false)}
+        onChange={(e) => choose(e.target.value)}
         className={selectClass}
       >
         {!ctx.payload.providers[value] && (

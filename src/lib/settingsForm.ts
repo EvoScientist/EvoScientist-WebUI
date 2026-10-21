@@ -99,6 +99,24 @@ export function sendableEdits(
   );
 }
 
+/**
+ * The model to offer when the provider changes, as EvoSci onboard picks it:
+ * the first of `candidates` (the current model, then the saved one) that the
+ * new provider lists, else the provider's first listed model. For a provider
+ * whose check lists its models (Ollama, the custom endpoints) none, so the
+ * user picks one of those or types one.
+ */
+export function modelForProvider(
+  candidates: ReadonlyArray<string>,
+  info: ProviderInfo | undefined,
+  listed: ReadonlyArray<string>
+): string {
+  const kept = candidates.find((model) => listed.includes(model));
+  if (kept) return kept;
+  if (info?.lists_models) return "";
+  return listed[0] ?? "";
+}
+
 /** The PATCH body: only the changed fields, and the revision the page read. */
 export function patchBody(
   edits: Edits,
@@ -115,10 +133,37 @@ const HIDDEN_USERINFO = /:\/\/[^/?#]*\*\*\*@/;
  *  password. Sent unchanged, the backend keeps the stored URL. */
 export function draftErrors(edits: Edits): Record<string, string> {
   const errors: Record<string, string> = {};
+  // A removed model falls back to the Anthropic default whatever the
+  // provider is.
+  if ("model" in edits && edits.model === null) {
+    errors.model = "Choose or type a model.";
+  }
   for (const [field, value] of Object.entries(edits)) {
     if (typeof value === "string" && HIDDEN_USERINFO.test(value)) {
       errors[field] =
         "Type the whole URL again, with its user name and password: the saved ones are hidden.";
+    }
+  }
+  return errors;
+}
+
+/**
+ * A changed base URL of a provider whose key is saved in config.yaml needs
+ * that key in the same save (a new one, or removed), so the saved key never
+ * goes to the new address; EvoScientist refuses the save otherwise.
+ */
+export function keyedBaseUrlErrors(
+  edits: Edits,
+  payload: SettingsPayload
+): Record<string, string> {
+  const errors: Record<string, string> = {};
+  for (const info of Object.values(payload.providers)) {
+    const { key_field: key, base_url_field: url } = info;
+    if (!key || !url || !(url in edits) || key in edits) continue;
+    const saved = payload.settings[key];
+    if (isMaskedSecret(saved) && saved.set) {
+      errors[key] =
+        "Enter the API key again: the saved key is not sent to a new address.";
     }
   }
   return errors;

@@ -454,6 +454,77 @@ describe("the Setup form", () => {
     renderView();
     expect(await screen.findByText(/no settings API/)).toBeTruthy();
   });
+  it("does not save a provider without a model for it", async () => {
+    renderView();
+    const provider = (await screen.findByLabelText(
+      "Provider"
+    )) as HTMLSelectElement;
+    fireEvent.change(provider, { target: { value: "ollama" } });
+    expect((screen.getByLabelText("Model") as HTMLInputElement).value).toBe("");
+    expect(screen.getByText("Choose or type a model.")).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "Save" }) as HTMLButtonElement)
+        .disabled
+    ).toBe(true);
+  });
+
+  describe("an endpoint whose key is saved", () => {
+    const CUSTOM = {
+      label: "OpenAI-compatible",
+      key_field: "custom_openai_api_key",
+      base_url_field: "custom_openai_base_url",
+      needs_key: true,
+      needs_base_url: true,
+      has_check: true,
+      lists_models: true,
+    };
+    const custom = (sources: Record<string, unknown> = {}) =>
+      settings({
+        providers: { ...PROVIDERS, "custom-openai": CUSTOM },
+        sources,
+        settings: {
+          ...settings().settings,
+          provider: "custom-openai",
+          model: "my-model",
+          custom_openai_api_key: { set: true, hint: "…wxyz" },
+          custom_openai_base_url: "http://a.example/v1",
+        },
+      });
+    const baseUrl = () =>
+      screen.getByLabelText("OpenAI-compatible base URL") as HTMLInputElement;
+
+    it("asks for the key again with a new address, and sends both", async () => {
+      server.settings = custom();
+      renderView();
+      await screen.findByText("Saved: …wxyz");
+      fireEvent.change(baseUrl(), { target: { value: "http://b.example/v1" } });
+      expect(screen.getByText(/Enter the API key again/)).toBeTruthy();
+      const save = screen.getByRole("button", {
+        name: "Save",
+      }) as HTMLButtonElement;
+      expect(save.disabled).toBe(true);
+      fireEvent.change(screen.getByLabelText("OpenAI-compatible API key"), {
+        target: { value: "sk-new-0000" },
+      });
+      fireEvent.click(save);
+      await waitFor(() => expect(server.patch).toHaveBeenCalledOnce());
+      expect(server.patch.mock.calls[0][0]).toEqual({
+        custom_openai_base_url: "http://b.example/v1",
+        custom_openai_api_key: "sk-new-0000",
+        revision: "rev-1",
+      });
+    });
+
+    it("keeps the address when the saved key is also set elsewhere", async () => {
+      server.settings = custom({
+        custom_openai_api_key: { source: "env", shadowed: true },
+      });
+      renderView();
+      await screen.findByLabelText("OpenAI-compatible base URL");
+      expect(baseUrl().disabled).toBe(true);
+      expect(screen.getByText(/Its API key is set by/)).toBeTruthy();
+    });
+  });
 });
 
 describe("the setup wizard", () => {
@@ -623,6 +694,39 @@ describe("the setup wizard", () => {
     expect(
       (screen.getByLabelText("Default folder") as HTMLInputElement).value
     ).toBe("/home/u/Documents/Evo");
+  });
+  it("offers the chosen provider's model, and asks for one where the check lists them", async () => {
+    server.settings = settings({
+      setup_needed: true,
+      providers: {
+        ...PROVIDERS,
+        anthropic: {
+          ...PROVIDERS.openai,
+          label: "Anthropic",
+          key_field: "anthropic_api_key",
+        },
+      },
+    });
+    renderView();
+    const provider = (await screen.findByLabelText(
+      "Provider"
+    )) as HTMLSelectElement;
+    fireEvent.change(provider, { target: { value: "anthropic" } });
+    next();
+    expect((screen.getByLabelText("Model") as HTMLInputElement).value).toBe(
+      "claude-x"
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.change(screen.getByLabelText("Provider"), {
+      target: { value: "ollama" },
+    });
+    next();
+    next();
+    expect((screen.getByLabelText("Model") as HTMLInputElement).value).toBe("");
+    expect(
+      (screen.getByRole("button", { name: "Next" }) as HTMLButtonElement)
+        .disabled
+    ).toBe(true);
   });
 });
 
