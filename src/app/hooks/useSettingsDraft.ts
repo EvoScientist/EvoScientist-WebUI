@@ -249,6 +249,19 @@ export function useSettingsDraft(
       if (typeof key === "string" && key) request.key = key;
       const baseUrl = baseUrlField ? edits[baseUrlField] : null;
       if (typeof baseUrl === "string" && baseUrl) request.base_url = baseUrl;
+      // A cleared address goes back to a default this page does not know,
+      // so the check would still use the saved one.
+      if (baseUrlField && edits[baseUrlField] === null) {
+        dropChecks([provider]);
+        setChecks((c) => ({
+          ...c,
+          [provider]: {
+            error:
+              "Save first to test the default address; until then the check uses the saved one.",
+          },
+        }));
+        return;
+      }
       // EvoScientist tests a key it has only against the saved address.
       if (
         request.base_url &&

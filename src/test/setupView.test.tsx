@@ -681,6 +681,26 @@ describe("the Setup form", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByText("Saved without a check.")).toBeTruthy();
   });
+  it("tests a cleared address only after the save", async () => {
+    server.settings = settings({
+      settings: {
+        ...settings().settings,
+        provider: "ollama",
+        model: "llama3.2",
+        ollama_base_url: "http://old.example:11434",
+      },
+    });
+    renderView();
+    const address = (await screen.findByLabelText(
+      "Ollama base URL"
+    )) as HTMLInputElement;
+    fireEvent.change(address, { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
+    expect(
+      await screen.findByText(/Save first to test the default address/)
+    ).toBeTruthy();
+    expect(server.testKey).not.toHaveBeenCalled();
+  });
 });
 
 describe("the setup wizard", () => {
