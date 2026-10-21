@@ -522,7 +522,10 @@ function HomePageInner({
                   </ChatProvider>
                 </div>
                 {view === "setup" && (
-                  <SetupView onClose={() => void setView(null)} />
+                  <SetupView
+                    key={backendKey}
+                    onClose={() => void setView(null)}
+                  />
                 )}
                 {view === "skills" && <SkillsMarketplace />}
                 {view === "experts" && <ExpertsPanel />}

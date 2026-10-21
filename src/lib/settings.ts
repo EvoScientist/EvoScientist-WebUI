@@ -98,8 +98,9 @@ export function isLocalDeployment(
 /**
  * The page can save when the relay can write (`access`), the deployment URL
  * is the local backend the relay writes to, and that backend is the one the
- * page read (`settings`): the same `instance`, or, from a backend without the
- * field, the same `revision`. Host and port alone can name another machine's
+ * page read (`settings`): the same `instance` (`null` from a backend that
+ * loaded no local secret, which matches none), or, from a backend without
+ * the field, the same `revision`. Host and port alone can name another machine's
  * backend through a tunnel.
  */
 export function settingsWriteAccess(
@@ -112,9 +113,9 @@ export function settingsWriteAccess(
     return { writable: false, reason: "other_backend" };
   }
   const same =
-    typeof settings.instance === "string"
-      ? settings.instance === access.instance
-      : settings.revision === access.revision;
+    settings.instance === undefined
+      ? settings.revision === access.revision
+      : settings.instance === access.instance;
   return same
     ? { writable: true }
     : { writable: false, reason: "other_backend" };

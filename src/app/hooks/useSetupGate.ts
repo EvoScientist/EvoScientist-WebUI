@@ -33,15 +33,17 @@ export function useSetupGate(
     previousView.current = view;
   }, [view, setupNeeded, deploymentUrl]);
 
-  const openedFor = useRef<string | null>(null);
+  const decidedFor = useRef<string | null>(null);
   useEffect(() => {
     // A page that starts on Setup (the desktop app opens `?view=setup`)
     // has had its wizard.
-    if (view === "setup") openedFor.current = deploymentUrl;
-    if (!wizardWanted || view !== null) return;
-    if (openedFor.current === deploymentUrl) return;
-    openedFor.current = deploymentUrl;
-    if (isSetupDeferred(deploymentUrl)) return;
+    if (view === "setup") decidedFor.current = deploymentUrl;
+    // Decided on the first answers the chat sees: a later one (a key removed
+    // in a terminal, read again on focus) does not take the chat away.
+    if (view !== null || !payload || access === undefined) return;
+    if (decidedFor.current === deploymentUrl) return;
+    decidedFor.current = deploymentUrl;
+    if (!wizardWanted || isSetupDeferred(deploymentUrl)) return;
     void setView("setup");
-  }, [wizardWanted, view, deploymentUrl, setView]);
+  }, [wizardWanted, payload, access, view, deploymentUrl, setView]);
 }

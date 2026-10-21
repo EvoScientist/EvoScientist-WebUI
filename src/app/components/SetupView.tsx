@@ -103,7 +103,8 @@ export function SetupView({ onClose }: SetupViewProps) {
         terminal.
       </p>
     );
-  } else if (settings.error) {
+  } else if (settings.error && !payload) {
+    // A failed re-read (EvoSci restarting) keeps the form and its draft.
     body = (
       <p className="text-sm text-destructive">
         The settings could not be read from {deploymentUrl}.

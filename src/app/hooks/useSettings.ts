@@ -81,8 +81,12 @@ export interface UseSettingsAccess {
 export function useSettingsAccess(): UseSettingsAccess {
   const { deploymentUrl } = useDeployment();
   const settings = useSettings();
+  // Asked once the deployment's settings arrived: an answer from while the
+  // backend was still starting would otherwise stay until the next focus.
   const relay = useSWR(
-    deploymentUrl ? (["settings-access", deploymentUrl] as const) : null,
+    deploymentUrl && settings.payload
+      ? (["settings-access", deploymentUrl] as const)
+      : null,
     fetchAccess
   );
   const refreshSettings = settings.refresh;

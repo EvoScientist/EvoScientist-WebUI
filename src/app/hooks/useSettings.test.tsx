@@ -222,4 +222,35 @@ describe("useSettingsAccess", () => {
     expect(urls).toContain("/api/settings/access");
     expect(urls).toContain("http://127.0.0.1:6174/api/settings");
   });
+  it("checks the relay once the backend answers, not while it is down", async () => {
+    let up = false;
+    const fetchMock = stubFetch({
+      "/api/settings": () =>
+        up ? json(payload()) : Promise.reject(new TypeError("Failed to fetch")),
+      "/api/settings/access": () =>
+        json(
+          up ? access() : { writable: false, reason: "backend_unreachable" }
+        ),
+    });
+    const { result } = renderHook(
+      () => ({ settings: useSettings(), relay: useSettingsAccess() }),
+      { wrapper }
+    );
+    await waitFor(() =>
+      expect(result.current.relay.access).toEqual({
+        writable: false,
+        reason: "backend_unreachable",
+      })
+    );
+    up = true;
+    await act(() => result.current.settings.refresh());
+    await waitFor(() =>
+      expect(result.current.relay.access).toEqual({ writable: true })
+    );
+    expect(
+      fetchMock.mock.calls.filter(
+        (c) => String(c[0]) === "/api/settings/access"
+      )
+    ).toHaveLength(1);
+  });
 });

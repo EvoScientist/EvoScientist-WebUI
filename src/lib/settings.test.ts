@@ -100,6 +100,17 @@ describe("settingsWriteAccess", () => {
       )
     ).toEqual({ writable: true });
   });
+  it("is read-only for a backend that loaded no local secret", () => {
+    // That backend refuses every write, so the relay's writable backend is
+    // another one, even with the same (missing) config file.
+    expect(
+      settingsWriteAccess(
+        URL,
+        { ...ACCESS, revision: null },
+        { instance: null, revision: null }
+      )
+    ).toEqual({ writable: false, reason: "other_backend" });
+  });
 });
 
 describe("isSettingsPayload", () => {

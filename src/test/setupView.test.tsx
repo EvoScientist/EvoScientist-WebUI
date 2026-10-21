@@ -19,6 +19,7 @@ import {
 import { SWRConfig } from "swr";
 import { SetupView } from "@/app/components/SetupView";
 import { SetupNotice } from "@/app/components/SetupNotice";
+import { useSettings } from "@/app/hooks/useSettings";
 import { useSetupGate } from "@/app/hooks/useSetupGate";
 import { deferSetup, resetSetupDeferral } from "@/lib/setupDeferral";
 
@@ -525,6 +526,25 @@ describe("the Setup form", () => {
       expect(screen.getByText(/Its API key is set by/)).toBeTruthy();
     });
   });
+  it("keeps the form when reading the settings again fails", async () => {
+    renderView();
+    await screen.findByLabelText("Model");
+    const fetchMock = vi.mocked(fetch);
+    const real = fetchMock.getMockImplementation()!;
+    let failed = 0;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input) === `${DEPLOYMENT}/api/settings`) {
+        failed += 1;
+        throw new TypeError("Failed to fetch");
+      }
+      return real(input, init);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Reload" }));
+    await waitFor(() => expect(failed).toBeGreaterThan(0));
+    await act(() => new Promise((r) => setTimeout(r, 50)));
+    expect(screen.queryByText(/could not be read/)).toBeNull();
+    expect(screen.getByLabelText("Model")).toBeTruthy();
+  });
 });
 
 describe("the setup wizard", () => {
@@ -838,5 +858,21 @@ describe("the first-run gate", () => {
     expect(window.sessionStorage.getItem("evoscientist-setup-later")).toContain(
       DEPLOYMENT
     );
+  });
+  it("does not take the chat away when setup is needed later", async () => {
+    const setView = vi.fn();
+    const { result } = renderHook(
+      () => {
+        useSetupGate(null, setView);
+        return useSettings();
+      },
+      { wrapper }
+    );
+    await waitFor(() => expect(result.current.payload).toBeDefined());
+    await act(async () => {});
+    server.settings = settings({ setup_needed: true });
+    await act(() => result.current.refresh());
+    await act(async () => {});
+    expect(setView).not.toHaveBeenCalled();
   });
 });
