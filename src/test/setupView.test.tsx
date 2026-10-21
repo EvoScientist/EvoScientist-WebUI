@@ -525,6 +525,33 @@ describe("the Setup form", () => {
       expect(baseUrl().disabled).toBe(true);
       expect(screen.getByText(/Its API key is set by/)).toBeTruthy();
     });
+
+    it("tests a new address only with a key typed for it", async () => {
+      server.settings = custom();
+      renderView();
+      await screen.findByText("Saved: …wxyz");
+      fireEvent.change(baseUrl(), { target: { value: "http://b.example/v1" } });
+      fireEvent.click(screen.getAllByRole("button", { name: "Test key" })[0]);
+      expect(
+        await screen.findByText(
+          "Enter the API key to test it with the new address."
+        )
+      ).toBeTruthy();
+      expect(server.testKey).not.toHaveBeenCalled();
+    });
+
+    it("names the field of a refused check", async () => {
+      server.settings = custom();
+      server.testKey.mockImplementationOnce(() =>
+        json({ errors: { base_url: "must be an http or https URL" } }, 400)
+      );
+      renderView();
+      await screen.findByText("Saved: …wxyz");
+      fireEvent.click(screen.getAllByRole("button", { name: "Test key" })[0]);
+      expect(
+        await screen.findByText("Address: must be an http or https URL")
+      ).toBeTruthy();
+    });
   });
   it("keeps the form when reading the settings again fails", async () => {
     renderView();
@@ -544,6 +571,78 @@ describe("the Setup form", () => {
     await act(() => new Promise((r) => setTimeout(r, 50)));
     expect(screen.queryByText(/could not be read/)).toBeNull();
     expect(screen.getByLabelText("Model")).toBeTruthy();
+  });
+  it("ignores a key check that answers after the key changed", async () => {
+    const answers: Array<(r: Response) => void> = [];
+    server.testKey.mockImplementation(
+      () => new Promise<Response>((resolve) => answers.push(resolve)) as never
+    );
+    renderView();
+    await screen.findByText("Saved: …abcd");
+    const test = () =>
+      screen.getAllByRole("button", {
+        name: "Test key",
+      })[0] as HTMLButtonElement;
+    fireEvent.change(keyInput(), { target: { value: "sk-a-12345678" } });
+    fireEvent.click(test());
+    await waitFor(() => expect(test().disabled).toBe(true));
+    fireEvent.change(keyInput(), { target: { value: "sk-b-12345678" } });
+    expect(test().disabled).toBe(false);
+    fireEvent.click(test());
+    await waitFor(() => expect(answers).toHaveLength(2));
+    // The first check answers while the second still runs.
+    await act(async () =>
+      answers[0](json({ ok: true, status: "valid", message: "" }))
+    );
+    expect(screen.queryByText(/The key works/)).toBeNull();
+    expect(test().disabled).toBe(true);
+    await act(async () =>
+      answers[1](json({ ok: false, status: "invalid", message: "bad key" }))
+    );
+    expect(screen.queryByText(/The key works/)).toBeNull();
+    expect(test().disabled).toBe(false);
+  });
+
+  it("takes no input while a save is running", async () => {
+    let answer: (r: Response) => void = () => {};
+    server.patch.mockImplementationOnce(
+      () => new Promise<Response>((resolve) => (answer = resolve)) as never
+    );
+    renderView();
+    const model = (await screen.findByLabelText("Model")) as HTMLInputElement;
+    fireEvent.change(model, { target: { value: "gpt-4.1" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(model.disabled).toBe(true));
+    await act(async () =>
+      answer(
+        json({
+          revision: "rev-2",
+          changed: ["model"],
+          restart_required: false,
+          restart_fields: [],
+          warnings: {},
+        })
+      )
+    );
+    await waitFor(() => expect(model.disabled).toBe(false));
+  });
+
+  it("starts from the current revision again once the edits are undone", async () => {
+    renderView();
+    const model = (await screen.findByLabelText("Model")) as HTMLInputElement;
+    fireEvent.change(model, { target: { value: "gpt-4.1" } });
+    fireEvent.change(model, { target: { value: "gpt-5" } });
+    server.settings = settings({ revision: "rev-9" });
+    fireEvent.click(screen.getByRole("button", { name: "Reload" }));
+    await waitFor(() => expect(server.gets).toBeGreaterThan(1));
+    await act(async () => {});
+    fireEvent.change(model, { target: { value: "gpt-4.1" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(server.patch).toHaveBeenCalledOnce());
+    expect(server.patch.mock.calls[0][0]).toEqual({
+      model: "gpt-4.1",
+      revision: "rev-9",
+    });
   });
 });
 

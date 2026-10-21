@@ -33,12 +33,13 @@ export function keyShadowOf(ctx: FieldContext, field: string) {
     : null;
 }
 
-/** Whether a field takes input: the page can save, the backend lets this
- *  API change it, and no override hides the saved value or the saved key
- *  it goes with. */
+/** Whether a field takes input: the page can save and is not saving (a
+ *  successful save replaces the draft), the backend lets this API change it,
+ *  and no override hides the saved value or the saved key it goes with. */
 export function isEditable(ctx: FieldContext, field: string): boolean {
   return (
     ctx.writable &&
+    !ctx.draft.saving &&
     !ctx.payload.read_only.includes(field) &&
     shadowOf(ctx, field) === null &&
     keyShadowOf(ctx, field) === null

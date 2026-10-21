@@ -169,6 +169,29 @@ export function keyedBaseUrlErrors(
   return errors;
 }
 
+const TEST_KEY_FIELDS: Record<string, string> = {
+  key: "API key",
+  base_url: "Address",
+  provider: "Provider",
+};
+
+/** The errors of a refused key check, each with what it is about. */
+export function testKeyErrorText(errors: Record<string, string>): string {
+  return Object.entries(errors)
+    .map(([field, error]) => `${TEST_KEY_FIELDS[field] ?? field}: ${error}`)
+    .join(" ");
+}
+
+/** A key EvoScientist has: saved in config.yaml, or set elsewhere (the
+ *  environment, a .env file). */
+export function keyIsSet(payload: SettingsPayload, field: string): boolean {
+  const saved = payload.settings[field];
+  return (
+    (isMaskedSecret(saved) && saved.set) ||
+    payload.sources[field]?.shadowed === true
+  );
+}
+
 export type WizardStep =
   | "provider"
   | "key"

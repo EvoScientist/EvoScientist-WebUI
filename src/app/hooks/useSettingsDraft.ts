@@ -8,10 +8,12 @@ import {
   applyEdit,
   draftErrors,
   keyedBaseUrlErrors,
+  keyIsSet,
   currentText,
   patchBody,
   saveErrorText,
   sendableEdits,
+  testKeyErrorText,
   type Edits,
   type KeyCheckResult,
 } from "@/lib/settingsForm";
@@ -77,6 +79,26 @@ export function useSettingsDraft(
   // the backend refuse it (409 revision_mismatch).
   const baseRevision = useRef<{ revision: string | null } | null>(null);
 
+  // One number per provider, raised whenever its check stops applying (its
+  // key or address changed, a save, Discard). A check answers only while its
+  // number is current, so an answer for the old key never shows next to the
+  // new one, nor ends the "checking" of a newer check.
+  const checkSeq = useRef<Record<string, number>>({});
+  const dropChecks = useCallback((providers: ReadonlyArray<string> | null) => {
+    const names = providers ?? Object.keys(checkSeq.current);
+    for (const name of names) {
+      checkSeq.current[name] = (checkSeq.current[name] ?? 0) + 1;
+    }
+    const keep = <T>(c: Record<string, T>) =>
+      providers === null
+        ? {}
+        : Object.fromEntries(
+            Object.entries(c).filter(([name]) => !names.includes(name))
+          );
+    setChecks(keep);
+    setChecking(keep);
+  }, []);
+
   const setField = useCallback(
     (field: string, value: string | null, secret: boolean) => {
       if (!payload) return;
@@ -84,36 +106,37 @@ export function useSettingsDraft(
         if (Object.keys(e).length === 0 && baseRevision.current === null) {
           baseRevision.current = { revision: payload.revision };
         }
-        return applyEdit(e, payload, field, value, { secret });
+        const next = applyEdit(e, payload, field, value, { secret });
+        // Undone edits start again from the revision read then.
+        if (Object.keys(next).length === 0) baseRevision.current = null;
+        return next;
       });
       // A changed value answers the error and the warning it had, and the
       // check of a key or address that changed no longer applies.
       setServerErrors(({ [field]: _e, ...rest }) => rest);
       setWarnings(({ [field]: _w, ...rest }) => rest);
-      setChecks((c) =>
-        Object.fromEntries(
-          Object.entries(c).filter(([provider]) => {
-            const info = payload.providers[provider];
-            const fields =
-              provider === "tavily"
-                ? ["tavily_api_key"]
-                : [info?.key_field, info?.base_url_field];
-            return !fields.includes(field);
-          })
-        )
+      dropChecks(
+        ["tavily", ...Object.keys(payload.providers)].filter((provider) => {
+          const info = payload.providers[provider];
+          const fields =
+            provider === "tavily"
+              ? ["tavily_api_key"]
+              : [info?.key_field, info?.base_url_field];
+          return fields.includes(field);
+        })
       );
     },
-    [payload]
+    [payload, dropChecks]
   );
 
   const discard = useCallback(() => {
     setEdits({});
     setServerErrors({});
     setWarnings({});
-    setChecks({});
+    dropChecks(null);
     setMessage(null);
     baseRevision.current = null;
-  }, []);
+  }, [dropChecks]);
 
   // What a save sends: the selected provider's key fields, not another's.
   const sendable = useMemo(
@@ -180,7 +203,7 @@ export function useSettingsDraft(
         baseRevision.current = null;
         setServerErrors({});
         setWarnings(result.warnings);
-        setChecks({});
+        dropChecks(null);
         await refresh();
         refreshModelRegistry(deploymentUrl);
         return { ok: true, result };
@@ -207,7 +230,7 @@ export function useSettingsDraft(
     } finally {
       setSaving(false);
     }
-  }, [sendable, localErrors, payload, refresh, deploymentUrl]);
+  }, [sendable, localErrors, payload, refresh, deploymentUrl, dropChecks]);
 
   const testKey = useCallback(
     async ({
@@ -226,6 +249,26 @@ export function useSettingsDraft(
       if (typeof key === "string" && key) request.key = key;
       const baseUrl = baseUrlField ? edits[baseUrlField] : null;
       if (typeof baseUrl === "string" && baseUrl) request.base_url = baseUrl;
+      // EvoScientist tests a key it has only against the saved address.
+      if (
+        request.base_url &&
+        !request.key &&
+        keyField &&
+        payload &&
+        keyIsSet(payload, keyField)
+      ) {
+        dropChecks([provider]);
+        setChecks((c) => ({
+          ...c,
+          [provider]: {
+            error: "Enter the API key to test it with the new address.",
+          },
+        }));
+        return;
+      }
+      checkSeq.current[provider] = (checkSeq.current[provider] ?? 0) + 1;
+      const seq = checkSeq.current[provider];
+      const current = () => checkSeq.current[provider] === seq;
       setChecking((c) => ({ ...c, [provider]: true }));
       try {
         const res = await fetch("/api/settings/test-key", {
@@ -242,21 +285,23 @@ export function useSettingsDraft(
             ?.errors;
           result = {
             error: errors
-              ? Object.values(errors).join(" ")
+              ? testKeyErrorText(errors)
               : saveErrorText(body, res.status),
           };
         }
-        setChecks((c) => ({ ...c, [provider]: result }));
+        if (current()) setChecks((c) => ({ ...c, [provider]: result }));
       } catch {
-        setChecks((c) => ({
-          ...c,
-          [provider]: { error: "The WebUI server did not answer." },
-        }));
+        if (current()) {
+          setChecks((c) => ({
+            ...c,
+            [provider]: { error: "The WebUI server did not answer." },
+          }));
+        }
       } finally {
-        setChecking((c) => ({ ...c, [provider]: false }));
+        if (current()) setChecking((c) => ({ ...c, [provider]: false }));
       }
     },
-    [edits]
+    [edits, payload, dropChecks]
   );
 
   return {

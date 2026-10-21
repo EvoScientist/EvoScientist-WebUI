@@ -5,6 +5,7 @@ import {
   draftErrors,
   fieldLabel,
   keyedBaseUrlErrors,
+  keyIsSet,
   modelForProvider,
   patchBody,
   readOnlyReason,
@@ -12,6 +13,7 @@ import {
   sendableEdits,
   sourceNote,
   stepOfField,
+  testKeyErrorText,
   wizardSteps,
 } from "@/lib/settingsForm";
 import type { ProviderInfo, SettingsPayload } from "@/lib/settings";
@@ -338,5 +340,30 @@ describe("saveErrorText", () => {
     expect(
       readOnlyReason({ writable: false, reason: "other_backend" })
     ).toMatch(/machine that runs it/);
+  });
+});
+
+describe("keyIsSet", () => {
+  it("counts a saved key and one set elsewhere", () => {
+    expect(keyIsSet(payload, "openai_api_key")).toBe(true);
+    expect(
+      keyIsSet(
+        {
+          ...payload,
+          settings: { ...payload.settings, openai_api_key: { set: false } },
+          sources: { openai_api_key: { source: "env", shadowed: true } },
+        },
+        "openai_api_key"
+      )
+    ).toBe(true);
+    expect(keyIsSet(payload, "custom_openai_api_key")).toBe(false);
+  });
+});
+
+describe("testKeyErrorText", () => {
+  it("names what each error is about", () => {
+    expect(testKeyErrorText({ base_url: "must be an http or https URL" })).toBe(
+      "Address: must be an http or https URL"
+    );
   });
 });
