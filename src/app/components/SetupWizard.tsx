@@ -109,18 +109,19 @@ export function SetupWizard({
   const goTo = (s: WizardStep) => setStepName(s);
   const offeredFolder = useRef(false);
   const next = () => {
-    // The desktop app suggests a folder; offer it once when none is saved,
-    // so a folder the user emptied stays empty.
+    // The desktop app suggests a folder; offer it on the first visit of the
+    // folder step when no folder is saved, so a folder the user emptied (a
+    // saved one included) stays empty.
     const nextStep = steps[index + 1];
-    if (
-      nextStep === "folder" &&
-      defaultFolder &&
-      !offeredFolder.current &&
-      isEditable(ctx, "default_workdir") &&
-      !currentText(ctx.payload, edits, "default_workdir")
-    ) {
+    if (nextStep === "folder" && !offeredFolder.current) {
       offeredFolder.current = true;
-      ctx.draft.setField("default_workdir", defaultFolder, false);
+      if (
+        defaultFolder &&
+        isEditable(ctx, "default_workdir") &&
+        !currentText(ctx.payload, edits, "default_workdir")
+      ) {
+        ctx.draft.setField("default_workdir", defaultFolder, false);
+      }
     }
     goTo(nextStep);
   };

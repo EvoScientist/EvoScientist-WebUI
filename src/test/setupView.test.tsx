@@ -914,6 +914,28 @@ describe("the setup wizard", () => {
     expect(folder().value).toBe("");
   });
 
+  it("does not offer the desktop app's folder for a saved folder the user emptied", async () => {
+    window.evoscientistDesktop = { defaultFolder: "/home/u/Documents/Evo" };
+    server.settings = settings({
+      setup_needed: true,
+      settings: { ...settings().settings, default_workdir: "/srv/work" },
+    });
+    renderView();
+    await screen.findByRole("region", { name: "Setup wizard" });
+    next();
+    next();
+    fireEvent.change(keyInput(), { target: { value: "sk-new-key-1234" } });
+    next();
+    fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+    const folder = () =>
+      screen.getByLabelText("Default folder") as HTMLInputElement;
+    expect(folder().value).toBe("/srv/work");
+    fireEvent.change(folder(), { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+    expect(folder().value).toBe("");
+  });
+
   it("does not fill in a folder set by a flag of the running EvoSci", async () => {
     window.evoscientistDesktop = { defaultFolder: "/home/u/Documents/Evo" };
     server.settings = settings({
