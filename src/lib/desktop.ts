@@ -9,7 +9,9 @@ export type RestartResult =
 
 export interface DesktopBridge {
   /** Restart the backend the app started. Resolves once the restarted
-   *  backend answers again: the page reads the settings right after. */
+   *  backend answers again: the page reads the settings right after. A
+   *  bridge that throws or answers another shape reads as
+   *  `{ ok: false, code: "failed" }`. */
   restartBackend?: () => Promise<RestartResult>;
   /** The folder the app suggests for new work, e.g. Documents/EvoScientist. */
   defaultFolder?: string;

@@ -6,9 +6,9 @@ import { deferSetup, isSetupDeferred } from "@/lib/setupDeferral";
 import { useDeployment } from "@/providers/ClientProvider";
 
 /**
- * First run: open the Setup wizard before the chat, once per deployment and
- * page load, when EvoScientist needs setup, its config parses, and this page
- * can save. Leaving Setup while it is still needed is "Configure later": the
+ * First run: open the Setup wizard before the chat when EvoScientist needs
+ * setup, its config parses, and this page can save. Decided once per
+ * deployment and page load, on the first answers the chat sees. Leaving Setup while it is still needed is "Configure later": the
  * wizard then stays closed and the chat shows a notice instead.
  */
 export function useSetupGate(
