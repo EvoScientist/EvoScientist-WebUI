@@ -168,6 +168,33 @@ describe("PATCH /api/settings", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("refuses a Host the WebUI's other routes trust when it is not loopback", async () => {
+    // backend_allowed_origins makes isCrossOrigin() accept this name; the
+    // routes that attach the secret still want a loopback Host.
+    const xdg = mkdtempSync(join(tmpdir(), "evo-xdg-"));
+    mkdirSync(join(xdg, "evoscientist"));
+    writeFileSync(
+      join(xdg, "evoscientist", "config.yaml"),
+      "backend_allowed_origins: http://lan.example:4716\n"
+    );
+    vi.stubEnv("XDG_CONFIG_HOME", xdg);
+    resetCoreConfigCache();
+    try {
+      const res = await PATCH(
+        request("/api/settings", {
+          headers: {
+            host: "lan.example:4716",
+            origin: "http://lan.example:4716",
+          },
+        })
+      );
+      expect(await res.json()).toEqual({ error: "host_not_loopback" });
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      rmSync(xdg, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     [{ origin: "http://evil.example" }],
     [{ origin: "http://localhost:3000", "sec-fetch-site": "same-site" }],

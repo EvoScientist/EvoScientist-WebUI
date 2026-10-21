@@ -252,21 +252,27 @@ describe("isCrossOrigin", () => {
   });
 
   it("re-reads the machine's addresses after a few seconds", () => {
-    expect(isCrossOrigin(req({ host: "10.0.0.7:4716" }))).toBe(true);
-    vi.mocked(networkInterfaces).mockReturnValue({
-      wlan0: [
-        {
-          address: "10.0.0.7",
-          family: "IPv4",
-          internal: false,
-          netmask: "255.0.0.0",
-          mac: "02:00:00:00:00:02",
-          cidr: "10.0.0.7/8",
-        },
-      ],
-    });
-    resetMachineAddressCache();
-    expect(isCrossOrigin(req({ host: "10.0.0.7:4716" }))).toBe(false);
+    vi.useFakeTimers();
+    try {
+      expect(isCrossOrigin(req({ host: "10.0.0.7:4716" }))).toBe(true);
+      vi.mocked(networkInterfaces).mockReturnValue({
+        wlan0: [
+          {
+            address: "10.0.0.7",
+            family: "IPv4",
+            internal: false,
+            netmask: "255.0.0.0",
+            mac: "02:00:00:00:00:02",
+            cidr: "10.0.0.7/8",
+          },
+        ],
+      });
+      expect(isCrossOrigin(req({ host: "10.0.0.7:4716" }))).toBe(true);
+      vi.advanceTimersByTime(5001);
+      expect(isCrossOrigin(req({ host: "10.0.0.7:4716" }))).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

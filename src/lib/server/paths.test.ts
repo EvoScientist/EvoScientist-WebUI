@@ -62,3 +62,23 @@ describe("configDir", () => {
     expect(configDir()).toBe(join(resolve("/srv/xdg"), "evoscientist"));
   });
 });
+
+describe("the skills and memory folders", () => {
+  // `~name` is a relative folder to the backend, not a user's home.
+  const data = "~alice/evo";
+
+  it("put memories under the data folder by the same rule", async () => {
+    vi.stubEnv("EVOSCIENTIST_DATA_DIR", data);
+    vi.stubEnv("EVOSCIENTIST_MEMORIES_DIR", "");
+    vi.stubEnv("EVOSCIENTIST_MEMORY_DIR", "");
+    const { memoryDirPath } = await import("@/lib/server/memory");
+    expect(memoryDirPath()).toBe(join(resolve(data), "memories"));
+  });
+
+  it("install skills under the data folder by the same rule", async () => {
+    vi.stubEnv("EVOSCIENTIST_DATA_DIR", data);
+    vi.resetModules();
+    const { SKILLS_INSTALL_DIR } = await import("@/lib/server/skills");
+    expect(SKILLS_INSTALL_DIR).toBe(join(resolve(data), "skills"));
+  });
+});
