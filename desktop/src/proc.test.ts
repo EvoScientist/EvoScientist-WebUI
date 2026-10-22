@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { killTree, run, withTimeout } from "./proc";
+import { killTree, run, runCollect, withTimeout } from "./proc";
 
 const node = process.execPath;
 const quiet = { info: () => {}, warn: () => {} };
@@ -80,5 +80,35 @@ describe("killTree", () => {
     await killTree(r.child.pid!, quiet, process.platform);
     const e = await withTimeout(r.closed, 5000);
     expect(e).not.toBe("timeout");
+  });
+});
+
+describe("runCollect", () => {
+  it("collects stdout lines and the exit code", async () => {
+    const r = await runCollect(
+      node,
+      ["-e", "console.log('{}'); process.exit(2)"],
+      {
+        cwd: process.cwd(),
+        env: process.env,
+        timeoutMs: 10_000,
+        log: quiet,
+      }
+    );
+    expect(r).toEqual({ timedOut: false, code: 2, stdout: ["{}"] });
+  });
+
+  it("times out and ends the process", async () => {
+    const r = await runCollect(
+      node,
+      ["-e", "console.log('slow'); setInterval(() => {}, 1000)"],
+      {
+        cwd: process.cwd(),
+        env: process.env,
+        timeoutMs: 1000,
+        log: quiet,
+      }
+    );
+    expect(r.timedOut).toBe(true);
   });
 });

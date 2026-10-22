@@ -154,3 +154,31 @@ export async function killTree(
     }
   }
 }
+
+export interface Collected {
+  timedOut: boolean;
+  code: number | null;
+  stdout: string[];
+}
+
+/** A short command (`--version --json`, the node stage): its stdout lines and
+ *  exit code, or `timedOut` after `timeoutMs`, when its tree is ended. */
+export async function runCollect(
+  file: string,
+  args: string[],
+  opts: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number; log: Logger }
+): Promise<Collected> {
+  const stdout: string[] = [];
+  const r = run(file, args, {
+    cwd: opts.cwd,
+    env: opts.env,
+    onStdoutLine: (l) => stdout.push(l),
+    onStderrLine: (l) => opts.log.info(`${args[0] ?? file} stderr: ${l}`),
+  });
+  const exit = await withTimeout(r.closed, opts.timeoutMs);
+  if (exit === "timeout") {
+    if (r.child.pid) await killTree(r.child.pid, opts.log);
+    return { timedOut: true, code: null, stdout };
+  }
+  return { timedOut: false, code: exit.code, stdout };
+}
