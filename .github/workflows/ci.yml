@@ -46,3 +46,35 @@ jobs:
 
       - name: Build
         run: npm run build
+
+  desktop:
+    name: Desktop lint & test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v7
+
+      # Electron's Node is 24; the desktop code is checked against the same.
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      # Installs no Electron binary (Electron 44 has no postinstall); the
+      # unit tests do not start Electron. Packaging stays in W04.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint and typecheck
+        run: npm run lint
+
+      - name: Unit tests
+        run: npm test

@@ -39,3 +39,8 @@ package-lock.json
 
 # local QA evidence (not committed)
 .codex-qa/
+
+# desktop app: dependencies and build output
+desktop/node_modules
+desktop/dist
+desktop/release

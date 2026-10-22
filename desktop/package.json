@@ -1,0 +1,38 @@
+{
+  "name": "evoscientist-desktop",
+  "version": "0.4.0",
+  "private": true,
+  "description": "EvoScientist desktop app: runs the installed core and the bundled WebUI in a window.",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "start": "npm run build && electron .",
+    "lint": "eslint . && tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "evoscientist": {
+    "coreRange": ">=0.3.8,<0.4",
+    "protocols": [
+      1
+    ],
+    "uiPort": 4718
+  },
+  "dependencies": {
+    "js-yaml": "^4.1.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9",
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^24",
+    "electron": "^44.9.3",
+    "eslint": "^9",
+    "globals": "^16",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.54.0",
+    "vitest": "^4.1.9"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}
