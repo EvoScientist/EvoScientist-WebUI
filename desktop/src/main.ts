@@ -54,6 +54,7 @@ import {
   type StartConfig,
 } from "./paths";
 import { killTree, runCollect } from "./proc";
+import { SessionEnd } from "./sessionEnd";
 import {
   errorScreen,
   progressScreen,
@@ -128,7 +129,7 @@ let working = false;
 let quitState: "none" | "checking" | "waiting" | "stopping" = "none";
 let quitCancelled = false;
 let relaunchAfterExit = false;
-let sessionEnding = false;
+const sessionEnd = new SessionEnd();
 let exiting = false;
 
 const uiOrigin = (): string | null => (ui ? new URL(ui.url).origin : null);
@@ -264,13 +265,18 @@ async function launchLocked(): Promise<void> {
   ready = result.ready;
   const current = result.session;
   current.onLost((e) => {
-    if (session !== current || quitState !== "none" || sessionEnding) return;
+    if (session !== current || quitState !== "none") return;
     ready = null;
-    showError({
-      code: e.code,
-      message: e.message,
-      detail: e.detail as Record<string, unknown>,
+    const shown = sessionEnd.report(() => {
+      if (session === current && quitState === "none")
+        showError({
+          code: e.code,
+          message: e.message,
+          detail: e.detail as Record<string, unknown>,
+        });
     });
+    if (shown !== "now")
+      log.info(`backend lost during the end of the session: ${shown}`);
   });
   const logDir = dirname(ready.logFile);
   log.moveTo(logDir);
@@ -326,14 +332,19 @@ async function startUiLocked(r: DeployReady): Promise<void> {
     writeUiRecord(record, null);
     ui = null;
     uiBackendUrl = null;
-    if (!showingUi || quitState !== "none" || sessionEnding) return;
-    showError({
-      code: "ui_server_exited",
-      message: `The WebUI server exited (code ${exit.code}${
-        exit.signal ? `, signal ${exit.signal}` : ""
-      }).`,
-      detail: { exit_code: exit.code },
+    if (!showingUi || quitState !== "none") return;
+    const shown = sessionEnd.report(() => {
+      if (ui === null && quitState === "none")
+        showError({
+          code: "ui_server_exited",
+          message: `The WebUI server exited (code ${exit.code}${
+            exit.signal ? `, signal ${exit.signal}` : ""
+          }).`,
+          detail: { exit_code: exit.code },
+        });
     });
+    if (shown !== "now")
+      log.info(`UI server exited during the end of the session: ${shown}`);
   });
   await started.whenAnswering(UI_START_MS);
 }
@@ -464,10 +475,12 @@ function restartBackend(): void {
 /** The end of the system session (D5): no confirmation, no memory wait. On
  *  Windows the process ends right after `session-end` returns, so this only
  *  writes one log line (synchronously) and closes both stdin pipes; the
- *  backend's job object does the rest if `deploy` dies first. */
+ *  backend's job object does the rest if `deploy` dies first. At a real
+ *  sign-out Windows has usually ended `deploy` already, right after
+ *  `query-session-end` (see sessionEnd.ts). */
 function endOfSession(why: string): void {
-  if (sessionEnding) return;
-  sessionEnding = true;
+  if (sessionEnd.ending) return;
+  sessionEnd.end();
   log.info(
     `${why}: stopping without confirmation; closing the stdin of deploy and the UI server`
   );
@@ -480,18 +493,18 @@ async function requestQuit(): Promise<void> {
   quitState = "checking";
   try {
     const owned = Boolean(ready?.owned && session);
-    if (owned && !sessionEnding && !(await confirmStop("quit"))) {
+    if (owned && !sessionEnd.ending && !(await confirmStop("quit"))) {
       quitState = "none";
       return;
     }
     // Hidden, never destroyed: a destroyed window gets no `session-end` (D5).
     win?.hide();
-    if (owned && ready && !sessionEnding) {
+    if (owned && ready && !sessionEnd.ending) {
       quitState = "waiting";
       quitCancelled = false;
       log.info("waiting for the memory workers before stopping the backend");
       const r = await waitForMemoryWorkers(backendRequest(ready.url), {
-        cancelled: () => quitCancelled || sessionEnding,
+        cancelled: () => quitCancelled || sessionEnd.ending,
       });
       log.info(`memory workers: ${r}`);
       if (r === "cancelled" && quitCancelled) {
@@ -569,9 +582,10 @@ function createWindow(): BrowserWindow {
     e.preventDefault();
     void requestQuit();
   });
-  w.on("query-session-end", (e) =>
-    log.info(`query-session-end (${e.reasons.join(",")})`)
-  );
+  w.on("query-session-end", (e) => {
+    sessionEnd.queried();
+    log.info(`query-session-end (${e.reasons.join(",")})`);
+  });
   w.on("session-end", (e) =>
     endOfSession(`session-end (${e.reasons.join(",")})`)
   );
