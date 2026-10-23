@@ -1465,7 +1465,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     );
 
     // UI preference: auto-collapse completed agent-action groups. The user can
-    // turn this off in ConfigDialog; default is on.
+    // turn this off under Settings → This browser; default is on.
     const { value: collapseAgentActions } = useCollapseAgentActions();
 
     // Detect whether an AI message has any actual rendered text content (as

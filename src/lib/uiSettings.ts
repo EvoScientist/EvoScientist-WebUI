@@ -3,6 +3,10 @@
 import { useCallback, useEffect, useState } from "react";
 
 const COLLAPSE_AGENT_ACTIONS_KEY = "evosci.ui.collapseAgentActions";
+// Same-tab writes: `storage` events fire only in other tabs, and the chat
+// stays mounted while Settings changes this. The value rides in the event so
+// readers agree even when storage refuses the write.
+const CHANGE_EVENT = "evo-collapse-agent-actions-change";
 
 function readCollapseAgentActions(): boolean {
   if (typeof window === "undefined") return true;
@@ -28,14 +32,23 @@ export function useCollapseAgentActions(): {
 } {
   const [value, setValueState] = useState<boolean>(readCollapseAgentActions);
 
-  // Pick up changes from other tabs / late init (e.g. SSR → CSR transition).
+  // Pick up changes from other tabs / late init (e.g. SSR → CSR transition),
+  // and from other readers in this tab.
   useEffect(() => {
     const onStorage = (e: StorageEvent) => {
       if (e.key !== COLLAPSE_AGENT_ACTIONS_KEY) return;
       setValueState(readCollapseAgentActions());
     };
+    const onChange = (e: Event) => {
+      const next = (e as CustomEvent<unknown>).detail;
+      if (typeof next === "boolean") setValueState(next);
+    };
     window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
+    window.addEventListener(CHANGE_EVENT, onChange);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener(CHANGE_EVENT, onChange);
+    };
   }, []);
 
   const setValue = useCallback((next: boolean) => {
@@ -46,6 +59,9 @@ export function useCollapseAgentActions(): {
       } catch {
         // Not saved when storage is blocked or full.
       }
+      window.dispatchEvent(
+        new CustomEvent<boolean>(CHANGE_EVENT, { detail: next })
+      );
     }
   }, []);
 

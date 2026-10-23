@@ -188,6 +188,28 @@ describe("ActionGroup default open/collapsed state", () => {
     // renders under hasPendingApproval, which is false here.)
     expect(screen.queryAllByTestId("chat-message")).toHaveLength(0);
   });
+
+  // Settings changes the preference while the chat stays mounted.
+  it("follows a changed preference while the user has not touched it", () => {
+    const { rerender } = render(
+      <ActionGroup {...defaultProps({ defaultCollapsed: true })} />
+    );
+    rerender(<ActionGroup {...defaultProps({ defaultCollapsed: false })} />);
+    expect(screen.getAllByTestId("chat-message").length).toBeGreaterThan(0);
+    rerender(<ActionGroup {...defaultProps({ defaultCollapsed: true })} />);
+    expect(screen.queryAllByTestId("chat-message")).toHaveLength(0);
+  });
+
+  it("keeps the user's own choice when the preference changes", () => {
+    const { rerender, container } = render(
+      <ActionGroup {...defaultProps({ defaultCollapsed: false })} />
+    );
+    fireEvent.click(container.querySelector('button[aria-expanded="true"]')!);
+    expect(screen.queryAllByTestId("chat-message")).toHaveLength(0);
+    rerender(<ActionGroup {...defaultProps({ defaultCollapsed: true })} />);
+    rerender(<ActionGroup {...defaultProps({ defaultCollapsed: false })} />);
+    expect(screen.queryAllByTestId("chat-message")).toHaveLength(0);
+  });
 });
 
 describe("ActionGroup hasPendingApproval (auto-approve gate)", () => {

@@ -137,6 +137,17 @@ export const ActionGroup = React.memo<ActionGroupProps>(function ActionGroup({
     }
   }, [isStreaming, hasPendingApproval, defaultCollapsed, isAtBottom]);
 
+  // The preference changed while this group is on screen (Settings applies it
+  // at once, with the chat still mounted): follow it, unless the user opened
+  // or closed the group themselves.
+  const shownDefaultRef = useRef(defaultCollapsed);
+  useEffect(() => {
+    if (shownDefaultRef.current === defaultCollapsed) return;
+    shownDefaultRef.current = defaultCollapsed;
+    if (userTouchedRef.current) return;
+    setOpen(!defaultCollapsed);
+  }, [defaultCollapsed]);
+
   // One AI message can carry several tool calls, so count the actual actions
   // rather than the number of message containers in this group.
   const count = items.reduce((total, item) => total + item.toolCalls.length, 0);

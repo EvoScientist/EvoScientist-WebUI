@@ -23,6 +23,12 @@ import { useSettings } from "@/app/hooks/useSettings";
 import { useSetupGate } from "@/app/hooks/useSetupGate";
 import { deferSetup, resetSetupDeferral } from "@/lib/setupDeferral";
 
+// jsdom has no scrollIntoView; Radix Select calls it on the item it focuses
+// when the provider list opens.
+if (!Element.prototype.scrollIntoView) {
+  Element.prototype.scrollIntoView = function scrollIntoView() {};
+}
+
 const DEPLOYMENT = "http://127.0.0.1:6174";
 const INSTANCE = "0123456789abcdef";
 
@@ -160,15 +166,117 @@ const wrapper = ({ children }: { children: ReactNode }) => (
   </SWRConfig>
 );
 
-function renderView(onClose = vi.fn()) {
-  render(<SetupView onClose={onClose} />, { wrapper });
-  return { onClose };
+function renderView(onClose = vi.fn(), entry: "setup" | "settings" = "setup") {
+  const onSaveUrl = vi.fn();
+  const onFormShown = vi.fn();
+  render(
+    <SetupView
+      entry={entry}
+      onClose={onClose}
+      onSaveDeploymentUrl={onSaveUrl}
+      onFormShown={onFormShown}
+    />,
+    { wrapper }
+  );
+  return { onClose, onSaveUrl, onFormShown };
 }
+
+const renderSettingsPage = () => renderView(vi.fn(), "settings");
 
 const keyInput = () =>
   screen.getByLabelText("OpenAI API key") as HTMLInputElement;
 
+// The provider is picked from an in-page list (a Radix Select, like the
+// model's menu): open it, then choose the option by the name it shows.
+async function chooseProvider(label: string) {
+  fireEvent.click(await screen.findByLabelText("Provider"));
+  fireEvent.click(await screen.findByRole("option", { name: label }));
+}
+
 describe("the Setup form", () => {
+  // The same in-page list as the model's menu, and pick-only: a provider
+  // EvoScientist does not list cannot be typed in.
+  it("picks the provider from an in-page list, not by typing", async () => {
+    renderView();
+    const trigger = await screen.findByLabelText("Provider");
+    expect(trigger.tagName).toBe("BUTTON");
+    fireEvent.click(trigger);
+    const list = await screen.findByRole("listbox");
+    expect(
+      within(list)
+        .getAllByRole("option")
+        .map((o) => o.textContent)
+    ).toEqual(["OpenAI", "Ollama"]);
+    fireEvent.click(within(list).getByRole("option", { name: "Ollama" }));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Provider").textContent).toContain("Ollama")
+    );
+  });
+
+  // `undefined` would make Radix Select uncontrolled and keep the discarded
+  // pick on screen; an empty saved provider must show the placeholder again.
+  it("shows no provider again after Discard when none is saved", async () => {
+    server.settings = settings({
+      settings: { ...settings().settings, provider: "" },
+    });
+    renderView();
+    await chooseProvider("OpenAI");
+    expect(screen.getByLabelText("Provider").textContent).toContain("OpenAI");
+    fireEvent.click(screen.getByRole("button", { name: "Discard changes" }));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Provider").textContent).toContain(
+        "Choose a provider"
+      )
+    );
+  });
+
+  // Inside the form Radix renders a hidden native <select>; the option for an
+  // unknown saved provider mounts in the same commit as the value, so that
+  // select reports "" once. Taken as a pick, it would clear provider and model.
+  it("goes back to an unknown saved provider on Discard", async () => {
+    server.settings = settings({
+      settings: { ...settings().settings, provider: "gone-provider" },
+    });
+    renderView();
+    await chooseProvider("OpenAI");
+    fireEvent.click(screen.getByRole("button", { name: "Discard changes" }));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Provider").textContent).toContain(
+        "gone-provider"
+      )
+    );
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "Discard changes",
+        }) as HTMLButtonElement
+      ).disabled
+    ).toBe(true);
+  });
+
+  it("makes no edits when a re-read brings an unknown provider", async () => {
+    renderView();
+    await screen.findByLabelText("OpenAI API key");
+    server.settings = settings({
+      settings: { ...settings().settings, provider: "gone-provider" },
+      revision: "rev-2",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Reload" }));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Provider").textContent).toContain(
+        "gone-provider"
+      )
+    );
+    await act(async () => {});
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "Discard changes",
+        }) as HTMLButtonElement
+      ).disabled
+    ).toBe(true);
+  });
+
   it("shows a stored key as its hint and keeps the field empty", async () => {
     renderView();
     await screen.findByText("Saved: …abcd");
@@ -461,10 +569,7 @@ describe("the Setup form", () => {
   });
   it("does not save a provider without a model for it", async () => {
     renderView();
-    const provider = (await screen.findByLabelText(
-      "Provider"
-    )) as HTMLSelectElement;
-    fireEvent.change(provider, { target: { value: "ollama" } });
+    await chooseProvider("Ollama");
     expect((screen.getByLabelText("Model") as HTMLInputElement).value).toBe("");
     expect(screen.getByText("Choose or type a model.")).toBeTruthy();
     expect(
@@ -703,6 +808,273 @@ describe("the Setup form", () => {
   });
 });
 
+describe("the Settings page", () => {
+  const urlInput = () =>
+    screen.getByLabelText("Deployment URL") as HTMLInputElement;
+
+  it("shows both groups on the settings entry", async () => {
+    renderSettingsPage();
+    expect(
+      await screen.findByRole("heading", { name: "General" })
+    ).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "This browser" })).toBeTruthy();
+    expect(await screen.findByLabelText("OpenAI API key")).toBeTruthy();
+    expect(urlInput().value).toBe(DEPLOYMENT);
+  });
+
+  it("shows the form, not the wizard, on the settings entry even when setup is needed", async () => {
+    server.settings = settings({ setup_needed: true });
+    renderSettingsPage();
+    await screen.findByRole("button", { name: "Save" });
+    expect(screen.queryByRole("region", { name: "Setup wizard" })).toBeNull();
+  });
+
+  it("keeps the address editable on a read-only page", async () => {
+    server.access = { writable: false, reason: "host_not_loopback" };
+    renderSettingsPage();
+    expect(
+      await screen.findByText(/These settings are read-only here/)
+    ).toBeTruthy();
+    expect(urlInput().disabled).toBe(false);
+  });
+
+  it("still offers Connection when the deployment has no settings API", async () => {
+    vi.mocked(fetch).mockImplementation(async (input) =>
+      String(input).startsWith(DEPLOYMENT)
+        ? json({ detail: "Not Found" }, 404)
+        : json(server.access)
+    );
+    renderSettingsPage();
+    expect(await screen.findByText(/no settings API/)).toBeTruthy();
+    expect(urlInput().value).toBe(DEPLOYMENT);
+  });
+
+  it("points to Connection when the settings cannot be read", async () => {
+    vi.mocked(fetch).mockImplementation(async (input) =>
+      String(input).startsWith(DEPLOYMENT)
+        ? json({ detail: "boom" }, 500)
+        : json(server.access)
+    );
+    renderSettingsPage();
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Check the address under Connection",
+      })
+    );
+    expect(document.activeElement).toBe(urlInput());
+  });
+
+  it("asks before a new address drops unsaved General edits", async () => {
+    const { onSaveUrl } = renderSettingsPage();
+    fireEvent.change(await screen.findByLabelText("OpenAI API key"), {
+      target: { value: "sk-new" },
+    });
+    fireEvent.change(urlInput(), {
+      target: { value: "http://127.0.0.1:7000" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Save deployment URL" })
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Discard and connect" })
+    );
+    expect(onSaveUrl).toHaveBeenCalledExactlyOnceWith("http://127.0.0.1:7000");
+  });
+
+  describe("section index", () => {
+    const index = () =>
+      within(screen.getByRole("navigation", { name: "Settings sections" }));
+
+    it("marks the chosen section as current and moves focus to it", async () => {
+      renderSettingsPage();
+      await screen.findByLabelText("OpenAI API key");
+      fireEvent.click(index().getByRole("button", { name: "Connection" }));
+      expect(
+        index()
+          .getByRole("button", { name: "Connection" })
+          .getAttribute("aria-current")
+      ).toBe("location");
+      expect(document.activeElement?.id).toBe("settings-connection");
+      expect(index().getByText("General")).toBeTruthy();
+      expect(index().queryByText("EvoScientist")).toBeNull();
+    });
+
+    // Named like the rest of the app (the inspector's Workspace tab); the
+    // mirrors are about downloads, not the workspace, so they have their own.
+    it("lists the General sections as Model, Search, Workspace and Mirrors", async () => {
+      renderSettingsPage();
+      await screen.findByLabelText("OpenAI API key");
+      const names = index()
+        .getAllByRole("button")
+        .map((b) => b.textContent);
+      expect(names).toEqual([
+        "Model",
+        "Search",
+        "Workspace",
+        "Mirrors",
+        "Connection",
+        "Display",
+      ]);
+      expect(
+        within(screen.getByRole("group", { name: "Workspace" })).getByLabelText(
+          "Default folder"
+        )
+      ).toBeTruthy();
+      expect(
+        within(screen.getByRole("group", { name: "Mirrors" })).getByLabelText(
+          /Use mainland China mirrors/
+        )
+      ).toBeTruthy();
+      expect(
+        within(screen.getByRole("group", { name: "Search" })).getByLabelText(
+          "Tavily API key"
+        )
+      ).toBeTruthy();
+    });
+
+    it("offers only the sections that are on the page", async () => {
+      vi.mocked(fetch).mockImplementation(async (input) =>
+        String(input).startsWith(DEPLOYMENT)
+          ? json({ detail: "Not Found" }, 404)
+          : json(server.access)
+      );
+      renderSettingsPage();
+      await screen.findByText(/no settings API/);
+      for (const name of ["Model", "Search", "Workspace", "Mirrors"]) {
+        expect(
+          (index().getByRole("button", { name }) as HTMLButtonElement).disabled
+        ).toBe(true);
+      }
+      expect(
+        (
+          index().getByRole("button", {
+            name: "Connection",
+          }) as HTMLButtonElement
+        ).disabled
+      ).toBe(false);
+    });
+
+    // A click pins its entry while the smooth scroll runs; the user scrolling
+    // on their own ends the pin, or the index would keep the clicked entry.
+    it("lets the user's own scrolling take over from a clicked entry", async () => {
+      let report: ((entries: unknown[]) => void) | null = null;
+      vi.stubGlobal(
+        "IntersectionObserver",
+        class {
+          constructor(cb: (entries: unknown[]) => void) {
+            report = cb;
+          }
+          observe() {}
+          disconnect() {}
+        }
+      );
+      renderSettingsPage();
+      await screen.findByLabelText("OpenAI API key");
+      await waitFor(() => expect(report).not.toBeNull());
+      fireEvent.click(index().getByRole("button", { name: "Connection" }));
+      const scroller = screen
+        .getByRole("navigation", { name: "Settings sections" })
+        .closest(".overflow-y-auto")!;
+      fireEvent.wheel(scroller);
+      const web = document.getElementById("settings-search")!;
+      act(() => report!([{ target: web, isIntersecting: true }]));
+      expect(
+        index()
+          .getByRole("button", { name: "Search" })
+          .getAttribute("aria-current")
+      ).toBe("location");
+    });
+
+    it("follows the section in view while the page scrolls", async () => {
+      let report: ((entries: unknown[]) => void) | null = null;
+      vi.stubGlobal(
+        "IntersectionObserver",
+        class {
+          constructor(cb: (entries: unknown[]) => void) {
+            report = cb;
+          }
+          observe() {}
+          disconnect() {}
+        }
+      );
+      renderSettingsPage();
+      await screen.findByLabelText("OpenAI API key");
+      await waitFor(() => expect(report).not.toBeNull());
+      const web = document.getElementById("settings-search")!;
+      act(() => report!([{ target: web, isIntersecting: true }]));
+      expect(
+        index()
+          .getByRole("button", { name: "Search" })
+          .getAttribute("aria-current")
+      ).toBe("location");
+      expect(
+        index()
+          .getByRole("button", { name: "Model" })
+          .getAttribute("aria-current")
+      ).toBeNull();
+    });
+  });
+
+  // The gear closes only `view=settings`; a `setup` entry showing the form
+  // hands over to it, so the first click on the pressed gear closes the page.
+  it("hands the setup entry over to Settings once it shows the form", async () => {
+    const { onFormShown } = renderView();
+    await screen.findByRole("button", { name: "Save" });
+    await waitFor(() => expect(onFormShown).toHaveBeenCalled());
+  });
+
+  // The desktop app opens `?view=setup` while EvoSci may still be starting:
+  // a first read that fails must not hand the first run over to the form.
+  it("keeps the setup entry through a failed first read, then shows the wizard", async () => {
+    server.settings = settings({ setup_needed: true });
+    const fetchMock = vi.mocked(fetch);
+    const real = fetchMock.getMockImplementation()!;
+    let failing = true;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (failing && String(input) === `${DEPLOYMENT}/api/settings`) {
+        throw new TypeError("Failed to fetch");
+      }
+      return real(input, init);
+    });
+    const { onFormShown } = renderView();
+    await screen.findByText(/could not be read/);
+    await act(async () => {});
+    expect(onFormShown).not.toHaveBeenCalled();
+    failing = false;
+    fireEvent.click(screen.getByRole("button", { name: "Reload" }));
+    await screen.findByRole("region", { name: "Setup wizard" });
+    expect(onFormShown).not.toHaveBeenCalled();
+  });
+
+  it("keeps the setup entry while the wizard shows", async () => {
+    server.settings = settings({ setup_needed: true });
+    const { onFormShown } = renderView();
+    await screen.findByRole("region", { name: "Setup wizard" });
+    await act(async () => {});
+    expect(onFormShown).not.toHaveBeenCalled();
+  });
+
+  it("cannot switch the address while the General save runs", async () => {
+    server.patch.mockImplementationOnce(
+      () => new Promise<Response>(() => {}) as unknown as Response
+    );
+    renderSettingsPage();
+    fireEvent.change(await screen.findByLabelText("OpenAI API key"), {
+      target: { value: "sk-new" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(
+        (
+          screen.getByRole("button", {
+            name: "Save deployment URL",
+          }) as HTMLButtonElement
+        ).disabled
+      ).toBe(true)
+    );
+  });
+});
+
 describe("the setup wizard", () => {
   beforeEach(() => {
     server.settings = settings({
@@ -732,7 +1104,12 @@ describe("the setup wizard", () => {
     ).toBe(true);
     fireEvent.change(keyInput(), { target: { value: "sk-new-key-1234" } });
     next();
+    expect(within(wizard).getByText("Search (optional)")).toBeTruthy();
+    expect(
+      within(wizard).getByText(/You can add one later in Settings\./)
+    ).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+    expect(within(wizard).getByText("Workspace and mirrors")).toBeTruthy();
     fireEvent.click(screen.getByLabelText(/Use mainland China mirrors/));
     next();
     expect(within(wizard).getByText("Check and finish")).toBeTruthy();
@@ -753,9 +1130,7 @@ describe("the setup wizard", () => {
     fireEvent.change(keyInput(), { target: { value: "sk-wrong-0000" } });
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
-    fireEvent.change(screen.getByLabelText("Provider"), {
-      target: { value: "ollama" },
-    });
+    await chooseProvider("Ollama");
     next();
     next();
     fireEvent.change(screen.getByLabelText("Model"), {
@@ -802,10 +1177,7 @@ describe("the setup wizard", () => {
       })
     );
     renderView();
-    const provider = (await screen.findByLabelText(
-      "Provider"
-    )) as HTMLSelectElement;
-    fireEvent.change(provider, { target: { value: "ollama" } });
+    await chooseProvider("Ollama");
     next();
     expect(screen.getByText("Connect to it")).toBeTruthy();
     fireEvent.change(screen.getByLabelText("Ollama base URL"), {
@@ -884,18 +1256,13 @@ describe("the setup wizard", () => {
       },
     });
     renderView();
-    const provider = (await screen.findByLabelText(
-      "Provider"
-    )) as HTMLSelectElement;
-    fireEvent.change(provider, { target: { value: "anthropic" } });
+    await chooseProvider("Anthropic");
     next();
     expect((screen.getByLabelText("Model") as HTMLInputElement).value).toBe(
       "claude-x"
     );
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
-    fireEvent.change(screen.getByLabelText("Provider"), {
-      target: { value: "ollama" },
-    });
+    await chooseProvider("Ollama");
     next();
     next();
     expect((screen.getByLabelText("Model") as HTMLInputElement).value).toBe("");
@@ -980,9 +1347,7 @@ describe("the setup wizard", () => {
       json({ ok: true, status: "valid", message: "", models: ["llama3.2"] })
     );
     renderView();
-    fireEvent.change(await screen.findByLabelText("Provider"), {
-      target: { value: "ollama" },
-    });
+    await chooseProvider("Ollama");
     next();
     fireEvent.change(screen.getByLabelText("Ollama base URL"), {
       target: { value: "http://127.0.0.1:11434" },
@@ -1045,9 +1410,7 @@ describe("the setup wizard", () => {
       json({ ok: true, status: "valid", message: "", models: ["m1", "m2"] })
     );
     renderView();
-    fireEvent.change(await screen.findByLabelText("Provider"), {
-      target: { value: "custom-openai" },
-    });
+    await chooseProvider("OpenAI-compatible");
     next();
     const nextButton = () =>
       screen.getByRole("button", { name: "Next" }) as HTMLButtonElement;
@@ -1085,10 +1448,12 @@ describe("the chat notice", () => {
     return onOpenSetup;
   };
 
-  it("links to Setup when setup is needed and the page can save", async () => {
+  it("links to Settings when setup is needed and the page can save", async () => {
     server.settings = settings({ setup_needed: true });
     const onOpenSetup = renderNotice();
-    fireEvent.click(await screen.findByRole("button", { name: "Open Setup" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Open Settings" })
+    );
     expect(onOpenSetup).toHaveBeenCalledOnce();
   });
 
@@ -1099,7 +1464,7 @@ describe("the chat notice", () => {
     expect(
       await screen.findByText(/Configure it on the machine that runs it/)
     ).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Open Setup" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Open Settings" })).toBeNull();
   });
 
   it("shows config_error with its path", async () => {
@@ -1187,6 +1552,32 @@ describe("the first-run gate", () => {
       DEPLOYMENT
     );
   });
+  it("counts leaving Settings as Configure later", async () => {
+    server.settings = settings({ setup_needed: true });
+    const { setView, hook } = renderGate("settings");
+    await waitFor(() => expect(server.gets).toBeGreaterThan(0));
+    await act(async () => {});
+    hook.rerender({ v: null });
+    await act(async () => {});
+    expect(setView).not.toHaveBeenCalled();
+    expect(window.sessionStorage.getItem("evoscientist-setup-later")).toContain(
+      DEPLOYMENT
+    );
+  });
+
+  // The gear opens Settings before the gate decides; the user has seen the
+  // fields there, so the chat they return to is not taken away by the wizard.
+  it("does not open the wizard over a page that started on Settings", async () => {
+    server.settings = settings({ setup_needed: true });
+    const { setView, hook } = renderGate("settings");
+    await waitFor(() => expect(server.gets).toBeGreaterThan(0));
+    await act(async () => {});
+    resetSetupDeferral();
+    hook.rerender({ v: null });
+    await act(async () => {});
+    expect(setView).not.toHaveBeenCalled();
+  });
+
   it("does not take the chat away when setup is needed later", async () => {
     const setView = vi.fn();
     const { result } = renderHook(

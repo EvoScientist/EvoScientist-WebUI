@@ -8,4 +8,5 @@ export type NavTarget =
   | { view: "workspace" }
   | { view: "experts" }
   | { view: "skills" }
-  | { view: "setup" };
+  | { view: "setup" }
+  | { view: "settings" };
