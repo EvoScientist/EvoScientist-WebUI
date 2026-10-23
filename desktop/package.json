@@ -1,5 +1,6 @@
 {
   "name": "evoscientist-desktop",
+  "productName": "EvoScientist",
   "version": "0.4.0",
   "private": true,
   "description": "EvoScientist desktop app: runs the installed core and the bundled WebUI in a window.",
@@ -9,7 +10,8 @@
     "start": "npm run build && electron .",
     "lint": "eslint . && tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "pack": "npm run build && electron-builder --dir"
   },
   "evoscientist": {
     "coreRange": ">=0.3.8,<0.4",
@@ -26,6 +28,7 @@
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^24",
     "electron": "^44.9.3",
+    "electron-builder": "^26.15.3",
     "eslint": "^9",
     "globals": "^16",
     "typescript": "^5.9.3",
@@ -34,5 +37,49 @@
   },
   "engines": {
     "node": ">=24"
+  },
+  "build": {
+    "appId": "com.evoscientist.desktop",
+    "productName": "EvoScientist",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*.js",
+      "resources/**",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../dist",
+        "to": "ui",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "../dist/node_modules",
+        "to": "ui/node_modules",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "resources/ui-entry.mjs",
+        "to": "ui-entry.mjs"
+      }
+    ],
+    "asar": true,
+    "npmRebuild": false,
+    "win": {
+      "target": "dir",
+      "executableName": "EvoScientist"
+    },
+    "mac": {
+      "target": "dir"
+    },
+    "linux": {
+      "target": "dir"
+    }
   }
 }
