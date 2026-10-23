@@ -73,7 +73,8 @@
     "npmRebuild": false,
     "win": {
       "target": "dir",
-      "executableName": "EvoScientist"
+      "executableName": "EvoScientist",
+      "signAndEditExecutable": false
     },
     "mac": {
       "target": "dir"
