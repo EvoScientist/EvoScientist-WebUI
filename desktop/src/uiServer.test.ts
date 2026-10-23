@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
@@ -136,5 +137,23 @@ describe("startUiServer with the entry script", () => {
   it("rejects whenAnswering when server.js fails to load", async () => {
     const ui = await start("throw new Error('broken bundle');");
     await expect(ui.whenAnswering(10_000)).rejects.toThrow(/exited/);
+  });
+});
+
+describe("the entry script", () => {
+  it("exits when the parent's IPC channel disconnects, with stdin still open", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "evosci-entry-"));
+    const serverJs = join(dir, "server.mjs");
+    writeFileSync(serverJs, "setInterval(() => {}, 1000);");
+    const child = spawn(process.execPath, [ENTRY], {
+      env: { ...process.env, EVOSCIENTIST_UI_SERVER_JS: serverJs },
+      stdio: ["pipe", "pipe", "pipe", "ipc"],
+    });
+    const exit = new Promise<number | null>((r) => child.once("exit", r));
+    await new Promise((r) => setTimeout(r, 500));
+    child.disconnect();
+    expect(await withTimeout(exit, 5_000)).toBe(0);
+    child.stdin?.destroy();
+    rmSync(dir, { recursive: true, force: true });
   });
 });

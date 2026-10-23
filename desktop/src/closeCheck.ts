@@ -201,3 +201,76 @@ export async function waitForMemoryWorkers(
     await pause(MEMORY_POLL_MS);
   }
 }
+
+/** What the stop is for: quitting the app, or a stop after which the backend
+ *  comes back ("Restart backend"; W03c's update and W04's "Restart to update"
+ *  use the same check). */
+export type StopPurpose = "quit" | "restart";
+
+export interface Confirmation {
+  message: string;
+  detail: string;
+  /** The first button stops, the second cancels. */
+  buttons: [string, string];
+  /** 0 (stop) for the "could not tell" case, else 1 (cancel). */
+  defaultId: 0 | 1;
+}
+
+const plural = (n: number, one: string, many: string) =>
+  `${n} ${n === 1 ? one : many}`;
+
+/** The question before stopping an owned backend, or null when nothing is
+ *  running and no scheduled task is enabled. */
+export function confirmation(
+  check: WorkCheck,
+  purpose: StopPurpose
+): Confirmation | null {
+  if (!hasWork(check)) return null;
+  const buttons: [string, string] =
+    purpose === "quit" ? ["Quit", "Cancel"] : ["Restart backend", "Cancel"];
+  const stops =
+    purpose === "quit"
+      ? "Quitting stops the backend"
+      : "Restarting stops the backend";
+  if (check.kind === "unknown") {
+    return {
+      message: "EvoScientist could not tell whether work is running.",
+      detail: `${stops}, and any work in progress with it. (The check failed: ${check.reason}.)`,
+      buttons,
+      defaultId: 0,
+    };
+  }
+  const lines: string[] = [];
+  if (check.busyThreads > 0)
+    lines.push(
+      check.busyThreads >= BUSY_LIMIT
+        ? `${BUSY_LIMIT} or more chats are still running.`
+        : `${plural(check.busyThreads, "chat is", "chats are")} still running.`
+    );
+  if (check.jobs.length > 0)
+    lines.push(`Background jobs running: ${check.jobs.join(", ")}.`);
+  const running = lines.length > 0;
+  if (running) lines.push(`${stops} and this work with it.`);
+  if (check.scheduledTasks > 0)
+    lines.push(
+      purpose === "quit"
+        ? `${plural(
+            check.scheduledTasks,
+            "scheduled task",
+            "scheduled tasks"
+          )} will not run while the app is closed.`
+        : `${plural(
+            check.scheduledTasks,
+            "scheduled task pauses",
+            "scheduled tasks pause"
+          )} only until the backend is back.`
+    );
+  return {
+    message: running
+      ? "Work is still running."
+      : "Scheduled tasks are enabled.",
+    detail: lines.join("\n"),
+    buttons,
+    defaultId: 1,
+  };
+}

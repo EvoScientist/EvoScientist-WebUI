@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   MEMORY_POLL_MS,
   checkWork,
+  confirmation,
   hasWork,
   isBackgroundThread,
   waitForMemoryWorkers,
@@ -155,5 +156,51 @@ describe("waitForMemoryWorkers", () => {
     expect(
       await waitForMemoryWorkers(busy, { cancelled: () => true, ...clock() })
     ).toBe("cancelled");
+  });
+});
+
+describe("confirmation", () => {
+  const idle = {
+    kind: "known" as const,
+    busyThreads: 0,
+    jobs: [],
+    scheduledTasks: 0,
+  };
+
+  it("asks nothing when idle", () => {
+    expect(confirmation(idle, "quit")).toBeNull();
+  });
+
+  it("names the jobs, with Cancel as the default", () => {
+    const c = confirmation(
+      { ...idle, busyThreads: 1, jobs: ["train.py"] },
+      "quit"
+    )!;
+    expect(c.message).toBe("Work is still running.");
+    expect(c.detail).toContain("1 chat is still running.");
+    expect(c.detail).toContain("Background jobs running: train.py.");
+    expect(c.buttons).toEqual(["Quit", "Cancel"]);
+    expect(c.defaultId).toBe(1);
+  });
+
+  it("says scheduled tasks will not run while closed, or pause until the backend is back", () => {
+    const tasks = { ...idle, scheduledTasks: 2 };
+    expect(confirmation(tasks, "quit")!.detail).toBe(
+      "2 scheduled tasks will not run while the app is closed."
+    );
+    const r = confirmation(tasks, "restart")!;
+    expect(r.detail).toBe(
+      "2 scheduled tasks pause only until the backend is back."
+    );
+    expect(r.buttons[0]).toBe("Restart backend");
+  });
+
+  it("asks with the could-not-tell text and Quit as the default when a probe failed", () => {
+    const c = confirmation({ kind: "unknown", reason: "timeout" }, "quit")!;
+    expect(c.message).toBe(
+      "EvoScientist could not tell whether work is running."
+    );
+    expect(c.defaultId).toBe(0);
+    expect(c.buttons[0]).toBe("Quit");
   });
 });
