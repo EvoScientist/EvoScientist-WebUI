@@ -22,6 +22,10 @@
 * {
   box-sizing: border-box;
 }
+/* The `hidden` attribute loses to any `display` rule below (#port is flex). */
+[hidden] {
+  display: none !important;
+}
 html,
 body {
   height: 100%;
