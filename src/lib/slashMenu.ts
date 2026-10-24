@@ -9,7 +9,8 @@
 
 import { PY_SPACE } from "./pythonWhitespace";
 
-const PIN_WORD = /^\/[a-z0-9]+(?:-[a-z0-9]+)*$/;
+/** A whole `/name` the backend pins. */
+export const PIN_WORD = /^\/[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const MAX_NAME = 64;
 // What may already be typed of a name: the menu filters as it grows.
 const PARTIAL = /^[a-z0-9-]*$/;
