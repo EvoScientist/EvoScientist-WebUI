@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   GOAL_MENU_COMMANDS,
   GOAL_USAGE,
+  goalPageActions,
   goalRefusal,
   goalRequest,
+  goalSummary,
   goalUsageLine,
   parseGoalCommand,
 } from "./goalCommand";
@@ -208,5 +210,87 @@ describe("GOAL_MENU_COMMANDS", () => {
     ]);
     expect(GOAL_MENU_COMMANDS.some((c) => c.run)).toBe(false);
     expect(parseGoalCommand("/goal pause")).toEqual({ kind: "pause" });
+  });
+});
+
+// The `/` menu's Goal page: what the core would take for this goal.
+describe("goalPageActions", () => {
+  const kinds = (g: ThreadGoal | null) => goalPageActions(g).map((a) => a.kind);
+
+  it("lists every goal command the core accepts, in order, for each status", () => {
+    expect(kinds(null)).toEqual(["create"]);
+    expect(kinds(goal("active"))).toEqual([
+      "amend",
+      "pause",
+      "create",
+      "clear",
+      "show",
+    ]);
+    expect(kinds(goal("paused"))).toEqual([
+      "resume",
+      "create",
+      "clear",
+      "show",
+    ]);
+    expect(kinds(goal("blocked"))).toEqual([
+      "amend",
+      "create",
+      "clear",
+      "show",
+    ]);
+    expect(kinds(goal("complete"))).toEqual(["create", "clear", "show"]);
+  });
+
+  it("offers nothing goalRefusal would refuse, and leaves out only what it refuses", () => {
+    const statuses: GoalStatus[] = ["active", "paused", "blocked", "complete"];
+    for (const status of statuses) {
+      const offered = new Set(kinds(goal(status)));
+      for (const kind of ["amend", "pause", "resume", "clear"] as const) {
+        const command = kind === "amend" ? { kind, feedback: "x" } : { kind };
+        expect([status, kind, offered.has(kind)]).toEqual([
+          status,
+          kind,
+          goalRefusal(command, goal(status)) === null,
+        ]);
+      }
+    }
+  });
+
+  it("names a new goal by whether one is set", () => {
+    expect(goalPageActions(null)[0]).toEqual({
+      kind: "create",
+      label: "Set a goal…",
+      description: "Describe it; its criteria are drafted for you to review",
+    });
+    expect(goalPageActions(goal("complete"))[0]).toEqual({
+      kind: "create",
+      label: "Set a new goal…",
+      description: "Replace this goal with a new one",
+    });
+  });
+
+  it("words every other row", () => {
+    const rows = [
+      ...goalPageActions(goal("active")),
+      ...goalPageActions(goal("paused")),
+    ].filter((a) => a.kind !== "create");
+    const copy = Object.fromEntries(
+      rows.map((a) => [a.kind, [a.label, a.description]])
+    );
+    expect(copy).toEqual({
+      amend: ["Amend the goal…", "Change the goal or its criteria"],
+      pause: ["Pause", "Stop working toward the goal for now"],
+      resume: ["Resume", "Pick the goal back up"],
+      clear: ["Clear", "Drop the goal and its criteria"],
+      show: ["Show details", "The goal, its criteria and the latest grading"],
+    });
+  });
+});
+
+describe("goalSummary", () => {
+  it("summarises the goal for the root row", () => {
+    expect(goalSummary(null)).toBe("Set a goal to keep working toward");
+    expect(goalSummary(goal("active"))).toBe("Active · Write hello");
+    expect(goalSummary(goal("complete"))).toBe("Complete · Write hello");
   });
 });
