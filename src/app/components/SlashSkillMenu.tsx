@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useLayoutEffect, useState } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   Check,
@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import type { SlashView } from "@/app/hooks/useSlashMenu";
 import type { MenuIcon } from "@/lib/slashMenu";
+import { prefersReducedMotion } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 
 // A command's icon is its pill's (the goal's target, the model's sparkles);
@@ -40,7 +41,14 @@ const ROW = "mb-0 flex cursor-pointer items-center gap-3 px-3 py-1.5 text-sm";
 const ICON = "size-3.5 shrink-0 text-muted-foreground";
 const HEADING =
   "mb-0 select-none px-3 pb-1 pt-1.5 text-xs font-medium text-muted-foreground";
-const LISTBOX = "m-0 max-h-96 min-h-0 overflow-y-auto px-0 py-1";
+const LISTBOX = "relative m-0 max-h-96 min-h-0 overflow-y-auto px-0 py-1";
+// A row is positioned, so it paints over the highlight bar behind it.
+const OPTION = "relative";
+
+// How long the menu fades out and a page slides out (globals.css cuts the
+// CSS side to nothing for reduced motion; the leaving layers are skipped).
+const EXIT_MS = 120;
+const PAGE_MS = 220;
 
 // Gap to the composer, and the margin kept from the window's top edge.
 const GAP = 6;
@@ -73,257 +81,211 @@ interface SlashSkillMenuProps {
 const plural = (n: number, one: string, many: string) =>
   `${n} ${n === 1 ? one : many}`;
 
-/**
- * The `/` menu (state in `useSlashMenu`): the commands' pages and the skills,
- * or one page's rows. It renders into the body, because the composer clips
- * what overflows it; focus stays in the textarea, which points at the active
- * option with `aria-activedescendant`.
- */
-export function SlashSkillMenu({
-  open,
-  anchorRef,
-  listboxId,
-  optionId,
-  pageId,
-  rowId,
-  activeId,
-  active,
-  view,
-  skillsKnown,
-  onChoose,
-  onHover,
-  onBack,
-  onBrowse,
-}: SlashSkillMenuProps) {
-  const [box, setBox] = useState<{
-    left: number;
-    top: number;
-    width: number;
-  } | null>(null);
+/** What draws one view of the menu: the live one, or a snapshot of it while
+ *  it leaves (a page sliding out, the menu fading). */
+type Body = Pick<
+  SlashSkillMenuProps,
+  | "listboxId"
+  | "optionId"
+  | "pageId"
+  | "rowId"
+  | "activeId"
+  | "active"
+  | "view"
+  | "onChoose"
+  | "onHover"
+  | "onBack"
+  | "onBrowse"
+>;
 
-  // Follow the composer each frame while open: it can move without resizing
-  // or scrolling (a panel opening beside the chat), and a frame's one
-  // measurement replaces a stream of scroll events.
-  useLayoutEffect(() => {
-    if (!open) return;
-    let frame = 0;
-    const measure = () => {
-      const rect = anchorRef.current?.getBoundingClientRect();
-      setBox((prev) =>
-        !rect
-          ? null
-          : prev &&
-            prev.left === rect.left &&
-            prev.top === rect.top &&
-            prev.width === rect.width
-          ? prev
-          : { left: rect.left, top: rect.top, width: rect.width }
-      );
-      frame = requestAnimationFrame(measure);
-    };
-    measure();
-    return () => cancelAnimationFrame(frame);
-  }, [open, anchorRef]);
+const viewKey = (view: SlashView) =>
+  view.kind === "page" ? `page:${view.page.word}` : "root";
 
-  useEffect(() => {
-    if (!open || !activeId) return;
-    const option = document.getElementById(activeId);
-    // A section's first row brings the section's heading into view too:
-    // with the list scrolled, wrapping to the top or stepping into Skills
-    // from above would otherwise leave the heading out of sight.
-    const before = option?.previousElementSibling;
-    if (before?.getAttribute("role") === "presentation") {
-      before.scrollIntoView?.({ block: "nearest" });
-    }
-    option?.scrollIntoView?.({ block: "nearest" });
-  }, [open, activeId]);
-
-  // Kept in the page, not in the menu, so it is announced as it changes
-  // rather than mounted with the list.
-  let status = "";
-  if (open && view.kind === "page") {
-    status = `${view.page.label}: ${
-      view.rows.length === 0
-        ? view.page.empty(view.filter)
-        : plural(view.rows.length, "option", "options")
-    }`;
-  } else if (open && view.kind === "root") {
-    const skillCount = view.marketplace
-      ? "no skills installed"
-      : skillsKnown
-      ? plural(view.skills.length, "skill", "skills")
-      : null;
-    const commandCount =
-      view.pages.length > 0
-        ? plural(view.pages.length, "command", "commands")
-        : null;
-    status = commandCount
-      ? skillCount
-        ? `${commandCount}, ${skillCount}`
-        : commandCount
-      : view.marketplace
-      ? "No skills installed"
-      : skillCount ?? "";
+/** What Enter does on the highlighted row. */
+function hintFor({ view, active }: Body): string {
+  if (view.kind === "page") {
+    return "↑ ↓ to choose · Enter to select · Type to filter · ← to go back";
   }
-  // What Enter does on the highlighted row.
-  const marketplaceIndex =
-    view.kind === "root" ? view.pages.length + view.skills.length : -1;
-  const hint =
-    view.kind === "page"
-      ? "↑ ↓ to choose · Enter to select · Type to filter · ← to go back"
-      : (view.marketplace && active === marketplaceIndex) ||
-        active < view.pages.length
-      ? "↑ ↓ to choose · Enter to open · Esc to close"
-      : "↑ ↓ to choose · Enter or Tab to add · Esc to close";
-  // Keep the composer's focus: a mousedown here would take it.
-  const keepFocus = (e: React.MouseEvent) => e.preventDefault();
+  const marketplaceIndex = view.pages.length + view.skills.length;
+  return (view.marketplace && active === marketplaceIndex) ||
+    active < view.pages.length
+    ? "↑ ↓ to choose · Enter to open · Esc to close"
+    : "↑ ↓ to choose · Enter or Tab to add · Esc to close";
+}
 
-  const rootList = view.kind === "root" && (
-    // Commands and skills each under a heading, a rule between them (the
-    // APG's grouped listbox: the headings are not options, so the keys skip
-    // them).
+/** The rows of one view: the commands' pages and the skills, or a page's
+ *  header and rows. The live view's highlight is one bar that glides to the
+ *  active row; a leaving snapshot marks its active row in place. */
+function MenuBody({
+  body,
+  live,
+  barRef,
+}: {
+  body: Body;
+  live: boolean;
+  barRef?: React.Ref<HTMLDivElement>;
+}) {
+  const { view, active, listboxId, optionId, pageId, rowId } = body;
+  const { onChoose, onHover, onBack, onBrowse } = body;
+  const rowClass = (index: number) =>
+    cn(ROW, OPTION, !live && index === active && "bg-accent");
+  const bar = live && (
     <div
-      id={listboxId}
-      role="listbox"
-      aria-label={
-        view.pages.length === 0
-          ? "Skills"
-          : view.skills.length > 0 || view.marketplace
-          ? "Commands and skills"
-          : "Commands"
-      }
-      className={LISTBOX}
-    >
-      {view.pages.length > 0 && (
-        <ul
-          role="group"
-          aria-labelledby={`${listboxId}-commands`}
-          className="m-0 list-none p-0"
-        >
-          <li
-            role="presentation"
-            id={`${listboxId}-commands`}
-            className={HEADING}
+      ref={barRef}
+      data-slot="highlight"
+      aria-hidden="true"
+      className="pointer-events-none absolute inset-x-1 left-0 top-0 rounded-md bg-accent opacity-0 transition-[transform,height,opacity] duration-150 ease-out"
+    />
+  );
+
+  if (view.kind === "root") {
+    const marketplaceIndex = view.pages.length + view.skills.length;
+    return (
+      // Commands and skills each under a heading, a rule between them (the
+      // APG's grouped listbox: the headings are not options, so the keys skip
+      // them).
+      <div
+        id={listboxId}
+        role="listbox"
+        aria-label={
+          view.pages.length === 0
+            ? "Skills"
+            : view.skills.length > 0 || view.marketplace
+            ? "Commands and skills"
+            : "Commands"
+        }
+        className={LISTBOX}
+      >
+        {bar}
+        {view.pages.length > 0 && (
+          <ul
+            role="group"
+            aria-labelledby={`${listboxId}-commands`}
+            className="m-0 list-none p-0"
           >
-            Commands
-          </li>
-          {view.pages.map((page, index) => {
-            const Icon = ICONS[page.icon];
-            return (
-              <li
-                key={page.word}
-                id={pageId(page.word)}
-                role="option"
-                aria-selected={index === active}
-                onMouseEnter={() => onHover(index)}
-                onClick={() => onChoose(index)}
-                className={cn(ROW, index === active && "bg-accent")}
-              >
-                <Icon
-                  className={ICON}
-                  aria-hidden="true"
-                />
-                <span className="shrink-0 text-foreground">{page.label}</span>
-                {/* The description gives way first; the tail keeps its
-                    place before the chevron. */}
-                <span
-                  data-slot="description"
-                  className="min-w-0 flex-1 truncate text-muted-foreground"
+            <li
+              role="presentation"
+              id={`${listboxId}-commands`}
+              className={HEADING}
+            >
+              Commands
+            </li>
+            {view.pages.map((page, index) => {
+              const Icon = ICONS[page.icon];
+              return (
+                <li
+                  key={page.word}
+                  id={pageId(page.word)}
+                  role="option"
+                  aria-selected={index === active}
+                  onMouseEnter={() => onHover(index)}
+                  onClick={() => onChoose(index)}
+                  className={rowClass(index)}
                 >
-                  {page.description}
-                </span>
-                {page.tail && (
+                  <Icon
+                    className={ICON}
+                    aria-hidden="true"
+                  />
+                  <span className="shrink-0 text-foreground">{page.label}</span>
+                  {/* The description gives way first; the tail keeps its
+                      place before the chevron. */}
                   <span
-                    data-slot="tail"
-                    className="max-w-[40%] shrink-0 truncate text-xs text-muted-foreground"
+                    data-slot="description"
+                    className="min-w-0 flex-1 truncate text-muted-foreground"
                   >
-                    {page.tail}
+                    {page.description}
                   </span>
-                )}
-                <ChevronRight
-                  data-slot="chevron"
-                  className={ICON}
-                  aria-hidden="true"
-                />
-              </li>
-            );
-          })}
-        </ul>
-      )}
-      {(view.skills.length > 0 || view.marketplace) && (
-        <ul
-          role="group"
-          aria-labelledby={`${listboxId}-skills`}
-          className={cn(
-            "m-0 list-none p-0",
-            view.pages.length > 0 &&
-              "mt-1 border-0 border-t border-solid border-border pt-1"
-          )}
-        >
-          <li
-            role="presentation"
-            id={`${listboxId}-skills`}
-            className={HEADING}
+                  {page.tail && (
+                    <span
+                      data-slot="tail"
+                      className="max-w-[40%] shrink-0 truncate text-xs text-muted-foreground"
+                    >
+                      {page.tail}
+                    </span>
+                  )}
+                  <ChevronRight
+                    data-slot="chevron"
+                    className={ICON}
+                    aria-hidden="true"
+                  />
+                </li>
+              );
+            })}
+          </ul>
+        )}
+        {(view.skills.length > 0 || view.marketplace) && (
+          <ul
+            role="group"
+            aria-labelledby={`${listboxId}-skills`}
+            className={cn(
+              "m-0 list-none p-0",
+              view.pages.length > 0 &&
+                "mt-1 border-0 border-t border-solid border-border pt-1"
+            )}
           >
-            Skills
-          </li>
-          {view.skills.map((skill, skillIndex) => {
-            // One index over the pages, then the skills.
-            const index = view.pages.length + skillIndex;
-            return (
+            <li
+              role="presentation"
+              id={`${listboxId}-skills`}
+              className={HEADING}
+            >
+              Skills
+            </li>
+            {view.skills.map((skill, skillIndex) => {
+              // One index over the pages, then the skills.
+              const index = view.pages.length + skillIndex;
+              return (
+                <li
+                  key={skill.name}
+                  id={optionId(skill.name)}
+                  role="option"
+                  aria-selected={index === active}
+                  onMouseEnter={() => onHover(index)}
+                  onClick={() => onChoose(index)}
+                  className={rowClass(index)}
+                >
+                  <Puzzle
+                    className={ICON}
+                    aria-hidden="true"
+                  />
+                  {/* A name too long for the row truncates; the source keeps
+                      its place. */}
+                  <span className="min-w-0 truncate font-mono text-foreground">
+                    /{skill.name}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-muted-foreground">
+                    {skill.description}
+                  </span>
+                  <span className="shrink-0 text-xs text-muted-foreground">
+                    {skill.source === "workspace" ? "Workspace" : "Global"}
+                  </span>
+                </li>
+              );
+            })}
+            {view.marketplace && (
               <li
-                key={skill.name}
-                id={optionId(skill.name)}
+                id={optionId(null)}
                 role="option"
-                aria-selected={index === active}
-                onMouseEnter={() => onHover(index)}
-                onClick={() => onChoose(index)}
-                className={cn(ROW, index === active && "bg-accent")}
+                aria-selected={marketplaceIndex === active}
+                onMouseEnter={() => onHover(marketplaceIndex)}
+                onClick={onBrowse}
+                className={cn(rowClass(marketplaceIndex), "py-2")}
               >
                 <Puzzle
                   className={ICON}
                   aria-hidden="true"
                 />
-                {/* A name too long for the row truncates; the source keeps
-                    its place. */}
-                <span className="min-w-0 truncate font-mono text-foreground">
-                  /{skill.name}
-                </span>
-                <span className="min-w-0 flex-1 truncate text-muted-foreground">
-                  {skill.description}
-                </span>
-                <span className="shrink-0 text-xs text-muted-foreground">
-                  {skill.source === "workspace" ? "Workspace" : "Global"}
+                <span className="text-muted-foreground">
+                  No skills installed. Browse the Skills marketplace
                 </span>
               </li>
-            );
-          })}
-          {view.marketplace && (
-            <li
-              id={optionId(null)}
-              role="option"
-              aria-selected={marketplaceIndex === active}
-              onMouseEnter={() => onHover(marketplaceIndex)}
-              onClick={onBrowse}
-              className={cn(
-                ROW,
-                "py-2 text-muted-foreground",
-                marketplaceIndex === active && "bg-accent"
-              )}
-            >
-              <Puzzle
-                className={ICON}
-                aria-hidden="true"
-              />
-              No skills installed. Browse the Skills marketplace
-            </li>
-          )}
-        </ul>
-      )}
-    </div>
-  );
+            )}
+          </ul>
+        )}
+      </div>
+    );
+  }
 
-  const pageList = view.kind === "page" && (
+  return (
     <>
       <div className="flex shrink-0 items-center gap-1.5 border-0 border-b border-solid border-border py-1 pl-1.5 pr-3">
         <button
@@ -362,6 +324,7 @@ export function SlashSkillMenu({
         aria-label={view.page.label}
         className={LISTBOX}
       >
+        {bar}
         {view.rows.length > 0 && (
           <ul
             role="presentation"
@@ -378,7 +341,7 @@ export function SlashSkillMenu({
                   data-tone={row.danger ? "danger" : undefined}
                   onMouseEnter={() => onHover(index)}
                   onClick={() => onChoose(index)}
-                  className={cn(ROW, index === active && "bg-accent")}
+                  className={rowClass(index)}
                 >
                   {Icon ? (
                     <Icon
@@ -429,6 +392,187 @@ export function SlashSkillMenu({
       )}
     </>
   );
+}
+
+/**
+ * The `/` menu (state in `useSlashMenu`): the commands' pages and the skills,
+ * or one page's rows. It renders into the body, because the composer clips
+ * what overflows it; focus stays in the textarea, which points at the active
+ * option with `aria-activedescendant`. It fades in and out, a page slides in
+ * over the one it leaves, the box eases to its new height and the highlight
+ * glides; what leaves is out of reach (aria-hidden, inert) at once.
+ */
+export function SlashSkillMenu({
+  open,
+  anchorRef,
+  skillsKnown,
+  ...rest
+}: SlashSkillMenuProps) {
+  const body: Body = rest;
+  const { view, activeId } = body;
+  const key = viewKey(view);
+  const reduced = prefersReducedMotion();
+  const [box, setBox] = useState<{
+    left: number;
+    top: number;
+    width: number;
+  } | null>(null);
+  // What leaves: the menu while it fades, a page while the next slides in.
+  const [closing, setClosing] = useState<Body | null>(null);
+  const [leaving, setLeaving] = useState<{
+    body: Body;
+    back: boolean;
+  } | null>(null);
+  // The last open render's view, for either to leave from.
+  const shown = useRef<{ key: string; body: Body } | null>(null);
+  const viewport = useRef<HTMLDivElement | null>(null);
+  const current = useRef<HTMLDivElement | null>(null);
+  const bar = useRef<HTMLDivElement | null>(null);
+  const height = useRef<{ to: number | null; timer: number }>({
+    to: null,
+    timer: 0,
+  });
+
+  // Follow the composer each frame while open: it can move without resizing
+  // or scrolling (a panel opening beside the chat), and a frame's one
+  // measurement replaces a stream of scroll events.
+  useLayoutEffect(() => {
+    if (!open) return;
+    let frame = 0;
+    const measure = () => {
+      const rect = anchorRef.current?.getBoundingClientRect();
+      setBox((prev) =>
+        !rect
+          ? null
+          : prev &&
+            prev.left === rect.left &&
+            prev.top === rect.top &&
+            prev.width === rect.width
+          ? prev
+          : { left: rect.left, top: rect.top, width: rect.width }
+      );
+      frame = requestAnimationFrame(measure);
+    };
+    measure();
+    return () => cancelAnimationFrame(frame);
+  }, [open, anchorRef]);
+
+  // A new view slides in over the last one; a menu that shuts fades out.
+  // Before `shown` takes this render (the effect after this one).
+  useLayoutEffect(() => {
+    const last = shown.current;
+    if (open) {
+      setClosing(null);
+      if (!last || last.key === key || reduced) return;
+      setLeaving({ body: last.body, back: key === "root" });
+      const timer = window.setTimeout(() => setLeaving(null), PAGE_MS);
+      return () => window.clearTimeout(timer);
+    }
+    setLeaving(null);
+    shown.current = null;
+    if (!last || reduced) return;
+    setClosing(last.body);
+    const timer = window.setTimeout(() => setClosing(null), EXIT_MS);
+    return () => window.clearTimeout(timer);
+  }, [open, key, reduced]);
+  useLayoutEffect(() => {
+    if (open) shown.current = { key, body };
+  });
+
+  // The box eases from its last height to the new one (a new page, rows
+  // filtered away), then follows its content again.
+  useLayoutEffect(() => {
+    const vp = viewport.current;
+    const content = current.current;
+    const h = height.current;
+    if (!open || !vp || !content) {
+      h.to = null;
+      return;
+    }
+    const to = content.offsetHeight;
+    const from = h.to;
+    h.to = to;
+    if (reduced || from === null || from === to) return;
+    vp.style.height = `${from}px`;
+    void vp.offsetHeight;
+    vp.style.transition = "height 200ms cubic-bezier(.2,.8,.2,1)";
+    vp.style.height = `${to}px`;
+    window.clearTimeout(h.timer);
+    h.timer = window.setTimeout(() => {
+      vp.style.height = "";
+      vp.style.transition = "";
+    }, PAGE_MS);
+  });
+  useEffect(() => {
+    const h = height.current;
+    return () => window.clearTimeout(h.timer);
+  }, []);
+
+  // The highlight bar glides to the active option; placed the first time
+  // without a glide, and hidden while no option is active.
+  useLayoutEffect(() => {
+    const el = bar.current;
+    if (!el) return;
+    const option = activeId ? document.getElementById(activeId) : null;
+    if (!option || !el.parentElement?.contains(option)) {
+      el.style.opacity = "0";
+      return;
+    }
+    const first = el.dataset.placed !== "true";
+    if (first) el.style.transition = "none";
+    el.style.opacity = "1";
+    el.style.transform = `translateY(${option.offsetTop}px)`;
+    el.style.height = `${option.offsetHeight}px`;
+    if (first) {
+      void el.offsetHeight;
+      el.style.transition = "";
+      el.dataset.placed = "true";
+    }
+  });
+
+  useEffect(() => {
+    if (!open || !activeId) return;
+    const option = document.getElementById(activeId);
+    // A section's first row brings the section's heading into view too:
+    // with the list scrolled, wrapping to the top or stepping into Skills
+    // from above would otherwise leave the heading out of sight.
+    const before = option?.previousElementSibling;
+    if (before?.getAttribute("role") === "presentation") {
+      before.scrollIntoView?.({ block: "nearest" });
+    }
+    option?.scrollIntoView?.({ block: "nearest" });
+  }, [open, activeId]);
+
+  // Kept in the page, not in the menu, so it is announced as it changes
+  // rather than mounted with the list.
+  let status = "";
+  if (open && view.kind === "page") {
+    status = `${view.page.label}: ${
+      view.rows.length === 0
+        ? view.page.empty(view.filter)
+        : plural(view.rows.length, "option", "options")
+    }`;
+  } else if (open && view.kind === "root") {
+    const skillCount = view.marketplace
+      ? "no skills installed"
+      : skillsKnown
+      ? plural(view.skills.length, "skill", "skills")
+      : null;
+    const commandCount =
+      view.pages.length > 0
+        ? plural(view.pages.length, "command", "commands")
+        : null;
+    status = commandCount
+      ? skillCount
+        ? `${commandCount}, ${skillCount}`
+        : commandCount
+      : view.marketplace
+      ? "No skills installed"
+      : skillCount ?? "";
+  }
+  // Keep the composer's focus: a mousedown here would take it.
+  const keepFocus = (e: React.MouseEvent) => e.preventDefault();
+  const shownBody = open ? body : closing;
 
   return (
     <>
@@ -438,11 +582,20 @@ export function SlashSkillMenu({
       >
         {status}
       </span>
-      {open &&
+      {shownBody &&
         box &&
         createPortal(
           <div
-            className="fixed z-50 flex flex-col overflow-hidden rounded-lg border border-border bg-background shadow-lg"
+            data-slot="slash-menu"
+            data-state={open ? "open" : "closed"}
+            aria-hidden={open ? undefined : true}
+            inert={!open}
+            className={cn(
+              "fixed z-50 flex flex-col overflow-hidden rounded-lg border border-border bg-background shadow-lg",
+              open
+                ? "duration-150 animate-in fade-in-0 slide-in-from-bottom-1"
+                : "pointer-events-none duration-100 animate-out fade-out-0 slide-out-to-bottom-1 fill-mode-forwards"
+            )}
             style={{
               left: box.left,
               width: box.width,
@@ -453,13 +606,57 @@ export function SlashSkillMenu({
             }}
             onMouseDown={keepFocus}
           >
-            {rootList}
-            {pageList}
+            <div
+              ref={viewport}
+              className="relative flex min-h-0 flex-col overflow-hidden"
+            >
+              {open && leaving && (
+                <div
+                  data-slot="slash-page"
+                  data-leaving=""
+                  aria-hidden="true"
+                  inert
+                  className={cn(
+                    "pointer-events-none absolute inset-x-0 top-0 flex flex-col duration-200 animate-out fade-out-0 fill-mode-forwards",
+                    leaving.back
+                      ? "slide-out-to-right-6"
+                      : "slide-out-to-left-6"
+                  )}
+                >
+                  <MenuBody
+                    body={leaving.body}
+                    live={false}
+                  />
+                </div>
+              )}
+              <div
+                ref={current}
+                key={open ? key : "closing"}
+                data-slot="slash-page"
+                className={cn(
+                  "flex min-h-0 flex-col",
+                  open &&
+                    leaving &&
+                    cn(
+                      "duration-200 animate-in fade-in-0",
+                      leaving.back
+                        ? "slide-in-from-left-6"
+                        : "slide-in-from-right-6"
+                    )
+                )}
+              >
+                <MenuBody
+                  body={shownBody}
+                  live={open}
+                  barRef={bar}
+                />
+              </div>
+            </div>
             <p
               aria-hidden="true"
               className="shrink-0 border-t border-border px-3 py-1 text-xs text-muted-foreground"
             >
-              {hint}
+              {hintFor(shownBody)}
             </p>
           </div>,
           document.body

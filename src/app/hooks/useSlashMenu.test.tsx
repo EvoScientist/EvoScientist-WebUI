@@ -601,7 +601,9 @@ describe("useSlashMenu", () => {
       } as DOMRect);
     type("/");
     await waitFor(() => expect(options()).toHaveLength(3));
-    const menu = screen.getByRole("listbox").parentElement!;
+    const menu = screen
+      .getByRole("listbox")
+      .closest<HTMLElement>('[data-slot="slash-menu"]')!;
     expect(menu.style.left).toBe("100px");
     expect(menu.style.width).toBe("600px");
     expect(menu.style.bottom).toBe(`${window.innerHeight - 500 + 6}px`);
@@ -1324,5 +1326,84 @@ describe("useSlashMenu pages", () => {
     type("/g");
     await waitFor(() => expect(options()).toHaveLength(1));
     expect(options().some((o) => o.includes("marketplace"))).toBe(false);
+  });
+});
+
+describe("useSlashMenu motion", () => {
+  const leavingPage = () =>
+    document.querySelector('[data-slot="slash-page"][data-leaving]');
+  const menuBox = () => document.querySelector('[data-slot="slash-menu"]');
+
+  it("hides a closing menu from assistive tech at once, and removes it after its fade", async () => {
+    stubSkills();
+    render(<Composer />);
+    type("/");
+    await waitFor(() => expect(options()).toHaveLength(3));
+    key("Escape");
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(menuBox()?.getAttribute("aria-hidden")).toBe("true");
+    expect(menuBox()?.hasAttribute("inert")).toBe(true);
+    await waitFor(() => expect(menuBox()).toBeNull());
+  });
+
+  it("keeps the leaving page out of reach while the next slides in", async () => {
+    stubSkills();
+    render(<Composer pages={testPages().both} />);
+    type("/go");
+    await waitFor(() => expect(options()).toHaveLength(1));
+    key("Enter");
+    expect(screen.getAllByRole("listbox")).toHaveLength(1);
+    expect(screen.getByRole("listbox", { name: "Goal" })).toBeTruthy();
+    expect(leavingPage()?.getAttribute("aria-hidden")).toBe("true");
+    expect(leavingPage()?.hasAttribute("inert")).toBe(true);
+    await waitFor(() => expect(leavingPage()).toBeNull());
+  });
+
+  it("acts on keys pressed during a transition", async () => {
+    stubSkills();
+    const { both, runs } = testPages();
+    render(<Composer pages={both} />);
+    type("/mo");
+    await waitFor(() => expect(options()).toHaveLength(1));
+    key("Enter");
+    key("ArrowDown");
+    key("Enter");
+    expect(runs.c).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips the leaving layers when the user prefers reduced motion", async () => {
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: query.includes("reduce"),
+      media: query,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    }));
+    stubSkills();
+    render(<Composer pages={testPages().both} />);
+    type("/go");
+    await waitFor(() => expect(options()).toHaveLength(1));
+    key("Enter");
+    expect(leavingPage()).toBeNull();
+    key("Escape");
+    key("Escape");
+    expect(menuBox()).toBeNull();
+  });
+
+  it("moves one highlight bar to the active option", async () => {
+    stubSkills();
+    render(<Composer pages={testPages().both} />);
+    type("/");
+    await waitFor(() => expect(options()).toHaveLength(5));
+    const bars = screen
+      .getByRole("listbox")
+      .querySelectorAll('[data-slot="highlight"]');
+    expect(bars).toHaveLength(1);
+    expect(bars[0].getAttribute("aria-hidden")).toBe("true");
+    expect(
+      screen
+        .getAllByRole("option")
+        .some((o) => o.className.includes("bg-accent"))
+    ).toBe(false);
+    expect(activeOption()?.getAttribute("aria-selected")).toBe("true");
   });
 });
