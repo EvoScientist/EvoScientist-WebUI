@@ -245,7 +245,8 @@ function unsentSnapshot(
  *  an otherwise empty composer, alone: glued to more text, Enter would send
  *  it all as one goal. `isCommand` says what a text would go out as now (on
  *  a backend without goals "/goal …" is a message). The commands left out
- *  are `notSent`; their files stay attached, so a fold drops no file. */
+ *  are `notSent`, each with its own files: on a draft they would go out
+ *  with an unrelated message, so the notice names them instead. */
 function foldBack(
   items: ComposerItem[],
   draft: string,
@@ -257,31 +258,9 @@ function foldBack(
   const base = unsentSnapshot(messages, draft, attached);
   if (!base.text && base.files.length === 0 && commands.length > 0) {
     const [first, ...others] = commands;
-    return {
-      text: first.text.trim(),
-      files: withFilesOf(first.files, others),
-      notSent: others,
-    };
+    return { text: first.text.trim(), files: first.files, notSent: others };
   }
-  return {
-    ...base,
-    files: withFilesOf(base.files, commands),
-    notSent: commands,
-  };
-}
-
-/** `files`, then the files of `items` not among them (by path). */
-function withFilesOf(
-  files: UploadedWorkspaceFile[],
-  items: ComposerItem[]
-): UploadedWorkspaceFile[] {
-  const seen = new Set(files.map((f) => f.path));
-  return [
-    ...files,
-    ...items
-      .flatMap((m) => m.files)
-      .filter((f) => !seen.has(f.path) && seen.add(f.path)),
-  ];
+  return { ...base, notSent: commands };
 }
 
 /** The `/` menu's commands by name, where the backend runs goals; /model's
@@ -342,11 +321,13 @@ function CopyLeftOut({ text, name }: { text: string; name: string }) {
 /** Commands that didn't go out and couldn't come back to the composer: one
  *  notice that stays until closed, listing them in order (it scrolls), each
  *  with its own Copy, since copied together they would read as one goal. */
-function sayNotSent(texts: string[]) {
-  const items = texts.map((t) => t.trim()).filter(Boolean);
+function sayNotSent(left: ComposerItem[]) {
+  const items = left
+    .map((m) => ({ text: m.text.trim(), files: m.files }))
+    .filter((m) => m.text);
   if (items.length === 0) return;
   const name =
-    items.length > 1 ? `${items.length} commands` : firstLineOf(items[0]);
+    items.length > 1 ? `${items.length} commands` : firstLineOf(items[0].text);
   toast.info(`Not sent: ${name}`, {
     duration: Infinity,
     description: (
@@ -358,13 +339,20 @@ function sayNotSent(texts: string[]) {
         aria-label="Commands not sent"
         className="m-0 flex max-h-40 list-none flex-col gap-2 overflow-y-auto p-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
-        {items.map((text, index) => (
+        {items.map(({ text, files }, index) => (
           <li
             key={index}
-            className="flex items-start gap-2"
+            className="mb-0 flex items-start gap-2"
           >
             <span className="min-w-0 flex-1 whitespace-pre-wrap break-words">
               {text}
+              {/* Its files stay in the workspace; named here, as they
+                  can't come back with it onto another text. */}
+              {files.length > 0 && (
+                <span className="mt-0.5 block text-xs text-muted-foreground">
+                  Attached: {files.map((f) => f.name).join(", ")}
+                </span>
+              )}
             </span>
             {/* Two commands can start alike (two amends): say which. */}
             <CopyLeftOut
@@ -513,7 +501,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
           // The new chat runs on the chat graph, whatever this thread's.
           goalCommandFor(chatGoalSupportedRef.current)
         );
-        sayNotSent(back.notSent.map((m) => m.text));
+        sayNotSent(back.notSent);
         return {
           text: back.text,
           files: back.files,
@@ -717,7 +705,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         setQueuedMessages([]);
         setInput(back.text);
         setPendingFiles(back.files);
-        sayNotSent(back.notSent.map((m) => m.text));
+        sayNotSent(back.notSent);
         return !back.notSent.includes(refused);
       });
       return () => setRefusalHandler(null);
@@ -1150,7 +1138,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
           setInput(back.text);
           setPendingFiles(back.files);
         }
-        sayNotSent(back.notSent.map((m) => m.text));
+        sayNotSent(back.notSent);
       }
     }, [
       canSend,

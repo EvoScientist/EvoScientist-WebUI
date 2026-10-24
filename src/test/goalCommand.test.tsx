@@ -554,16 +554,23 @@ describe("/goal in the composer", () => {
     expect(screen.getByText("a.txt")).toBeTruthy();
   });
 
-  it("keeps a refused command's files when a draft takes the composer", async () => {
+  // With a draft in the composer the command goes to the "Not sent" notice,
+  // and its files go with it (named there): put on the draft, they would be
+  // sent with an unrelated message (Codex on the CodeRabbit fix).
+  it("leaves a refused command's files with it, not on the draft", async () => {
     const { textarea } = await queueGoalWithFiles();
-    fireEvent.change(textarea, { target: { value: "my draft" } });
+    // The draft stays as typed: a rewrite would drop its final line break
+    // and move the caret (independent review of 854007e).
+    fireEvent.change(textarea, { target: { value: "my draft\n" } });
     act(() => {
       stream.setLoading(false);
     });
     await waitFor(() => expect(notSent()).toEqual(["/goal write x"]));
     expect(submits()).toHaveLength(0);
-    expect(textarea.value).toBe("my draft");
-    expect(screen.getByText("a.txt")).toBeTruthy();
+    expect(textarea.value).toBe("my draft\n");
+    expect(screen.queryByText("a.txt")).toBeNull();
+    const { container } = showNotSent();
+    expect(container.textContent).toContain("Attached: a.txt");
   });
 
   // The backend refusing a goal request's run (W02's fold): the /goal text
