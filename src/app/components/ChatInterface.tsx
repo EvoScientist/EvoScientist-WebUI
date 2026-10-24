@@ -245,7 +245,7 @@ function unsentSnapshot(
  *  an otherwise empty composer, alone: glued to more text, Enter would send
  *  it all as one goal. `isCommand` says what a text would go out as now (on
  *  a backend without goals "/goal …" is a message). The commands left out
- *  are `notSent`. */
+ *  are `notSent`; their files stay attached, so a fold drops no file. */
 function foldBack(
   items: ComposerItem[],
   draft: string,
@@ -257,9 +257,31 @@ function foldBack(
   const base = unsentSnapshot(messages, draft, attached);
   if (!base.text && base.files.length === 0 && commands.length > 0) {
     const [first, ...others] = commands;
-    return { text: first.text.trim(), files: first.files, notSent: others };
+    return {
+      text: first.text.trim(),
+      files: withFilesOf(first.files, others),
+      notSent: others,
+    };
   }
-  return { ...base, notSent: commands };
+  return {
+    ...base,
+    files: withFilesOf(base.files, commands),
+    notSent: commands,
+  };
+}
+
+/** `files`, then the files of `items` not among them (by path). */
+function withFilesOf(
+  files: UploadedWorkspaceFile[],
+  items: ComposerItem[]
+): UploadedWorkspaceFile[] {
+  const seen = new Set(files.map((f) => f.path));
+  return [
+    ...files,
+    ...items
+      .flatMap((m) => m.files)
+      .filter((f) => !seen.has(f.path) && seen.add(f.path)),
+  ];
 }
 
 /** The `/` menu's commands by name, where the backend runs goals; /model's
@@ -662,6 +684,12 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     const sendComposerText = useCallback(
       (text: string, files: UploadedWorkspaceFile[]): ComposerSendResult => {
         const command = goalSupported === true ? parseGoalCommand(text) : null;
+        // A goal can't carry files: Enter refuses them, and so does a drain
+        // (a "/goal …" queued while goal support was unknown).
+        if (command && files.length > 0) {
+          toast.warning("A goal can't carry files; send them in a message.");
+          return "kept";
+        }
         if (command) return runGoalCommand(command, text);
         return sendMessage(formatMessageWithFiles(text, files))
           ? "sent"

@@ -214,5 +214,9 @@ describe("AskUserInterrupt", () => {
     expect(prompt.textContent).toContain("- one\n- two");
     expect(prompt.className).toContain("whitespace-pre-wrap");
     expect(prompt.className).toContain("overflow-y-auto");
+    // A keyboard reaches it to scroll a long one, with a visible focus ring
+    // (CodeRabbit, #102).
+    expect(prompt.getAttribute("tabindex")).toBe("0");
+    expect(prompt.className).toContain("focus-visible:ring-2");
   });
 });

@@ -75,8 +75,9 @@ export function AskUserInterrupt({
             <p
               id={`${questionIdPrefix}-question-${i}`}
               // A goal's review lists its criteria one per line, up to
-              // 12,000 characters.
-              className="mb-2 max-h-[40vh] overflow-y-auto whitespace-pre-wrap break-words text-sm font-medium text-foreground"
+              // 12,000 characters: focusable, so a keyboard can scroll it.
+              tabIndex={0}
+              className="mb-2 max-h-[40vh] overflow-y-auto whitespace-pre-wrap break-words rounded-sm text-sm font-medium text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               {q.question}
               {!isOptional(q) && (

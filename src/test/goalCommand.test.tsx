@@ -514,6 +514,58 @@ describe("/goal in the composer", () => {
     expect(submits()).toHaveLength(0);
   });
 
+  // Queued while goal support was unknown, "/goal …" with files is refused
+  // when it drains, as Enter refuses it: it comes back with its files
+  // instead of going out as a goal request without them (CodeRabbit, #102).
+  async function queueGoalWithFiles() {
+    let answer: (value: unknown) => void = () => {};
+    getActiveMockClient().assistants.getSchemas.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        })
+    );
+    const files = [{ name: "a.txt", path: "/a.txt", size: 1 }];
+    const view = await mount(
+      { draftSeed: { text: "/goal write x", files } },
+      { goals: false }
+    );
+    act(() => {
+      stream.setLoading(true);
+    });
+    fireEvent.keyDown(view.textarea, { key: "Enter" });
+    expect(view.textarea.value).toBe("");
+    await act(async () => {
+      answer(WITH_GOAL);
+    });
+    return view;
+  }
+
+  it("hands a drained /goal with files back, files and all", async () => {
+    const { textarea } = await queueGoalWithFiles();
+    act(() => {
+      stream.setLoading(false);
+    });
+    await waitFor(() => expect(textarea.value).toBe("/goal write x"));
+    expect(submits()).toHaveLength(0);
+    expect(toast.warning).toHaveBeenCalledWith(
+      "A goal can't carry files; send them in a message."
+    );
+    expect(screen.getByText("a.txt")).toBeTruthy();
+  });
+
+  it("keeps a refused command's files when a draft takes the composer", async () => {
+    const { textarea } = await queueGoalWithFiles();
+    fireEvent.change(textarea, { target: { value: "my draft" } });
+    act(() => {
+      stream.setLoading(false);
+    });
+    await waitFor(() => expect(notSent()).toEqual(["/goal write x"]));
+    expect(submits()).toHaveLength(0);
+    expect(textarea.value).toBe("my draft");
+    expect(screen.getByText("a.txt")).toBeTruthy();
+  });
+
   // The backend refusing a goal request's run (W02's fold): the /goal text
   // comes back only to an empty composer.
   it("keeps the draft when a refused goal request comes back", async () => {
