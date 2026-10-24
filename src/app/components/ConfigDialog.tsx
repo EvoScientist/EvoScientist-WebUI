@@ -1,5 +1,9 @@
 "use client";
 
+// The first screen's Configuration dialog: shown only before this browser has
+// saved any deployment URL, when the rest of the page can't render yet. Once
+// one is saved, the header gear opens the Settings page instead.
+
 import { useState, useEffect, useRef } from "react";
 import {
   Dialog,
@@ -13,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { DeploymentConfig } from "@/lib/config";
+import { deploymentUrlError } from "@/lib/deploymentUrl";
 import { useCollapseAgentActions } from "@/lib/uiSettings";
 
 interface ConfigDialogProps {
@@ -58,21 +63,14 @@ export function ConfigDialog({
   }, [open, initialConfig]);
 
   const handleSave = () => {
-    const url = deploymentUrl.trim();
-    if (!url) {
-      setError("Enter your deployment URL to continue.");
-      inputRef.current?.focus();
-      return;
-    }
-    try {
-      new URL(url);
-    } catch {
-      setError("Enter a valid URL, e.g. http://127.0.0.1:6174");
+    const problem = deploymentUrlError(deploymentUrl);
+    if (problem) {
+      setError(problem);
       inputRef.current?.focus();
       return;
     }
 
-    onSave({ ...initialConfig, deploymentUrl: url });
+    onSave({ ...initialConfig, deploymentUrl: deploymentUrl.trim() });
     onOpenChange(false);
   };
 

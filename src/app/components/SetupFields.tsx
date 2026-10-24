@@ -4,6 +4,7 @@
 // reads the saved value from GET /api/settings, shows the unsaved change
 // from the draft, and explains why it cannot be edited when it cannot.
 
+import { useRef, useState } from "react";
 import { Check, ChevronDown, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -14,6 +15,13 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   useAvailableModels,
   type ModelRegistryEntry,
@@ -38,8 +46,12 @@ import {
 } from "@/lib/settingsForm";
 import { cn } from "@/lib/utils";
 
-const selectClass =
-  "h-9 w-full rounded-md border border-input bg-background py-1.5 pl-2.5 pr-8 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50";
+// The provider list's trigger, drawn like the Input next to it (height,
+// padding, background, focus ring, 16 px text below 768 px like the inputs).
+// globals.css sets `button { border: none }`, so the border needs its style
+// back.
+const providerTriggerClass =
+  "h-9 border-solid bg-transparent px-3 py-1 text-base shadow-xs md:text-sm transition-[color,box-shadow] dark:bg-input/30 focus:ring-0 focus:ring-offset-0 focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50";
 
 function FieldNotes({ ctx, field }: { ctx: FieldContext; field: string }) {
   const shadow = shadowOf(ctx, field);
@@ -139,25 +151,40 @@ export function ProviderField({ ctx }: { ctx: FieldContext }) {
       field="provider"
       label="Provider"
     >
-      <select
-        id="setting-provider"
+      {/* Pick-only, in the same in-page list as the model's menu (a native
+          <select> opens the system's own popup). */}
+      <Select
+        // Always controlled: "" shows the placeholder, while `undefined` would
+        // let Radix keep a pick that Discard has dropped.
         value={value}
+        // No item has the value "": in a form Radix also renders a hidden
+        // native <select>, which reports "" once when an unknown saved provider
+        // and its item arrive together (Discard, a re-read). Not a pick.
+        onValueChange={(next) => {
+          if (next) choose(next);
+        }}
         disabled={!isEditable(ctx, "provider")}
-        onChange={(e) => choose(e.target.value)}
-        className={selectClass}
       >
-        {!ctx.payload.providers[value] && (
-          <option value={value}>{value}</option>
-        )}
-        {providers.map(([name, info]) => (
-          <option
-            key={name}
-            value={name}
-          >
-            {info.label}
-          </option>
-        ))}
-      </select>
+        <SelectTrigger
+          id="setting-provider"
+          className={providerTriggerClass}
+        >
+          <SelectValue placeholder="Choose a provider" />
+        </SelectTrigger>
+        <SelectContent className="max-h-[min(18rem,var(--radix-select-content-available-height))]">
+          {value && !ctx.payload.providers[value] && (
+            <SelectItem value={value}>{value}</SelectItem>
+          )}
+          {providers.map(([name, info]) => (
+            <SelectItem
+              key={name}
+              value={name}
+            >
+              {info.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     </FieldShell>
   );
 }
@@ -172,6 +199,9 @@ export function ModelField({
   const suggestions = modelSuggestions(ctx, registry);
   const value = currentText(ctx.payload, ctx.draft.edits, "model");
   const editable = isEditable(ctx, "model");
+  // The menu spans the field, as the provider's list does.
+  const fieldRef = useRef<HTMLDivElement | null>(null);
+  const [menuWidth, setMenuWidth] = useState<number | undefined>(undefined);
   // A menu of every suggestion next to a free text field: a <datalist>
   // shows only the options that match what the field already holds, so a
   // prefilled model hid the whole list.
@@ -182,7 +212,10 @@ export function ModelField({
       label="Model"
       description="Pick one from the list or type a model name."
     >
-      <div className="flex gap-2">
+      <div
+        ref={fieldRef}
+        className="relative"
+      >
         <Input
           id="setting-model"
           autoComplete="off"
@@ -191,13 +224,17 @@ export function ModelField({
           disabled={!editable}
           onChange={(e) => ctx.draft.setField("model", e.target.value, false)}
           aria-invalid={ctx.draft.fieldErrors.model ? true : undefined}
+          className="pr-10"
         />
-        <DropdownMenu modal={false}>
+        <DropdownMenu
+          modal={false}
+          onOpenChange={(open) => {
+            if (open) setMenuWidth(fieldRef.current?.offsetWidth);
+          }}
+        >
           <DropdownMenuTrigger asChild>
-            <Button
+            <button
               type="button"
-              variant="outline"
-              size="icon"
               disabled={!editable || suggestions.length === 0}
               aria-label="Choose from the model list"
               title={
@@ -205,23 +242,25 @@ export function ModelField({
                   ? "No models listed for this provider; type a name"
                   : "Choose from the model list"
               }
-              className="shrink-0"
+              // Inside the field's border, the chevron where the provider
+              // list has its own (12 px padding + 1 px border).
+              className="absolute inset-y-px right-px flex w-10 items-center justify-center rounded-r-md outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <ChevronDown
-                className="size-4"
+                className="h-4 w-4 opacity-50"
                 aria-hidden="true"
               />
-            </Button>
+            </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent
             align="end"
-            className="max-h-72"
+            className="max-h-[min(18rem,var(--radix-dropdown-menu-content-available-height))]"
+            style={menuWidth ? { width: menuWidth } : undefined}
           >
             {suggestions.map((name) => (
               <DropdownMenuItem
                 key={name}
                 onSelect={() => ctx.draft.setField("model", name, false)}
-                className={cn("font-mono", name === value && "font-semibold")}
               >
                 {name === value ? (
                   <Check aria-hidden="true" />
@@ -508,7 +547,7 @@ export function MirrorField({ ctx }: { ctx: FieldContext }) {
             )
           }
           aria-describedby="setting-mirror-description"
-          className="mt-1 size-4 rounded border-border accent-[var(--brand)]"
+          className="mt-1 size-4 rounded border border-muted-foreground bg-transparent text-[var(--brand-solid)] focus:ring-0 focus:ring-offset-0 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
         />
         <Label
           htmlFor="setting-mirror"

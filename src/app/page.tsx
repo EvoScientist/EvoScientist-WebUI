@@ -59,21 +59,15 @@ import {
 import { setThreadAutoApprove } from "@/lib/autoApprove";
 import type { MainChatReporter } from "@/lib/asyncAgents";
 import type { NavTarget } from "@/lib/navTarget";
+import { sameDeploymentUrl } from "@/lib/deploymentUrl";
 import { cn } from "@/lib/utils";
 
 interface HomePageInnerProps {
   config: DeploymentConfig;
-  configDialogOpen: boolean;
-  setConfigDialogOpen: (open: boolean) => void;
   handleSaveConfig: (config: DeploymentConfig) => void;
 }
 
-function HomePageInner({
-  config,
-  configDialogOpen,
-  setConfigDialogOpen,
-  handleSaveConfig,
-}: HomePageInnerProps) {
+function HomePageInner({ config, handleSaveConfig }: HomePageInnerProps) {
   const { deploymentUrl, apiKey } = useDeployment();
   // Panels that hold one backend's data start over on another.
   const backendKey = `${deploymentUrl}\n${apiKey}`;
@@ -86,6 +80,27 @@ function HomePageInner({
   const [memoryExec, setMemoryExec] = useQueryState("memoryExec");
   const [inspector, setInspector] = useQueryState("inspector");
   const [inspectorTab, setInspectorTab] = useQueryState("inspectorTab");
+  // The gear's page; `setup` is its first-run entry (wizard or the same form).
+  const settingsOpen = view === "settings" || view === "setup";
+  // Settings' Connection: another address switches the backend and stays on
+  // Settings, so the new backend shows the form, not a first run's wizard.
+  // The switch remounts Settings, which takes the focused Save with it: the
+  // new page's address field gets the focus.
+  const focusUrlFieldRef = useRef(false);
+  const saveDeploymentUrl = useCallback(
+    (url: string) => {
+      if (sameDeploymentUrl(url, config.deploymentUrl)) return;
+      focusUrlFieldRef.current = true;
+      handleSaveConfig({ ...config, deploymentUrl: url });
+      void setView("settings");
+    },
+    [config, handleSaveConfig, setView]
+  );
+  useEffect(() => {
+    if (!focusUrlFieldRef.current) return;
+    focusUrlFieldRef.current = false;
+    document.getElementById("settings-deployment-url")?.focus();
+  }, [deploymentUrl]);
 
   useSetupGate(view, setView);
 
@@ -147,6 +162,25 @@ function HomePageInner({
     setInspectorTab,
     setSidebar,
   ]);
+  // The gear: Settings, or back to the chat from it. On a phone the sidebar
+  // and the inspector cover the center column, so they close first.
+  const settingsGearRef = useRef<HTMLButtonElement>(null);
+  const toggleSettings = useCallback(() => {
+    if (view === "settings") {
+      void setView(null);
+      return;
+    }
+    if (isDesktopLayout === false) {
+      setSidebar(null);
+      closeInspector();
+    }
+    void setView("settings");
+  }, [closeInspector, isDesktopLayout, setSidebar, setView, view]);
+  // Close / Configure later unmount the focused button: focus the gear.
+  const closeSettings = useCallback(() => {
+    void setView(null);
+    settingsGearRef.current?.focus();
+  }, [setView]);
   // Open the inspector straight on its Agents tab (composer pulse → board).
   const showAgentsInspector = useCallback(() => {
     setInspectorTab("agents");
@@ -229,6 +263,8 @@ function HomePageInner({
         setView("skills");
       } else if (target.view === "setup") {
         setView("setup");
+      } else if (target.view === "settings") {
+        setView("settings");
       } else {
         if (inspector && inspectorTab !== "agents") {
           closeInspector();
@@ -276,12 +312,6 @@ function HomePageInner({
 
   return (
     <>
-      <ConfigDialog
-        open={configDialogOpen}
-        onOpenChange={setConfigDialogOpen}
-        onSave={handleSaveConfig}
-        initialConfig={config}
-      />
       <div className="app-shell flex flex-col">
         <header className="mobile-app-header flex h-14 shrink-0 items-center justify-between gap-1 border-b border-border px-2 sm:gap-2 sm:px-4">
           <div className="flex min-w-0 items-center gap-2 sm:gap-3">
@@ -387,10 +417,12 @@ function HomePageInner({
             <Button
               variant="ghost"
               size="icon"
-              onClick={() => setConfigDialogOpen(true)}
+              ref={settingsGearRef}
+              onClick={toggleSettings}
               aria-label="Settings"
+              aria-pressed={settingsOpen}
               title="Settings"
-              className="size-8"
+              className={cn("size-8", settingsOpen && "bg-accent")}
             >
               <Settings
                 className="size-5"
@@ -521,10 +553,13 @@ function HomePageInner({
                     />
                   </ChatProvider>
                 </div>
-                {view === "setup" && (
+                {(view === "settings" || view === "setup") && (
                   <SetupView
                     key={backendKey}
-                    onClose={() => void setView(null)}
+                    entry={view}
+                    onClose={closeSettings}
+                    onSaveDeploymentUrl={saveDeploymentUrl}
+                    onFormShown={() => void setView("settings")}
                   />
                 )}
                 {view === "skills" && <SkillsMarketplace />}
@@ -660,8 +695,6 @@ function HomePageContent() {
       >
         <HomePageInner
           config={config}
-          configDialogOpen={configDialogOpen}
-          setConfigDialogOpen={setConfigDialogOpen}
           handleSaveConfig={handleSaveConfig}
         />
       </WorkspaceProvider>

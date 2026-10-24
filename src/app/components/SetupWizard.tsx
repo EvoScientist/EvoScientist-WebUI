@@ -39,8 +39,8 @@ const STEP_TITLES: Record<WizardStep, string> = {
   provider: "Choose a provider",
   key: "Connect to it",
   model: "Choose a model",
-  tavily: "Web search (optional)",
-  folder: "Folder and downloads",
+  tavily: "Search (optional)",
+  folder: "Workspace and mirrors",
   summary: "Check and finish",
 };
 
@@ -185,7 +185,7 @@ export function SetupWizard({
           <>
             <p className="text-sm text-muted-foreground">
               Without a Tavily key, web search is off. You can add one later in
-              Setup.
+              Settings.
             </p>
             <SecretField
               ctx={ctx}

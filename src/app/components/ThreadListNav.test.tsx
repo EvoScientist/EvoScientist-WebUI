@@ -84,8 +84,10 @@ describe("left rail Experts entry", () => {
   });
 });
 
-describe("left rail Setup entry", () => {
-  const renderRail = () =>
+// EvoScientist's settings live behind the header gear (the Settings page).
+describe("left rail without Setup", () => {
+  it("has no Setup entry, also once the deployment answered", () => {
+    nav.settings = { setup_needed: false };
     render(
       <ThreadList
         onThreadSelect={vi.fn()}
@@ -93,24 +95,7 @@ describe("left rail Setup entry", () => {
         onInterruptCountChange={vi.fn()}
       />
     );
-
-  it("is hidden while the deployment has no settings to show (404 included)", () => {
-    renderRail();
+    expect(screen.getByRole("button", { name: /^experts$/i })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /^setup$/i })).toBeNull();
-  });
-
-  it("opens the Setup view once the deployment answered", () => {
-    nav.settings = { setup_needed: false };
-    renderRail();
-    fireEvent.click(screen.getByRole("button", { name: /^setup$/i }));
-    expect(nav.setView).toHaveBeenCalledWith("setup");
-  });
-
-  it("returns to the conversation when the active entry is clicked again", () => {
-    nav.settings = { setup_needed: false };
-    nav.view = "setup";
-    renderRail();
-    fireEvent.click(screen.getByRole("button", { name: /^setup$/i }));
-    expect(nav.setView).toHaveBeenCalledWith(null);
   });
 });

@@ -10,7 +10,6 @@ import {
   MoreHorizontal,
   Pencil,
   Pin,
-  Plug,
   PinOff,
   Puzzle,
   Users,
@@ -65,7 +64,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
-import { useSettings } from "@/app/hooks/useSettings";
 
 type StatusFilter = "all" | "idle" | "busy" | "interrupted" | "error";
 
@@ -170,9 +168,6 @@ export function ThreadList({
 }: ThreadListProps) {
   const [currentThreadId, setThreadId] = useQueryState("threadId");
   const [view, setView] = useQueryState("view");
-  // Setup appears once the deployment answered GET /api/settings; an older
-  // EvoScientist without the route (404) never shows it.
-  const settingsReadable = useSettings().payload !== undefined;
   // Badge the Memory nav when long-term memory changed since last viewed.
   const { unseenCount: memoryUnseen, markSeen: markMemorySeen } =
     useMemoryActivity();
@@ -794,25 +789,6 @@ export function ThreadList({
         />
         Scheduled
       </button>
-      {settingsReadable && (
-        <button
-          type="button"
-          onClick={() => {
-            setView(view === "setup" ? null : "setup");
-            onClose?.();
-          }}
-          className={cn(
-            "flex flex-shrink-0 items-center gap-2.5 border-b border-border px-3 py-3 text-left text-sm font-medium transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
-            view === "setup" && "bg-accent"
-          )}
-        >
-          <Plug
-            className="size-4"
-            aria-hidden="true"
-          />
-          Setup
-        </button>
-      )}
       <div className="flex-shrink-0 border-b border-border p-2.5">
         <div className="relative">
           <Search

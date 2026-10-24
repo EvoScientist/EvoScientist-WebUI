@@ -3,7 +3,7 @@
 // The notice above the chat when EvoScientist cannot run as configured: the
 // selected provider lacks a key or base URL (`setup_needed`), or config.yaml
 // does not parse (`config_error`). Where this page can save, it links to the
-// Setup view; elsewhere it says to configure the machine that runs
+// Settings page; elsewhere it says to configure the machine that runs
 // EvoScientist, and why this page cannot.
 
 import { TriangleAlert } from "lucide-react";
@@ -46,7 +46,7 @@ export function SetupNotice({ onOpenSetup }: { onOpenSetup: () => void }) {
           onClick={onOpenSetup}
           className="shrink-0 rounded px-2 py-1 font-semibold transition-colors hover:bg-amber-200 focus-visible:ring-2 focus-visible:ring-amber-700 dark:hover:bg-amber-900"
         >
-          Open Setup
+          Open Settings
         </button>
       )}
     </div>
