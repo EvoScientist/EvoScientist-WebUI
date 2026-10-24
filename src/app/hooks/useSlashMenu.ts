@@ -9,14 +9,20 @@ import React, {
   useState,
 } from "react";
 import {
-  applySkill,
   rankSkills,
   slashTokenAt,
-  type MenuCommand,
+  type MenuPage,
+  type MenuRow,
 } from "@/lib/slashMenu";
 import { PY_SPACE } from "@/lib/pythonWhitespace";
 
-const NO_COMMANDS: readonly MenuCommand[] = [];
+const NO_PAGES: readonly MenuPage[] = [];
+// No highlight remembered: the next opening starts on its first row.
+const NO_ACTIVE = {
+  key: null as string | null,
+  index: 0,
+  row: null as string | null,
+};
 
 /** An installed skill the backend can pin (`GET /api/skills/pinnable`). */
 export interface MenuSkill {
@@ -25,12 +31,42 @@ export interface MenuSkill {
   source: "workspace" | "global";
 }
 
+/** What the menu shows: the commands' pages and the skills, or one page. */
+export type SlashView =
+  | {
+      kind: "root";
+      pages: readonly MenuPage[];
+      skills: readonly MenuSkill[];
+      marketplace: boolean;
+    }
+  | {
+      kind: "page";
+      page: MenuPage;
+      rows: readonly MenuRow[];
+      filter: string;
+    };
+
+interface OpenPage {
+  word: string;
+  /** The typed word the page took out of the composer (with the whitespace
+   *  after it), to put back on the way back; null when opened by its word. */
+  token: { at: number; text: string; word: string } | null;
+}
+
+/** The length of the whitespace run at `text`'s start (Python's). */
+function leadingSpace(text: string): number {
+  let n = 0;
+  while (n < text.length && PY_SPACE.test(text[n])) n++;
+  return n;
+}
+
 /**
  * The composer's `/` menu: while the caret ends a `/name` the backend would pin
- * (the message's leading `/name`s), list the installed skills that match, and
- * put the chosen name in place. Wire `onChange`, `onKeyDown` (it returns true
- * when it took the key) and `textareaProps` into the textarea, and
- * `menuProps` into `SlashSkillMenu`.
+ * (the message's leading `/name`s), list the commands' pages and the installed
+ * skills that match. A page row opens its page, whose rows run when chosen; a
+ * skill goes to `onPickSkill`. Wire `onChange`, `onKeyDown` (it returns true
+ * when it took the key) and `textareaProps` into the textarea, and `menuProps`
+ * into `SlashSkillMenu`.
  */
 export function useSlashMenu({
   textareaRef,
@@ -39,8 +75,11 @@ export function useSlashMenu({
   disabled = false,
   workspaceSkills = true,
   onBrowse,
-  commands = NO_COMMANDS,
-  runnerFor,
+  pages = NO_PAGES,
+  onPickSkill,
+  leadSkill = null,
+  wantSkills = false,
+  onSkillsRead,
 }: {
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
   value: string;
@@ -51,13 +90,20 @@ export function useSlashMenu({
   workspaceSkills?: boolean;
   /** Open the Skills marketplace (offered when none is installed). */
   onBrowse?: () => void;
-  /** Commands offered above the skills as the message's first word. */
-  commands?: readonly MenuCommand[];
-  /** How to run a command that needs nothing more (`run`), chosen with Enter
-   *  or a click: a function, or null where this composer can't run it (an
-   *  ordinary row then: written out). It must not act itself: the hint asks
-   *  it about the highlighted row on every render. */
-  runnerFor?: (command: MenuCommand) => (() => void) | null;
+  /** The commands, each a page, offered above the skills as the message's
+   *  first word. */
+  pages?: readonly MenuPage[];
+  /** A skill chosen: `rest` is the text without the typed word (and the
+   *  whitespace after it); `from` is where its row was, for the chip to
+   *  come from. */
+  onPickSkill: (name: string, rest: string, from: DOMRect | null) => void;
+  /** The skill the composer's chip pins: not offered again. */
+  leadSkill?: string | null;
+  /** Read the installed skills once outside the menu while true (the
+   *  composer's text may start with one). */
+  wantSkills?: boolean;
+  /** Every list read, menu or not: the names a chip can show. */
+  onSkillsRead?: (names: ReadonlySet<string>) => void;
 }) {
   const listboxId = useId();
   // Ids by name, so the active option's id changes with the match and a
@@ -67,8 +113,12 @@ export function useSlashMenu({
       name === null ? `${listboxId}-browse` : `${listboxId}-skill-${name}`,
     [listboxId]
   );
-  const commandId = useCallback(
-    (index: number) => `${listboxId}-command-${index}`,
+  const pageId = useCallback(
+    (word: string) => `${listboxId}-page-${word}`,
+    [listboxId]
+  );
+  const rowId = useCallback(
+    (id: string) => `${listboxId}-row-${id}`,
     [listboxId]
   );
   const [caret, setCaret] = useState<number | null>(null);
@@ -80,208 +130,339 @@ export function useSlashMenu({
   const [skills, setSkills] = useState<MenuSkill[] | null>(null);
   // Escape closes the menu for what was typed; typing on opens it again.
   const [dismissed, setDismissed] = useState<string | null>(null);
-  const [activeState, setActiveState] = useState({
-    key: null as string | null,
-    index: 0,
-    // The highlighted row itself, so the highlight stays on it when rows
-    // come in above it (goal support or the skills answering while open).
-    row: null as string | null,
-  });
+  const [activeState, setActiveState] = useState(NO_ACTIVE);
+  const [page, setPage] = useState<OpenPage | null>(null);
+  // What is typed on a page: the page's, not the composer's.
+  const [filter, setFilter] = useState("");
   const request = useRef(0);
+  const everRead = useRef(false);
+  const reportRead = useRef(onSkillsRead);
+  useLayoutEffect(() => {
+    reportRead.current = onSkillsRead;
+  });
 
+  const pageDef = page ? pages.find((p) => p.word === page.word) : undefined;
+  const usable = !disabled && focused;
+
+  // The root: pages and skills for the word being typed.
   const token =
-    !disabled && focused && !composing && caret !== null
-      ? slashTokenAt(value, caret)
+    !pageDef && usable && !composing && caret !== null
+      ? slashTokenAt(value, caret, new Set(pages.map((p) => p.word)))
       : null;
-  const key = token ? `${token.start}:${token.query}` : null;
-  const items =
-    token && skills ? rankSkills(skills, token.query, token.pinned) : [];
-  // A command is a message's first word ("/goal …"), offered while the
-  // typed word starts it; slashTokenAt closes the menu once it is whole.
-  const commandItems =
+  const rootKey = token ? `${token.start}:${token.query}` : null;
+  const pinned = token
+    ? leadSkill
+      ? [leadSkill, ...token.pinned]
+      : token.pinned
+    : [];
+  const items = token && skills ? rankSkills(skills, token.query, pinned) : [];
+  // A command is a message's first word ("/goal"), offered while the typed
+  // word starts it; slashTokenAt closes the menu once it is whole.
+  const pageItems =
     token && token.pinned.length === 0
-      ? commands.filter((c) => c.word.startsWith(token.query))
-      : NO_COMMANDS;
+      ? pages.filter((p) => p.word.startsWith(token.query))
+      : NO_PAGES;
   // Nothing installed and a bare `/`: the way to the marketplace, as the last
-  // row after any commands.
+  // row after any pages.
   const marketplace =
     token !== null &&
     skills?.length === 0 &&
     token.query === "" &&
     token.pinned.length === 0;
+
+  // A page: its rows for what is typed on it.
+  const pageRows = pageDef ? pageDef.rows(filter) : [];
+  const key = pageDef ? `page:${pageDef.word}\n${filter}` : rootKey;
   // Each row's identity, in index order.
-  const rows = [
-    ...commandItems.map((c) => `command:${c.label}`),
-    ...items.map((s) => `skill:${s.name}`),
-    ...(marketplace ? ["marketplace"] : []),
-  ];
+  const rows = pageDef
+    ? pageRows.map((r) => `row:${r.id}`)
+    : [
+        ...pageItems.map((p) => `page:${p.word}`),
+        ...items.map((s) => `skill:${s.name}`),
+        ...(marketplace ? ["marketplace"] : []),
+      ];
   const count = rows.length;
-  const marketplaceIndex = marketplace ? count - 1 : -1;
+  const marketplaceIndex = !pageDef && marketplace ? count - 1 : -1;
   // Shut after an Escape until the word changes.
-  const wanted = token !== null && key !== dismissed;
-  const open = wanted && count > 0;
-  // One index over the commands, the skills, then the marketplace. The
-  // highlight follows its row; only a row that went falls back to the place.
+  const wanted = token !== null && rootKey !== dismissed;
+  // A page stays open with nothing matching: it says so.
+  const open = pageDef ? usable : wanted && count > 0;
+  // One index over the rows. The highlight follows its row; only a row that
+  // went falls back to its place. A page starts on its initial row.
+  const initialIndex =
+    pageDef?.initial !== undefined
+      ? Math.max(0, rows.indexOf(`row:${pageDef.initial}`))
+      : 0;
   const kept =
     activeState.key === key && activeState.row !== null
       ? rows.indexOf(activeState.row)
       : -1;
   const active =
     activeState.key !== key
-      ? 0
+      ? initialIndex
       : kept >= 0
       ? kept
       : Math.min(activeState.index, Math.max(count - 1, 0));
-  const activeId = !open
-    ? undefined
-    : active === marketplaceIndex
-    ? optionId(null)
-    : active < commandItems.length
-    ? commandId(active)
-    : optionId(items[active - commandItems.length].name);
+  const activeRow = open ? rows[active] : undefined;
+  const activeId =
+    activeRow === undefined
+      ? undefined
+      : activeRow === "marketplace"
+      ? optionId(null)
+      : activeRow.startsWith("page:")
+      ? pageId(activeRow.slice("page:".length))
+      : activeRow.startsWith("skill:")
+      ? optionId(activeRow.slice("skill:".length))
+      : rowId(activeRow.slice("row:".length));
+  // A focus reads the list again: until it is back, a highlighted skill
+  // isn't in the rows, and Enter would act on whatever row took its place.
+  const rereading =
+    skills === null &&
+    activeState.key === key &&
+    !!activeState.row?.startsWith("skill:");
 
-  // A command runs when chosen only if it needs nothing more and this
-  // composer can run it.
-  const runnerOf = (command: MenuCommand | undefined) =>
-    command?.run ? runnerFor?.(command) ?? null : null;
-  const enterRuns =
-    open && active < commandItems.length && !!runnerOf(commandItems[active]);
+  const url = workspaceSkills
+    ? "/api/skills/pinnable"
+    : "/api/skills/pinnable?workspace=0";
+  const readSkills = useCallback(async (): Promise<MenuSkill[] | null> => {
+    try {
+      const res = await fetch(url, { cache: "no-store" });
+      if (!res.ok) return null;
+      const data = (await res.json()) as { skills?: unknown };
+      const list = Array.isArray(data.skills)
+        ? (data.skills as MenuSkill[])
+        : [];
+      everRead.current = true;
+      reportRead.current?.(new Set(list.map((s) => s.name)));
+      return list;
+    } catch {
+      return null;
+    }
+  }, [url]);
 
   // Read the list each time the menu opens, an Escape's reopening included,
   // and show only that answer: a skill installed or removed a moment ago is
-  // right, a failed read shows no skills (only commands, if any match), and
-  // the last answer wins over a slower earlier one.
+  // right, a failed read shows no skills (only pages, if any match), and the
+  // last answer wins over a slower earlier one.
   useEffect(() => {
     if (!wanted) return;
     setSkills(null);
     const id = ++request.current;
-    fetch(
-      workspaceSkills
-        ? "/api/skills/pinnable"
-        : "/api/skills/pinnable?workspace=0",
-      { cache: "no-store" }
-    )
-      .then((res) => (res.ok ? res.json() : Promise.reject(res.status)))
-      .then((data: { skills?: unknown }) => {
-        if (id !== request.current) return;
-        setSkills(
-          Array.isArray(data.skills) ? (data.skills as MenuSkill[]) : []
-        );
-      })
-      .catch(() => {
-        // A failed read shows no skills: the menu stays shut unless a
-        // command matches.
-      });
-  }, [wanted, focusCount, workspaceSkills]);
+    void readSkills().then((list) => {
+      if (list && id === request.current) setSkills(list);
+    });
+  }, [wanted, focusCount, readSkills]);
+
+  // Outside the menu, once: the names a chip for the composer's text needs.
+  useEffect(() => {
+    if (!wantSkills || everRead.current) return;
+    void readSkills();
+  }, [wantSkills, readSkills]);
 
   // An Escape holds only while the word it closed on stays as it was.
   useEffect(() => {
-    if (dismissed !== null && dismissed !== key) setDismissed(null);
-  }, [dismissed, key]);
+    if (dismissed !== null && dismissed !== rootKey) setDismissed(null);
+  }, [dismissed, rootKey]);
 
-  // So does a highlight: a new word, or the menu closing, starts the next
-  // opening on the first row (a bare "/" typed again is a new opening).
-  // Rows coming in while the word stays keep it (it follows its row).
+  // So does a highlight: a new word, a new filter or the menu closing starts
+  // the next opening on its first row (a bare "/" typed again is a new
+  // opening). Rows coming in while the word stays keep it (it follows its row).
   useEffect(() => {
     if (activeState.key !== null && activeState.key !== key) {
-      setActiveState({ key: null, index: 0, row: null });
+      setActiveState(NO_ACTIVE);
     }
   }, [activeState.key, key]);
 
-  // Enter and a click choose; Tab writes the row out. A command that needs
-  // nothing more (`run`) runs when chosen, if this composer can run it, and
-  // its typed word goes.
-  const pick = (index: number, choose = true) => {
+  // A page whose command went (goal support lost) closes.
+  useEffect(() => {
+    if (page && !pageDef) {
+      setPage(null);
+      setFilter("");
+    }
+  }, [page, pageDef]);
+
+  // A caret to place once the text it belongs to is in the box, before the
+  // browser paints. The key that moved the text also reports the caret it
+  // left (React's select event, in the same batch): that report is ignored
+  // (onSelect) and this one wins.
+  const pendingCaret = useRef<number | null>(null);
+  const [placing, setPlacing] = useState(0);
+  useLayoutEffect(() => {
+    const at = pendingCaret.current;
+    if (at === null) return;
+    pendingCaret.current = null;
+    textareaRef.current?.setSelectionRange(at, at);
+    setCaret(at);
+  }, [placing, textareaRef]);
+  const placeCaret = (at: number) => {
+    setCaret(at);
+    pendingCaret.current = at;
+    setPlacing((n) => n + 1);
+  };
+
+  const closePage = () => {
+    setPage(null);
+    setFilter("");
+  };
+
+  // A page row: the page takes the typed word (and the whitespace after it)
+  // out of the composer, keeping it to put back.
+  const openFromToken = (word: string) => {
     if (!token) return;
-    const command = commandItems[index];
-    const skill = items[index - commandItems.length];
-    if (!command && !skill) return;
-    const runner = choose ? runnerOf(command) : null;
-    if (runner) {
-      // The word goes with the separator slashTokenAt split on (Python's
-      // whitespace), and the caret goes where the word was: the picker has
-      // the focus, but typing on after it closes starts there.
-      const rest = value.slice(token.end);
-      let skip = 0;
-      while (skip < rest.length && PY_SPACE.test(rest[skip])) skip++;
-      setValue(value.slice(0, token.start) + rest.slice(skip));
-      setCaret(token.start);
-      const el = textareaRef.current;
-      const at = token.start;
-      requestAnimationFrame(() => el?.setSelectionRange(at, at));
-      runner();
+    const end = token.end + leadingSpace(value.slice(token.end));
+    setValue(value.slice(0, token.start) + value.slice(end));
+    setPage({
+      word,
+      token: {
+        at: token.start,
+        text: value.slice(token.start, end),
+        word: value.slice(token.start, token.end),
+      },
+    });
+    setFilter("");
+    setActiveState(NO_ACTIVE);
+    placeCaret(token.start);
+  };
+
+  const openPage = (word: string) => {
+    if (!pages.some((p) => p.word === word)) return;
+    setPage({ word, token: null });
+    setFilter("");
+    setActiveState(NO_ACTIVE);
+  };
+
+  // Back to the root: the typed word returns, with the page's row
+  // highlighted. A page opened by its word just closes.
+  const back = () => {
+    if (!page) return;
+    closePage();
+    const t = page.token;
+    if (!t) {
+      setActiveState(NO_ACTIVE);
       return;
     }
-    const next = command
-      ? {
-          text:
-            value.slice(0, token.start) +
-            command.insert +
-            value.slice(token.end),
-          caret: token.start + command.insert.length,
-        }
-      : applySkill(value, token, skill.name);
-    setValue(next.text);
-    setCaret(next.caret);
-    const el = textareaRef.current;
-    requestAnimationFrame(() => {
-      el?.focus();
-      el?.setSelectionRange(next.caret, next.caret);
+    setValue(value.slice(0, t.at) + t.text + value.slice(t.at));
+    setActiveState({
+      key: `${t.at}:${t.word.slice(1)}`,
+      index: 0,
+      row: `page:${page.word}`,
     });
+    placeCaret(t.at + t.word.length);
+  };
+
+  const pickSkill = (name: string) => {
+    if (!token) return;
+    const end = token.end + leadingSpace(value.slice(token.end));
+    const rest = value.slice(0, token.start) + value.slice(end);
+    const from =
+      document.getElementById(optionId(name))?.getBoundingClientRect() ?? null;
+    // The next caret event finds the next word.
+    setCaret(null);
+    onPickSkill(name, rest, from);
   };
 
   // On the way to the marketplace the menu closes, as with Escape.
   const browse = () => {
-    setDismissed(key);
+    setDismissed(rootKey);
     // An explicit close starts the next opening on the first row too.
-    setActiveState({ key: null, index: 0, row: null });
+    setActiveState(NO_ACTIVE);
     onBrowse?.();
+  };
+
+  // Enter, Tab and a click choose; a page's row runs once the menu is shut.
+  const choose = (index: number) => {
+    if (pageDef) {
+      const row = pageRows[index];
+      if (!row) return;
+      closePage();
+      setActiveState(NO_ACTIVE);
+      row.run();
+      return;
+    }
+    const id = rows[index];
+    if (!id) return;
+    if (id === "marketplace") browse();
+    else if (id.startsWith("page:")) openFromToken(id.slice("page:".length));
+    else pickSkill(id.slice("skill:".length));
   };
 
   // The key handler reads the latest render, so it can stay one function.
   const latest = useRef({
     open,
-    marketplaceIndex,
+    onPage: !!pageDef,
+    filter,
     rows,
     count,
     active,
     key,
-    pick,
-    browse,
+    marketplaceIndex,
+    rootKey,
+    rereading,
+    choose,
+    back,
   });
   useLayoutEffect(() => {
     latest.current = {
       open,
-      marketplaceIndex,
+      onPage: !!pageDef,
+      filter,
       rows,
       count,
       active,
       key,
-      pick,
-      browse,
+      marketplaceIndex,
+      rootKey,
+      rereading,
+      choose,
+      back,
     };
   });
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>): boolean => {
-      const { open, marketplaceIndex, rows, count, active, key, pick, browse } =
-        latest.current;
-      // Keys with modifiers (Cmd+Enter, Shift+↓ …) stay the composer's.
-      if (!open || e.nativeEvent.isComposing) return false;
-      if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return false;
-      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-        if (count > 0) {
-          const step = e.key === "ArrowDown" ? 1 : -1;
-          const index = (active + step + count) % count;
-          setActiveState({ key, index, row: rows[index] });
+      const L = latest.current;
+      // Keys with modifiers (Cmd+Enter, Alt+↓ …) stay the composer's.
+      if (!L.open || e.nativeEvent.isComposing) return false;
+      if (e.ctrlKey || e.metaKey || e.altKey) return false;
+      const move = (step: number) => {
+        if (L.count === 0) return;
+        const index = (L.active + step + L.count) % L.count;
+        setActiveState({ key: L.key, index, row: L.rows[index] });
+      };
+      if (L.onPage) {
+        // A printable key filters the page (Shift for capitals).
+        if (e.key.length === 1) {
+          setFilter(L.filter + e.key);
+        } else if (e.shiftKey) {
+          return false;
+        } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+          move(e.key === "ArrowDown" ? 1 : -1);
+        } else if (e.key === "Enter" || e.key === "Tab") {
+          L.choose(L.active);
+        } else if (e.key === "ArrowLeft" || e.key === "Escape") {
+          L.back();
+        } else if (e.key === "Backspace") {
+          if (L.filter) setFilter(L.filter.slice(0, -1));
+          else L.back();
+        } else {
+          return false;
         }
+        e.preventDefault();
+        return true;
+      }
+      if (e.shiftKey) return false;
+      const row = L.rows[L.active] ?? "";
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        move(e.key === "ArrowDown" ? 1 : -1);
       } else if (e.key === "Enter") {
-        if (active === marketplaceIndex) browse();
-        else pick(active);
-      } else if (e.key === "Tab" && active !== marketplaceIndex) {
-        pick(active, false);
+        // Wait for a re-read rather than act on the row in its place.
+        if (!L.rereading) L.choose(L.active);
+      } else if (e.key === "Tab" && L.active !== L.marketplaceIndex) {
+        if (!L.rereading) L.choose(L.active);
+      } else if (e.key === "ArrowRight" && row.startsWith("page:")) {
+        L.choose(L.active);
       } else if (e.key === "Escape") {
-        setDismissed(key);
-        setActiveState({ key: null, index: 0, row: null });
+        setDismissed(L.rootKey);
+        setActiveState(NO_ACTIVE);
       } else {
         return false;
       }
@@ -294,14 +475,27 @@ export function useSlashMenu({
   const onChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setFocused(true);
     setCaret(e.target.selectionStart);
+    // Text typed (or pasted, or composed) while a page is open is the
+    // composer's: the page closes.
+    if (page) closePage();
   };
+
+  const view: SlashView = pageDef
+    ? { kind: "page", page: pageDef, rows: pageRows, filter }
+    : { kind: "root", pages: pageItems, skills: items, marketplace };
 
   return {
     onChange,
     onKeyDown,
+    openPage,
     textareaProps: {
-      onSelect: (e: React.SyntheticEvent<HTMLTextAreaElement>) =>
-        setCaret(e.currentTarget.selectionStart),
+      onSelect: (e: React.SyntheticEvent<HTMLTextAreaElement>) => {
+        // The menu is placing the caret: the select the same key reports
+        // is the old text's (a moment without the word would reset the
+        // highlight).
+        if (pendingCaret.current !== null) return;
+        setCaret(e.currentTarget.selectionStart);
+      },
       onFocus: (e: React.FocusEvent<HTMLTextAreaElement>) => {
         setFocused(true);
         setCaret(e.currentTarget.selectionStart);
@@ -310,7 +504,11 @@ export function useSlashMenu({
         setDismissed(null);
         setFocusCount((n) => n + 1);
       },
-      onBlur: () => setFocused(false),
+      onBlur: () => {
+        setFocused(false);
+        // A page closes with the focus: it never reopens by itself.
+        closePage();
+      },
       onCompositionStart: () => setComposing(true),
       onCompositionEnd: (e: React.CompositionEvent<HTMLTextAreaElement>) => {
         setComposing(false);
@@ -324,17 +522,16 @@ export function useSlashMenu({
       open,
       listboxId,
       optionId,
-      commandId,
-      commands: commandItems,
+      pageId,
+      rowId,
       activeId,
-      items,
       active,
-      marketplace,
-      enterRuns,
+      view,
       skillsKnown: skills !== null,
-      onPick: pick,
+      onChoose: choose,
       onHover: (index: number) =>
         setActiveState({ key, index, row: rows[index] ?? null }),
+      onBack: back,
       onBrowse: browse,
     },
   };

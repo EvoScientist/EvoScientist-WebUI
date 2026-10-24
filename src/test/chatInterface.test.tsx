@@ -6,6 +6,7 @@
 // the full render tree into scope.
 
 import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
+import { toast } from "sonner";
 import {
   act,
   screen,
@@ -1507,25 +1508,84 @@ describe("ChatInterface composition", () => {
       expect(stream.getSubmitCalls()).toHaveLength(0);
     });
 
-    // /model works on every backend; goalCommand.test has the menu with
-    // /goal's rows too.
-    it("offers /model above the skills and opens the picker when it is chosen", async () => {
+    // The Model page is on every backend; goalCommand.test has the menu
+    // with the Goal page too.
+    it("offers the Model page above the skills and opens it when chosen", async () => {
       const { container } = renderChatInterface();
       const textarea = typeInComposer(container, "/");
       await waitFor(() =>
         expect(screen.getAllByRole("option")).toHaveLength(2)
       );
       const rows = screen.getAllByRole("option").map((o) => o.textContent);
-      expect(rows[0]).toBe("/modelChange model for this chat");
+      expect(rows[0]).toContain("Model");
+      expect(rows[0]).toContain("Change the model for this chat");
       expect(rows[1]).toContain("/paper-writing");
       fireEvent.click(screen.getAllByRole("option")[0]);
-      expect(
-        await screen.findByRole("dialog", {
-          name: "Pick a model for this chat",
-        })
-      ).toBeTruthy();
+      expect(screen.getByRole("listbox", { name: "Model" })).toBeTruthy();
       expect(textarea.value).toBe("");
       expect(stream.getSubmitCalls()).toHaveLength(0);
+    });
+
+    it("sets the model from the Model page, and resets it", async () => {
+      const { container } = renderChatInterface();
+      const openModelPage = async () => {
+        const textarea = typeInComposer(container, "/mo");
+        await waitFor(() =>
+          expect(screen.getAllByRole("option")).toHaveLength(1)
+        );
+        fireEvent.keyDown(textarea, { key: "Enter" });
+        return textarea;
+      };
+      let textarea = await openModelPage();
+      // The curated list here (no registry): its first row, then Enter.
+      expect(screen.getAllByRole("option")[0].textContent).toContain(
+        "claude-sonnet-4-6"
+      );
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      await waitFor(() =>
+        expect(toast.success).toHaveBeenCalledWith(
+          "Model set to claude-sonnet-4-6 (anthropic)."
+        )
+      );
+      expect(screen.queryByRole("listbox")).toBeNull();
+      // Back on the page: the current model is highlighted, and Reset to
+      // default is the last row.
+      textarea = await openModelPage();
+      const active = () =>
+        document.getElementById(
+          textarea.getAttribute("aria-activedescendant") ?? ""
+        );
+      expect(active()?.textContent).toContain("claude-sonnet-4-6");
+      const rows = screen.getAllByRole("option");
+      expect(rows[rows.length - 1].textContent).toContain("Reset to default");
+      fireEvent.keyDown(textarea, { key: "ArrowUp" });
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      await waitFor(() =>
+        expect(toast.success).toHaveBeenCalledWith("Model override cleared.")
+      );
+      expect(stream.getSubmitCalls()).toHaveLength(0);
+    });
+
+    it("notes the curated list when the registry didn't load", async () => {
+      const { registryStub } = await import("@/test/mocks/chatInterfaceStubs");
+      registryStub.failed = true;
+      try {
+        const { container } = renderChatInterface();
+        const textarea = typeInComposer(container, "/mo");
+        await waitFor(() =>
+          expect(screen.getAllByRole("option")).toHaveLength(1)
+        );
+        fireEvent.keyDown(textarea, { key: "Enter" });
+        const note = screen.getByText(
+          "Showing a curated list: the backend's model registry didn't load."
+        );
+        expect(note.closest('[role="option"]')).toBeNull();
+        // The curated list's models, none of them the default.
+        expect(screen.getAllByRole("option").length).toBeGreaterThan(3);
+        expect(screen.queryByText("default")).toBeNull();
+      } finally {
+        registryStub.failed = false;
+      }
     });
 
     it("offers only the global skills when the backend's folder is elsewhere", async () => {

@@ -1,7 +1,6 @@
 import { v4 as uuidv4 } from "uuid";
 import type { GoalStatus, ThreadGoal } from "@/lib/goalState";
 import { PY_SPACE, pySplit, pyStrip } from "@/lib/pythonWhitespace";
-import type { MenuCommand } from "@/lib/slashMenu";
 
 // The /goal command, read and checked the way the core's GoalCommand
 // (commands/implementation/goal.py) does, so the WebUI and the TUI take the
@@ -38,42 +37,6 @@ export const GOAL_USAGE: readonly string[] = [
   "       /goal pause              stop working toward it and grading against it",
   "       /goal resume             continue a paused goal",
   "       /goal clear              drop the goal and its criteria",
-];
-
-/** The `/` menu's /goal rows: the core's GoalCommand and the subcommands a
- *  click can't do, their descriptions word for word. Show is the goal pill
- *  (typing `/goal show` still works). */
-export const GOAL_MENU_COMMANDS: readonly MenuCommand[] = [
-  {
-    word: "goal",
-    label: "goal <objective>",
-    insert: "/goal ",
-    description: "Set a goal with drafted acceptance criteria",
-  },
-  {
-    word: "goal",
-    label: "goal amend <feedback>",
-    insert: "/goal amend ",
-    description: "Revise the goal and its criteria",
-  },
-  {
-    word: "goal",
-    label: "goal pause",
-    insert: "/goal pause",
-    description: "Stop working toward the goal",
-  },
-  {
-    word: "goal",
-    label: "goal resume",
-    insert: "/goal resume",
-    description: "Continue a paused goal",
-  },
-  {
-    word: "goal",
-    label: "goal clear",
-    insert: "/goal clear",
-    description: "Drop the goal and its criteria",
-  },
 ];
 
 /** The core's _NO_GOAL. */

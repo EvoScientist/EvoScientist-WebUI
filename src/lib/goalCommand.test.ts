@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  GOAL_MENU_COMMANDS,
   GOAL_USAGE,
   goalPageActions,
   goalRefusal,
@@ -199,20 +198,6 @@ describe("goalUsageLine", () => {
 
 // The `/` menu lists what the WebUI can't do with a click: /goal show is the
 // goal pill (typing it still works). Each row writes what the parser reads.
-describe("GOAL_MENU_COMMANDS", () => {
-  it("offers the goal commands a click can't do", () => {
-    expect(GOAL_MENU_COMMANDS.map((c) => c.label)).toEqual([
-      "goal <objective>",
-      "goal amend <feedback>",
-      "goal pause",
-      "goal resume",
-      "goal clear",
-    ]);
-    expect(GOAL_MENU_COMMANDS.some((c) => c.run)).toBe(false);
-    expect(parseGoalCommand("/goal pause")).toEqual({ kind: "pause" });
-  });
-});
-
 // The `/` menu's Goal page: what the core would take for this goal.
 describe("goalPageActions", () => {
   const kinds = (g: ThreadGoal | null) => goalPageActions(g).map((a) => a.kind);

@@ -71,13 +71,15 @@ import { useTeams } from "@/app/hooks/useTeams";
 import { ExpertsPill } from "@/app/components/ExpertsPill";
 import { GoalPill } from "@/app/components/GoalPill";
 import {
-  GOAL_MENU_COMMANDS,
+  goalPageActions,
   goalRefusal,
   goalRequest,
+  goalSummary,
   goalUsageLine,
   NO_GOAL_TEXT,
   parseGoalCommand,
   type GoalCommand,
+  type GoalPageActionKind,
 } from "@/lib/goalCommand";
 import { SlashSkillMenu } from "@/app/components/SlashSkillMenu";
 import { useSlashMenu } from "@/app/hooks/useSlashMenu";
@@ -132,12 +134,9 @@ import {
 import { useQueryState } from "nuqs";
 import { toast } from "sonner";
 import { useFilePane } from "@/providers/filePaneContext";
-import {
-  COMMON_MODELS,
-  MODEL_MENU_COMMANDS,
-  parseModelCommand,
-  type ModelOverride,
-} from "@/lib/modelCommand";
+import { parseModelCommand, type ModelOverride } from "@/lib/modelCommand";
+import { modelPageEntries, modelPageModels } from "@/lib/modelPage";
+import type { MenuIcon, MenuPage, MenuRow } from "@/lib/slashMenu";
 import { useAvailableModels } from "@/app/hooks/useAvailableModels";
 import type { NavTarget } from "@/lib/navTarget";
 
@@ -263,9 +262,19 @@ function foldBack(
   return { ...base, notSent: commands };
 }
 
-/** The `/` menu's commands by name, where the backend runs goals; /model's
- *  alone everywhere else. */
-const GOAL_AND_MODEL_COMMANDS = [...GOAL_MENU_COMMANDS, ...MODEL_MENU_COMMANDS];
+/** The Goal page's rows say what they do. */
+const GOAL_ROW_ICONS: Record<GoalPageActionKind, MenuIcon> = {
+  create: "plus",
+  amend: "pencil",
+  pause: "pause",
+  resume: "play",
+  clear: "clear",
+  show: "details",
+};
+
+/** Whether a page row's label holds what was typed on the page. */
+const rowMatches = (label: string, filter: string) =>
+  label.toLowerCase().includes(filter.trim().toLowerCase());
 
 /** Whether Enter may read a text as a /goal command in the composer it
  *  comes back to: wherever goals are supported, or not known yet (support
@@ -553,18 +562,10 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     // to the curated short list when the endpoint isn't available (older
     // deployment, network blip). Registry order is the rank the backend
     // recommends — we don't re-sort.
-    const pickerModels = useMemo(() => {
-      if (modelRegistry.entries.length > 0) {
-        return modelRegistry.entries.map((e) => ({
-          model: e.name,
-          model_provider: e.provider,
-        }));
-      }
-      return COMMON_MODELS.map((m) => ({
-        model: m.model,
-        model_provider: m.model_provider,
-      }));
-    }, [modelRegistry.entries]);
+    const pickerModels = useMemo(
+      () => modelPageModels(modelRegistry.entries),
+      [modelRegistry.entries]
+    );
     // Case-insensitive substring filter on name + provider. Fuzzy match was
     // discussed but punted — substring catches the common "I know roughly
     // what I want" case and keeps the picker behavior predictable.
@@ -1259,6 +1260,47 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     //             aren't in our curated list are still accepted — the backend
     //             accepts anything `init_chat_model` knows, and we'd rather
     //             not block a power user on our curation lagging the registry.
+    // A model chosen from the picker or the Model page, and Reset to default:
+    // said with a toast either way.
+    const chooseModel = useCallback(
+      async (m: ModelOverride): Promise<boolean> => {
+        try {
+          await setModelOverride({
+            model: m.model,
+            ...(m.model_provider ? { model_provider: m.model_provider } : {}),
+          });
+          toast.success(
+            `Model set to ${m.model}${
+              m.model_provider ? ` (${m.model_provider})` : ""
+            }.`
+          );
+          return true;
+        } catch (err) {
+          toast.error(
+            err instanceof Error
+              ? `Couldn't update model: ${err.message}`
+              : "Couldn't update model — try again."
+          );
+          return false;
+        }
+      },
+      [setModelOverride]
+    );
+    const resetModel = useCallback(async (): Promise<boolean> => {
+      try {
+        await setModelOverride(null);
+        toast.success("Model override cleared.");
+        return true;
+      } catch (err) {
+        toast.error(
+          err instanceof Error
+            ? `Couldn't clear override: ${err.message}`
+            : "Couldn't clear override — try again."
+        );
+        return false;
+      }
+    }, [setModelOverride]);
+
     const applyModelCommand = useCallback(
       async (cmd: ReturnType<typeof parseModelCommand>) => {
         if (!cmd) return;
@@ -1438,7 +1480,126 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       setQueuedMessages([]);
     }, []);
 
-    // The `/` menu: installed skills to pin while a leading `/name` is typed.
+    // A command chosen from a page runs as if typed and sent with Enter:
+    // queued while the agent works, the draft left alone.
+    const runMenuCommand = (text: string) => {
+      if (!canSend || hasPendingInterrupt) return;
+      if (isLoading) {
+        setQueuedMessages((prev) => [
+          ...prev,
+          { id: (queueIdRef.current += 1), text, files: [], threadId },
+        ]);
+        return;
+      }
+      if (!canRunNow()) return;
+      sendComposerText(text, []);
+    };
+
+    const runGoalPageAction = (kind: GoalPageActionKind) => {
+      if (kind === "show") {
+        setGoalDetailsOpen(true);
+        return;
+      }
+      if (kind === "create" || kind === "amend") {
+        const next =
+          (kind === "create" ? "/goal " : "/goal amend ") + input.trimStart();
+        setInput(next);
+        requestAnimationFrame(() => {
+          const el = textareaRef.current;
+          el?.focus();
+          el?.setSelectionRange(next.length, next.length);
+        });
+        return;
+      }
+      runMenuCommand(`/goal ${kind}`);
+    };
+
+    // The `/` menu's commands, each a page: the goal's (where goals run) and
+    // the model's (everywhere).
+    const goalPage: MenuPage | null =
+      goalSupported === true
+        ? {
+            word: "goal",
+            label: "Goal",
+            icon: "goal",
+            description: goalSummary(goal),
+            status: goal ? `${goal.objective} · ${goal.status}` : "No goal yet",
+            rows: (filter) =>
+              goalPageActions(goal)
+                .filter((a) => rowMatches(a.label, filter))
+                .map(
+                  (a): MenuRow => ({
+                    id: a.kind,
+                    label: a.label,
+                    description: a.description,
+                    icon: GOAL_ROW_ICONS[a.kind],
+                    danger: a.kind === "clear",
+                    run: () => runGoalPageAction(a.kind),
+                  })
+                ),
+            empty: (filter) => `Nothing here matches “${filter}”.`,
+          }
+        : null;
+    const modelRowId = (model: string, provider?: string) =>
+      `model:${model}|${provider ?? ""}`;
+    const currentEntry = modelPageEntries({
+      models: pickerModels,
+      override: modelOverride,
+      defaultEntry: modelRegistry.defaultEntry,
+      filter: "",
+    }).find((e) => e.current);
+    const modelPage: MenuPage = {
+      word: "model",
+      label: "Model",
+      icon: "model",
+      description: "Change the model for this chat",
+      tail: currentModel?.name,
+      status: currentModel
+        ? `Current: ${currentModel.name}${modelOverride ? "" : " (default)"}`
+        : undefined,
+      note: isFallbackModelList
+        ? "Showing a curated list: the backend's model registry didn't load."
+        : modelRegistryLoading
+        ? "Loading the backend's models…"
+        : undefined,
+      rows: (filter) => {
+        const rows: MenuRow[] = modelPageEntries({
+          models: pickerModels,
+          override: modelOverride,
+          defaultEntry: modelRegistry.defaultEntry,
+          filter,
+        }).map((e) => ({
+          id: modelRowId(e.model, e.provider),
+          label: e.model,
+          description: e.provider,
+          tail: e.isDefault ? "default" : undefined,
+          icon: e.current ? "check" : null,
+          mono: true,
+          run: () =>
+            void chooseModel({ model: e.model, model_provider: e.provider }),
+        }));
+        if (modelOverride && !filter.trim()) {
+          const fallback = modelRegistry.defaultEntry?.name;
+          rows.push({
+            id: "reset",
+            label: "Reset to default",
+            description: fallback
+              ? `Back to ${fallback}`
+              : "Back to the deployment's default",
+            icon: "reset",
+            run: () => void resetModel(),
+          });
+        }
+        return rows;
+      },
+      initial: currentEntry
+        ? modelRowId(currentEntry.model, currentEntry.provider)
+        : undefined,
+      empty: (filter) => `No models match “${filter}”.`,
+    };
+
+    // The `/` menu: the commands' pages, and installed skills to pin while a
+    // leading `/name` is typed.
     const slash = useSlashMenu({
       textareaRef,
       value: input,
@@ -1446,13 +1607,15 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       disabled: hasPendingInterrupt,
       workspaceSkills: filesHere,
       onBrowse: () => onNavigate?.({ view: "skills" }),
-      commands:
-        goalSupported === true ? GOAL_AND_MODEL_COMMANDS : MODEL_MENU_COMMANDS,
-      // /model chosen from the menu opens the picker at once; a run command
-      // this composer can't read stays an ordinary row (written out).
-      runnerFor: (command) => {
-        const cmd = parseModelCommand(command.insert);
-        return cmd ? () => void applyModelCommand(cmd) : null;
+      pages: goalPage ? [goalPage, modelPage] : [modelPage],
+      // A picked skill goes first, in place of the typed word.
+      onPickSkill: (name, rest) => {
+        const next = `/${name} ${rest}`;
+        setInput(next);
+        const at = name.length + 2;
+        requestAnimationFrame(() =>
+          textareaRef.current?.setSelectionRange(at, at)
+        );
       },
     });
     const slashKeyDown = slash.onKeyDown;
@@ -2061,26 +2224,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                           m.model_provider ? ` from ${m.model_provider}` : ""
                         }${isDefault ? " (default)" : ""}`}
                         onClick={async () => {
-                          try {
-                            await setModelOverride({
-                              model: m.model,
-                              ...(m.model_provider
-                                ? { model_provider: m.model_provider }
-                                : {}),
-                            });
-                            toast.success(
-                              `Model set to ${m.model}${
-                                m.model_provider ? ` (${m.model_provider})` : ""
-                              }.`
-                            );
-                            setModelPickerOpen(false);
-                          } catch (err) {
-                            toast.error(
-                              err instanceof Error
-                                ? `Couldn't update model: ${err.message}`
-                                : "Couldn't update model — try again."
-                            );
-                          }
+                          if (await chooseModel(m)) setModelPickerOpen(false);
                         }}
                         className={cn(
                           "flex w-full items-center justify-between gap-3 rounded px-3 py-2 text-left text-sm transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
@@ -2110,17 +2254,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
               <Button
                 variant="outline"
                 onClick={async () => {
-                  try {
-                    await setModelOverride(null);
-                    toast.success("Model override cleared.");
-                    setModelPickerOpen(false);
-                  } catch (err) {
-                    toast.error(
-                      err instanceof Error
-                        ? `Couldn't clear override: ${err.message}`
-                        : "Couldn't clear override — try again."
-                    );
-                  }
+                  if (await resetModel()) setModelPickerOpen(false);
                 }}
                 disabled={!modelOverride}
               >

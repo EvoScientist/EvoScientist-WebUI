@@ -245,9 +245,9 @@ describe("/goal in the composer", () => {
     return { ...view, textarea, type };
   }
 
-  // The `/` menu lists /goal's commands, then /model's, above the skills
-  // (chatInterface.test has the menu without goals).
-  it("lists /goal's commands, then /model's, in the / menu", async () => {
+  // The `/` menu offers the Goal page, then the Model page, above the
+  // skills (chatInterface.test has the menu without goals).
+  it("lists the Goal and Model pages above the skills in the / menu", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(
@@ -272,17 +272,117 @@ describe("/goal in the composer", () => {
       act(() => textarea.focus());
       fireEvent.change(textarea, { target: { value: "/" } });
       await waitFor(() =>
-        expect(screen.getAllByRole("option")).toHaveLength(7)
+        expect(screen.getAllByRole("option")).toHaveLength(3)
       );
       const rows = screen
         .getAllByRole("option")
         .map((o) => o.textContent ?? "");
-      expect(rows.slice(0, 5).every((r) => r.startsWith("/goal"))).toBe(true);
-      expect(rows[5]).toBe("/modelChange model for this chat");
-      expect(rows[6]).toContain("/paper-writing");
+      expect(rows[0]).toContain("Goal");
+      expect(rows[0]).toContain("Set a goal to keep working toward");
+      expect(rows[1]).toContain("Model");
+      expect(rows[2]).toContain("/paper-writing");
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it("has no Goal row where goals aren't supported", async () => {
+    const { textarea } = await mount({}, { goals: false });
+    act(() => textarea.focus());
+    fireEvent.change(textarea, { target: { value: "/" } });
+    await waitFor(() =>
+      expect(screen.getAllByRole("option").length).toBeGreaterThan(0)
+    );
+    const rows = screen.getAllByRole("option").map((o) => o.textContent ?? "");
+    expect(rows[0]).toContain("Model");
+    expect(rows.some((r) => r.startsWith("Goal"))).toBe(false);
+  });
+
+  // The Goal page: every /goal command the core takes on this goal.
+  describe("the Goal page", () => {
+    async function openGoalPage(textarea: HTMLTextAreaElement) {
+      act(() => textarea.focus());
+      fireEvent.change(textarea, { target: { value: "/go" } });
+      await waitFor(() =>
+        expect(screen.getAllByRole("option")).toHaveLength(1)
+      );
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(screen.getByRole("listbox", { name: "Goal" })).toBeTruthy();
+    }
+    const labels = () =>
+      screen.getAllByRole("option").map((o) => o.textContent ?? "");
+
+    it("offers what the goal's status allows", async () => {
+      const { textarea } = await mount(
+        {},
+        { threadValues: goalValues("active") }
+      );
+      await openGoalPage(textarea);
+      const rows = labels();
+      expect(rows).toHaveLength(5);
+      [
+        "Amend the goal…",
+        "Pause",
+        "Set a new goal…",
+        "Clear",
+        "Show details",
+      ].forEach((label, i) => expect(rows[i].startsWith(label)).toBe(true));
+      expect(textarea.value).toBe("");
+    });
+
+    it("runs Pause as a goal request, and queues it while busy", async () => {
+      const { textarea } = await mount(
+        {},
+        { threadValues: goalValues("active") }
+      );
+      await openGoalPage(textarea);
+      fireEvent.keyDown(textarea, { key: "ArrowDown" });
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(submits()).toHaveLength(1);
+      expect(submits()[0].values).toMatchObject({
+        messages: [],
+        goal_request: { kind: "pause" },
+      });
+      expect(screen.queryByRole("listbox")).toBeNull();
+      // Busy: it waits in the queue like a typed /goal pause.
+      act(() => {
+        stream.setLoading(true);
+      });
+      await openGoalPage(textarea);
+      fireEvent.keyDown(textarea, { key: "ArrowDown" });
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(submits()).toHaveLength(1);
+      expect(screen.getByLabelText("Queued messages").textContent).toContain(
+        "/goal pause"
+      );
+    });
+
+    it("opens the goal's details from Show details", async () => {
+      const { textarea } = await mount(
+        {},
+        { threadValues: goalValues("active") }
+      );
+      await openGoalPage(textarea);
+      fireEvent.keyDown(textarea, { key: "ArrowUp" });
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      await waitFor(() =>
+        expect(getLastProps<{ open: boolean }>("GoalPill")?.open).toBe(true)
+      );
+      expect(submits()).toHaveLength(0);
+    });
+
+    it("puts /goal's words in the box for a new goal", async () => {
+      const { textarea } = await mount(
+        {},
+        { threadValues: goalValues("active") }
+      );
+      await openGoalPage(textarea);
+      fireEvent.keyDown(textarea, { key: "ArrowDown" });
+      fireEvent.keyDown(textarea, { key: "ArrowDown" });
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(textarea.value).toBe("/goal ");
+      expect(submits()).toHaveLength(0);
+    });
   });
 
   it("sends /goal <objective> as a goal request, not a message", async () => {

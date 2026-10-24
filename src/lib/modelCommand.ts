@@ -20,7 +20,6 @@
  *  authoritative store, so the choice survives reload, thread switch, and
  *  cross-device opens of the same thread. */
 
-import type { MenuCommand } from "./slashMenu";
 export const MODEL_OVERRIDE_METADATA_KEY = "model_override";
 
 export interface ModelOverride {
@@ -53,19 +52,6 @@ export const COMMON_MODELS: ReadonlyArray<CommonModelEntry> = [
   { model: "gemini-2.5-pro", model_provider: "google-genai" },
   { model: "gemini-3.5-flash", model_provider: "google-genai" },
   { model: "deepseek-v3.2", model_provider: "deepseek" },
-];
-
-/** The `/` menu's row for /model: chosen, it opens the picker at once
- *  (`run`), and the picker does the rest — a name, a provider, Reset to
- *  default. Typing `/model <name> [provider]` or `/model reset` still works. */
-export const MODEL_MENU_COMMANDS: readonly MenuCommand[] = [
-  {
-    word: "model",
-    label: "model",
-    insert: "/model",
-    description: "Change model for this chat",
-    run: true,
-  },
 ];
 
 export type ModelCommand =
