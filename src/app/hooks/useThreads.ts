@@ -8,6 +8,7 @@ import {
   needsThreadLabelBackfill,
 } from "@/lib/threadLabels";
 import { cancelActiveRuns, type RunCancelClient } from "@/lib/threadLifecycle";
+import { pickThreadMessages } from "@/lib/threadMessages";
 import { CHAT_GRAPH_ID } from "@/lib/workspaceAssistant";
 import { useWorkspace } from "@/providers/WorkspaceProvider";
 
@@ -29,16 +30,24 @@ const DEFAULT_PAGE_SIZE = 20;
 
 const labelBackfillAttempted = new Map<string, string>();
 
-async function backfillThreadLabels(
+export async function backfillThreadLabels(
   client: Client,
   id: string,
   attemptKey: string,
   attemptedState: string
 ): Promise<{ autoTitle: string | null; preview: string | null } | null> {
   try {
-    const thread = await client.threads.get(id);
+    // The labels come from the root conversation: the bare record can be a
+    // nested run's, the goal drafter's while a goal's review waits.
+    const [thread, state] = await Promise.all([
+      client.threads.get(id),
+      client.threads.getState(id),
+    ]);
     const values = thread.values as { messages?: unknown } | undefined;
-    const derived = deriveThreadMetadata(values?.messages);
+    const rootValues = state.values as { messages?: unknown } | undefined;
+    const derived = deriveThreadMetadata(
+      pickThreadMessages(rootValues?.messages, values?.messages)
+    );
     const current = (thread.metadata ?? {}) as Record<string, unknown>;
     const stateUpdatedAt =
       (thread as { state_updated_at?: string | null }).state_updated_at ||

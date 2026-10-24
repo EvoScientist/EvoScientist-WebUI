@@ -93,6 +93,50 @@ describe("recovery poll", () => {
     clearMockClient();
   });
 
+  it("keeps a goal drafter's messages out of the chat while the review waits", async () => {
+    // A goal's create run sends no message, so the root conversation is
+    // still empty while its review waits, and the bare thread record is the
+    // drafter's run.
+    const client = getActiveMockClient();
+    client.setThreadState("t-1", {
+      next: ["GoalMiddleware.before_agent"],
+      tasks: [
+        {
+          interrupts: [
+            {
+              id: "int-goal",
+              value: {
+                type: "ask_user",
+                questions: [
+                  {
+                    question: "Proposed acceptance criteria for the goal:",
+                    type: "multiple_choice",
+                    choices: [{ value: "Accept" }, { value: "Cancel" }],
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+      values: { messages: [] },
+    });
+    client.setThreadRecord("t-1", {
+      status: "interrupted",
+      values: {
+        messages: [
+          { id: "d1", type: "human", content: "<operation>draft</operation>" },
+          { id: "d2", type: "ai", content: "- The file exists" },
+        ] as unknown as Message[],
+      },
+    });
+    const { result } = renderChat({ connected: true });
+    await waitFor(() => {
+      expect(result.current.interrupt).toBeDefined();
+    });
+    expect(result.current.messages).toEqual([]);
+  });
+
   it("surfaces a pending server-side approval the settled stream dropped", async () => {
     // The live stream settled with nothing: the poll must backfill both the
     // approval interrupt and the dropped tail from thread state. This also
@@ -226,6 +270,42 @@ describe("recovery poll", () => {
         expect(result.current.messages.map((m) => m.id)).toEqual([
           "h1",
           "p1",
+          "a1",
+        ]);
+      });
+      expect(result.current.interrupt).toBeUndefined();
+    });
+
+    it("keeps suppressing when recovery brings a grader's revision the client had not received at Stop", async () => {
+      const revision = {
+        id: "r1",
+        type: "human",
+        name: "rubric_grader",
+        content: "A grader reviewed your work and asked for revisions.",
+        additional_kwargs: { lc_source: "rubric_grader" },
+      };
+      const { result } = renderChat({ connected: true });
+      act(() => {
+        stream.setMessages([userMessage] as unknown as Message[]);
+        stream.setLoading(true);
+      });
+      act(() => {
+        result.current.abortRun();
+      });
+      getActiveMockClient().setThreadState("t-1", {
+        next: ["tools"],
+        tasks: [{ interrupts: [pendingApproval] }],
+        values: {
+          messages: [userMessage, revision, toolCall] as unknown as Message[],
+        },
+      });
+      act(() => {
+        stream.setLoading(false);
+      });
+      await waitFor(() => {
+        expect(result.current.messages.map((m) => m.id)).toEqual([
+          "h1",
+          "r1",
           "a1",
         ]);
       });

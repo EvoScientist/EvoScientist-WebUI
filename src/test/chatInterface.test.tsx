@@ -13,7 +13,7 @@ import {
   fireEvent,
   waitFor,
 } from "@testing-library/react";
-import type { ComposerSnapshot } from "@/app/components/ChatInterface";
+import type { ComposerFold } from "@/app/components/ChatInterface";
 import {
   MockStreamStore,
   clearMockStreamStore,
@@ -179,7 +179,7 @@ describe("ChatInterface composition", () => {
   });
 
   it("exposes the unsent composer state through onComposerSnapshotReady", () => {
-    let getSnapshot: (() => ComposerSnapshot) | null = null;
+    let getSnapshot: ((unsent?: string | null) => ComposerFold) | null = null;
     const { unmount } = renderChatInterface({
       onComposerSnapshotReady: (fn) => {
         getSnapshot = fn;
@@ -190,7 +190,11 @@ describe("ChatInterface composition", () => {
     act(() => {
       fireEvent.change(textarea, { target: { value: "typed but unsent" } });
     });
-    expect(getSnapshot!()).toEqual({ text: "typed but unsent", files: [] });
+    expect(getSnapshot!()).toEqual({
+      text: "typed but unsent",
+      files: [],
+      unsentBack: false,
+    });
     unmount();
     expect(getSnapshot).toBeNull();
   });
@@ -1503,6 +1507,27 @@ describe("ChatInterface composition", () => {
       expect(stream.getSubmitCalls()).toHaveLength(0);
     });
 
+    // /model works on every backend; goalCommand.test has the menu with
+    // /goal's rows too.
+    it("offers /model above the skills and opens the picker when it is chosen", async () => {
+      const { container } = renderChatInterface();
+      const textarea = typeInComposer(container, "/");
+      await waitFor(() =>
+        expect(screen.getAllByRole("option")).toHaveLength(2)
+      );
+      const rows = screen.getAllByRole("option").map((o) => o.textContent);
+      expect(rows[0]).toBe("/modelChange model for this chat");
+      expect(rows[1]).toContain("/paper-writing");
+      fireEvent.click(screen.getAllByRole("option")[0]);
+      expect(
+        await screen.findByRole("dialog", {
+          name: "Pick a model for this chat",
+        })
+      ).toBeTruthy();
+      expect(textarea.value).toBe("");
+      expect(stream.getSubmitCalls()).toHaveLength(0);
+    });
+
     it("offers only the global skills when the backend's folder is elsewhere", async () => {
       const { container } = renderChatInterface({
         workspace: mockWorkspace({
@@ -1573,10 +1598,15 @@ describe("ChatInterface composition", () => {
       );
       const onNavigate = vi.fn();
       const { container } = renderChatInterface({ onNavigate });
+      // /model first, the way to the marketplace last.
       const textarea = typeInComposer(container, "/");
       await waitFor(() =>
-        expect(screen.getAllByRole("option")).toHaveLength(1)
+        expect(screen.getAllByRole("option")).toHaveLength(2)
       );
+      expect(screen.getAllByRole("option")[1].textContent).toContain(
+        "No skills installed"
+      );
+      fireEvent.keyDown(textarea, { key: "ArrowUp" });
       fireEvent.keyDown(textarea, { key: "Enter" });
       expect(onNavigate).toHaveBeenCalledWith({ view: "skills" });
     });

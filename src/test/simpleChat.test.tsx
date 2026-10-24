@@ -111,8 +111,13 @@ describe("simple chat scenario", () => {
     expect(opts.streamResumable).toBe(true);
     expect(opts.onDisconnect).toBe("continue");
     // The server layers the assistant's config underneath; the run carries
-    // only the model override, so a stale assistant can't override its folder.
-    expect(opts.config).toEqual({ configurable: {} });
+    // only the model override and the grading marker (sent until the backend
+    // is known to lack /goal), so a stale assistant can't override its folder.
+    expect(opts.config).toEqual({
+      configurable: { rubric_run: { mode: "thread", changes: [] } },
+    });
+    // Every message clears a /goal request a stopped run left in state.
+    expect(calls[0].values).toHaveProperty("goal_request", null);
   });
 
   it("immediately kicks off a thread-list revalidate on send", () => {

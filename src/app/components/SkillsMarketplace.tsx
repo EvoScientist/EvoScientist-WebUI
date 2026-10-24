@@ -400,7 +400,7 @@ function expertBadge(
         e.stopPropagation();
         void setView("experts");
       }}
-      className="shrink-0 rounded-full border border-[var(--brand)] bg-[var(--brand-soft)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--brand)] transition-opacity hover:opacity-80 focus-visible:ring-2 focus-visible:ring-ring"
+      className="shrink-0 rounded-full border border-solid border-[var(--brand)] bg-[var(--brand-soft)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--brand)] transition-colors focus-visible:ring-2 focus-visible:ring-ring enabled:hover:border-[var(--brand-hover)] enabled:hover:text-[var(--brand-hover)]"
       title="Also an expert — can be dispatched to run a task on its own"
     >
       Expert

@@ -4,6 +4,7 @@ import {
   useCallback,
   useDeferredValue,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -19,6 +20,22 @@ import { useClient } from "@/providers/ClientProvider";
 import { useQueryState } from "nuqs";
 import { pickThreadMessages } from "@/lib/threadMessages";
 import { pinnedSkillName } from "@/lib/pinnedSkill";
+import { isRubricRevision } from "@/lib/rubricRevision";
+import { withoutNestedRuns } from "@/lib/nestedRuns";
+import type { GoalRequest } from "@/lib/goalCommand";
+import {
+  goalEventKey,
+  goalEventNotice,
+  parseGoalEvent,
+  type GoalEvent,
+} from "@/lib/goalEvents";
+import {
+  lastRubricVerdict,
+  threadGoal,
+  type RubricVerdict,
+  type ThreadGoal,
+} from "@/lib/goalState";
+import { useGoalSupport } from "@/app/hooks/useGoalSupport";
 import { parseSummarizationEvent } from "@/lib/summarization";
 import {
   applySubagentEvent,
@@ -66,6 +83,9 @@ import { extractStringFromMessageContent } from "@/app/utils/utils";
 
 export type StateType = {
   messages: Message[];
+  // A /goal request (core middleware/goal.py). Only in run inputs: every
+  // message writes null so a leftover request is not drafted again.
+  goal_request?: GoalRequest | null;
   todos: TodoItem[];
   files: Record<string, string>;
   email?: {
@@ -171,9 +191,14 @@ const SETTLED_THREAD_STATUSES = new Set(["idle", "interrupted", "error"]);
 function lastHumanMessageId(messages: readonly unknown[]): string | null {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i] as Message | null;
-    // The pinned-skill message is not a user turn; counting it would read the
-    // stopped turn's own late-arriving pinned message as a new turn.
-    if (m?.type === "human" && pinnedSkillName(m) === null) {
+    // The pinned-skill message and the grader's request for revisions are
+    // not user turns; counting one would read the stopped turn's own
+    // late-arriving message as a new turn.
+    if (
+      m?.type === "human" &&
+      pinnedSkillName(m) === null &&
+      !isRubricRevision(m)
+    ) {
       return typeof m.id === "string" ? m.id : null;
     }
   }
@@ -224,6 +249,21 @@ export interface ThreadUnavailableInfo {
   unsentMessage: string | null;
 }
 
+/** A run's grading mode (the core's `configurable.rubric_run.mode`): the
+ *  user's turns and /goal requests are "thread"; a report the WebUI sends
+ *  for finished background work is "followup", which only completes a
+ *  grading that was waiting for it. */
+export type RunMode = "thread" | "followup";
+/** A goal run's step the goal pill shows while it lasts. */
+export type GoalBusy = "drafting" | "checking" | null;
+
+function goalBusyAfter(event: GoalEvent): GoalBusy {
+  if (event.type === "goal_state") {
+    return event.change === "drafting" ? "drafting" : null;
+  }
+  return event.type === "rubric_evaluation_start" ? "checking" : null;
+}
+
 export function useChat({
   onHistoryRevalidate,
   onThreadUnavailable,
@@ -238,11 +278,22 @@ export function useChat({
    * message. Return `false` to reject the report (it was about a thread the
    * user has already left) — nothing is reset or toasted then.
    */
-  onThreadUnavailable?: (info: ThreadUnavailableInfo) => boolean | void;
+  /** False: the report was ignored. `unsentBack`: whether the unsent
+   *  message reached the new chat's composer. */
+  onThreadUnavailable?: (
+    info: ThreadUnavailableInfo
+  ) => boolean | void | { unsentBack: boolean };
   thread?: UseStreamThread<StateType>;
 }) {
   const [threadId, setThreadId] = useQueryState("threadId");
+  // The SDK runs a run's callbacks from the render that submitted it, which
+  // for a new chat's first run knew no thread yet.
+  const threadIdRef = useRef(threadId);
+  threadIdRef.current = threadId;
   const client = useClient();
+  // useStream reads through this one: a middleware's nested run (goal
+  // drafter, rubric grader) would otherwise take over the chat's values.
+  const streamClient = useMemo(() => withoutNestedRuns(client), [client]);
   const {
     workspace,
     refreshing,
@@ -251,6 +302,47 @@ export function useChat({
   } = useWorkspace();
   const workspaceRef = useRef(workspace);
   workspaceRef.current = workspace;
+  const goalSupported = useGoalSupport();
+  // The mode of the run a resume continues; null after a reload, which
+  // resumes as "thread" (a goal review only pauses a thread run).
+  const lastRunModeRef = useRef<RunMode | null>(null);
+  // Goal events shown in this run: a replay on reconnect shows nothing twice.
+  const goalEventKeysRef = useRef(new Set<string>());
+  // Every goal read takes a number; only the latest one is kept.
+  const goalReadRef = useRef(0);
+  const [goalState, setGoalState] = useState<{
+    threadId: string;
+    goal: ThreadGoal | null;
+    verdict: RubricVerdict | null;
+  } | null>(null);
+  const [goalBusy, setGoalBusy] = useState<GoalBusy>(null);
+  const applyGoalRead = useCallback(
+    (read: number, id: string, values: unknown) => {
+      if (read !== goalReadRef.current) return;
+      setGoalState({
+        threadId: id,
+        goal: threadGoal(values),
+        verdict: lastRubricVerdict(values),
+      });
+    },
+    []
+  );
+  // The goal lives in thread state (getState), not in the streamed values.
+  const refreshGoal = useCallback(
+    (id: string | null) => {
+      if (!id) return;
+      const read = ++goalReadRef.current;
+      client.threads
+        .getState(id)
+        .then((state) =>
+          applyGoalRead(read, id, (state as { values?: unknown }).values)
+        )
+        .catch(() => {
+          // The next read (the run's end, a thread load) tries again.
+        });
+    },
+    [client, applyGoalRead]
+  );
   // The folder answer the latest run was sent for.
   const sentForRef = useRef(servedKey(workspace));
 
@@ -296,6 +388,9 @@ export function useChat({
   // submit fails with a thread-gone 404, this is the message that never made
   // it and should be handed back to the user.
   const lastSubmittedHumanIdRef = useRef<string | null>(null);
+  // A goal request sends no message: the /goal text it came from, until
+  // the backend has made its run.
+  const unsentGoalRef = useRef<string | null>(null);
 
   const [dynamicWorkflows, setDynamicWorkflows] = useState<WorkflowMap>({});
   const workflowThreadIdRef = useRef(threadId);
@@ -329,12 +424,28 @@ export function useChat({
   // Computed from the folder answer this render carries, so it can never
   // belong to another folder than the one the gate was opened for.
   const threadAssistantId = assistantIdFor(workspace, threadGraph) ?? "";
+  // Goals only on the chat graph: the scheduler graph has no goal
+  // middleware, so a goal request on a scheduled task's thread would be
+  // dropped and the agent would answer its last turn again. Unknown while an
+  // open thread's own metadata is out, since until then a scheduled task's
+  // thread reads as the chat graph's. The run marker still follows
+  // goalSupported: a graph without the middleware ignores it.
+  const goalsHere =
+    threadId !== null && !openMeta
+      ? undefined
+      : threadGraph === CHAT_GRAPH_ID
+      ? goalSupported
+      : false;
 
   // A message the backend refused before running it goes back to the
   // composer, which registers how (`setRefusalHandler`).
-  const refusalHandlerRef = useRef<((text: string) => void) | null>(null);
+  // The handler answers false when the text did not come back (a /goal
+  // command that would be glued onto other text there).
+  const refusalHandlerRef = useRef<((text: string) => boolean | void) | null>(
+    null
+  );
   const setRefusalHandler = useCallback(
-    (handler: ((text: string) => void) | null) => {
+    (handler: ((text: string) => boolean | void) | null) => {
       refusalHandlerRef.current = handler;
     },
     []
@@ -350,8 +461,10 @@ export function useChat({
       last.id === lastSubmittedHumanIdRef.current
         ? extractStringFromMessageContent(last).trim() || null
         : null;
+    const goalText = unsentGoalRef.current;
     lastSubmittedHumanIdRef.current = null;
-    return unsentMessage;
+    unsentGoalRef.current = null;
+    return unsentMessage ?? goalText;
   };
 
   // The open thread is gone: hand back an unsent message and start over.
@@ -362,15 +475,16 @@ export function useChat({
     unsentMessage = takeUnsentMessage(),
     inComposer = false
   ) => {
+    let unsentBack = unsentMessage !== null;
     if (onThreadUnavailable) {
-      if (onThreadUnavailable({ threadId, unsentMessage }) === false) {
-        return;
-      }
+      const handled = onThreadUnavailable({ threadId, unsentMessage });
+      if (handled === false) return;
+      if (typeof handled === "object") unsentBack = handled.unsentBack;
     } else {
       void setThreadId(null);
     }
     toast.error(
-      unsentMessage || inComposer
+      unsentBack || inComposer
         ? onThreadUnavailable || inComposer
           ? "This conversation is no longer available. Started a new chat; your unsent message is back in the composer."
           : "This conversation is no longer available. Started a new chat; your last message was not sent."
@@ -384,7 +498,7 @@ export function useChat({
     // The open thread's assistant. Every submitter checks `canSend` first,
     // so the empty id is never sent.
     assistantId: threadAssistantId,
-    client: client ?? undefined,
+    client: streamClient,
     reconnectOnMount: true,
     threadId: threadId ?? null,
     onThreadId: setThreadId,
@@ -413,6 +527,7 @@ export function useChat({
     // model provider returned a quota error.
     onFinish: () => {
       lastSubmittedHumanIdRef.current = null;
+      unsentGoalRef.current = null;
       onHistoryRevalidate?.();
     },
     onError: (error) => {
@@ -431,6 +546,7 @@ export function useChat({
       }
       if (isRunFolderMismatchError(error)) {
         lastSubmittedHumanIdRef.current = null;
+        unsentGoalRef.current = null;
         // Read the folder again (runs wait until it is in): if the backend
         // moved, the next send goes to that folder's assistant; otherwise
         // say why it refused.
@@ -465,8 +581,8 @@ export function useChat({
         const refusedOn = runStateRef.current.threadId;
         void refreshWorkspace();
         const handBack = refusalHandlerRef.current;
-        const inComposer = unsent !== null && handBack !== null;
-        if (inComposer) handBack(unsent);
+        const inComposer =
+          unsent !== null && handBack !== null && handBack(unsent) !== false;
         // Only a 404 means the thread is gone; any other failure to check
         // keeps the conversation. One toast, for what the check found.
         void assistantIsMissing(client, refusedOn).then((missing) => {
@@ -480,9 +596,10 @@ export function useChat({
             return;
           }
           if (!missing) {
+            // Handed to the composer, the text is dealt with there.
             reportThreadUnavailable(
               refusedOn as string,
-              inComposer ? null : unsent,
+              handBack !== null ? null : unsent,
               inComposer
             );
             return;
@@ -502,9 +619,14 @@ export function useChat({
         return;
       }
       lastSubmittedHumanIdRef.current = null;
+      unsentGoalRef.current = null;
       toast.error(formatStreamError(error));
     },
-    onCreated: onHistoryRevalidate,
+    // The backend made the run, so a goal request was not refused.
+    onCreated: () => {
+      unsentGoalRef.current = null;
+      onHistoryRevalidate?.();
+    },
     onCustomEvent: (data, options) => {
       // A fallback chain emits several notices (failed → falling back →
       // succeeded); one toast id lets each replace the last instead of
@@ -516,6 +638,27 @@ export function useChat({
         return;
       }
       if (retryTracker.handle(data, options)) return;
+      // Before the root-namespace gate: "drafting" comes from the drafter's
+      // nested namespace.
+      const goalEvent = parseGoalEvent(data);
+      if (goalEvent) {
+        // The SDK doesn't stop a run when its chat unmounts (a thread
+        // switch): such a run's events belong to a thread no longer shown.
+        if (!mountedRef.current) return;
+        const key = goalEventKey(goalEvent);
+        if (goalEventKeysRef.current.has(key)) return;
+        goalEventKeysRef.current.add(key);
+        const notice = goalEventNotice(goalEvent);
+        if (notice) toast[notice.level](notice.text);
+        setGoalBusy(goalBusyAfter(goalEvent));
+        if (
+          goalEvent.type === "goal_state" &&
+          goalEvent.change !== "drafting"
+        ) {
+          refreshGoal(threadIdRef.current);
+        }
+        return;
+      }
       if (options?.namespace && options.namespace.length > 0) return;
       const event = parseSubagentEvent(data);
       if (!event) return;
@@ -526,6 +669,10 @@ export function useChat({
     thread,
   };
   const stream = useStream<StateType>(streamOptions);
+  // A run that ends or stops mid-draft or mid-grading leaves no step shown.
+  useEffect(() => {
+    if (!stream.isLoading) setGoalBusy(null);
+  }, [stream.isLoading]);
 
   // `filterSubagentMessages` is a DeepAgent-only option in the SDK's public
   // type inference, but remote graph clients cannot import the backend agent's
@@ -870,11 +1017,12 @@ export function useChat({
     const attempt = async () => {
       tries += 1;
       try {
+        const goalRead = ++goalReadRef.current;
         const [state, threadRecord] = await Promise.all([
           client.threads.getState(threadId) as Promise<{
             tasks?: Array<{ interrupts?: unknown[] }>;
             next?: unknown[];
-            values?: { messages?: Message[] };
+            values?: { messages?: Message[] } & Record<string, unknown>;
           }>,
           client.threads.get(threadId) as Promise<{
             status?: string;
@@ -882,6 +1030,7 @@ export function useChat({
           }>,
         ]);
         if (cancelled || recoveryRunRef.current !== recoveryRunId) return;
+        applyGoalRead(goalRead, threadId, state.values);
         const msgs = pickThreadMessages(
           state.values?.messages,
           threadRecord.values?.messages
@@ -1051,21 +1200,33 @@ export function useChat({
   // The run's config carries only the per-thread model override. The server
   // layers the assistant's config (its `workspace_dir`) underneath, so a
   // stale assistant held here can't send another folder that would win.
-  const buildRunConfig = useCallback(() => {
-    const configurable: Record<string, unknown> = {};
-    if (modelOverride) {
-      configurable.model = modelOverride.model;
-      if (modelOverride.model_provider) {
-        configurable.model_provider = modelOverride.model_provider;
+  const buildRunConfig = useCallback(
+    (mode: RunMode = "thread") => {
+      const configurable: Record<string, unknown> = {};
+      if (modelOverride) {
+        configurable.model = modelOverride.model;
+        if (modelOverride.model_provider) {
+          configurable.model_provider = modelOverride.model_provider;
+        }
       }
-    }
-    return { configurable };
-  }, [modelOverride]);
+      // The core's grading marker: a thread's goal applies only to runs
+      // that carry it, and a resume without it drops a goal review. Sent
+      // until the backend is known to lack goals; an older core ignores it.
+      if (goalSupported !== false) {
+        configurable.rubric_run = { mode, changes: [] };
+      }
+      return { configurable };
+    },
+    [modelOverride, goalSupported]
+  );
 
   const sendMessage = useCallback(
-    (content: string): boolean => {
+    (content: string, options?: { mode?: RunMode }): boolean => {
       if (!canRunNow()) return false;
       const key = startRun();
+      const mode = options?.mode ?? "thread";
+      lastRunModeRef.current = mode;
+      goalEventKeysRef.current = new Set();
       // Drop any settled-run snapshot up front. Otherwise, until `isLoading`
       // flips true (and the effect above clears it), a previous run's
       // `fetchedMessages` can still out-count `stream.messages` and shadow the
@@ -1081,14 +1242,15 @@ export function useChat({
       retryTracker.reset();
       const newMessage: Message = { id: uuidv4(), type: "human", content };
       lastSubmittedHumanIdRef.current = newMessage.id ?? null;
+      unsentGoalRef.current = null;
       thinkingClock.runStarting();
       streamRef.current.submit(
-        { messages: [newMessage] },
+        { messages: [newMessage], goal_request: null },
         {
           optimisticValues: (prev) => ({
             messages: [...(prev.messages ?? []), newMessage],
           }),
-          config: buildRunConfig(),
+          config: buildRunConfig(mode),
           // A new thread is created with this metadata, so it is in the
           // folder's list from the first message.
           metadata: key ? { workspace_dir: key } : undefined,
@@ -1126,10 +1288,56 @@ export function useChat({
     [canRunNow, client, threadId]
   );
 
+  // A /goal request: a thread run with no message (the core drafts the
+  // criteria and pauses on a review the user answers with resumeInterrupt).
+  const sendGoalRequest = useCallback(
+    (request: GoalRequest, text?: string): boolean => {
+      if (goalsHere !== true || !canRunNow()) return false;
+      const key = startRun();
+      lastRunModeRef.current = "thread";
+      goalEventKeysRef.current = new Set();
+      setFetchedInterrupt(undefined);
+      setFetchedMessages(null);
+      setFetchedThreadId(null);
+      setResolvedInterruptKey(null);
+      userAbortedRef.current = false;
+      abortedTurnRef.current = null;
+      setUserAborted(false);
+      recoveryRunRef.current += 1;
+      retryTracker.reset();
+      lastSubmittedHumanIdRef.current = null;
+      unsentGoalRef.current = text?.trim() || null;
+      thinkingClock.runStarting();
+      streamRef.current.submit(
+        { messages: [], goal_request: request },
+        {
+          config: buildRunConfig("thread"),
+          metadata: key ? { workspace_dir: key } : undefined,
+          streamSubgraphs: true,
+          streamMode: ["updates"],
+          streamResumable: true,
+          onDisconnect: "continue",
+        }
+      );
+      onHistoryRevalidate?.();
+      return true;
+    },
+    [
+      buildRunConfig,
+      canRunNow,
+      goalsHere,
+      onHistoryRevalidate,
+      retryTracker,
+      startRun,
+      thinkingClock,
+    ]
+  );
+
   const resumeInterrupt = useCallback(
     (value: any): boolean => {
       if (!canRunNow()) return false;
       startRun();
+      goalEventKeysRef.current = new Set();
       // Same as sendMessage: clear the prior snapshot before resuming so a stale
       // fetchedInterrupt/fetchedMessages can't briefly re-surface a resolved
       // approval card or shadow the resumed run's messages.
@@ -1143,10 +1351,11 @@ export function useChat({
       recoveryRunRef.current += 1;
       retryTracker.reset();
       lastSubmittedHumanIdRef.current = null;
+      unsentGoalRef.current = null;
       thinkingClock.runStarting();
       streamRef.current.submit(null, {
         command: { resume: value },
-        config: buildRunConfig(),
+        config: buildRunConfig(lastRunModeRef.current ?? "thread"),
         streamSubgraphs: true,
         streamMode: ["updates"],
         streamResumable: true,
@@ -1177,6 +1386,7 @@ export function useChat({
     abortedTurnRef.current = lastHumanMessageId(streamRef.current.messages);
     setUserAborted(true);
     lastSubmittedHumanIdRef.current = null;
+    unsentGoalRef.current = null;
     retryTracker.reset();
     streamRef.current.stop();
   }, [retryTracker]);
@@ -1278,5 +1488,16 @@ export function useChat({
     dynamicWorkflows,
     modelOverride,
     setModelOverride,
+    /** Whether the backend takes /goal; undefined until known. */
+    goalSupported: goalsHere,
+    // A new chat runs on the chat graph: what a /goal text means there.
+    chatGoalSupported: goalSupported,
+    sendGoalRequest,
+    /** The open thread's goal, from thread state. */
+    goal: goalState && goalState.threadId === threadId ? goalState.goal : null,
+    goalBusy,
+    /** The open thread's latest grading. */
+    rubricVerdict:
+      goalState && goalState.threadId === threadId ? goalState.verdict : null,
   };
 }

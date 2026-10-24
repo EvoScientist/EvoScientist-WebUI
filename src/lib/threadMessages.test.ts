@@ -10,10 +10,18 @@ describe("pickThreadMessages", () => {
     expect(pickThreadMessages("junk", 42)).toBeNull();
   });
 
-  it("returns the record when state is empty or missing", () => {
-    const record = [msg("a"), msg("b")];
-    expect(pickThreadMessages(undefined, record)).toEqual(record);
-    expect(pickThreadMessages([], record)).toEqual(record);
+  // `/state` is always the root conversation; the bare record is the latest
+  // checkpoint of any namespace. While a goal's review waits, that is the
+  // goal drafter's run, with the root conversation still empty.
+  it("keeps an empty root conversation over another namespace's record", () => {
+    const record = [msg("drafter-prompt", "human"), msg("drafter-reply")];
+    expect(pickThreadMessages([], record)).toEqual([]);
+    expect(pickThreadMessages([], [])).toEqual([]);
+  });
+
+  it("trusts no record without the root conversation", () => {
+    const record = [msg("drafter-prompt", "human"), msg("drafter-reply")];
+    expect(pickThreadMessages(undefined, record)).toBeNull();
   });
 
   it("returns state when the record is empty or missing", () => {

@@ -74,7 +74,9 @@ export function AskUserInterrupt({
           <div key={i}>
             <p
               id={`${questionIdPrefix}-question-${i}`}
-              className="mb-2 text-sm font-medium text-foreground"
+              // A goal's review lists its criteria one per line, up to
+              // 12,000 characters.
+              className="mb-2 max-h-[40vh] overflow-y-auto whitespace-pre-wrap break-words text-sm font-medium text-foreground"
             >
               {q.question}
               {!isOptional(q) && (

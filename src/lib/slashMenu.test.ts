@@ -168,3 +168,12 @@ describe("applySkill", () => {
     ).toEqual({ text: "/a /paper-writing draft the intro", caret: 18 });
   });
 });
+
+describe("slashTokenAt and /goal", () => {
+  it.each(["/goal", "/goal show", "/goal write the report"])(
+    "leaves %j to the goal command",
+    (text) => {
+      expect(slashTokenAt(text, text.length)).toBeNull();
+    }
+  );
+});

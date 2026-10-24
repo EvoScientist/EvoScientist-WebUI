@@ -84,6 +84,7 @@ import type React from "react";
 import { render, type RenderResult } from "@testing-library/react";
 import {
   ChatInterface,
+  type ComposerFold,
   type ComposerSnapshot,
 } from "@/app/components/ChatInterface";
 import { ChatProvider } from "@/providers/ChatProvider";
@@ -93,13 +94,15 @@ import { TestWorkspaceProvider, mockWorkspace } from "@/test/mockWorkspace";
 interface RenderChatInterfaceOptions {
   draftSeed?: ComposerSnapshot | null;
   onComposerSnapshotReady?: (
-    getSnapshot: (() => ComposerSnapshot) | null
+    getSnapshot: ((unsent?: string | null) => ComposerFold) | null
   ) => void;
   /** Wrap the provider tree, e.g. in a FilePaneProvider. */
   wrapper?: React.ComponentType<{ children: React.ReactNode }>;
   onNavigate?: React.ComponentProps<typeof ChatInterface>["onNavigate"];
   /** The backend's folder; defaults to a backend without the route. */
   workspace?: WorkspaceContextValue;
+  /** Receives the "Notify main chat" reporter ChatInterface hands out. */
+  onNotifyReady?: React.ComponentProps<typeof ChatInterface>["onNotifyReady"];
 }
 
 export function renderChatInterface(
@@ -112,6 +115,7 @@ export function renderChatInterface(
           draftSeed={opts.draftSeed}
           onComposerSnapshotReady={opts.onComposerSnapshotReady}
           onNavigate={opts.onNavigate}
+          onNotifyReady={opts.onNotifyReady}
         />
       </ChatProvider>
     </TestWorkspaceProvider>,

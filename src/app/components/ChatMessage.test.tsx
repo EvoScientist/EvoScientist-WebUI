@@ -616,3 +616,21 @@ describe("ChatMessage sub-agent", () => {
     }
   );
 });
+
+describe("ChatMessage rubric revision", () => {
+  it("shows the grader's feedback as a collapsed row, not a user bubble", () => {
+    renderMessage({
+      id: "r1",
+      type: "human",
+      name: "rubric_grader",
+      content: "A grader reviewed your work and asked for revisions.",
+      additional_kwargs: { lc_source: "rubric_grader" },
+    } as unknown as Message);
+    expect(
+      screen.getByRole("button", { name: "rubric: revision requested" })
+    ).toBeTruthy();
+    expect(
+      screen.queryByText("A grader reviewed your work and asked for revisions.")
+    ).toBeNull();
+  });
+});

@@ -11,6 +11,7 @@ import { SubAgentIndicator } from "@/app/components/SubAgentIndicator";
 import { ToolCallBox } from "@/app/components/ToolCallBox";
 import { MarkdownContent } from "@/app/components/MarkdownContent";
 import { PinnedSkill } from "@/app/components/PinnedSkill";
+import { RubricRevision } from "@/app/components/RubricRevision";
 import { SubAgentSteps } from "@/app/components/SubAgentSteps";
 import { ThinkingRow } from "@/app/components/ThinkingRow";
 import type {
@@ -24,6 +25,7 @@ import { taskSubAgentName, type SubAgentStep } from "@/lib/subAgentActivity";
 import { isAsyncUpdateMessage } from "@/lib/asyncAgents";
 import { bindActionRequestsToToolCalls } from "@/lib/hitl";
 import { pinnedSkillDescription, pinnedSkillName } from "@/lib/pinnedSkill";
+import { isRubricRevision } from "@/lib/rubricRevision";
 import { messageReasoning } from "@/lib/reasoning";
 import { thoughtLabel, useThoughtSeconds } from "@/lib/thinkingTimer";
 import { AlertTriangle, Bell, Check, Copy, Pencil } from "lucide-react";
@@ -286,6 +288,10 @@ export const ChatMessage = React.memo<ChatMessageProps>(
           content={messageContent}
         />
       );
+    }
+    // Likewise the rubric grader's request for revisions.
+    if (isRubricRevision(message)) {
+      return <RubricRevision content={messageContent} />;
     }
 
     return (

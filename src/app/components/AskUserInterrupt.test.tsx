@@ -197,4 +197,22 @@ describe("AskUserInterrupt", () => {
     const textarea = screen.getByPlaceholderText(/type your answer/i);
     expect(textarea.hasAttribute("disabled")).toBe(true);
   });
+
+  // A goal's review (core goal.review_question): criteria up to 12,000
+  // characters, one per line.
+  it("keeps a long multi-line question's line breaks and lets it scroll", () => {
+    const question =
+      "Proposed acceptance criteria for the goal:\nWrite hello\n\n- one\n- two\n\nAccept them, or type what to change.";
+    render(
+      <AskUserInterrupt
+        questions={[choiceQ(question, ["Accept", "Cancel"])]}
+        onSubmit={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    const prompt = screen.getByText(/Proposed acceptance criteria/);
+    expect(prompt.textContent).toContain("- one\n- two");
+    expect(prompt.className).toContain("whitespace-pre-wrap");
+    expect(prompt.className).toContain("overflow-y-auto");
+  });
 });

@@ -283,6 +283,8 @@ export function AgentsPanel({ onReportToMainChat }: AgentsPanelProps) {
         ? "The active conversation changed — reopen this task and try again."
         : result === "read-only"
         ? "The main chat is read-only here."
+        : result === "waiting"
+        ? "The main chat is waiting for your answer — answer it, then notify."
         : "Main chat is busy — try again when it's idle."
     );
   };

@@ -178,7 +178,23 @@ export class MockStreamStore<
 
   submit = async (values: unknown, options?: unknown): Promise<void> => {
     this.submitCalls.push({ values, options });
+    this.submitOptions = this.lastOptions;
   };
+
+  // The SDK runs a submitted run's callbacks from the options of the render
+  // that submitted (`callbacks: {...options}` in stream.lgp.js), not from
+  // the latest render.
+  private submitOptions: Record<string, unknown> | null = null;
+
+  emitCustomEventFromSubmit(data: unknown, namespace: string[] = []): void {
+    const cb = this.submitOptions?.onCustomEvent as
+      | ((
+          d: unknown,
+          o: { namespace: string[]; mutate: (update: unknown) => void }
+        ) => void)
+      | undefined;
+    cb?.(data, { namespace, mutate: this.mutate });
+  }
 
   stop = async (): Promise<void> => {
     this.stopCallCount += 1;

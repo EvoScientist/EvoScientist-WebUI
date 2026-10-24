@@ -8,7 +8,15 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { applySkill, rankSkills, slashTokenAt } from "@/lib/slashMenu";
+import {
+  applySkill,
+  rankSkills,
+  slashTokenAt,
+  type MenuCommand,
+} from "@/lib/slashMenu";
+import { PY_SPACE } from "@/lib/pythonWhitespace";
+
+const NO_COMMANDS: readonly MenuCommand[] = [];
 
 /** An installed skill the backend can pin (`GET /api/skills/pinnable`). */
 export interface MenuSkill {
@@ -31,6 +39,8 @@ export function useSlashMenu({
   disabled = false,
   workspaceSkills = true,
   onBrowse,
+  commands = NO_COMMANDS,
+  runnerFor,
 }: {
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
   value: string;
@@ -41,6 +51,13 @@ export function useSlashMenu({
   workspaceSkills?: boolean;
   /** Open the Skills marketplace (offered when none is installed). */
   onBrowse?: () => void;
+  /** Commands offered above the skills as the message's first word. */
+  commands?: readonly MenuCommand[];
+  /** How to run a command that needs nothing more (`run`), chosen with Enter
+   *  or a click: a function, or null where this composer can't run it (an
+   *  ordinary row then: written out). It must not act itself: the hint asks
+   *  it about the highlighted row on every render. */
+  runnerFor?: (command: MenuCommand) => (() => void) | null;
 }) {
   const listboxId = useId();
   // Ids by name, so the active option's id changes with the match and a
@@ -48,6 +65,10 @@ export function useSlashMenu({
   const optionId = useCallback(
     (name: string | null) =>
       name === null ? `${listboxId}-browse` : `${listboxId}-skill-${name}`,
+    [listboxId]
+  );
+  const commandId = useCallback(
+    (index: number) => `${listboxId}-command-${index}`,
     [listboxId]
   );
   const [caret, setCaret] = useState<number | null>(null);
@@ -62,6 +83,9 @@ export function useSlashMenu({
   const [activeState, setActiveState] = useState({
     key: null as string | null,
     index: 0,
+    // The highlighted row itself, so the highlight stays on it when rows
+    // come in above it (goal support or the skills answering while open).
+    row: null as string | null,
   });
   const request = useRef(0);
 
@@ -72,29 +96,61 @@ export function useSlashMenu({
   const key = token ? `${token.start}:${token.query}` : null;
   const items =
     token && skills ? rankSkills(skills, token.query, token.pinned) : [];
-  // Nothing installed: a bare `/` points to the marketplace instead.
-  const empty =
+  // A command is a message's first word ("/goal …"), offered while the
+  // typed word starts it; slashTokenAt closes the menu once it is whole.
+  const commandItems =
+    token && token.pinned.length === 0
+      ? commands.filter((c) => c.word.startsWith(token.query))
+      : NO_COMMANDS;
+  // Nothing installed and a bare `/`: the way to the marketplace, as the last
+  // row after any commands.
+  const marketplace =
     token !== null &&
     skills?.length === 0 &&
     token.query === "" &&
     token.pinned.length === 0;
+  // Each row's identity, in index order.
+  const rows = [
+    ...commandItems.map((c) => `command:${c.label}`),
+    ...items.map((s) => `skill:${s.name}`),
+    ...(marketplace ? ["marketplace"] : []),
+  ];
+  const count = rows.length;
+  const marketplaceIndex = marketplace ? count - 1 : -1;
   // Shut after an Escape until the word changes.
   const wanted = token !== null && key !== dismissed;
-  const open = wanted && (items.length > 0 || empty);
+  const open = wanted && count > 0;
+  // One index over the commands, the skills, then the marketplace. The
+  // highlight follows its row; only a row that went falls back to the place.
+  const kept =
+    activeState.key === key && activeState.row !== null
+      ? rows.indexOf(activeState.row)
+      : -1;
   const active =
-    activeState.key === key
-      ? Math.min(activeState.index, Math.max(items.length - 1, 0))
-      : 0;
+    activeState.key !== key
+      ? 0
+      : kept >= 0
+      ? kept
+      : Math.min(activeState.index, Math.max(count - 1, 0));
   const activeId = !open
     ? undefined
-    : empty
+    : active === marketplaceIndex
     ? optionId(null)
-    : optionId(items[active].name);
+    : active < commandItems.length
+    ? commandId(active)
+    : optionId(items[active - commandItems.length].name);
+
+  // A command runs when chosen only if it needs nothing more and this
+  // composer can run it.
+  const runnerOf = (command: MenuCommand | undefined) =>
+    command?.run ? runnerFor?.(command) ?? null : null;
+  const enterRuns =
+    open && active < commandItems.length && !!runnerOf(commandItems[active]);
 
   // Read the list each time the menu opens, an Escape's reopening included,
   // and show only that answer: a skill installed or removed a moment ago is
-  // right, a failed read leaves the menu shut, and the last answer wins over
-  // a slower earlier one.
+  // right, a failed read shows no skills (only commands, if any match), and
+  // the last answer wins over a slower earlier one.
   useEffect(() => {
     if (!wanted) return;
     setSkills(null);
@@ -113,7 +169,8 @@ export function useSlashMenu({
         );
       })
       .catch(() => {
-        // A failed read leaves the menu shut.
+        // A failed read shows no skills: the menu stays shut unless a
+        // command matches.
       });
   }, [wanted, focusCount, workspaceSkills]);
 
@@ -122,10 +179,48 @@ export function useSlashMenu({
     if (dismissed !== null && dismissed !== key) setDismissed(null);
   }, [dismissed, key]);
 
-  const pick = (index: number) => {
-    const skill = items[index];
-    if (!token || !skill) return;
-    const next = applySkill(value, token, skill.name);
+  // So does a highlight: a new word, or the menu closing, starts the next
+  // opening on the first row (a bare "/" typed again is a new opening).
+  // Rows coming in while the word stays keep it (it follows its row).
+  useEffect(() => {
+    if (activeState.key !== null && activeState.key !== key) {
+      setActiveState({ key: null, index: 0, row: null });
+    }
+  }, [activeState.key, key]);
+
+  // Enter and a click choose; Tab writes the row out. A command that needs
+  // nothing more (`run`) runs when chosen, if this composer can run it, and
+  // its typed word goes.
+  const pick = (index: number, choose = true) => {
+    if (!token) return;
+    const command = commandItems[index];
+    const skill = items[index - commandItems.length];
+    if (!command && !skill) return;
+    const runner = choose ? runnerOf(command) : null;
+    if (runner) {
+      // The word goes with the separator slashTokenAt split on (Python's
+      // whitespace), and the caret goes where the word was: the picker has
+      // the focus, but typing on after it closes starts there.
+      const rest = value.slice(token.end);
+      let skip = 0;
+      while (skip < rest.length && PY_SPACE.test(rest[skip])) skip++;
+      setValue(value.slice(0, token.start) + rest.slice(skip));
+      setCaret(token.start);
+      const el = textareaRef.current;
+      const at = token.start;
+      requestAnimationFrame(() => el?.setSelectionRange(at, at));
+      runner();
+      return;
+    }
+    const next = command
+      ? {
+          text:
+            value.slice(0, token.start) +
+            command.insert +
+            value.slice(token.end),
+          caret: token.start + command.insert.length,
+        }
+      : applySkill(value, token, skill.name);
     setValue(next.text);
     setCaret(next.caret);
     const el = textareaRef.current;
@@ -138,35 +233,55 @@ export function useSlashMenu({
   // On the way to the marketplace the menu closes, as with Escape.
   const browse = () => {
     setDismissed(key);
+    // An explicit close starts the next opening on the first row too.
+    setActiveState({ key: null, index: 0, row: null });
     onBrowse?.();
   };
 
   // The key handler reads the latest render, so it can stay one function.
-  const latest = useRef({ open, empty, items, active, key, pick, browse });
+  const latest = useRef({
+    open,
+    marketplaceIndex,
+    rows,
+    count,
+    active,
+    key,
+    pick,
+    browse,
+  });
   useLayoutEffect(() => {
-    latest.current = { open, empty, items, active, key, pick, browse };
+    latest.current = {
+      open,
+      marketplaceIndex,
+      rows,
+      count,
+      active,
+      key,
+      pick,
+      browse,
+    };
   });
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>): boolean => {
-      const { open, empty, items, active, key, pick, browse } = latest.current;
+      const { open, marketplaceIndex, rows, count, active, key, pick, browse } =
+        latest.current;
       // Keys with modifiers (Cmd+Enter, Shift+↓ …) stay the composer's.
       if (!open || e.nativeEvent.isComposing) return false;
       if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return false;
       if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-        if (items.length > 0) {
+        if (count > 0) {
           const step = e.key === "ArrowDown" ? 1 : -1;
-          setActiveState({
-            key,
-            index: (active + step + items.length) % items.length,
-          });
+          const index = (active + step + count) % count;
+          setActiveState({ key, index, row: rows[index] });
         }
       } else if (e.key === "Enter") {
-        if (empty) browse();
+        if (active === marketplaceIndex) browse();
         else pick(active);
-      } else if (e.key === "Tab" && !empty) {
-        pick(active);
+      } else if (e.key === "Tab" && active !== marketplaceIndex) {
+        pick(active, false);
       } else if (e.key === "Escape") {
         setDismissed(key);
+        setActiveState({ key: null, index: 0, row: null });
       } else {
         return false;
       }
@@ -209,11 +324,17 @@ export function useSlashMenu({
       open,
       listboxId,
       optionId,
+      commandId,
+      commands: commandItems,
+      activeId,
       items,
       active,
-      empty,
+      marketplace,
+      enterRuns,
+      skillsKnown: skills !== null,
       onPick: pick,
-      onHover: (index: number) => setActiveState({ key, index }),
+      onHover: (index: number) =>
+        setActiveState({ key, index, row: rows[index] ?? null }),
       onBrowse: browse,
     },
   };

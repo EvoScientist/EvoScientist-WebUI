@@ -11,7 +11,9 @@ import type { UseStreamThread } from "@langchain/langgraph-sdk/react";
 interface ChatProviderProps {
   children: ReactNode;
   onHistoryRevalidate?: () => void;
-  onThreadUnavailable?: (info: ThreadUnavailableInfo) => void;
+  onThreadUnavailable?: (
+    info: ThreadUnavailableInfo
+  ) => boolean | void | { unsentBack: boolean };
   thread?: UseStreamThread<StateType>;
 }
 
