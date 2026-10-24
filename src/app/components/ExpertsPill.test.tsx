@@ -26,6 +26,37 @@ describe("ExpertsPill", () => {
     expect(screen.getByRole("button", { name: /3 experts/i })).toBeTruthy();
   });
 
+  // Same pill as the goal's: globals.css takes button borders away, so the
+  // outline needs border-solid.
+  it("draws as a pill: a brand outline on the soft brand fill", () => {
+    render(
+      <ExpertsPill
+        teams={three}
+        onManage={vi.fn()}
+      />
+    );
+    const button = screen.getByRole("button", { name: /3 experts/i });
+    const classes = button.className.split(/\s+/);
+    expect(classes).toEqual(
+      expect.arrayContaining([
+        "rounded-full",
+        "border",
+        "border-solid",
+        "border-[var(--brand)]",
+        "bg-[var(--brand-soft)]",
+      ])
+    );
+    // Hover darkens the brand colour (lightens it in dark mode): fading the
+    // whole pill took its text under 4.5:1.
+    expect(classes).not.toContain("hover:opacity-80");
+    expect(classes).toEqual(
+      expect.arrayContaining([
+        "enabled:hover:border-[var(--brand-hover)]",
+        "enabled:hover:text-[var(--brand-hover)]",
+      ])
+    );
+  });
+
   it("says one expert in the singular", () => {
     render(
       <ExpertsPill
@@ -61,6 +92,31 @@ describe("ExpertsPill", () => {
     expect(screen.getByText("Audits reasoning.")).toBeTruthy();
     // Opening the list must not navigate on its own.
     expect(onManage).not.toHaveBeenCalled();
+  });
+
+  // globals.css indents every ul (1.5rem) and adds a bottom margin: the
+  // list cancels both, so the experts line up with the heading and the link.
+  it("lines the experts up with the heading, without the page's list indent", () => {
+    render(
+      <ExpertsPill
+        teams={three}
+        onManage={vi.fn()}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: /3 experts/i }));
+    expect(screen.getByRole("list").className.split(/\s+/)).toEqual(
+      expect.arrayContaining(["m-0", "list-none", "p-0"])
+    );
+    // …and every li a bottom margin, which the rows cancel too.
+    for (const item of screen.getAllByRole("listitem")) {
+      expect(item.className.split(/\s+/)).toContain("mb-0");
+    }
+    // The rule above the link: a button's border needs border-solid there.
+    expect(
+      screen
+        .getByRole("button", { name: /Manage in Experts/ })
+        .className.split(/\s+/)
+    ).toEqual(expect.arrayContaining(["border-0", "border-t", "border-solid"]));
   });
 
   it("offers a way through to the full view", () => {

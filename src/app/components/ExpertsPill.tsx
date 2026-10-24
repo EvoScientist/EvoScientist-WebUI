@@ -109,11 +109,12 @@ export function ExpertsPill({
       <p className="shrink-0 border-b border-border px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-tertiary">
         Available experts
       </p>
-      <ul className="min-h-0 flex-1 overflow-y-auto">
+      {/* globals.css indents every ul and adds a bottom margin. */}
+      <ul className="m-0 min-h-0 flex-1 list-none overflow-y-auto p-0">
         {teams.map((team) => (
           <li
             key={team.name}
-            className="border-b border-border/60 px-3 py-2 last:border-b-0"
+            className="mb-0 border-b border-border/60 px-3 py-2 last:border-b-0"
           >
             <p className="text-xs font-medium text-foreground">{team.name}</p>
             {team.description && (
@@ -130,7 +131,7 @@ export function ExpertsPill({
           setOpen(false);
           onManage();
         }}
-        className="w-full shrink-0 border-t border-border px-3 py-2 text-left text-[11px] font-medium text-[var(--brand)] transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+        className="w-full shrink-0 border-0 border-t border-solid border-border px-3 py-2 text-left text-[11px] font-medium text-[var(--brand)] transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
       >
         Manage in Experts →
       </button>
@@ -147,7 +148,7 @@ export function ExpertsPill({
           setOpen((v) => !v);
         }}
         aria-expanded={open}
-        className="inline-flex items-center gap-1.5 rounded-full border border-[var(--brand)] bg-[var(--brand-soft)] px-2 py-0.5 text-[11px] font-medium text-[var(--brand)] transition-opacity hover:opacity-80 focus-visible:ring-2 focus-visible:ring-ring"
+        className="inline-flex items-center gap-1.5 rounded-full border border-solid border-[var(--brand)] bg-[var(--brand-soft)] px-2 py-0.5 text-[11px] font-medium text-[var(--brand)] transition-colors focus-visible:ring-2 focus-visible:ring-ring enabled:hover:border-[var(--brand-hover)] enabled:hover:text-[var(--brand-hover)]"
         title="Experts the orchestrator can dispatch on this deployment"
       >
         <Users

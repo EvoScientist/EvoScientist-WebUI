@@ -46,6 +46,9 @@
        deeper, calmer cyan so buttons don't glow (see .dark). White text on both. */
     --brand-solid: #066679;
     --brand-foreground: #ffffff;
+    /* Soft brand fill behind brand text (pills, badges, the active workflow
+       row): the user bubble's tint; --brand on it is 5.77:1. */
+    --brand-soft: #e6f2f5;
 
     /* deep-agents-ui base tokens. Its tailwind.config.mjs maps semantic classes
        (text-primary, text-tertiary, text-success, text-warning, bg-secondary,
@@ -185,6 +188,9 @@
        doesn't glow on the dark card; white text passes AA (4.82:1). */
     --brand-solid: #087d91;
     --brand-foreground: #ffffff;
+    /* Deeper than the user bubble's #16343b, which leaves --brand text at
+       4.13:1; on this it is 4.69:1. */
+    --brand-soft: #132a30;
 
     /* Tailwind/Radix UI component variables for dark mode */
     --radius: 0.5rem;

@@ -86,6 +86,7 @@ export interface AsyncTaskReportTarget {
 export type MainChatReportResult =
   | "sent"
   | "busy"
+  | "waiting"
   | "duplicate"
   | "wrong-thread"
   | "read-only";

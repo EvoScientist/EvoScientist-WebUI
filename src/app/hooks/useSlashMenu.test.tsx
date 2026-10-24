@@ -7,9 +7,13 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { useSlashMenu, type MenuSkill } from "./useSlashMenu";
 import { SlashSkillMenu } from "@/app/components/SlashSkillMenu";
+import { GOAL_MENU_COMMANDS } from "@/lib/goalCommand";
+import { MODEL_MENU_COMMANDS } from "@/lib/modelCommand";
+import type { MenuCommand } from "@/lib/slashMenu";
 
 const SKILLS: MenuSkill[] = [
   { name: "paper-review", description: "Review your paper", source: "global" },
@@ -37,10 +41,14 @@ function Composer({
   onSubmit = () => {},
   onBrowse = () => {},
   disabled = false,
+  commands,
+  runnerFor,
 }: {
   onSubmit?: (value: string) => void;
   onBrowse?: () => void;
   disabled?: boolean;
+  commands?: readonly MenuCommand[];
+  runnerFor?: (command: MenuCommand) => (() => void) | null;
 }) {
   const [value, setValue] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -51,6 +59,8 @@ function Composer({
     setValue,
     onBrowse,
     disabled,
+    commands,
+    runnerFor,
   });
   return (
     <div
@@ -105,7 +115,8 @@ describe("useSlashMenu", () => {
     expect(screen.getByRole("listbox", { name: "Skills" })).toBeTruthy();
     expect(options()[1]).toContain("/paper-writing");
     expect(options()[1]).toContain("Write a paper");
-    expect(options()[1]).toContain("workspace");
+    expect(options()[1]).toContain("Workspace");
+    expect(options()[0]).toContain("Global");
   });
 
   it("filters as the name grows and closes when nothing matches", async () => {
@@ -260,7 +271,7 @@ describe("useSlashMenu", () => {
     );
     type("/");
     await waitFor(() =>
-      expect(options()).toEqual(["/new-skillJust installed"])
+      expect(options()).toEqual(["/new-skillJust installedGlobal"])
     );
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
@@ -282,7 +293,7 @@ describe("useSlashMenu", () => {
     await act(async () =>
       answer(new Response(JSON.stringify({ skills: [SKILLS[0]] })))
     );
-    expect(options()).toEqual(["/paper-reviewReview your paper"]);
+    expect(options()).toEqual(["/paper-reviewReview your paperGlobal"]);
     // A failed answer leaves it shut, not showing the last list.
     type("");
     fetchMock.mockImplementation(
@@ -313,7 +324,7 @@ describe("useSlashMenu", () => {
     expect(answers).toHaveLength(2);
     await act(async () => answers[1]([SKILLS[0]]));
     await act(async () => answers[0](SKILLS));
-    expect(options()).toEqual(["/paper-reviewReview your paper"]);
+    expect(options()).toEqual(["/paper-reviewReview your paperGlobal"]);
   });
 
   it("opens again after Escape once the typing changes", async () => {
@@ -356,7 +367,7 @@ describe("useSlashMenu", () => {
     );
     type("/p");
     await waitFor(() =>
-      expect(options()).toEqual(["/paper-graphJust installed"])
+      expect(options()).toEqual(["/paper-graphJust installedGlobal"])
     );
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
@@ -425,7 +436,7 @@ describe("useSlashMenu", () => {
     );
     fireEvent.focus(box());
     await waitFor(() =>
-      expect(options()).toEqual(["/paper-reviewReview your paper"])
+      expect(options()).toEqual(["/paper-reviewReview your paperGlobal"])
     );
     // Focus reads the list again while the menu is open, too.
     fetchMock.mockImplementation(
@@ -433,7 +444,7 @@ describe("useSlashMenu", () => {
     );
     fireEvent.focus(box());
     await waitFor(() =>
-      expect(options()).toEqual(["/paper-writingWrite a paperworkspace"])
+      expect(options()).toEqual(["/paper-writingWrite a paperWorkspace"])
     );
   });
 
@@ -507,12 +518,502 @@ describe("useSlashMenu", () => {
     expect(menu.style.width).toBe("600px");
     expect(menu.style.bottom).toBe(`${window.innerHeight - 500 + 6}px`);
     // The whole box fits the room above, hint row and borders included; the
-    // list inside keeps its own 18rem cap and scrolls.
+    // list inside keeps its own 24rem cap (room for a few skills under the
+    // commands and the two headings) and scrolls.
     expect(menu.style.maxHeight).toBe("486px");
-    expect(screen.getByRole("listbox").className).toContain("max-h-72");
+    expect(screen.getByRole("listbox").className).toContain("max-h-96");
     // It follows when the composer moves without resizing (a panel opening
     // beside the chat), not only on window resize or scroll.
     rect.left = 260;
     await waitFor(() => expect(menu.style.left).toBe("260px"));
+  });
+});
+
+describe("useSlashMenu commands", () => {
+  it("lists the /goal commands above the skills at the start of a message", async () => {
+    stubSkills();
+    render(<Composer commands={GOAL_MENU_COMMANDS} />);
+    type("/");
+    await waitFor(() => expect(options()).toHaveLength(8));
+    expect(
+      screen.getByRole("listbox", { name: "Commands and skills" })
+    ).toBeTruthy();
+    expect(options()[0]).toContain("/goal <objective>");
+    expect(options()[0]).toContain(
+      "Set a goal with drafted acceptance criteria"
+    );
+    expect(options()[4]).toContain("/goal clear");
+    expect(options()[5]).toContain("/paper-review");
+  });
+
+  it("keeps the /goal commands while the word is the start of goal", async () => {
+    stubSkills();
+    render(<Composer commands={GOAL_MENU_COMMANDS} />);
+    type("/go");
+    await waitFor(() => expect(options()).toHaveLength(5));
+    type("/pa");
+    await waitFor(() => expect(options()).toHaveLength(2));
+    expect(options().some((o) => o.includes("/goal"))).toBe(false);
+  });
+
+  it("offers commands only as the message's first word", async () => {
+    stubSkills();
+    render(<Composer commands={GOAL_MENU_COMMANDS} />);
+    type("/paper-review /");
+    await waitFor(() => expect(options().length).toBeGreaterThan(0));
+    expect(options().some((o) => o.includes("/goal"))).toBe(false);
+  });
+
+  it("shows no command rows without commands", async () => {
+    stubSkills();
+    render(<Composer />);
+    type("/");
+    await waitFor(() => expect(options()).toHaveLength(3));
+    expect(screen.getByRole("listbox", { name: "Skills" })).toBeTruthy();
+  });
+
+  it("writes the chosen command in place of the word, with the keyboard", async () => {
+    stubSkills();
+    const onSubmit = vi.fn();
+    render(
+      <Composer
+        commands={GOAL_MENU_COMMANDS}
+        onSubmit={onSubmit}
+      />
+    );
+    type("/");
+    await waitFor(() => expect(options()).toHaveLength(8));
+    key("ArrowDown");
+    expect(box().getAttribute("aria-activedescendant")).toBe(
+      screen.getAllByRole("option")[1].id
+    );
+    key("Enter");
+    expect((box() as HTMLTextAreaElement).value).toBe("/goal amend ");
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(screen.queryByRole("listbox")).toBeNull();
+  });
+
+  it("writes a command chosen with a click", async () => {
+    stubSkills();
+    render(<Composer commands={GOAL_MENU_COMMANDS} />);
+    type("/");
+    await waitFor(() => expect(options()).toHaveLength(8));
+    fireEvent.click(screen.getAllByRole("option")[2]);
+    expect((box() as HTMLTextAreaElement).value).toBe("/goal pause");
+  });
+
+  // A command that needs nothing more (/model opens the picker) runs when
+  // chosen with Enter or a click: the typed word goes and its runner runs.
+  // Tab still writes it out.
+  it("runs a command that needs nothing more when chosen", async () => {
+    stubSkills();
+    const onRun = vi.fn();
+    const onSubmit = vi.fn();
+    render(
+      <Composer
+        commands={MODEL_MENU_COMMANDS}
+        runnerFor={(command) => () => onRun(command)}
+        onSubmit={onSubmit}
+      />
+    );
+    type("/mo");
+    await waitFor(() => expect(options()).toHaveLength(1));
+    key("Enter");
+    expect(onRun).toHaveBeenCalledWith(MODEL_MENU_COMMANDS[0]);
+    expect((box() as HTMLTextAreaElement).value).toBe("");
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(screen.queryByRole("listbox")).toBeNull();
+    type("/mo");
+    await waitFor(() => expect(options()).toHaveLength(1));
+    fireEvent.click(screen.getAllByRole("option")[0]);
+    expect(onRun).toHaveBeenCalledTimes(2);
+    expect((box() as HTMLTextAreaElement).value).toBe("");
+    type("/mo");
+    await waitFor(() => expect(options()).toHaveLength(1));
+    key("Tab");
+    expect(onRun).toHaveBeenCalledTimes(2);
+    expect((box() as HTMLTextAreaElement).value).toBe("/model");
+  });
+
+  // Text after the typed word stays, without the separator the menu split
+  // on (Python's whitespace, U+0085 included), and the caret goes where the
+  // word was, so typing on starts there.
+  it("keeps the text after the word, with the caret where the word was", async () => {
+    stubSkills();
+    const onRun = vi.fn();
+    render(
+      <Composer
+        commands={MODEL_MENU_COMMANDS}
+        runnerFor={() => onRun}
+      />
+    );
+    const el = box() as HTMLTextAreaElement;
+    fireEvent.change(el, { target: { value: "/mo\u0085draft" } });
+    el.setSelectionRange(3, 3);
+    fireEvent.select(el);
+    await waitFor(() => expect(options()).toHaveLength(1));
+    key("Enter");
+    expect(onRun).toHaveBeenCalledTimes(1);
+    expect(el.value).toBe("draft");
+    await waitFor(() => expect(el.selectionStart).toBe(0));
+    expect(el.selectionEnd).toBe(0);
+  });
+
+  // A run command the composer can't run is an ordinary row: the hint says
+  // Enter inserts it, and Enter writes it out, so its typed word isn't lost.
+  it("treats a run command the composer can't run as an ordinary row", async () => {
+    stubSkills();
+    render(
+      <Composer
+        commands={MODEL_MENU_COMMANDS}
+        runnerFor={() => null}
+      />
+    );
+    type("/mo");
+    await waitFor(() => expect(options()).toHaveLength(1));
+    expect(screen.getByText(/to choose/).textContent).toBe(
+      "↑ ↓ to choose · Enter or Tab to insert · Esc to close"
+    );
+    key("Enter");
+    expect((box() as HTMLTextAreaElement).value).toBe("/model");
+  });
+
+  // The hint under the list says what Enter does on the highlighted row.
+  it("says what Enter does on the highlighted row", async () => {
+    stubSkills([]);
+    render(
+      <Composer
+        commands={[...GOAL_MENU_COMMANDS, ...MODEL_MENU_COMMANDS]}
+        runnerFor={() => () => {}}
+      />
+    );
+    type("/");
+    await waitFor(() => expect(options()).toHaveLength(7));
+    const hint = () => screen.getByText(/to choose/).textContent;
+    expect(hint()).toBe(
+      "↑ ↓ to choose · Enter or Tab to insert · Esc to close"
+    );
+    key("ArrowUp");
+    expect(hint()).toBe("↑ ↓ to choose · Enter to open · Esc to close");
+    key("ArrowUp");
+    expect(hint()).toBe(
+      "↑ ↓ to choose · Enter to run · Tab to insert · Esc to close"
+    );
+  });
+
+  // Commands and skills sit under their own headings, with a rule between
+  // them; the headings aren't options, so the keys skip them.
+  it("groups the commands and the skills under their headings", async () => {
+    stubSkills();
+    render(
+      <Composer commands={[...GOAL_MENU_COMMANDS, ...MODEL_MENU_COMMANDS]} />
+    );
+    type("/");
+    await waitFor(() => expect(options()).toHaveLength(9));
+    const commands = screen.getByRole("group", { name: "Commands" });
+    const skills = screen.getByRole("group", { name: "Skills" });
+    expect(within(commands).getAllByRole("option")).toHaveLength(6);
+    expect(within(skills).getAllByRole("option")).toHaveLength(3);
+    expect(skills.className).toContain("border-t");
+    expect(commands.className).not.toContain("border-t");
+    for (let i = 0; i < 6; i++) key("ArrowDown");
+    expect(box().getAttribute("aria-activedescendant")).toBe(
+      within(skills).getAllByRole("option")[0].id
+    );
+  });
+
+  it("puts the way to the marketplace under Skills when none is installed", async () => {
+    stubSkills([]);
+    render(<Composer commands={MODEL_MENU_COMMANDS} />);
+    type("/");
+    await waitFor(() => expect(options()).toHaveLength(2));
+    expect(
+      within(screen.getByRole("group", { name: "Skills" })).getByRole("option")
+        .textContent
+    ).toContain("No skills installed");
+  });
+
+  it("shows only the headings with rows under them", async () => {
+    stubSkills();
+    render(
+      <Composer commands={[...GOAL_MENU_COMMANDS, ...MODEL_MENU_COMMANDS]} />
+    );
+    type("/pa");
+    await waitFor(() => expect(options()).toHaveLength(2));
+    expect(screen.queryByRole("group", { name: "Commands" })).toBeNull();
+    expect(
+      screen.getByRole("group", { name: "Skills" }).className
+    ).not.toContain("border-t");
+    type("/go");
+    await waitFor(() => expect(options()).toHaveLength(5));
+    expect(screen.queryByRole("group", { name: "Skills" })).toBeNull();
+    // The list is named for what it shows.
+    expect(screen.getByRole("listbox", { name: "Commands" })).toBeTruthy();
+  });
+
+  // The first row of a section brings its heading into view too: with the
+  // list scrolled, wrapping to the top or stepping into Skills from above
+  // would otherwise leave the heading out of sight.
+  it("scrolls a section's heading into view with its first row", async () => {
+    const scrolled: string[] = [];
+    const proto = Element.prototype as unknown as {
+      scrollIntoView?: (arg?: unknown) => void;
+    };
+    const original = proto.scrollIntoView;
+    proto.scrollIntoView = function (this: Element) {
+      scrolled.push(this.textContent ?? "");
+    };
+    try {
+      stubSkills();
+      render(
+        <Composer commands={[...GOAL_MENU_COMMANDS, ...MODEL_MENU_COMMANDS]} />
+      );
+      type("/");
+      await waitFor(() => expect(options()).toHaveLength(9));
+      // Down into Skills: its heading, then its first row.
+      for (let n = 0; n < 6; n++) key("ArrowDown");
+      await waitFor(() =>
+        expect(scrolled.slice(-2)).toEqual([
+          "Skills",
+          expect.stringContaining("/paper-review"),
+        ])
+      );
+      // A row further down scrolls only itself.
+      key("ArrowDown");
+      await waitFor(() =>
+        expect(scrolled[scrolled.length - 1]).toContain("/paper-writing")
+      );
+      expect(scrolled[scrolled.length - 2]).toContain("/paper-review");
+      // Wrapping to the top brings "Commands" back with the first row.
+      key("ArrowDown");
+      key("ArrowDown");
+      await waitFor(() =>
+        expect(scrolled.slice(-2)).toEqual([
+          "Commands",
+          expect.stringContaining("/goal <objective>"),
+        ])
+      );
+    } finally {
+      proto.scrollIntoView = original;
+    }
+  });
+
+  // Each row has an icon (the goal pill's, the model pill's, a skill's), and
+  // each skill says where it comes from.
+  it("marks every row with an icon and every skill with its source", async () => {
+    stubSkills();
+    render(
+      <Composer commands={[...GOAL_MENU_COMMANDS, ...MODEL_MENU_COMMANDS]} />
+    );
+    type("/");
+    await waitFor(() => expect(options()).toHaveLength(9));
+    const rows = screen.getAllByRole("option");
+    expect(
+      rows.every((row) => row.querySelector('svg[aria-hidden="true"]'))
+    ).toBe(true);
+    expect(rows[6].textContent).toContain("Global");
+    expect(rows[7].textContent).toContain("Workspace");
+  });
+
+  // On a narrow screen a long name gives way (it truncates) before the
+  // skill's source, which keeps its place at the row's end (at 320 px a long
+  // name pushed "Global" out of the row).
+  it("lets a long name give way before the skill's source", async () => {
+    stubSkills();
+    render(<Composer commands={MODEL_MENU_COMMANDS} />);
+    type("/");
+    await waitFor(() => expect(options()).toHaveLength(4));
+    const [commandRow, skillRow] = screen.getAllByRole("option");
+    for (const row of [commandRow, skillRow]) {
+      const name = row.querySelector(":scope > span")!;
+      expect(name.className.split(/\s+/)).toEqual(
+        expect.arrayContaining(["min-w-0", "truncate"])
+      );
+      expect(name.className).not.toContain("shrink-0");
+    }
+    const spans = skillRow.querySelectorAll(":scope > span");
+    expect(spans[spans.length - 1].className).toContain("shrink-0");
+  });
+
+  // Each opening starts on the first row: a highlight is remembered only
+  // while its word stays typed (a bare "/" retyped is a new opening).
+  it("starts each opening on the first row", async () => {
+    stubSkills([]);
+    render(
+      <Composer commands={[...GOAL_MENU_COMMANDS, ...MODEL_MENU_COMMANDS]} />
+    );
+    type("/");
+    await waitFor(() => expect(options()).toHaveLength(7));
+    key("ArrowUp");
+    expect(box().getAttribute("aria-activedescendant")).toBe(
+      screen.getAllByRole("option")[6].id
+    );
+    type("");
+    await waitFor(() => expect(screen.queryByRole("listbox")).toBeNull());
+    type("/");
+    await waitFor(() => expect(options()).toHaveLength(7));
+    expect(box().getAttribute("aria-activedescendant")).toBe(
+      screen.getAllByRole("option")[0].id
+    );
+  });
+
+  // An explicit close (Escape, the way to the marketplace) also starts the
+  // next opening on the first row, though the word stays typed.
+  it("starts on the first row after an Escape or the marketplace", async () => {
+    const fetchMock = stubSkills([]);
+    const onBrowse = vi.fn();
+    render(
+      <Composer
+        commands={[...GOAL_MENU_COMMANDS, ...MODEL_MENU_COMMANDS]}
+        onBrowse={onBrowse}
+      />
+    );
+    type("/");
+    await waitFor(() => expect(options()).toHaveLength(7));
+    key("ArrowUp");
+    key("ArrowUp");
+    key("Escape");
+    await waitFor(() => expect(screen.queryByRole("listbox")).toBeNull());
+    fireEvent.focus(box());
+    await waitFor(() => expect(options()).toHaveLength(7));
+    expect(box().getAttribute("aria-activedescendant")).toBe(
+      screen.getAllByRole("option")[0].id
+    );
+    // The marketplace: a skill installed there, back without a blur.
+    key("ArrowUp");
+    key("Enter");
+    expect(onBrowse).toHaveBeenCalledTimes(1);
+    fetchMock.mockImplementation(
+      async () => new Response(JSON.stringify({ skills: [SKILLS[0]] }))
+    );
+    fireEvent.focus(box());
+    await waitFor(() => expect(options()).toHaveLength(7));
+    expect(box().getAttribute("aria-activedescendant")).toBe(
+      screen.getAllByRole("option")[0].id
+    );
+  });
+
+  // globals.css gives every li a bottom margin: the menu's rows and headings
+  // cancel it, so there is no dead strip between rows.
+  it("leaves no gap between the menu's rows", async () => {
+    stubSkills();
+    render(
+      <Composer commands={[...GOAL_MENU_COMMANDS, ...MODEL_MENU_COMMANDS]} />
+    );
+    type("/");
+    await waitFor(() => expect(options()).toHaveLength(9));
+    const items = screen.getByRole("listbox").querySelectorAll("li");
+    expect(items.length).toBeGreaterThan(9);
+    for (const item of items) {
+      expect(item.className.split(/\s+/)).toContain("mb-0");
+    }
+  });
+
+  // Rows can come in above the highlight while the menu is open (goal
+  // support or a thread's metadata answering): it stays on its row, so Enter
+  // does what was highlighted.
+  it("keeps the highlighted row when commands come in above it", async () => {
+    stubSkills([]);
+    const onBrowse = vi.fn();
+    const { rerender } = render(
+      <Composer
+        commands={MODEL_MENU_COMMANDS}
+        onBrowse={onBrowse}
+      />
+    );
+    type("/");
+    await waitFor(() => expect(options()).toHaveLength(2));
+    key("ArrowUp");
+    rerender(
+      <Composer
+        commands={[...GOAL_MENU_COMMANDS, ...MODEL_MENU_COMMANDS]}
+        onBrowse={onBrowse}
+      />
+    );
+    await waitFor(() => expect(options()).toHaveLength(7));
+    expect(box().getAttribute("aria-activedescendant")).toBe(
+      screen.getAllByRole("option")[6].id
+    );
+    key("Enter");
+    expect(onBrowse).toHaveBeenCalledTimes(1);
+    expect((box() as HTMLTextAreaElement).value).toBe("/");
+  });
+
+  it("keeps a highlighted skill when commands come in above it", async () => {
+    stubSkills();
+    const { rerender } = render(<Composer commands={MODEL_MENU_COMMANDS} />);
+    type("/");
+    await waitFor(() => expect(options()).toHaveLength(4));
+    key("ArrowDown");
+    key("ArrowDown");
+    rerender(
+      <Composer commands={[...GOAL_MENU_COMMANDS, ...MODEL_MENU_COMMANDS]} />
+    );
+    await waitFor(() => expect(options()).toHaveLength(9));
+    key("Enter");
+    expect((box() as HTMLTextAreaElement).value).toBe("/paper-writing ");
+  });
+
+  // Commands keep the menu open before the skills are read and after a failed
+  // read: the status doesn't count skills it doesn't know.
+  it("counts no skills before they are read", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise<Response>(() => {}))
+    );
+    render(<Composer commands={MODEL_MENU_COMMANDS} />);
+    type("/");
+    await waitFor(() => expect(options()).toHaveLength(1));
+    expect(screen.getByRole("status").textContent).toBe("1 command");
+  });
+
+  it("counts no skills after a failed read", async () => {
+    stubSkills("error");
+    render(<Composer commands={MODEL_MENU_COMMANDS} />);
+    type("/");
+    await waitFor(() => expect(fetch).toHaveBeenCalled());
+    await act(async () => {});
+    expect(options()).toHaveLength(1);
+    expect(screen.getByRole("status").textContent).toBe("1 command");
+  });
+
+  // Nothing installed and a bare "/": the way to the marketplace stays, as
+  // the last row after the commands (/model's row is on every backend, so
+  // without this it would never show).
+  it("offers the marketplace after the commands when no skill is installed", async () => {
+    stubSkills([]);
+    const onBrowse = vi.fn();
+    render(
+      <Composer
+        commands={GOAL_MENU_COMMANDS}
+        onBrowse={onBrowse}
+      />
+    );
+    type("/");
+    await waitFor(() => expect(options()).toHaveLength(6));
+    expect(options()[5]).toContain("No skills installed");
+    expect(screen.getByRole("status").textContent).toBe(
+      "5 commands, no skills installed"
+    );
+    // The first row is still a command.
+    key("Enter");
+    expect((box() as HTMLTextAreaElement).value).toBe("/goal ");
+    expect(onBrowse).not.toHaveBeenCalled();
+    type("/");
+    await waitFor(() => expect(options()).toHaveLength(6));
+    key("ArrowUp");
+    const last = screen.getAllByRole("option")[5];
+    expect(box().getAttribute("aria-activedescendant")).toBe(last.id);
+    expect(last.getAttribute("aria-selected")).toBe("true");
+    // Tab inserts nothing there; Enter goes to the marketplace.
+    key("Tab");
+    expect((box() as HTMLTextAreaElement).value).toBe("/");
+    key("Enter");
+    expect(onBrowse).toHaveBeenCalledTimes(1);
+    expect((box() as HTMLTextAreaElement).value).toBe("/");
+    // Only for a bare slash.
+    type("/g");
+    await waitFor(() => expect(options()).toHaveLength(5));
+    expect(options().some((o) => o.includes("marketplace"))).toBe(false);
   });
 });

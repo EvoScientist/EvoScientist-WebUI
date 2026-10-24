@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { PY_SPACE, pyStrip } from "./pythonWhitespace";
+import { PY_SPACE, pySplit, pyStrip } from "./pythonWhitespace";
 
 // The characters Python's str.isspace() takes (CPython 3.11, checked against
 // re's \s and str.split()).
@@ -32,5 +32,24 @@ describe("pyStrip", () => {
     const started = performance.now();
     for (let i = 0; i < 10; i++) expect(pyStrip(text)).toBe(text);
     expect(performance.now() - started).toBeLessThan(1000);
+  });
+});
+
+// Expected values are Python's own str.split() results.
+describe("pySplit", () => {
+  it.each([
+    ["", -1, []],
+    ["   ", -1, []],
+    ["a b", -1, ["a", "b"]],
+    ["  a \t\n b  ", -1, ["a", "b"]],
+    ["a\x1cb\x85c", -1, ["a", "b", "c"]],
+    ["a\ufeffb", -1, ["a\ufeffb"]],
+    ["amend  tighten it ", 1, ["amend", "tighten it "]],
+    ["  amend", 1, ["amend"]],
+    ["amend ", 1, ["amend"]],
+    ["a b c", 0, ["a b c"]],
+    [" a b c", 0, ["a b c"]],
+  ] as const)("%j with maxsplit %d", (text, maxsplit, words) => {
+    expect(pySplit(text, maxsplit)).toEqual(words);
   });
 });

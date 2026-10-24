@@ -69,6 +69,33 @@ describe("SkillsMarketplace expert marker", () => {
     expect(await screen.findByRole("button", { name: /expert/i })).toBeTruthy();
   });
 
+  // The same brand pill as the composer's: globals.css takes button borders
+  // away, so the outline needs border-solid.
+  it("draws the marker as a pill: a brand outline on the soft brand fill", async () => {
+    mockApi([row()]);
+    render(<SkillsMarketplace />);
+    const marker = await screen.findByRole("button", { name: /expert/i });
+    const classes = marker.className.split(/\s+/);
+    expect(classes).toEqual(
+      expect.arrayContaining([
+        "rounded-full",
+        "border",
+        "border-solid",
+        "border-[var(--brand)]",
+        "bg-[var(--brand-soft)]",
+      ])
+    );
+    // Hover darkens the brand colour (lightens it in dark mode): fading the
+    // whole pill took its text under 4.5:1.
+    expect(classes).not.toContain("hover:opacity-80");
+    expect(classes).toEqual(
+      expect.arrayContaining([
+        "enabled:hover:border-[var(--brand-hover)]",
+        "enabled:hover:text-[var(--brand-hover)]",
+      ])
+    );
+  });
+
   it("leaves an ordinary skill unmarked", async () => {
     mockApi([row({ isExpert: false })]);
     render(<SkillsMarketplace />);

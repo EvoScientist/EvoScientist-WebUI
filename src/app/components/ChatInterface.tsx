@@ -69,9 +69,20 @@ import {
 import { useChatContext } from "@/providers/ChatProvider";
 import { useTeams } from "@/app/hooks/useTeams";
 import { ExpertsPill } from "@/app/components/ExpertsPill";
+import { GoalPill } from "@/app/components/GoalPill";
+import {
+  GOAL_MENU_COMMANDS,
+  goalRefusal,
+  goalRequest,
+  goalUsageLine,
+  NO_GOAL_TEXT,
+  parseGoalCommand,
+  type GoalCommand,
+} from "@/lib/goalCommand";
 import { SlashSkillMenu } from "@/app/components/SlashSkillMenu";
 import { useSlashMenu } from "@/app/hooks/useSlashMenu";
 import { cn } from "@/lib/utils";
+import { copyText } from "@/lib/clipboard";
 import { formatModel } from "@/lib/model";
 import {
   getThreadAutoApprove,
@@ -123,6 +134,7 @@ import { toast } from "sonner";
 import { useFilePane } from "@/providers/filePaneContext";
 import {
   COMMON_MODELS,
+  MODEL_MENU_COMMANDS,
   parseModelCommand,
   type ModelOverride,
 } from "@/lib/modelCommand";
@@ -147,10 +159,10 @@ interface ChatInterfaceProps {
   // `handleThreadUnavailable`). Only ever seeds an empty composer.
   draftSeed?: ComposerSnapshot | null;
   // Register a getter for the current unsent composer state (draft + queue +
-  // attachments) up to the page, so it can be carried across a session
-  // remount. Cleared on unmount.
+  // attachments), folded with a message that didn't go out, up to the page,
+  // so it can be carried across a session remount. Cleared on unmount.
   onComposerSnapshotReady?: (
-    getSnapshot: (() => ComposerSnapshot) | null
+    getSnapshot: ((unsent?: string | null) => ComposerFold) | null
   ) => void;
 }
 
@@ -187,6 +199,12 @@ export interface ComposerSnapshot {
   files: UploadedWorkspaceFile[];
 }
 
+/** The composer's unsent state folded with a message that didn't go out;
+ *  `unsentBack` says whether that message is in `text`. */
+export interface ComposerFold extends ComposerSnapshot {
+  unsentBack: boolean;
+}
+
 // Build the message body sent to the backend, appending the same workspace-file
 // annotation handleSubmit uses so queued messages keep their attachments.
 function formatMessageWithFiles(
@@ -204,8 +222,10 @@ function formatMessageWithFiles(
 
 // Everything typed but not sent, in order: the queued messages, then the
 // draft, with their attachments once each.
+type ComposerItem = Pick<QueuedMessage, "text" | "files">;
+
 function unsentSnapshot(
-  queued: QueuedMessage[],
+  queued: ComposerItem[],
   draft: string,
   attached: UploadedWorkspaceFile[]
 ): ComposerSnapshot {
@@ -219,6 +239,141 @@ function unsentSnapshot(
   );
   return { text, files };
 }
+
+/** What comes back to the composer when items weren't sent: messages ahead
+ *  of the draft, as unsentSnapshot folds them, but a /goal command only into
+ *  an otherwise empty composer, alone: glued to more text, Enter would send
+ *  it all as one goal. `isCommand` says what a text would go out as now (on
+ *  a backend without goals "/goal …" is a message). The commands left out
+ *  are `notSent`, each with its own files: on a draft they would go out
+ *  with an unrelated message, so the notice names them instead. */
+function foldBack(
+  items: ComposerItem[],
+  draft: string,
+  attached: UploadedWorkspaceFile[],
+  isCommand: (item: ComposerItem) => boolean
+): ComposerSnapshot & { notSent: ComposerItem[] } {
+  const commands = items.filter((m) => isCommand(m));
+  const messages = items.filter((m) => !isCommand(m));
+  const base = unsentSnapshot(messages, draft, attached);
+  if (!base.text && base.files.length === 0 && commands.length > 0) {
+    const [first, ...others] = commands;
+    return { text: first.text.trim(), files: first.files, notSent: others };
+  }
+  return { ...base, notSent: commands };
+}
+
+/** The `/` menu's commands by name, where the backend runs goals; /model's
+ *  alone everywhere else. */
+const GOAL_AND_MODEL_COMMANDS = [...GOAL_MENU_COMMANDS, ...MODEL_MENU_COMMANDS];
+
+/** Whether Enter may read a text as a /goal command in the composer it
+ *  comes back to: wherever goals are supported, or not known yet (support
+ *  can turn up before Enter); only where they are known to be off is it a
+ *  message. What it went out as doesn't matter: the composer's text is read
+ *  when it is sent again. */
+function goalCommandFor(goalSupported: boolean | undefined) {
+  return (item: ComposerItem) =>
+    goalSupported !== false && parseGoalCommand(item.text) !== null;
+}
+
+/** A text's first line, at most 80 code points: how a notice names it. */
+function firstLineOf(text: string): string {
+  const line = Array.from(text.trim().split("\n")[0]);
+  return line.length > 80 ? `${line.slice(0, 79).join("")}…` : line.join("");
+}
+
+/** Copy for one left-out command: "Copied" shows on the button (a toast
+ *  would cover the notice on a touch screen, where the stack doesn't open
+ *  on hover), and is said to screen readers. */
+function CopyLeftOut({ text, name }: { text: string; name: string }) {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = window.setTimeout(() => setCopied(false), 2000);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
+  return (
+    <>
+      <button
+        type="button"
+        aria-label={`${copied ? "Copied" : "Copy"} ${name}`}
+        onClick={() => {
+          void copyText(text).then((ok) => {
+            if (ok) setCopied(true);
+            else toast.error("Couldn't copy the text.");
+          });
+        }}
+        className="shrink-0 rounded border border-solid border-border px-1.5 py-0.5 text-xs font-medium text-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-md:min-h-11 max-md:min-w-11"
+      >
+        {copied ? "Copied" : "Copy"}
+      </button>
+      <span
+        role="status"
+        className="sr-only"
+      >
+        {copied ? "Copied." : ""}
+      </span>
+    </>
+  );
+}
+
+/** Commands that didn't go out and couldn't come back to the composer: one
+ *  notice that stays until closed, listing them in order (it scrolls), each
+ *  with its own Copy, since copied together they would read as one goal. */
+function sayNotSent(left: ComposerItem[]) {
+  const items = left
+    .map((m) => ({ text: m.text.trim(), files: m.files }))
+    .filter((m) => m.text);
+  if (items.length === 0) return;
+  const name =
+    items.length > 1 ? `${items.length} commands` : firstLineOf(items[0].text);
+  toast.info(`Not sent: ${name}`, {
+    duration: Infinity,
+    description: (
+      // A list for VoiceOver (Safari drops it without bullets); focusable so
+      // a keyboard can scroll a long command into view.
+      <ul
+        role="list"
+        tabIndex={0}
+        aria-label="Commands not sent"
+        className="m-0 flex max-h-40 list-none flex-col gap-2 overflow-y-auto p-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        {items.map(({ text, files }, index) => (
+          <li
+            key={index}
+            className="mb-0 flex items-start gap-2"
+          >
+            <span className="min-w-0 flex-1 whitespace-pre-wrap break-words">
+              {text}
+              {/* Its files stay in the workspace; named here, as they
+                  can't come back with it onto another text. */}
+              {files.length > 0 && (
+                <span className="mt-0.5 block text-xs text-muted-foreground">
+                  Attached: {files.map((f) => f.name).join(", ")}
+                </span>
+              )}
+            </span>
+            {/* Two commands can start alike (two amends): say which. */}
+            <CopyLeftOut
+              text={text}
+              name={
+                items.length > 1
+                  ? `${index + 1} of ${items.length}: ${firstLineOf(text)}`
+                  : firstLineOf(text)
+              }
+            />
+          </li>
+        ))}
+      </ul>
+    ),
+  });
+}
+
+// What sending the composer's text did: a run went out, the text was
+// answered at once (/goal show), or it stays with the user (a refused or
+// unfinished /goal).
+type ComposerSendResult = "sent" | "done" | "kept";
 
 const getStatusIcon = (status: TodoItem["status"], className?: string) => {
   switch (status) {
@@ -322,6 +477,8 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     // latest queue so event handlers (key ↑, edit) read current state without
     // being recreated; queueIdRef hands out stable keys.
     const [queuedMessages, setQueuedMessages] = useState<QueuedMessage[]>([]);
+    // The goal pill's details; `/goal` (show) opens them.
+    const [goalDetailsOpen, setGoalDetailsOpen] = useState(false);
     const queuedMessagesRef = useRef<QueuedMessage[]>(queuedMessages);
     queuedMessagesRef.current = queuedMessages;
     const composerStateRef = useRef({ input, pendingFiles });
@@ -329,10 +486,27 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     const onComposerSnapshotReadyRef = useRef(onComposerSnapshotReady);
     onComposerSnapshotReadyRef.current = onComposerSnapshotReady;
     useEffect(() => {
-      const getSnapshot = (): ComposerSnapshot => {
+      // A gone thread's unsent message and composer, for a new chat: folded
+      // like any hand-back, so a /goal command is not glued onto the rest.
+      const getSnapshot = (unsent: string | null = null): ComposerFold => {
         const { input: draft, pendingFiles: attached } =
           composerStateRef.current;
-        return unsentSnapshot(queuedMessagesRef.current, draft, attached);
+        const first: ComposerItem[] = unsent?.trim()
+          ? [{ text: unsent, files: [] }]
+          : [];
+        const back = foldBack(
+          [...first, ...queuedMessagesRef.current],
+          draft,
+          attached,
+          // The new chat runs on the chat graph, whatever this thread's.
+          goalCommandFor(chatGoalSupportedRef.current)
+        );
+        sayNotSent(back.notSent);
+        return {
+          text: back.text,
+          files: back.files,
+          unsentBack: first.length > 0 && !back.notSent.includes(first[0]),
+        };
       };
       onComposerSnapshotReadyRef.current?.(getSnapshot);
       return () => onComposerSnapshotReadyRef.current?.(null);
@@ -435,20 +609,104 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       binding,
       canSend,
       setRefusalHandler,
+      goal,
+      goalBusy,
+      rubricVerdict,
+      goalSupported,
+      chatGoalSupported,
+      sendGoalRequest,
     } = useChatContext();
+    // Read by the hand-back folds, which are registered once.
+    const goalSupportedRef = useRef(goalSupported);
+    goalSupportedRef.current = goalSupported;
+    const chatGoalSupportedRef = useRef(chatGoalSupported);
+    chatGoalSupportedRef.current = chatGoalSupported;
+
+    // A bare/leftover interrupt value (e.g. after Stop) must NOT lock the input.
+    const interruptValue = interrupt?.value as
+      | { type?: string; action_requests?: unknown[] }
+      | undefined;
+    const hasPendingInterrupt =
+      interruptValue?.type === "ask_user" ||
+      (Array.isArray(interruptValue?.action_requests) &&
+        interruptValue.action_requests.length > 0);
+
+    // The goal's details close with the goal: left open, they would pop up
+    // by themselves for the next one.
+    if (!goal && goalDetailsOpen) setGoalDetailsOpen(false);
+
+    // /goal, answered the way the core's GoalCommand answers it: show opens
+    // the goal pill, a refusal is said in the core's words, and anything else
+    // becomes a goal request run. `text` is what was typed, handed back if
+    // the backend refuses the run.
+    const runGoalCommand = useCallback(
+      (command: GoalCommand, text = ""): ComposerSendResult => {
+        if (command.kind === "show") {
+          if (goal) setGoalDetailsOpen(true);
+          else toast.info(NO_GOAL_TEXT);
+          return "done";
+        }
+        if (command.kind === "usage") {
+          const usage = goalUsageLine("/goal amend <feedback>");
+          if (usage) {
+            toast.warning(`Usage: ${usage.command}`, {
+              description: usage.description,
+            });
+          }
+          return "kept";
+        }
+        const refusal = goalRefusal(command, goal);
+        if (refusal) {
+          toast.warning(refusal);
+          return "kept";
+        }
+        return sendGoalRequest(goalRequest(command, goal), text)
+          ? "sent"
+          : "kept";
+      },
+      [goal, sendGoalRequest]
+    );
+    // Where the composer's text becomes a run, typed or drained from the
+    // queue: a /goal command goes as a goal request, anything else as a
+    // message. A backend without goals gets "/goal …" as a message, as before.
+    const sendComposerText = useCallback(
+      (text: string, files: UploadedWorkspaceFile[]): ComposerSendResult => {
+        const command = goalSupported === true ? parseGoalCommand(text) : null;
+        // A goal can't carry files: Enter refuses them, and so does a drain
+        // (a "/goal …" queued while goal support was unknown).
+        if (command && files.length > 0) {
+          toast.warning("A goal can't carry files; send them in a message.");
+          return "kept";
+        }
+        if (command) return runGoalCommand(command, text);
+        return sendMessage(formatMessageWithFiles(text, files))
+          ? "sent"
+          : "kept";
+      },
+      [goalSupported, runGoalCommand, sendMessage]
+    );
     // A message the backend refused comes back to the composer at the moment
     // it is refused, followed by everything queued after it and then the
     // draft, and the queue is left empty: the fold the page makes for a
     // thread that is gone, here for the open one. Nothing goes out on its
     // own, and the order holds.
     useEffect(() => {
+      // True when the text came back to the composer.
       setRefusalHandler((text) => {
         const { input: draft, pendingFiles: attached } =
           composerStateRef.current;
-        const rest = unsentSnapshot(queuedMessagesRef.current, draft, attached);
+        const refused: ComposerItem = { text, files: [] };
+        const back = foldBack(
+          [refused, ...queuedMessagesRef.current],
+          draft,
+          attached,
+          goalCommandFor(goalSupportedRef.current)
+        );
         setQueuedMessages([]);
-        setInput([text, rest.text].filter(Boolean).join("\n\n"));
-        setPendingFiles(rest.files);
+        setInput(back.text);
+        setPendingFiles(back.files);
+        sayNotSent(back.notSent);
+        return !back.notSent.includes(refused);
       });
       return () => setRefusalHandler(null);
     }, [setRefusalHandler]);
@@ -654,7 +912,15 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       // a query (draft text) — their message has priority, so we hold the queue
       // until the composer is clear. Pending completions stay unreported (= the
       // queue) and drain one per idle window.
-      if (!canSend || isLoading || autoFireInFlightRef.current || input.trim())
+      // An interrupt waiting on the user holds reports too: a report is a run
+      // with a message, which would drop a goal's pending review.
+      if (
+        !canSend ||
+        isLoading ||
+        hasPendingInterrupt ||
+        autoFireInFlightRef.current ||
+        input.trim()
+      )
         return;
       // User-queued messages take the idle slot first — hold auto-reports until
       // the user's own queue has drained.
@@ -680,7 +946,9 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         if (!canRunNow()) return;
         autoFireInFlightRef.current = true;
         markThreadAutoNotifyReported(threadId, key);
-        sendMessage(formatAsyncUpdateMessage(t));
+        // A report of finished background work only completes a grading
+        // that waited for it; as a thread turn it would start a new one.
+        sendMessage(formatAsyncUpdateMessage(t), { mode: "followup" });
         toast.success(
           `Auto-reported ${agentLabel(t.agent_name)} to the main chat.`
         );
@@ -692,6 +960,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       liveAgentTasks,
       autoNotify,
       isLoading,
+      hasPendingInterrupt,
       input,
       messages,
       sendMessage,
@@ -714,6 +983,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     const notifyStateRef = useRef({
       sendMessage,
       isLoading,
+      hasPendingInterrupt,
       messages,
       threadId,
       canRunNow,
@@ -722,6 +992,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     notifyStateRef.current = {
       sendMessage,
       isLoading,
+      hasPendingInterrupt,
       messages,
       threadId,
       canRunNow,
@@ -737,6 +1008,8 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         // Still loading, or the folder is being read again.
         if (!current.canRunNow()) return "busy";
         if (current.isLoading) return "busy";
+        // A report run would drop what waits on the user (a goal's review).
+        if (current.hasPendingInterrupt) return "waiting";
         if (
           current.messages.some(
             (message) =>
@@ -753,7 +1026,9 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
           expectedThreadId,
           asyncTaskReportKey(task)
         );
-        current.sendMessage(formatAsyncUpdateMessage(task));
+        current.sendMessage(formatAsyncUpdateMessage(task), {
+          mode: "followup",
+        });
         return "sent";
       };
       onNotifyReadyRef.current?.(notify);
@@ -803,14 +1078,6 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     // While the agent waits on an *actionable* interrupt (approval or ask_user),
     // lock the composer so the user answers via the in-message controls — a free
     // message would cancel the pending tool call and corrupt the thread.
-    // A bare/leftover interrupt value (e.g. after Stop) must NOT lock the input.
-    const interruptValue = interrupt?.value as
-      | { type?: string; action_requests?: unknown[] }
-      | undefined;
-    const hasPendingInterrupt =
-      interruptValue?.type === "ask_user" ||
-      (Array.isArray(interruptValue?.action_requests) &&
-        interruptValue.action_requests.length > 0);
     const submitDisabled = isLoading || !canSend || hasPendingInterrupt;
     // Approvals and questions stay on the page while the folder is read
     // again (disabled, so nothing typed or chosen is lost) and are hidden
@@ -831,21 +1098,55 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       )
         return;
       if (queuedMessages.length === 0) return;
-      const [head, ...rest] = queuedMessages;
       // Effects from the previous render still run once after a route/thread
       // change. Never let that stale queue drain into the newly selected thread.
-      if (head.threadId !== threadId) return;
+      if (queuedMessages[0].threadId !== threadId) return;
       if (!canRunNow()) return;
       autoFireInFlightRef.current = true;
-      setQueuedMessages(rest);
-      sendMessage(formatMessageWithFiles(head.text, head.files));
+      // An item that sends nothing (a refused /goal) lets the next one take
+      // its turn in this pass; what stays with the user comes back to the
+      // composer (foldBack), in order.
+      const kept: QueuedMessage[] = [];
+      let taken = 0;
+      let sent = false;
+      for (const item of queuedMessages) {
+        if (item.threadId !== threadId) break;
+        taken += 1;
+        const result = sendComposerText(item.text, item.files);
+        if (result === "sent") {
+          sent = true;
+          break;
+        }
+        if (result === "kept") kept.push(item);
+      }
+      setQueuedMessages(queuedMessages.slice(taken));
+      // No run will release the latch when nothing went out.
+      if (!sent) autoFireInFlightRef.current = false;
+      if (kept.length > 0) {
+        const { input: draft, pendingFiles: attached } =
+          composerStateRef.current;
+        const back = foldBack(
+          kept,
+          draft,
+          attached,
+          goalCommandFor(goalSupportedRef.current)
+        );
+        if (
+          back.text !== draft.trim() ||
+          back.files.length !== attached.length
+        ) {
+          setInput(back.text);
+          setPendingFiles(back.files);
+        }
+        sayNotSent(back.notSent);
+      }
     }, [
       canSend,
       canRunNow,
       isLoading,
       hasPendingInterrupt,
       queuedMessages,
-      sendMessage,
+      sendComposerText,
       threadId,
     ]);
 
@@ -1010,6 +1311,20 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
           setInput("");
           return;
         }
+        const goalCmd =
+          goalSupported === true ? parseGoalCommand(messageText) : null;
+        if (goalCmd && pendingFiles.length > 0) {
+          toast.warning("A goal can't carry files; send them in a message.");
+          return;
+        }
+        // Reading the goal needs no run, so it answers at once, like /model;
+        // a goal request waits in the queue like a message. Show is done;
+        // the usage line leaves "/goal amend" to be finished.
+        if (goalCmd && (goalCmd.kind === "show" || goalCmd.kind === "usage")) {
+          runGoalCommand(goalCmd);
+          if (goalCmd.kind === "show") setInput("");
+          return;
+        }
         // Can't compose with no assistant, a pending interrupt, or files still
         // uploading. (Unlike before, isLoading is NOT a blocker — see below.)
         if (!canSend || hasPendingInterrupt || isUploadingFiles) return;
@@ -1033,7 +1348,9 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         if (!canRunNow()) return;
         migrateAutoApproveForCreatedThreadRef.current =
           threadId === null && autoApprove;
-        sendMessage(formatMessageWithFiles(messageText, pendingFiles));
+        // A refused /goal keeps its text: an objective over the limit is to
+        // be shortened, amend feedback is wanted again.
+        if (sendComposerText(messageText, pendingFiles) === "kept") return;
         setInput("");
         setPendingFiles([]);
       },
@@ -1047,7 +1364,9 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         isLoading,
         isUploadingFiles,
         pendingFiles,
-        sendMessage,
+        goalSupported,
+        runGoalCommand,
+        sendComposerText,
         threadId,
       ]
     );
@@ -1127,6 +1446,14 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       disabled: hasPendingInterrupt,
       workspaceSkills: filesHere,
       onBrowse: () => onNavigate?.({ view: "skills" }),
+      commands:
+        goalSupported === true ? GOAL_AND_MODEL_COMMANDS : MODEL_MENU_COMMANDS,
+      // /model chosen from the menu opens the picker at once; a run command
+      // this composer can't read stays an ordinary row (written out).
+      runnerFor: (command) => {
+        const cmd = parseModelCommand(command.insert);
+        return cmd ? () => void applyModelCommand(cmd) : null;
+      },
     });
     const slashKeyDown = slash.onKeyDown;
 
@@ -1817,35 +2144,39 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
               </div>
             ) : (
               <>
-                {processedMessages.length === 0 && !isLoading && (
-                  <div className="flex min-h-[42vh] flex-col items-center justify-center px-3 pt-12 text-center sm:pt-16">
-                    <h2 className="text-pretty text-lg font-semibold sm:text-xl">
-                      Where research evolves
-                    </h2>
-                    <p className="mt-2 max-w-lg text-sm text-muted-foreground">
-                      Your self-evolving lab partner — reads the literature,
-                      runs experiments, and remembers what matters.
-                    </p>
-                    <div className="mt-4 flex max-w-2xl flex-wrap justify-center gap-2">
-                      {SUGGESTED_PROMPTS.map((prompt) => (
-                        <button
-                          key={prompt}
-                          type="button"
-                          onClick={() => handleSuggestedPrompt(prompt)}
-                          className="max-w-full rounded-full border border-border bg-card px-2.5 py-1.5 text-xs text-foreground shadow-sm transition-colors hover:border-[var(--color-border)] hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring sm:text-sm"
-                        >
-                          {prompt}
-                        </button>
-                      ))}
+                {/* A question waiting in an empty chat (a new chat's goal
+                    review) takes the page instead. */}
+                {processedMessages.length === 0 &&
+                  !isLoading &&
+                  !hasPendingInterrupt && (
+                    <div className="flex min-h-[42vh] flex-col items-center justify-center px-3 pt-12 text-center sm:pt-16">
+                      <h2 className="text-pretty text-lg font-semibold sm:text-xl">
+                        Where research evolves
+                      </h2>
+                      <p className="mt-2 max-w-lg text-sm text-muted-foreground">
+                        Your self-evolving lab partner — reads the literature,
+                        runs experiments, and remembers what matters.
+                      </p>
+                      <div className="mt-4 flex max-w-2xl flex-wrap justify-center gap-2">
+                        {SUGGESTED_PROMPTS.map((prompt) => (
+                          <button
+                            key={prompt}
+                            type="button"
+                            onClick={() => handleSuggestedPrompt(prompt)}
+                            className="max-w-full rounded-full border border-border bg-card px-2.5 py-1.5 text-xs text-foreground shadow-sm transition-colors hover:border-[var(--color-border)] hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring sm:text-sm"
+                          >
+                            {prompt}
+                          </button>
+                        ))}
+                      </div>
+                      {onNavigate && onOpenThread && (
+                        <ResearchDashboard
+                          onNavigate={onNavigate}
+                          onOpenThread={onOpenThread}
+                        />
+                      )}
                     </div>
-                    {onNavigate && onOpenThread && (
-                      <ResearchDashboard
-                        onNavigate={onNavigate}
-                        onOpenThread={onOpenThread}
-                      />
-                    )}
-                  </div>
-                )}
+                  )}
                 {renderedItems.map((item, index) => {
                   if (item.kind === "action-group") {
                     // A group is "streaming" when its last item is the last
@@ -2442,6 +2773,13 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                 <ExpertsPill
                   teams={installedExperts}
                   onManage={() => onNavigate?.({ view: "experts" })}
+                />
+                <GoalPill
+                  goal={goal}
+                  busy={goalBusy}
+                  verdict={rubricVerdict}
+                  open={goalDetailsOpen}
+                  onOpenChange={setGoalDetailsOpen}
                 />
                 {runningAgents > 0 && (
                   <button

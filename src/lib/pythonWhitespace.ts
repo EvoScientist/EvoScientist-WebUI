@@ -18,3 +18,25 @@ export function pyStrip(text: string): string {
   while (end > start && PY_SPACE.test(text[end - 1])) end--;
   return text.slice(start, end);
 }
+
+/** Python's `str.split()` without a separator: the words between runs of
+ *  whitespace. After `maxsplit` splits the rest is one last word, with its
+ *  leading whitespace dropped and its trailing whitespace kept, as in
+ *  Python. */
+export function pySplit(text: string, maxsplit = -1): string[] {
+  const words: string[] = [];
+  let i = 0;
+  while (i < text.length) {
+    while (i < text.length && PY_SPACE.test(text[i])) i++;
+    if (i >= text.length) break;
+    if (maxsplit >= 0 && words.length === maxsplit) {
+      words.push(text.slice(i));
+      break;
+    }
+    let j = i;
+    while (j < text.length && !PY_SPACE.test(text[j])) j++;
+    words.push(text.slice(i, j));
+    i = j;
+  }
+  return words;
+}

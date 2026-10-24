@@ -10,7 +10,7 @@ import type { Message } from "@langchain/langgraph-sdk";
 export interface MockThreadState {
   next?: unknown[];
   tasks?: Array<{ interrupts?: unknown[]; error?: unknown; result?: unknown }>;
-  values?: { messages?: Message[] };
+  values?: { messages?: Message[]; [key: string]: unknown };
 }
 
 export interface MockThreadRecord {
@@ -47,6 +47,22 @@ export class MockClient {
     }),
     updateState: vi.fn(async () => {}),
     patch: vi.fn(async () => {}),
+  };
+
+  // useGoalSupport reads the main graph's input schema; {} is a backend
+  // without /goal, which is what every other suite expects.
+  assistants = {
+    getSchemas: vi.fn(async (id: string): Promise<unknown> => {
+      void id;
+      return {};
+    }),
+  };
+
+  // useChat wraps these for useStream (src/lib/nestedRuns.ts); the mocked
+  // useStream never calls them.
+  runs = {
+    stream: vi.fn(),
+    joinStream: vi.fn(),
   };
 }
 

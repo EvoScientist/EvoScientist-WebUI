@@ -41,6 +41,7 @@ import {
 } from "@/app/hooks/useBackendListsRefresh";
 import {
   ChatInterface,
+  type ComposerFold,
   type ComposerSnapshot,
 } from "@/app/components/ChatInterface";
 import { ExpertsPanel } from "@/app/components/ExpertsPanel";
@@ -211,7 +212,9 @@ function HomePageInner({ config, handleSaveConfig }: HomePageInnerProps) {
   const [composerSeed, setComposerSeed] = useState<ComposerSnapshot | null>(
     null
   );
-  const composerSnapshotRef = useRef<(() => ComposerSnapshot) | null>(null);
+  const composerSnapshotRef = useRef<
+    ((unsent?: string | null) => ComposerFold) | null
+  >(null);
   // Latest *intended* thread id, updated synchronously by the navigation
   // handlers below (the nuqs value lags by a render). The stale-thread
   // callback compares against this so a late 404 for a thread the user
@@ -234,17 +237,19 @@ function HomePageInner({ config, handleSaveConfig }: HomePageInnerProps) {
   // thread that is still open: a 404 can land late, after the user already
   // switched. Returns false to tell useChat the report was ignored.
   const handleThreadUnavailable = useCallback(
-    ({ threadId: staleId, unsentMessage }: ThreadUnavailableInfo): boolean => {
+    ({
+      threadId: staleId,
+      unsentMessage,
+    }: ThreadUnavailableInfo): false | { unsentBack: boolean } => {
       if (staleId !== threadIdRef.current) return false;
-      const snapshot = composerSnapshotRef.current?.();
-      const text = [unsentMessage, snapshot?.text]
-        .map((t) => t?.trim() ?? "")
-        .filter(Boolean)
-        .join("\n\n");
-      const files = snapshot?.files ?? [];
+      // The composer folds the unsent message in: a /goal command is not
+      // glued onto the rest (it is named as not sent instead).
+      const fold = composerSnapshotRef.current?.(unsentMessage);
+      const text = fold ? fold.text : unsentMessage?.trim() ?? "";
+      const files = fold?.files ?? [];
       startNewChat();
       setComposerSeed(text || files.length > 0 ? { text, files } : null);
-      return true;
+      return { unsentBack: fold ? fold.unsentBack : !!unsentMessage };
     },
     [startNewChat]
   );

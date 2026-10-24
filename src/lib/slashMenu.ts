@@ -14,7 +14,22 @@ const MAX_NAME = 64;
 // What may already be typed of a name: the menu filters as it grows.
 const PARTIAL = /^[a-z0-9-]*$/;
 // The WebUI's own commands: a message that starts with one is the command's.
-const COMMANDS = new Set(["model"]);
+const COMMANDS = new Set(["model", "goal"]);
+
+/** A WebUI command the `/` menu offers as a message's first word. */
+export interface MenuCommand {
+  /** The command's word after the slash: "goal". */
+  word: string;
+  /** The row after the slash: "goal amend <feedback>". */
+  label: string;
+  /** What choosing the row writes in place of the typed word. */
+  insert: string;
+  description: string;
+  /** Needs nothing more: chosen with Enter or a click it runs at once, where
+   *  the composer's `runnerFor` can run it (the typed word goes); Tab still
+   *  writes it out. */
+  run?: boolean;
+}
 
 export interface SlashToken {
   /** Where the `/` is. */
