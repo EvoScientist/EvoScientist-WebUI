@@ -1,13 +1,10 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSettings, useSettingsAccess } from "@/app/hooks/useSettings";
 import { deferSetup, isSetupDeferred } from "@/lib/setupDeferral";
+import { createLeaveTracker, SETUP_VIEWS } from "@/lib/setupLeave";
 import { useDeployment } from "@/providers/ClientProvider";
-
-// The views that show EvoScientist's settings: the Settings page (the gear)
-// and its first-run entry. The user has seen the fields in either.
-const SETUP_VIEWS: ReadonlySet<string | null> = new Set(["setup", "settings"]);
 
 /**
  * First run: open the Setup wizard before the chat when EvoScientist needs
@@ -28,20 +25,39 @@ export function useSetupGate(
     !payload.config_error &&
     access?.writable === true;
 
-  // Leaving Setup or Settings is recorded first, so the gate below already
-  // sees it.
+  // Leaving Setup or Settings while setup is needed is recorded once it is
+  // real (setupLeave.ts: a render that still shows the old view, with the
+  // address bar already on Setup, is not). The gate below does not wait for
+  // it: a page that showed either view has decided.
   const setupNeeded = payload?.setup_needed === true;
   const previousView = useRef(view);
+  const latestView = useRef(view);
+  const [leaves] = useState(() =>
+    createLeaveTracker({
+      record: deferSetup,
+      viewNow: () => latestView.current,
+      urlViewNow: () => new URLSearchParams(window.location.search).get("view"),
+    })
+  );
   useEffect(() => {
-    if (
-      SETUP_VIEWS.has(previousView.current) &&
-      !SETUP_VIEWS.has(view) &&
-      setupNeeded
-    ) {
-      deferSetup(deploymentUrl);
+    latestView.current = view;
+    if (SETUP_VIEWS.has(view)) leaves.back(deploymentUrl);
+    else if (SETUP_VIEWS.has(previousView.current) && setupNeeded) {
+      leaves.leave(deploymentUrl);
     }
     previousView.current = view;
-  }, [view, setupNeeded, deploymentUrl]);
+  }, [view, setupNeeded, deploymentUrl, leaves]);
+  // A reload or an unmount right after Configure later keeps it once the
+  // address bar has left Setup: nuqs writes it on the next tick when idle,
+  // and a reload before that opens Setup anyway.
+  useEffect(() => {
+    const flush = () => leaves.flush();
+    window.addEventListener("pagehide", flush);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      flush();
+    };
+  }, [leaves]);
 
   const decidedFor = useRef<string | null>(null);
   useEffect(() => {

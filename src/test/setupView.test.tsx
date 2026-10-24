@@ -124,6 +124,11 @@ const server = {
 };
 
 beforeEach(() => {
+  // The gate keeps a pending leave when it unmounts, and RTL's cleanup runs
+  // after this file's afterEach: start each test without a record or a view
+  // in the address bar.
+  resetSetupDeferral();
+  window.history.replaceState(null, "", "/");
   server.settings = settings();
   server.access = {
     writable: true,
@@ -1548,8 +1553,10 @@ describe("the first-run gate", () => {
     hook.rerender({ v: null });
     await act(async () => {});
     expect(setView).not.toHaveBeenCalled();
-    expect(window.sessionStorage.getItem("evoscientist-setup-later")).toContain(
-      DEPLOYMENT
+    await waitFor(() =>
+      expect(
+        window.sessionStorage.getItem("evoscientist-setup-later")
+      ).toContain(DEPLOYMENT)
     );
   });
   it("counts leaving Settings as Configure later", async () => {
@@ -1560,9 +1567,117 @@ describe("the first-run gate", () => {
     hook.rerender({ v: null });
     await act(async () => {});
     expect(setView).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(
+        window.sessionStorage.getItem("evoscientist-setup-later")
+      ).toContain(DEPLOYMENT)
+    );
+  });
+
+  // Configure later is about setup that is needed: a record made while it is
+  // not would later keep the wizard closed in this tab.
+  it("does not count leaving Settings when setup is not needed", async () => {
+    const { hook } = renderGate("settings");
+    await waitFor(() => expect(server.gets).toBeGreaterThan(0));
+    await act(async () => {});
+    hook.rerender({ v: null });
+    await act(() => new Promise((r) => setTimeout(r, 300)));
+    expect(
+      window.sessionStorage.getItem("evoscientist-setup-later")
+    ).toBeNull();
+  });
+
+  // Right after setView("setup") a render can still report the old view
+  // (seen on a cold first run); that flicker is not the user leaving, and
+  // counting it turned a first run's wizard into the form.
+  it("does not count a one-render flicker out of Setup as Configure later", async () => {
+    server.settings = settings({ setup_needed: true });
+    const { hook } = renderGate("setup");
+    await waitFor(() => expect(server.gets).toBeGreaterThan(0));
+    await act(async () => {});
+    hook.rerender({ v: null });
+    hook.rerender({ v: "setup" });
+    await act(() => new Promise((r) => setTimeout(r, 300)));
+    expect(
+      window.sessionStorage.getItem("evoscientist-setup-later")
+    ).toBeNull();
+  });
+
+  // Each return to Setup drops the flicker before it, so the next one does
+  // not find it waiting and keep it.
+  it("does not count two flickers in a row as Configure later", async () => {
+    server.settings = settings({ setup_needed: true });
+    const { hook } = renderGate("setup");
+    await waitFor(() => expect(server.gets).toBeGreaterThan(0));
+    await act(async () => {});
+    hook.rerender({ v: null });
+    hook.rerender({ v: "setup" });
+    hook.rerender({ v: null });
+    hook.rerender({ v: "setup" });
+    await act(() => new Promise((r) => setTimeout(r, 300)));
+    expect(
+      window.sessionStorage.getItem("evoscientist-setup-later")
+    ).toBeNull();
+  });
+
+  // A leave whose check has not run yet survives the page going away or the
+  // gate unmounting, once the address bar has left Setup.
+  it("keeps a pending leave on pagehide once the address bar has left Setup", async () => {
+    server.settings = settings({ setup_needed: true });
+    const { hook } = renderGate("setup");
+    await waitFor(() => expect(server.gets).toBeGreaterThan(0));
+    await act(async () => {});
+    hook.rerender({ v: null });
+    window.dispatchEvent(new Event("pagehide"));
     expect(window.sessionStorage.getItem("evoscientist-setup-later")).toContain(
       DEPLOYMENT
     );
+  });
+
+  it("keeps a pending leave on unmount once the address bar has left Setup", async () => {
+    server.settings = settings({ setup_needed: true });
+    const { hook } = renderGate("setup");
+    await waitFor(() => expect(server.gets).toBeGreaterThan(0));
+    await act(async () => {});
+    hook.rerender({ v: null });
+    hook.unmount();
+    expect(window.sessionStorage.getItem("evoscientist-setup-later")).toContain(
+      DEPLOYMENT
+    );
+  });
+
+  // As in the traced cold first run: nuqs has written view=setup to the
+  // address bar while a render still reports the old view.
+  it("waits for the address bar to leave Setup before counting a leave", async () => {
+    server.settings = settings({ setup_needed: true });
+    window.history.replaceState(null, "", "/?view=setup");
+    const { hook } = renderGate("setup");
+    await waitFor(() => expect(server.gets).toBeGreaterThan(0));
+    await act(async () => {});
+    hook.rerender({ v: null });
+    await act(() => new Promise((r) => setTimeout(r, 400)));
+    expect(
+      window.sessionStorage.getItem("evoscientist-setup-later")
+    ).toBeNull();
+    window.history.replaceState(null, "", "/");
+    await waitFor(() =>
+      expect(
+        window.sessionStorage.getItem("evoscientist-setup-later")
+      ).toContain(DEPLOYMENT)
+    );
+  });
+
+  it("does not count a stale render when the page goes away with the address bar on Setup", async () => {
+    server.settings = settings({ setup_needed: true });
+    window.history.replaceState(null, "", "/?view=setup");
+    const { hook } = renderGate("setup");
+    await waitFor(() => expect(server.gets).toBeGreaterThan(0));
+    await act(async () => {});
+    hook.rerender({ v: null });
+    window.dispatchEvent(new Event("pagehide"));
+    expect(
+      window.sessionStorage.getItem("evoscientist-setup-later")
+    ).toBeNull();
   });
 
   // The gear opens Settings before the gate decides; the user has seen the
@@ -1596,6 +1711,11 @@ describe("the first-run gate", () => {
   });
   it("does not open again after Configure later, also after a reload", async () => {
     deferSetup(DEPLOYMENT);
+    // A reload starts with nothing in memory and keeps the tab's
+    // sessionStorage.
+    const kept = window.sessionStorage.getItem("evoscientist-setup-later");
+    resetSetupDeferral();
+    window.sessionStorage.setItem("evoscientist-setup-later", kept ?? "");
     server.settings = settings({ setup_needed: true });
     const { setView } = renderGate();
     await waitFor(() => expect(server.gets).toBeGreaterThan(0));
