@@ -325,6 +325,38 @@ export function useSlashMenu({
   // (onSelect) and this one wins.
   const pendingCaret = useRef<number | null>(null);
   const [placing, setPlacing] = useState(0);
+  // The composer's text changed with no input here: a chip formed (or went)
+  // as the skill names arrived, a skill came off, a message came back ahead
+  // of the draft. Such a change is at the text's start, so the caret keeps
+  // its place from the end. React leaves it at the end, and nothing would
+  // tell the menu: a select event may come before the change, or never (CI
+  // on Node 20 and CodeRabbit, PR #103). Typing reports its own caret, and
+  // a placement on its way wins (this runs before the one below).
+  const seenValue = useRef(value);
+  const typed = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    const before = seenValue.current;
+    if (before === value) return;
+    seenValue.current = value;
+    const fromTyping = typed.current === value;
+    typed.current = null;
+    const el = textareaRef.current;
+    if (
+      fromTyping ||
+      pendingCaret.current !== null ||
+      caret === null ||
+      !el ||
+      el.value !== value
+    ) {
+      return;
+    }
+    const at = Math.min(
+      value.length,
+      Math.max(0, value.length - (before.length - caret))
+    );
+    if (document.activeElement === el) el.setSelectionRange(at, at);
+    setCaret(at);
+  }, [value, caret, textareaRef]);
   useLayoutEffect(() => {
     const at = pendingCaret.current;
     if (at === null) return;
@@ -546,6 +578,7 @@ export function useSlashMenu({
   const onChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setFocused(true);
     setCaret(e.target.selectionStart);
+    typed.current = e.target.value;
     // A composition on a page goes to its filter when it ends; any other
     // change of the composer's text (a drop, say) is the composer's: the
     // page closes.

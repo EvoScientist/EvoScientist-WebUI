@@ -932,6 +932,55 @@ describe("useSlashMenu pages", () => {
     expect(screen.queryByRole("listbox")).toBeNull();
   });
 
+  // CI on Node 20 (PR #103): a chip that forms as the skill names arrive
+  // takes the text's start out of the box with no input here, and the menu
+  // follows the caret: a select event may come before the change, or never
+  // (jsdom's comes only from a focus).
+  it("follows the caret when the box's text changes from outside", async () => {
+    stubSkills();
+    const valueApi = { set: (_: string) => {} };
+    render(<Composer valueApi={valueApi} />);
+    type("/paper-review /pa");
+    await waitFor(() =>
+      expect(options()).toEqual([expect.stringContaining("paper-writing")])
+    );
+    // The select event the focus queued goes by first, on the old text.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    act(() => valueApi.set("/pa"));
+    await waitFor(() =>
+      expect(options()).toEqual([
+        expect.stringContaining("paper-review"),
+        expect.stringContaining("paper-writing"),
+      ])
+    );
+  });
+
+  // CodeRabbit on #103: the caret keeps its place in the text (from its
+  // end, since such a change is at the start), not the end React leaves it
+  // at.
+  it("keeps the caret's place when the text's start changes from outside", async () => {
+    stubSkills();
+    const valueApi = { set: (_: string) => {} };
+    render(<Composer valueApi={valueApi} />);
+    typeAt("/paper-review /pa hello", 17);
+    await waitFor(() =>
+      expect(options()).toEqual([expect.stringContaining("paper-writing")])
+    );
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    act(() => valueApi.set("/pa hello"));
+    expect((box() as HTMLTextAreaElement).selectionStart).toBe(3);
+    await waitFor(() =>
+      expect(options()).toEqual([
+        expect.stringContaining("paper-review"),
+        expect.stringContaining("paper-writing"),
+      ])
+    );
+  });
+
   // Codex, checkpoint A: a re-read that fails ends the wait.
   it("stops waiting for a re-read that failed", async () => {
     const fetchMock = stubSkills();

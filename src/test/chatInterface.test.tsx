@@ -2129,6 +2129,42 @@ describe("ChatInterface composition", () => {
 
     // Codex, confirm round B: a paste made before the skill names arrived
     // gets the one-skill rule when they do (it pinned both).
+    // CodeRabbit on #103: a chip that forms as the names arrive leaves the
+    // caret where the typing was, not at the box's end.
+    it("keeps the caret in place when a chip forms late", async () => {
+      let answer: (r: Response) => void = () => {};
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((url: string) =>
+          String(url).includes("/api/skills/pinnable")
+            ? new Promise<Response>((resolve) => {
+                answer = resolve;
+              })
+            : Promise.resolve(new Response("{}"))
+        )
+      );
+      const { container } = renderChatInterface();
+      const textarea = container.querySelector("textarea")!;
+      act(() => textarea.focus());
+      fireEvent.change(textarea, { target: { value: "/paper-review hello" } });
+      textarea.setSelectionRange(14, 14);
+      fireEvent.select(textarea);
+      await act(async () =>
+        answer(
+          new Response(
+            JSON.stringify({
+              skills: [
+                { name: "paper-review", description: "x", source: "global" },
+              ],
+            })
+          )
+        )
+      );
+      expect(chips(container)).toEqual(["paper-review"]);
+      expect(textarea.value).toBe("hello");
+      expect(textarea.selectionStart).toBe(0);
+    });
+
     it("keeps one skill of a paste made before the names arrived", async () => {
       let answer: (r: Response) => void = () => {};
       vi.stubGlobal(
