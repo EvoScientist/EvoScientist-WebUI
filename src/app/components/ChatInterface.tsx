@@ -3151,7 +3151,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                       : "Ask EvoScientist anything…"
                   }
                   className={cn(
-                    "font-inherit field-sizing-content max-h-[min(30dvh,12rem)] min-h-12 min-w-0 flex-1 resize-none overflow-y-auto border-0 bg-transparent pb-2.5 pt-3 text-sm leading-6 text-primary outline-none placeholder:text-tertiary disabled:cursor-not-allowed",
+                    "font-inherit field-sizing-content max-h-[min(30dvh,12rem)] min-h-12 min-w-0 flex-1 resize-none overflow-y-auto border-0 bg-transparent pb-2.5 pt-3 text-sm leading-6 text-primary outline-none placeholder:text-tertiary focus:ring-0 disabled:cursor-not-allowed",
                     chip || leavingChip
                       ? "pl-2 pr-3.5 sm:pr-4"
                       : "px-3.5 sm:px-4"

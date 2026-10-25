@@ -2002,6 +2002,17 @@ describe("ChatInterface composition", () => {
       expect(textarea.value).toBe("again");
     });
 
+    // @tailwindcss/forms rings a focused textarea in blue: next to a chip
+    // it boxed the text alone. The composer box's ring shows the focus.
+    it("draws no focus ring of the box's own", () => {
+      const { container } = renderChatInterface();
+      const textarea = container.querySelector("textarea")!;
+      expect(textarea.className.split(" ")).toContain("focus:ring-0");
+      expect(
+        container.querySelector("form")!.parentElement!.className
+      ).toContain("focus-within:ring-2");
+    });
+
     it("keeps the composer's text as one string for the queue", async () => {
       const { container } = renderChatInterface();
       const textarea = container.querySelector("textarea")!;

@@ -142,7 +142,7 @@ export function ComposerChip({
       aria-hidden={leaving ? true : undefined}
       title={chip.kind === "skill" ? `/${label}` : undefined}
       className={cn(
-        "inline-flex h-6 max-w-[16rem] shrink-0 items-center gap-1 overflow-hidden rounded-md border border-solid pl-1.5 text-xs font-medium",
+        "inline-flex h-6 max-w-[min(16rem,50%)] shrink-0 items-center gap-1 overflow-hidden rounded-md border border-solid pl-1.5 text-xs font-medium",
         chip.kind === "skill"
           ? "border-[color-mix(in_srgb,var(--brand)_28%,transparent)] bg-[var(--brand-soft)] text-[var(--brand)]"
           : "border-transparent bg-[var(--brand-solid)] text-[var(--brand-foreground)]",

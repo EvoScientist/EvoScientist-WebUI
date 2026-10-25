@@ -75,6 +75,22 @@ describe("ComposerChip", () => {
     expect(screen.queryByRole("button")).toBeNull();
   });
 
+  // Live check at 320 px: a long skill name's chip at 16rem left the box
+  // beside it 10 px of text, a letter a line. It takes half its row at most.
+  it("takes half of its row at most, leaving room to type", () => {
+    const { container } = render(
+      <ComposerChip
+        chip={{
+          kind: "skill",
+          name: "research-literature-survey-with-citations-and-summaries",
+        }}
+        onRemove={() => {}}
+      />
+    );
+    const chip = container.querySelector('[data-slot="composer-chip"]')!;
+    expect(chip.className.split(" ")).toContain("max-w-[min(16rem,50%)]");
+  });
+
   it("pops in when it doesn't fly", () => {
     const { container } = render(
       <ComposerChip
