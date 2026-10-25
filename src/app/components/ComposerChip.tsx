@@ -176,7 +176,11 @@ export function ComposerChip({
       aria-hidden={leaving ? true : undefined}
       title={chip.kind === "skill" ? `/${label}` : undefined}
       className={cn(
-        "inline-flex h-6 max-w-[min(16rem,50%)] shrink-0 items-center gap-1 rounded-md border border-solid pl-1.5 text-xs font-medium",
+        "inline-flex h-6 shrink-0 items-center gap-1 rounded-md border border-solid pl-1.5 text-xs font-medium",
+        // The composer's chip takes half its row at most, so the box beside
+        // it keeps room to type; a sent or queued chip sits in a bubble that
+        // sizes to its content, where half of it would halve the chip.
+        onRemove || leaving ? "max-w-[min(16rem,50%)]" : "max-w-[16rem]",
         // Only a folding chip clips: the remove button's touch area reaches
         // out of it (the name truncates by itself).
         leaving && "overflow-hidden",

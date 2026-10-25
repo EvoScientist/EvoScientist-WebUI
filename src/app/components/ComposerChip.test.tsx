@@ -120,6 +120,20 @@ describe("ComposerChip", () => {
     expect(chip.className.split(" ")).toContain("max-w-[min(16rem,50%)]");
   });
 
+  // The owner's manual test: a sent bubble holding only its skill sizes to
+  // the chip, and half of that cut the chip to "pa…". The half-the-row cap
+  // is the composer's (a row of its own width); a static chip keeps 16rem.
+  it("caps a static chip at 16rem only", () => {
+    const { container } = render(
+      <ComposerChip chip={{ kind: "skill", name: "paper-review" }} />
+    );
+    const classes = container
+      .querySelector('[data-slot="composer-chip"]')!
+      .className.split(" ");
+    expect(classes).toContain("max-w-[16rem]");
+    expect(classes).not.toContain("max-w-[min(16rem,50%)]");
+  });
+
   it("pops in when it doesn't fly", () => {
     const { container } = render(
       <ComposerChip
