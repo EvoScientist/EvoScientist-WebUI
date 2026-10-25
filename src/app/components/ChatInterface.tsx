@@ -88,7 +88,9 @@ import { ComposerChip } from "@/app/components/ComposerChip";
 import { SwapText } from "@/app/components/SwapText";
 import {
   composerLead,
+  mayPin,
   oneSkill,
+  pinLead,
   previewLead,
   GOAL_LEADS,
   type ComposerChip as ComposerChipValue,
@@ -503,8 +505,10 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     // Goal mode, which only the Goal page starts: the box's text goes out as
     // the goal (or its amendment) after the mode's words.
     const [goalMode, setGoalMode] = useState<GoalMode | null>(null);
-    // The `/model` command and the model pill open the menu's Model page.
+    // The `/model` command and the model pill open the menu's Model page; a
+    // submit (Send pressed with a page open) closes the menu.
     const openModelPageRef = useRef(() => {});
+    const closeMenuRef = useRef(() => {});
     const [pendingFiles, setPendingFiles] = useState<UploadedWorkspaceFile[]>(
       []
     );
@@ -793,8 +797,9 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
           goalCommandFor(goalSupportedRef.current)
         );
         setQueuedMessages([]);
-        // Text brought back is text: goal mode ends with what it held.
-        if (back.text !== draft) setGoalMode(null);
+        // Text brought back is text: goal mode ends with what it held (a
+        // draft only trimmed is the same text).
+        if (back.text !== draft.trim()) setGoalMode(null);
         setInput(back.text);
         setPendingFiles(back.files);
         sayNotSent(back.notSent);
@@ -1152,7 +1157,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
           back.text !== draft.trim() ||
           back.files.length !== attached.length
         ) {
-          if (back.text !== draft) setGoalMode(null);
+          if (back.text !== draft.trim()) setGoalMode(null);
           setInput(back.text);
           setPendingFiles(back.files);
         }
@@ -1356,6 +1361,9 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         }
         const messageText = input.trim();
         if (!messageText) return;
+        // Enter on a page is the page's: only Send gets here with one open.
+        // It sends what shows, the page's word left out.
+        closeMenuRef.current();
         // Goal mode: nothing written, or a word the core would read as
         // another /goal command, stays here with a hint.
         if (activeGoalMode) {
@@ -1381,23 +1389,24 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
             return;
           }
         }
-        // After a skill's chip the box's first word is the command: /model
-        // and /goal answer as typed alone. The chip stays for what needs no
-        // run; a goal request goes without it (it carries no skill).
-        const head = activeGoalMode
+        // After a leading /word (a skill's chip) the next word may be the
+        // command: /model and /goal answer as typed alone. The word stays for
+        // what needs no run; a goal request goes without it (it carries no
+        // skill). Read whatever the skill names say, so a text sent before
+        // they arrive reads alike (no "/x /goal …" is a message).
+        const pin = activeGoalMode
           ? null
-          : composerLead(input, {
-              skills: knownSkills,
-              goalMode: null,
-              commands: new Set(
-                goalSupported === false ? MODEL_ONLY : COMMAND_WORDS
-              ),
-            });
-        const skillHead = head?.chip?.kind === "skill" ? head : null;
-        const commandText = skillHead
-          ? input.slice(skillHead.lead.length).trim()
-          : messageText;
-        const keep = skillHead ? skillHead.lead : "";
+          : pinLead(
+              input,
+              new Set(goalSupported === false ? MODEL_ONLY : COMMAND_WORDS)
+            );
+        const afterPin = pin ? input.slice(pin.lead.length).trim() : "";
+        const commandAfterPin =
+          !!afterPin &&
+          (parseModelCommand(afterPin) !== null ||
+            (goalSupported === true && parseGoalCommand(afterPin) !== null));
+        const commandText = commandAfterPin ? afterPin : messageText;
+        const keep = commandAfterPin && pin ? pin.lead : "";
         // Intercept `/model` before the agent sees it — purely client-side
         // state on the thread metadata. The textarea clears regardless of
         // outcome so the command echo doesn't linger; a bare `/model` opens
@@ -1425,10 +1434,8 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         }
         const outText = goalCmd ? commandText : messageText;
         const dropsSkill = () => {
-          if (goalCmd && skillHead?.chip?.kind === "skill") {
-            toast.info(
-              `A goal doesn't take skills, so /${skillHead.chip.name} came off.`
-            );
+          if (goalCmd && commandAfterPin && pin) {
+            toast.info(`A goal doesn't take skills, so /${pin.name} came off.`);
           }
         };
         // Can't compose with no assistant, a pending interrupt, or files still
@@ -1464,7 +1471,6 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       },
       [
         input,
-        knownSkills,
         activeGoalMode,
         nudgeComposer,
         applyModelCommand,
@@ -1558,6 +1564,29 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       goalMode: activeGoalMode,
       commands: new Set(commandWords),
     };
+    // A change typed or pasted before the skill names arrived gets the
+    // one-skill rule once they do, if the box still holds it (a hand-back
+    // meanwhile keeps its text).
+    const [unsorted, setUnsorted] = useState<string | null>(null);
+    // The skills one skill a message took off, said once committed.
+    const droppedRef = useRef<string | null>(null);
+    if (unsorted !== null && knownSkills !== null) {
+      setUnsorted(null);
+      if (input === unsorted) {
+        const one = oneSkill(input, chipOptions);
+        if (one !== input) {
+          droppedRef.current = input.slice(0, input.length - one.length);
+          setInput(one);
+        }
+      }
+    }
+    useEffect(() => {
+      const dropped = droppedRef.current;
+      if (dropped === null) return;
+      droppedRef.current = null;
+      const names = dropped.trim().split(/\s+/).join(", ");
+      toast.info(`A message takes one skill, so ${names} came off.`);
+    });
     const lead = composerLead(input, chipOptions);
     const rest = input.slice(lead.lead.length);
     const chip = lead.chip;
@@ -1715,7 +1744,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       leadSkill: chip?.kind === "skill" ? chip.name : null,
       // A text that may start with a skill (whitespace ahead of it too)
       // needs the names to show its chip.
-      wantSkills: activeGoalMode === null && input.trimStart().startsWith("/"),
+      wantSkills: activeGoalMode === null && mayPin(input),
       onSkillsRead: setKnownSkills,
       // One skill a message: a picked one takes the chip's place, and flies
       // in from its row; typing goes on after it.
@@ -1730,6 +1759,9 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       openModelPageRef.current = () => {
         textareaRef.current?.focus();
         slash.openPage("model");
+      };
+      closeMenuRef.current = () => {
+        if (slash.menuProps.view.kind === "page") slash.closeMenu();
       };
     });
     const sendLabel =
@@ -3136,12 +3168,20 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                   ))}
                 </div>
               )}
-              {/* The row holds the box's left padding and a chip keeps its gap
-                  on its right: a chip folding away (gap included) leaves the
-                  text where it stays. */}
+              {/* With a chip the row holds the box's left padding and the chip
+                  keeps its gap on its right, so a chip folding away (gap
+                  included) leaves the text where it stays; without one the
+                  padding is the box's (pressable). A press on the row itself
+                  focuses the box. */}
               <div
+                onMouseDown={(e) => {
+                  if (e.target !== e.currentTarget) return;
+                  e.preventDefault();
+                  textareaRef.current?.focus();
+                }}
                 className={cn(
-                  "flex min-w-0 items-start pl-3.5 transition-colors duration-200 sm:pl-4",
+                  "flex min-w-0 cursor-text items-start transition-colors duration-200",
+                  (chip || leavingChip) && "pl-3.5 sm:pl-4",
                   activeGoalMode &&
                     "bg-[color-mix(in_srgb,var(--brand-soft)_70%,transparent)]"
                 )}
@@ -3196,7 +3236,11 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                       composerLead(rest, chipOptions).chip === null &&
                       composerLead(next, chipOptions).chip !== null;
                     if (!typedSkill) {
-                      setInput(lead.lead + next);
+                      const full = lead.lead + next;
+                      setInput(full);
+                      setUnsorted(
+                        knownSkills === null && mayPin(full) ? full : null
+                      );
                       slash.onChange(e);
                       return;
                     }
@@ -3204,6 +3248,13 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                     const box = full.slice(
                       composerLead(full, chipOptions).lead.length
                     );
+                    // One skill a message: of several, what came off is said.
+                    if (full !== next) {
+                      droppedRef.current = next.slice(
+                        0,
+                        next.length - full.length
+                      );
+                    }
                     setInput(full);
                     slash.onChange(e);
                     slash.placeCaret(
@@ -3239,7 +3290,8 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                       : "Ask EvoScientist anything…"
                   }
                   className={cn(
-                    "font-inherit field-sizing-content max-h-[min(30dvh,12rem)] min-h-12 min-w-0 flex-1 resize-none overflow-y-auto border-0 bg-transparent pb-2.5 pl-0 pr-3.5 pt-3 text-sm leading-6 text-primary outline-none placeholder:text-tertiary focus:ring-0 disabled:cursor-not-allowed sm:pr-4"
+                    "font-inherit field-sizing-content max-h-[min(30dvh,12rem)] min-h-12 min-w-0 flex-1 resize-none overflow-y-auto border-0 bg-transparent pb-2.5 pr-3.5 pt-3 text-sm leading-6 text-primary outline-none placeholder:text-tertiary focus:ring-0 disabled:cursor-not-allowed sm:pr-4",
+                    chip || leavingChip ? "pl-0" : "pl-3.5 sm:pl-4"
                   )}
                   rows={1}
                 />
@@ -3336,6 +3388,9 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                     type={isLoading ? "button" : "submit"}
                     variant={isLoading ? "destructive" : "default"}
                     onClick={isLoading ? abortRun : handleSubmit}
+                    // The composer keeps its focus: a blur would take an
+                    // open page's word back into the box before the click.
+                    onMouseDown={(e) => e.preventDefault()}
                     disabled={
                       !isLoading &&
                       (submitDisabled || isUploadingFiles || !input.trim())

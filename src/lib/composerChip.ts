@@ -28,35 +28,64 @@ export const GOAL_LEADS: Record<GoalMode, string> = {
 
 const NONE: ComposerLead = { chip: null, lead: "" };
 const COMMANDS: ReadonlySet<string> = new Set(["model", "goal"]);
-// A pin is `/` and at most 64 characters (slashTokenAt's bound): a long
-// paste is never scanned further.
+// A pin is `/` and at most 64 characters (slashTokenAt's bound), and the
+// whitespace ahead of it is read up to 1,024 characters: the lead is read
+// every render, and a pasted log is never scanned further (a million blank
+// lines cost 12 ms a call).
 const MAX_WORD = 65;
+const MAX_SPACE = 1024;
 
-/** The installed skill a text's first word pins, with the whitespace ahead
- *  of it and the one after it: once the word is whole, and never a
- *  command's word. The text goes out trimmed and the backend splits it on
- *  whitespace, so a pin after leading whitespace pins too. */
+/** The index past the whitespace at `at`, read up to MAX_SPACE characters
+ *  (-1 beyond). */
+function pastSpace(text: string, at: number): number {
+  let i = at;
+  while (i < text.length && PY_SPACE.test(text[i])) {
+    if (i - at >= MAX_SPACE) return -1;
+    i++;
+  }
+  return i;
+}
+
+/** Whether a text's first word (after whitespace, as the backend splits
+ *  it) starts with "/": it may pin a skill, so the skill names are wanted. */
+export function mayPin(text: string): boolean {
+  const at = pastSpace(text, 0);
+  return at >= 0 && text[at] === "/";
+}
+
+/** A text's leading "/word" as a pin takes it, whatever is installed: the
+ *  whitespace ahead of it, the word and the one whitespace after it, once
+ *  the word is whole; never a command's word. The text goes out trimmed and
+ *  the backend splits it on whitespace, so a pin after leading whitespace
+ *  pins too. */
+export function pinLead(
+  text: string,
+  commands: ReadonlySet<string> = COMMANDS
+): { name: string; lead: string } | null {
+  const start = pastSpace(text, 0);
+  if (start < 0 || text[start] !== "/") return null;
+  let end = start + 1;
+  while (end < text.length && !PY_SPACE.test(text[end])) {
+    if (end - start >= MAX_WORD) return null;
+    end++;
+  }
+  if (end === text.length) return null;
+  const word = text.slice(start, end);
+  const name = word.slice(1);
+  if (!PIN_WORD.test(word) || commands.has(name)) return null;
+  return { name, lead: text.slice(0, end + 1) };
+}
+
+/** The installed skill a text's first word pins (pinLead's, when that word
+ *  is an installed skill). */
 function skillLead(
   text: string,
   skills: ReadonlySet<string> | null,
   commands: ReadonlySet<string>
 ): ComposerLead {
-  if (!skills) return NONE;
-  let start = 0;
-  while (start < text.length && PY_SPACE.test(text[start])) start++;
-  if (text[start] !== "/") return NONE;
-  let end = start + 1;
-  while (end < text.length && !PY_SPACE.test(text[end])) {
-    if (end - start >= MAX_WORD) return NONE;
-    end++;
-  }
-  if (end === text.length) return NONE;
-  const word = text.slice(start, end);
-  const name = word.slice(1);
-  if (!PIN_WORD.test(word) || commands.has(name) || !skills.has(name)) {
-    return NONE;
-  }
-  return { chip: { kind: "skill", name }, lead: text.slice(0, end + 1) };
+  const pin = skills ? pinLead(text, commands) : null;
+  if (!pin || !skills!.has(pin.name)) return NONE;
+  return { chip: { kind: "skill", name: pin.name }, lead: pin.lead };
 }
 
 /** The chip for the composer's text: its goal mode while the text starts
@@ -165,12 +194,9 @@ export function pinnedLead(
   pinned: readonly string[]
 ): { skills: string[]; rest: string } {
   const skills: string[] = [];
-  let at = 0;
-  const spaces = () => {
-    while (at < text.length && PY_SPACE.test(text[at])) at++;
-  };
-  spaces();
+  let at = pastSpace(text, 0);
   let restAt = 0;
+  if (at < 0) return { skills, rest: text };
   for (const name of pinned) {
     const word = `/${name}`;
     const end = at + word.length;
@@ -181,9 +207,10 @@ export function pinnedLead(
       break;
     }
     skills.push(name);
-    at = end;
-    spaces();
-    restAt = at;
+    const next = pastSpace(text, end);
+    restAt = next < 0 ? end : next;
+    if (next < 0) break;
+    at = next;
   }
   return { skills, rest: text.slice(restAt) };
 }

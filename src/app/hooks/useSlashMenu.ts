@@ -157,7 +157,6 @@ export function useSlashMenu({
   const request = useRef(0);
   // The menu's read in flight: a highlighted skill waits for it, not longer.
   const [reading, setReading] = useState(false);
-  const everRead = useRef(false);
   // Every read in order, menu or not: only a newer list is reported.
   const readSeq = useRef(0);
   const reported = useRef(0);
@@ -271,7 +270,6 @@ export function useSlashMenu({
       const list = Array.isArray(data.skills)
         ? (data.skills as MenuSkill[])
         : [];
-      everRead.current = true;
       // An older read answering after a newer one isn't news.
       if (id > reported.current) {
         reported.current = id;

@@ -1953,6 +1953,41 @@ describe("useSlashMenu motion", () => {
     }
   });
 
+  // Confirm round 2 (A): a page left with no rows measures its list's top
+  // padding too (it eased 4 px short, then jumped).
+  it("eases a page filtered to nothing to its list's padding", async () => {
+    const restore = layoutModel();
+    const style = window.getComputedStyle;
+    const padded = vi
+      .spyOn(window, "getComputedStyle")
+      .mockImplementation((el: Element) => {
+        const real = style(el);
+        if (el.getAttribute("role") !== "listbox") return real;
+        return new Proxy(real, {
+          get: (target, prop) =>
+            prop === "paddingTop" || prop === "paddingBottom"
+              ? "4px"
+              : Reflect.get(target, prop),
+        });
+      });
+    try {
+      stubSkills([]);
+      render(<Composer pages={[testPages().model]} />);
+      type("/mo");
+      await waitFor(() => expect(options()).toHaveLength(1));
+      const viewport = () =>
+        document.querySelector<HTMLElement>('[data-slot="slash-menu"] > div')!;
+      key("Enter");
+      await waitFor(() => expect(viewport().style.height).toBe(""));
+      key("z");
+      expect(options()).toHaveLength(0);
+      expect(viewport().style.height).toBe("8px");
+    } finally {
+      padded.mockRestore();
+      restore();
+    }
+  });
+
   // Independent review, checkpoint A: a second page change starts its own
   // leaving layer rather than swapping the snapshot under the running one.
   it("starts a new leaving layer for each page change", async () => {

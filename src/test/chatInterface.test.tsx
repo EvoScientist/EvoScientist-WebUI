@@ -1840,6 +1840,43 @@ describe("ChatInterface composition", () => {
       expect(screen.queryByRole("listbox")).toBeNull();
     });
 
+    // Confirm round 2 (A): Send keeps the composer's focus (a press that
+    // blurred it put "/mo" back after a chip and sent it), and a send closes
+    // an open page (Safari doesn't blur: the page stayed over the empty box).
+    it("sends what shows from Send on a page, and closes the page", async () => {
+      const { container } = renderChatInterface();
+      const textarea = typeInComposer(container, "/paper-writing ");
+      await waitFor(() =>
+        expect(
+          container
+            .querySelector("form")!
+            .querySelector('[data-slot="composer-chip"]')?.textContent
+        ).toBe("paper-writing")
+      );
+      fireEvent.change(textarea, { target: { value: "/mo" } });
+      await waitFor(() =>
+        expect(screen.getAllByRole("option").length).toBeGreaterThan(0)
+      );
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(screen.getByRole("listbox", { name: "Model" })).toBeTruthy();
+      expect(textarea.value).toBe("");
+      const send = screen.getByRole("button", { name: "Send message" });
+      // A browser moves focus on mousedown unless it is held back.
+      if (fireEvent.mouseDown(send)) fireEvent.blur(textarea);
+      fireEvent.mouseUp(send);
+      fireEvent.click(send);
+      expect(
+        stream
+          .getSubmitCalls()
+          .map(
+            (c) =>
+              (c.values as { messages: Array<{ content: string }> }).messages[0]
+                .content
+          )
+      ).toEqual(["/paper-writing"]);
+      expect(screen.queryByRole("listbox")).toBeNull();
+    });
+
     it("opens the Skills marketplace when nothing is installed", async () => {
       vi.stubGlobal(
         "fetch",
@@ -2090,6 +2127,52 @@ describe("ChatInterface composition", () => {
       expect(sent()).toEqual(["/paper-review hi"]);
     });
 
+    // Codex, confirm round B: a paste made before the skill names arrived
+    // gets the one-skill rule when they do (it pinned both).
+    it("keeps one skill of a paste made before the names arrived", async () => {
+      let answer: (r: Response) => void = () => {};
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((url: string) =>
+          String(url).includes("/api/skills/pinnable")
+            ? new Promise<Response>((resolve) => {
+                answer = resolve;
+              })
+            : Promise.resolve(new Response("{}"))
+        )
+      );
+      const { container } = renderChatInterface();
+      const textarea = container.querySelector("textarea")!;
+      write(textarea, "/paper-review /evo-memory hi");
+      expect(chips(container)).toEqual([]);
+      await act(async () =>
+        answer(
+          new Response(
+            JSON.stringify({
+              skills: [
+                { name: "paper-review", description: "x", source: "global" },
+                { name: "evo-memory", description: "y", source: "global" },
+              ],
+            })
+          )
+        )
+      );
+      expect(chips(container)).toEqual(["evo-memory"]);
+      expect(textarea.value).toBe("hi");
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(sent()).toEqual(["/evo-memory hi"]);
+    });
+
+    // Codex, confirm round B: Python whitespace ahead of a skill (U+0085)
+    // asks for the names too.
+    it("reads the names for a skill after any whitespace the backend skips", async () => {
+      const { container } = renderChatInterface();
+      const textarea = container.querySelector("textarea")!;
+      write(textarea, "\u0085/paper-review hi");
+      await waitFor(() => expect(chips(container)).toEqual(["paper-review"]));
+      expect(textarea.value).toBe("hi");
+    });
+
     // Codex C2 / agent #9: one skill a message, a paste of several included:
     // the last stays.
     it("keeps the last of several skills pasted in at once", async () => {
@@ -2103,6 +2186,10 @@ describe("ChatInterface composition", () => {
       });
       expect(chips(container)).toEqual(["evo-memory"]);
       expect(textarea.value).toBe("hi");
+      // What came off is said (agent, confirm round B: it went silently).
+      expect(toast.info).toHaveBeenCalledWith(
+        "A message takes one skill, so /paper-review came off."
+      );
       fireEvent.keyDown(textarea, { key: "Enter" });
       expect(sent()).toEqual(["/evo-memory hi"]);
     });
@@ -2195,21 +2282,65 @@ describe("ChatInterface composition", () => {
       ).toBe(true);
     });
 
-    // Agent #3: the box's left edge doesn't move with a chip: the row holds
-    // the padding and a chip keeps its gap on its right, so a fold that takes
-    // the chip and its gap to nothing leaves the text where it stays.
-    it("keeps the text's left edge in the row, a chip's gap on its right", async () => {
+    // Agent #3: a chip's fold leaves the text where it stays: with a chip the
+    // row holds the left padding and the chip keeps its gap on its right.
+    // Without one the padding is the box's again (confirm round B, R1: as
+    // the row's, a press there didn't reach the box); a press on the row
+    // focuses the box either way.
+    it("keeps the text's left edge, the padding the box's without a chip", async () => {
       const { container } = renderChatInterface();
       const textarea = container.querySelector("textarea")!;
+      const row = textarea.parentElement!;
       const classes = (el: Element) => el.className.split(" ");
-      expect(classes(textarea)).toContain("pl-0");
-      expect(classes(textarea.parentElement!)).toContain("pl-3.5");
+      expect(classes(textarea)).toContain("pl-3.5");
+      expect(classes(row)).not.toContain("pl-3.5");
       write(textarea, "/paper-review hi");
       await waitFor(() => expect(chips(container)).toEqual(["paper-review"]));
       expect(classes(textarea)).toContain("pl-0");
+      expect(classes(row)).toContain("pl-3.5");
       expect(
         classes(container.querySelector('form [data-slot="composer-chip"]')!)
       ).toContain("mr-2");
+      act(() => textarea.blur());
+      expect(fireEvent.mouseDown(row)).toBe(false);
+      expect(document.activeElement).toBe(textarea);
+    });
+
+    // Agent, confirm round B (T1): /model after a chip sets the model (a new
+    // chat stages it), the chip staying.
+    it("sets the model from /model typed after a chip", async () => {
+      const { container } = renderChatInterface();
+      const textarea = container.querySelector("textarea")!;
+      write(textarea, "/paper-review hi");
+      await waitFor(() => expect(chips(container)).toEqual(["paper-review"]));
+      fireEvent.change(textarea, { target: { value: "/model gpt-5.5" } });
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      await waitFor(() =>
+        expect(toast.success).toHaveBeenCalledWith("Model set to gpt-5.5.")
+      );
+      expect(chips(container)).toEqual(["paper-review"]);
+      expect(textarea.value).toBe("");
+      expect(sent()).toEqual([]);
+    });
+
+    // Agent, confirm round B (T2): the caret stays where the typing was, the
+    // end of a pasted skill and text included.
+    it("keeps the caret at the end of a pasted skill and text", async () => {
+      const { container } = renderChatInterface();
+      const textarea = container.querySelector("textarea")!;
+      write(textarea, "/");
+      await act(async () => {});
+      await act(async () => {});
+      fireEvent.change(textarea, {
+        target: {
+          value: "/paper-review please review",
+          selectionStart: 27,
+          selectionEnd: 27,
+        },
+      });
+      expect(chips(container)).toEqual(["paper-review"]);
+      expect(textarea.value).toBe("please review");
+      expect(textarea.selectionStart).toBe(13);
     });
 
     it("keeps the composer's text as one string for the queue", async () => {

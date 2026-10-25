@@ -405,6 +405,40 @@ describe("/goal in the composer", () => {
     }
   });
 
+  // Codex, confirm round B: the command after a leading /word runs whatever
+  // the skill names say, so a paste sent before they arrive reads alike.
+  it("runs a command after a /word before the skill names arrive", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) =>
+        String(url).includes("/api/skills/pinnable")
+          ? new Promise<Response>(() => {})
+          : Promise.resolve(new Response("{}"))
+      )
+    );
+    try {
+      const { textarea } = await mount(
+        {},
+        { threadValues: goalValues("active") }
+      );
+      act(() => textarea.focus());
+      fireEvent.change(textarea, {
+        target: { value: "/paper-review /goal pause" },
+      });
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(submits()).toHaveLength(1);
+      expect(submits()[0].values).toMatchObject({
+        messages: [],
+        goal_request: { kind: "pause" },
+      });
+      expect(toast.info).toHaveBeenCalledWith(
+        "A goal doesn't take skills, so /paper-review came off."
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   // Review focus 2: text the composer gets back (W02's hand-back here)
   // shows its skill as a chip again.
   it("shows the chip again for a message handed back", async () => {
@@ -838,6 +872,31 @@ describe("/goal in the composer", () => {
       });
       expect(textarea.value).toBe("hello");
       expect(chipOf(container)).toBeNull();
+    });
+
+    // Agent, confirm round B (R2, T3): a hand-back that leaves goal mode's
+    // text as it was (but trimmed) keeps the mode; a trailing space ended it.
+    it("keeps goal mode when a hand-back leaves its text as it was", async () => {
+      const { container, textarea, type } = await mount(
+        {},
+        { threadValues: goalValues("active") }
+      );
+      type("/goal write x");
+      expect(submits()).toHaveLength(1);
+      await openGoalPage(textarea);
+      fireEvent.keyDown(textarea, { key: "ArrowDown" });
+      fireEvent.keyDown(textarea, { key: "ArrowDown" });
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(chipOf(container)?.textContent).toBe("Goal");
+      write(textarea, "write y ");
+      act(() => {
+        stream.emitError(
+          new Error('HTTP 404: {"detail":"Thread or assistant not found."}')
+        );
+      });
+      expect(chipOf(container)?.textContent).toBe("Goal");
+      expect(textarea.value).toBe("write y");
+      expect(notSent()).toContain("/goal write x");
     });
 
     // Confirm round N4: an open page took its word out of the box, which

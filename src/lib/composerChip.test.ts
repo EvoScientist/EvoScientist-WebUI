@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   GOAL_LEADS,
   composerLead,
+  mayPin,
   oneSkill,
+  pinLead,
   pinnedLead,
   previewLead,
 } from "./composerChip";
@@ -237,5 +239,49 @@ describe("previewLead and command words", () => {
     expect(previewLead("/goal x", { skills, goals: false }).chip).toEqual(
       skill("goal")
     );
+  });
+});
+
+// Codex, checkpoint B confirm round: what a text's first word is, before (and
+// whatever) the skill names say.
+describe("mayPin and pinLead", () => {
+  it("sees a leading / after Python whitespace", () => {
+    expect(mayPin("/x")).toBe(true);
+    expect(mayPin(" \u0085\t/x")).toBe(true);
+    expect(mayPin(" x /y")).toBe(false);
+    expect(mayPin("")).toBe(false);
+  });
+
+  it("takes a leading /word as a pin would, whatever is installed", () => {
+    expect(pinLead("/paper-review /goal x")).toEqual({
+      name: "paper-review",
+      lead: "/paper-review ",
+    });
+    expect(pinLead("\u0085/any-word hi")).toEqual({
+      name: "any-word",
+      lead: "\u0085/any-word ",
+    });
+    // A command's word, a word that isn't a pin, and a word not yet ended
+    // aren't.
+    expect(pinLead("/goal x")).toBeNull();
+    expect(pinLead("/Paper x")).toBeNull();
+    expect(pinLead("/paper-review")).toBeNull();
+  });
+});
+
+// Agent, confirm round B: the lead is read every render, so the whitespace
+// ahead of a pin is read up to a bound (a pasted log of blank lines cost
+// 12 ms a call).
+describe("the whitespace ahead of a pin", () => {
+  it("is read up to 1,024 characters", () => {
+    expect(pinLead(" ".repeat(1024) + "/paper-review hi")?.name).toBe(
+      "paper-review"
+    );
+    expect(pinLead(" ".repeat(1025) + "/paper-review hi")).toBeNull();
+    expect(mayPin("\n".repeat(1025) + "/x")).toBe(false);
+    expect(
+      pinnedLead("\n".repeat(1025) + "/paper-review hi", ["paper-review"])
+        .skills
+    ).toEqual([]);
   });
 });

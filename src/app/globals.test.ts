@@ -90,9 +90,11 @@ describe("the composer chip's remove button", () => {
     );
   });
 
-  it("gives touch screens a 44px target around it", () => {
+  // 44 px across too, but no further right than the chip's gap: 3 px of the
+  // text took a tap meant for the caret (agent, confirm round B).
+  it("gives touch screens a 44px target around it, short of the text", () => {
     expect(css).toMatch(
-      /@media \(pointer: coarse\)\s*\{[^@]*\.composer-chip-remove::after\s*\{[^}]*content:\s*""[^}]*inset:\s*-14px/
+      /@media \(pointer: coarse\)\s*\{[^@]*\.composer-chip-remove::after\s*\{[^}]*content:\s*""[^}]*inset:\s*-14px -11px -14px -17px/
     );
   });
 });
