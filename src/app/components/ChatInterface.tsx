@@ -1532,18 +1532,33 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
 
     // Pull a queued message back into the composer to edit it (also restores its
     // attached files), removing it from the queue. Only ever touches the unsent
-    // draft — the running/sent messages in the thread are untouched.
+    // draft — the running/sent messages in the thread are untouched. A goal
+    // or an amendment comes back in its mode, as its queued row showed it
+    // (the owner's call, 2026-10-25); the composer is empty here (↑ and Edit
+    // need it so), so no chip of its own is in the way.
     const editQueuedMessage = useCallback((id: number) => {
       const target = queuedMessagesRef.current.find((m) => m.id === id);
       if (!target) return;
       setQueuedMessages((prev) => prev.filter((m) => m.id !== id));
-      setInput(target.text);
+      const goalLead = previewLead(target.text, {
+        skills: null,
+        goals: goalSupportedRef.current === true,
+      });
+      const mode: GoalMode | null =
+        goalLead.chip?.kind === "goal" || goalLead.chip?.kind === "amend"
+          ? goalLead.chip.kind
+          : null;
+      const text = mode
+        ? GOAL_LEADS[mode] + target.text.slice(goalLead.lead.length)
+        : target.text;
+      setGoalMode(mode);
+      setInput(text);
       setPendingFiles(target.files);
       requestAnimationFrame(() => {
         const el = textareaRef.current;
         if (el) {
           el.focus();
-          el.setSelectionRange(target.text.length, target.text.length);
+          el.setSelectionRange(text.length, text.length);
         }
       });
     }, []);

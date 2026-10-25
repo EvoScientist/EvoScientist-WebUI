@@ -11,6 +11,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { toast } from "sonner";
 import type { Message } from "@langchain/langgraph-sdk";
@@ -928,6 +929,48 @@ describe("/goal in the composer", () => {
       expect(submits()).toHaveLength(0);
       fireEvent.change(textarea, { target: { value: "" } });
       await waitFor(() => expect(submits()).toHaveLength(1));
+    });
+
+    // The owner's call (2026-10-25): a queued goal pulled back to edit comes
+    // back in goal mode, as its queued row showed it.
+    it("brings a queued goal back in goal mode", async () => {
+      const { container, textarea } = await mount();
+      act(() => {
+        stream.setLoading(true);
+      });
+      await openGoalPage(textarea);
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      write(textarea, "write x");
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(submits()).toHaveLength(0);
+      expect(chipOf(container)).toBeNull();
+      fireEvent.keyDown(textarea, { key: "ArrowUp" });
+      expect(chipOf(container)?.textContent).toBe("Goal");
+      expect(container.querySelector('[data-mode="goal"]')).toBeTruthy();
+      expect(textarea.value).toBe("write x");
+    });
+
+    it("brings a queued amendment back in amend mode", async () => {
+      const { container, textarea } = await mount(
+        {},
+        { threadValues: goalValues("active") }
+      );
+      act(() => {
+        stream.setLoading(true);
+      });
+      await openGoalPage(textarea);
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      write(textarea, "make it shorter");
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(chipOf(container)).toBeNull();
+      // The row's Edit, the other way back.
+      fireEvent.click(
+        within(screen.getByLabelText("Queued messages"))
+          .getByText("Edit message")
+          .closest("button")!
+      );
+      expect(chipOf(container)?.textContent).toBe("Amend goal");
+      expect(textarea.value).toBe("make it shorter");
     });
 
     // The box holds the goal: a "/" there is text, not the menu.
