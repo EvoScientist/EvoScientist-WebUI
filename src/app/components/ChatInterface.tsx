@@ -5,6 +5,7 @@ import React, {
   useRef,
   useCallback,
   useEffect,
+  useId,
   useMemo,
   FormEvent,
   Fragment,
@@ -82,6 +83,11 @@ import {
   type GoalPageActionKind,
 } from "@/lib/goalCommand";
 import { SlashSkillMenu } from "@/app/components/SlashSkillMenu";
+import { ComposerChip } from "@/app/components/ComposerChip";
+import {
+  composerLead,
+  type ComposerChip as ComposerChipValue,
+} from "@/lib/composerChip";
 import { useSlashMenu } from "@/app/hooks/useSlashMenu";
 import { cn } from "@/lib/utils";
 import { copyText } from "@/lib/clipboard";
@@ -272,6 +278,11 @@ const GOAL_ROW_ICONS: Record<GoalPageActionKind, MenuIcon> = {
   show: "details",
 };
 
+/** The composer's command words: /goal stays one while goal support is
+ *  unknown; only a backend known not to run goals leaves it to skills. */
+const COMMAND_WORDS: readonly string[] = ["model", "goal"];
+const MODEL_ONLY: readonly string[] = ["model"];
+
 /** Whether a page row's label holds what was typed on the page. */
 const rowMatches = (label: string, filter: string) =>
   label.toLowerCase().includes(filter.trim().toLowerCase());
@@ -425,11 +436,25 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     >(null);
     const tasksContainerRef = useRef<HTMLDivElement | null>(null);
     const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+    const chipHintId = useId();
     // The composer box, which the `/` menu sits above.
     const composerRef = useRef<HTMLDivElement | null>(null);
     const uploadInputRef = useRef<HTMLInputElement | null>(null);
 
     const [input, setInput] = useState("");
+    // The installed skills' names a chip can show (the `/` menu reads them).
+    const [knownSkills, setKnownSkills] = useState<ReadonlySet<string> | null>(
+      null
+    );
+    // Where a skill was picked in the menu: its chip flies in from there.
+    const [flyFrom, setFlyFrom] = useState<{
+      name: string;
+      rect: DOMRect | null;
+    } | null>(null);
+    // A chip removed by the user, folding away.
+    const [leavingChip, setLeavingChip] = useState<ComposerChipValue | null>(
+      null
+    );
     const [pendingFiles, setPendingFiles] = useState<UploadedWorkspaceFile[]>(
       []
     );
@@ -1607,30 +1632,50 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       empty: (filter) => `No models match “${filter}”.`,
     };
 
+    // The chip: the composer holds one string, and a chip stands for its
+    // start (the skill its first word pins); the box shows the rest.
+    const commandWords = goalSupported === false ? MODEL_ONLY : COMMAND_WORDS;
+    const chipOptions = {
+      skills: knownSkills,
+      goalMode: null,
+      commands: new Set(commandWords),
+    };
+    const lead = composerLead(input, chipOptions);
+    const rest = input.slice(lead.lead.length);
+    const chip = lead.chip;
+
     // The `/` menu: the commands' pages, and installed skills to pin while a
-    // leading `/name` is typed.
+    // leading `/name` is typed (in the box: after the chip).
     const slash = useSlashMenu({
       textareaRef,
-      value: input,
-      setValue: setInput,
+      value: rest,
+      setValue: (next) => setInput(lead.lead + next),
       disabled: hasPendingInterrupt,
       workspaceSkills: filesHere,
       onBrowse: () => onNavigate?.({ view: "skills" }),
       pages: goalPage ? [goalPage, modelPage] : [modelPage],
-      // "goal" is a command while goal support is unknown too: only a
-      // backend known not to run goals leaves the word to skills.
-      commandWords: goalSupported === false ? ["model"] : ["model", "goal"],
-      // A picked skill goes first, in place of the typed word.
-      onPickSkill: (name, rest) => {
-        const next = `/${name} ${rest}`;
-        setInput(next);
-        const at = name.length + 2;
-        requestAnimationFrame(() =>
-          textareaRef.current?.setSelectionRange(at, at)
-        );
+      commandWords,
+      leadSkill: chip?.kind === "skill" ? chip.name : null,
+      // A text that may start with a skill needs the names to show its chip.
+      wantSkills: input.startsWith("/"),
+      onSkillsRead: setKnownSkills,
+      // One skill a message: a picked one takes the chip's place, and flies
+      // in from its row; typing goes on after it.
+      onPickSkill: (name, after, from) => {
+        setInput(`/${name} ${after}`);
+        setFlyFrom({ name, rect: from });
       },
     });
     const slashKeyDown = slash.onKeyDown;
+
+    // Backspace at the box's start, or the chip's button: the chip goes (and
+    // folds away), the text after it stays.
+    const removeChip = () => {
+      if (!chip) return;
+      setLeavingChip(chip);
+      setInput(rest);
+      textareaRef.current?.focus();
+    };
 
     const handleKeyDown = useCallback(
       (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -1643,6 +1688,16 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         if (e.nativeEvent.isComposing || e.keyCode === 229) return;
         // While the `/` menu is open, the arrows, Enter, Tab and Escape are its.
         if (slashKeyDown(e)) return;
+        if (
+          e.key === "Backspace" &&
+          chip &&
+          e.currentTarget.selectionStart === 0 &&
+          e.currentTarget.selectionEnd === 0
+        ) {
+          e.preventDefault();
+          removeChip();
+          return;
+        }
         // ↑ on an empty composer pulls the most recent queued message back to edit.
         if (
           e.key === "ArrowUp" &&
@@ -1659,10 +1714,13 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
           handleSubmit();
         }
       },
+      // removeChip is this render's (chip, rest): `chip` covers it.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
       [
         handleSubmit,
         hasPendingInterrupt,
         input,
+        chip,
         editQueuedMessage,
         slashKeyDown,
       ]
@@ -2988,33 +3046,83 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                   ))}
                 </div>
               )}
-              <textarea
-                ref={textareaRef}
-                value={input}
-                onChange={(e) => {
-                  setInput(e.target.value);
-                  slash.onChange(e);
-                }}
-                onKeyDown={handleKeyDown}
-                {...slash.textareaProps}
-                aria-label="Message"
-                disabled={hasPendingInterrupt || binding.kind === "readOnly"}
-                placeholder={
-                  binding.kind === "readOnly"
-                    ? binding.reason
-                    : !canSend && workspaceRefreshing
-                    ? workspaceError
-                      ? `Can't read the backend's folder (${workspaceError}). Retrying…`
-                      : "Connecting to the backend…"
-                    : hasPendingInterrupt
-                    ? "Respond to the request above to continue…"
-                    : isLoading
-                    ? "Queue a follow-up — sends when this turn finishes…"
-                    : "Ask EvoScientist anything…"
-                }
-                className="font-inherit field-sizing-content max-h-[min(30dvh,12rem)] min-h-12 flex-1 resize-none overflow-y-auto border-0 bg-transparent px-3.5 pb-2.5 pt-3 text-sm leading-6 text-primary outline-none placeholder:text-tertiary disabled:cursor-not-allowed sm:px-4"
-                rows={1}
-              />
+              <div className="flex min-w-0 items-start">
+                {leavingChip && (
+                  <ComposerChip
+                    chip={leavingChip}
+                    leaving
+                    onLeft={() => setLeavingChip(null)}
+                    className="ml-3.5 mt-3 sm:ml-4"
+                  />
+                )}
+                {chip && (
+                  <ComposerChip
+                    key={chip.kind === "skill" ? chip.name : chip.kind}
+                    chip={chip}
+                    onRemove={removeChip}
+                    flyFrom={
+                      chip.kind === "skill" && flyFrom?.name === chip.name
+                        ? flyFrom.rect
+                        : null
+                    }
+                    className={cn(
+                      "mt-3",
+                      leavingChip ? "ml-1.5" : "ml-3.5 sm:ml-4"
+                    )}
+                  />
+                )}
+                {chip && (
+                  <span
+                    id={chipHintId}
+                    className="sr-only"
+                  >
+                    {chip.kind === "skill"
+                      ? `Skill ${chip.name} pinned. Backspace at the start removes it.`
+                      : ""}
+                  </span>
+                )}
+                <textarea
+                  ref={textareaRef}
+                  value={rest}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    // A skill typed out ahead of the chip's takes its place.
+                    const typedSkill =
+                      chip?.kind === "skill" &&
+                      composerLead(next, chipOptions).chip !== null &&
+                      composerLead(rest, chipOptions).chip === null;
+                    setInput(typedSkill ? next : lead.lead + next);
+                    slash.onChange(e);
+                  }}
+                  onKeyDown={handleKeyDown}
+                  {...slash.textareaProps}
+                  aria-describedby={chip ? chipHintId : undefined}
+                  aria-label="Message"
+                  disabled={hasPendingInterrupt || binding.kind === "readOnly"}
+                  placeholder={
+                    binding.kind === "readOnly"
+                      ? binding.reason
+                      : !canSend && workspaceRefreshing
+                      ? workspaceError
+                        ? `Can't read the backend's folder (${workspaceError}). Retrying…`
+                        : "Connecting to the backend…"
+                      : hasPendingInterrupt
+                      ? "Respond to the request above to continue…"
+                      : isLoading
+                      ? "Queue a follow-up — sends when this turn finishes…"
+                      : chip
+                      ? "Add your message…"
+                      : "Ask EvoScientist anything…"
+                  }
+                  className={cn(
+                    "font-inherit field-sizing-content max-h-[min(30dvh,12rem)] min-h-12 min-w-0 flex-1 resize-none overflow-y-auto border-0 bg-transparent pb-2.5 pt-3 text-sm leading-6 text-primary outline-none placeholder:text-tertiary disabled:cursor-not-allowed",
+                    chip || leavingChip
+                      ? "pl-2 pr-3.5 sm:pr-4"
+                      : "px-3.5 sm:px-4"
+                  )}
+                  rows={1}
+                />
+              </div>
               <SlashSkillMenu
                 {...slash.menuProps}
                 anchorRef={composerRef}

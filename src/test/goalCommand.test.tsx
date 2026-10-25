@@ -322,6 +322,66 @@ describe("/goal in the composer", () => {
     }
   });
 
+  // A typed /goal stays text (only the Goal page puts the box in goal mode),
+  // and goes out as a goal request as before.
+  it("shows no chip for a typed /goal", async () => {
+    const { container, textarea } = await mount();
+    act(() => textarea.focus());
+    fireEvent.change(textarea, { target: { value: "/goal write x" } });
+    expect(container.querySelector('[data-slot="composer-chip"]')).toBeNull();
+    expect(textarea.value).toBe("/goal write x");
+    fireEvent.keyDown(textarea, { key: "Enter" });
+    expect(submits()[0].values).toMatchObject({
+      goal_request: { kind: "create", objective: "write x" },
+    });
+  });
+
+  // Review focus 2: text the composer gets back (W02's hand-back here)
+  // shows its skill as a chip again.
+  it("shows the chip again for a message handed back", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              skills: [
+                {
+                  name: "paper-review",
+                  description: "Review a paper",
+                  source: "global",
+                },
+              ],
+            })
+          )
+      )
+    );
+    try {
+      const { container, textarea, type } = await mount(
+        {},
+        { threadValues: goalValues("active") }
+      );
+      type("/paper-review hi");
+      const sent = submits()[0].values as { messages: Message[] };
+      act(() => {
+        stream.setMessages([...sent.messages]);
+      });
+      act(() => {
+        stream.emitError(
+          new Error('HTTP 404: {"detail":"Thread or assistant not found."}')
+        );
+      });
+      await waitFor(() =>
+        expect(
+          container.querySelector('[data-slot="composer-chip"]')?.textContent
+        ).toBe("paper-review")
+      );
+      expect(textarea.value).toBe("hi");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("has no Goal row where goals aren't supported", async () => {
     const { textarea } = await mount({}, { goals: false });
     act(() => textarea.focus());

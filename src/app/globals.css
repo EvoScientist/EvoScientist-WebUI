@@ -560,3 +560,20 @@ button {
 .mobile-composer textarea {
   field-sizing: content;
 }
+
+/* The composer chip's remove button sits inside the phone composer, whose
+   buttons are made 44px above: it keeps its size there, and a touch screen
+   gets the 44px target from a pseudo-element around it instead (16px + 2 x
+   14px). */
+.mobile-composer .composer-chip-remove {
+  min-height: 0;
+  min-width: 0;
+}
+
+@media (pointer: coarse) {
+  .composer-chip-remove::after {
+    content: "";
+    position: absolute;
+    inset: -14px;
+  }
+}

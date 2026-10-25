@@ -398,9 +398,10 @@ export function useSlashMenu({
     const rest = value.slice(end);
     const from =
       document.getElementById(optionId(name))?.getBoundingClientRect() ?? null;
-    // The next caret event finds the next word.
-    setCaret(null);
     onPickSkill(name, rest, from);
+    // Typing goes on where the word was (the start, where a chip shows the
+    // skill), once the caller's text is in the box.
+    placeCaret(token.start);
   };
 
   // On the way to the marketplace the menu closes, as with Escape.
