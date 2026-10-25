@@ -575,13 +575,22 @@ export function useSlashMenu({
         setCaret(e.currentTarget.selectionStart);
         const base = composeBase.current;
         composeBase.current = null;
+        if (!page || !base) return;
         // What was composed on a page is its filter's; the composer's text
-        // comes back as it was.
-        if (page && base) {
-          setFilter((f) => f + firstLine(e.data ?? ""));
-          setValue(base.value);
-          placeCaret(base.caret);
+        // comes back as it was. Text that changed otherwise meanwhile (a
+        // message handed back) stays, and the page closes.
+        const composed = e.data ?? "";
+        const expected =
+          base.value.slice(0, base.caret) +
+          composed +
+          base.value.slice(base.caret);
+        if (value !== expected && value !== base.value) {
+          closePage();
+          return;
         }
+        setFilter((f) => f + firstLine(composed));
+        setValue(base.value);
+        placeCaret(base.caret);
       },
       onPaste: (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
         if (!page) return;

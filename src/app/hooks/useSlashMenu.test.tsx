@@ -1067,6 +1067,28 @@ describe("useSlashMenu pages", () => {
     expect(screen.getByRole("listbox", { name: "Model" })).toBeTruthy();
   });
 
+  // Codex, checkpoint A round 2: a message handed back during a
+  // composition stays; the page closes rather than writing the old text.
+  it("keeps text written from outside during a composition on a page", async () => {
+    stubSkills();
+    const valueApi = { set: (_: string) => {} };
+    render(
+      <Composer
+        pages={testPages().both}
+        valueApi={valueApi}
+      />
+    );
+    typeAt("/mo hello", 3);
+    await waitFor(() => expect(options()).toHaveLength(1));
+    key("Enter");
+    fireEvent.compositionStart(box());
+    fireEvent.change(box(), { target: { value: "chello" } });
+    act(() => valueApi.set("handed back"));
+    fireEvent.compositionEnd(box(), { data: "c" });
+    expect(value()).toBe("handed back");
+    expect(screen.queryByRole("listbox", { name: "Model" })).toBeNull();
+  });
+
   it("takes text pasted on a page as its filter", async () => {
     stubSkills();
     render(<Composer pages={testPages().both} />);
