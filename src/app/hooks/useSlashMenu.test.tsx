@@ -46,6 +46,8 @@ function Composer({
   wantSkills,
   onSkillsRead,
   apiRef,
+  valueApi,
+  commandWords,
 }: {
   onSubmit?: (value: string) => void;
   onBrowse?: () => void;
@@ -56,8 +58,12 @@ function Composer({
   wantSkills?: boolean;
   onSkillsRead?: (names: ReadonlySet<string>) => void;
   apiRef?: { current: ReturnType<typeof useSlashMenu> | null };
+  /** Text put in from outside the menu (a refused message coming back). */
+  valueApi?: { set: (value: string) => void };
+  commandWords?: readonly string[];
 }) {
   const [value, setValue] = useState("");
+  if (valueApi) valueApi.set = setValue;
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const anchorRef = useRef<HTMLDivElement | null>(null);
   const slash = useSlashMenu({
@@ -70,6 +76,7 @@ function Composer({
     leadSkill,
     wantSkills,
     onSkillsRead,
+    commandWords,
     onPickSkill: (name, rest, from) => {
       onPickSkill?.(name, rest, from);
       setValue(`/${name} ${rest}`);
@@ -805,8 +812,10 @@ describe("useSlashMenu pages", () => {
     key("Enter");
     act(() => box().blur());
     expect(screen.queryByRole("listbox")).toBeNull();
+    // The typed word is back (as going back puts it); the page isn't.
+    expect(value()).toBe("/mo");
     act(() => box().focus());
-    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(screen.queryByRole("listbox", { name: "Model" })).toBeNull();
   });
 
   it("passes keys through while an input method composes, on a page too", async () => {
@@ -900,6 +909,78 @@ describe("useSlashMenu pages", () => {
     );
   });
 
+  // Codex, checkpoint A: a message handed back while a page is open.
+  it("doesn't put the typed word back into text that changed under the page", async () => {
+    stubSkills();
+    const valueApi = { set: (_: string) => {} };
+    render(
+      <Composer
+        pages={testPages().both}
+        valueApi={valueApi}
+      />
+    );
+    type("/go");
+    await waitFor(() => expect(options()).toHaveLength(1));
+    key("Enter");
+    expect(value()).toBe("");
+    act(() => valueApi.set("my message"));
+    key("Escape");
+    expect(value()).toBe("my message");
+    expect(screen.queryByRole("listbox")).toBeNull();
+  });
+
+  // Codex, checkpoint A: a re-read that fails ends the wait.
+  it("stops waiting for a re-read that failed", async () => {
+    const fetchMock = stubSkills();
+    render(<Composer pages={testPages().both} />);
+    type("/");
+    await waitFor(() => expect(options()).toHaveLength(5));
+    key("ArrowDown");
+    key("ArrowDown");
+    fetchMock.mockImplementation(
+      async () => new Response("{}", { status: 500 })
+    );
+    fireEvent.focus(box());
+    await waitFor(() => expect(options()).toHaveLength(2));
+    await act(async () => {});
+    // No list is coming: Enter acts on the row the highlight now shows.
+    expect(activeOption()?.textContent).toContain("Model");
+    key("Enter");
+    expect(screen.getByRole("listbox", { name: "Model" })).toBeTruthy();
+  });
+
+  // Codex, checkpoint A: an older read that answers last isn't reported.
+  it("reports only lists newer than the last one reported", async () => {
+    const onSkillsRead = vi.fn();
+    const answers: Array<(r: Response) => void> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        () =>
+          new Promise<Response>((resolve) => {
+            answers.push(resolve);
+          })
+      )
+    );
+    render(
+      <Composer
+        wantSkills
+        onSkillsRead={onSkillsRead}
+      />
+    );
+    await waitFor(() => expect(answers).toHaveLength(1));
+    type("/");
+    await waitFor(() => expect(answers).toHaveLength(2));
+    await act(async () =>
+      answers[1](new Response(JSON.stringify({ skills: [SKILLS[1]] })))
+    );
+    await act(async () =>
+      answers[0](new Response(JSON.stringify({ skills: [SKILLS[0]] })))
+    );
+    expect(onSkillsRead).toHaveBeenCalledTimes(1);
+    expect(onSkillsRead).toHaveBeenLastCalledWith(new Set(["paper-writing"]));
+  });
+
   it("reads the skills once when asked outside the menu, and reports every read", async () => {
     const fetchMock = stubSkills();
     const onSkillsRead = vi.fn();
@@ -949,6 +1030,159 @@ describe("useSlashMenu pages", () => {
     key("Escape");
     expect(screen.queryByRole("listbox")).toBeNull();
     expect(value()).toBe("");
+  });
+
+  // Independent review, checkpoint A: one skill a message, so a pick
+  // replaces the pins typed before it (the caret then ends the new one).
+  it("replaces the pins typed before the picked skill", async () => {
+    stubSkills();
+    const onPickSkill = vi.fn();
+    render(<Composer onPickSkill={onPickSkill} />);
+    type("/paper-review /pa");
+    await waitFor(() => expect(options()).toHaveLength(1));
+    key("Tab");
+    expect(onPickSkill).toHaveBeenCalledWith(
+      "paper-writing",
+      "",
+      expect.anything()
+    );
+    expect(value()).toBe("/paper-writing ");
+  });
+
+  // Independent review, checkpoint A: an input method on a page fills the
+  // filter, and the composer keeps its text.
+  it("turns text composed on a page into its filter", async () => {
+    stubSkills();
+    render(<Composer pages={testPages().both} />);
+    typeAt("/mo hello", 3);
+    await waitFor(() => expect(options()).toHaveLength(1));
+    key("Enter");
+    expect(value()).toBe("hello");
+    fireEvent.compositionStart(box());
+    fireEvent.change(box(), { target: { value: "chello" } });
+    expect(screen.getByRole("listbox", { name: "Model" })).toBeTruthy();
+    fireEvent.compositionEnd(box(), { data: "c" });
+    expect(value()).toBe("hello");
+    expect(options()).toEqual([expect.stringContaining("model-c")]);
+    expect(screen.getByRole("listbox", { name: "Model" })).toBeTruthy();
+  });
+
+  it("takes text pasted on a page as its filter", async () => {
+    stubSkills();
+    render(<Composer pages={testPages().both} />);
+    type("/mo");
+    await waitFor(() => expect(options()).toHaveLength(1));
+    key("Enter");
+    const pasted = fireEvent.paste(box(), {
+      clipboardData: { getData: () => "b\nmore lines" },
+    });
+    expect(pasted).toBe(false);
+    expect(options()).toEqual([expect.stringContaining("model-b")]);
+    expect(value()).toBe("");
+  });
+
+  it("keeps Delete and Shift+Enter off the composer on a page", async () => {
+    stubSkills();
+    render(<Composer pages={testPages().both} />);
+    type("/mo");
+    await waitFor(() => expect(options()).toHaveLength(1));
+    key("Enter");
+    expect(key("Delete")).toBe(false);
+    expect(key("Enter", { shiftKey: true })).toBe(false);
+    expect(screen.getByRole("listbox", { name: "Model" })).toBeTruthy();
+    // Shift+Tab still moves on (the page closes with the focus).
+    expect(key("Tab", { shiftKey: true })).toBe(true);
+  });
+
+  // Independent review, checkpoint A: the initial row is for the opening;
+  // a filter starts on its first match.
+  it("highlights the first match once the page is filtered", async () => {
+    stubSkills();
+    render(<Composer pages={testPages().both} />);
+    type("/mo");
+    await waitFor(() => expect(options()).toHaveLength(1));
+    key("Enter");
+    expect(activeOption()?.textContent).toContain("model-b");
+    key("m");
+    expect(options()).toHaveLength(3);
+    expect(activeOption()?.textContent).toContain("model-a");
+  });
+
+  // Independent review, checkpoint A: → waits for a re-read as Enter does.
+  it("keeps → waiting for a re-read too", async () => {
+    const fetchMock = stubSkills();
+    render(<Composer pages={testPages().both} />);
+    type("/");
+    await waitFor(() => expect(options()).toHaveLength(5));
+    key("ArrowDown");
+    key("ArrowDown");
+    fetchMock.mockImplementation(() => new Promise<Response>(() => {}));
+    fireEvent.focus(box());
+    await waitFor(() => expect(options()).toHaveLength(2));
+    key("ArrowRight");
+    expect(screen.queryByRole("listbox", { name: "Model" })).toBeNull();
+  });
+
+  // Independent review, checkpoint A: "goal" stays a command word while goal
+  // support is unknown; only a backend known not to run goals frees it.
+  it("keeps the words it is given as command words", async () => {
+    stubSkills([
+      ...SKILLS,
+      {
+        name: "research-ideation",
+        description: "Rank goal ideas",
+        source: "global",
+      },
+    ]);
+    render(
+      <Composer
+        pages={[testPages().model]}
+        commandWords={["model", "goal"]}
+      />
+    );
+    type("/goal");
+    await act(async () => {});
+    expect(screen.queryByRole("listbox")).toBeNull();
+  });
+
+  // Independent review, checkpoint A: a page that goes away puts the typed
+  // word back, as going back does.
+  it("closes a page when the composer is disabled, putting the word back", async () => {
+    stubSkills();
+    const pages = testPages().both;
+    const { rerender } = render(<Composer pages={pages} />);
+    type("/go");
+    await waitFor(() => expect(options()).toHaveLength(1));
+    key("Enter");
+    rerender(
+      <Composer
+        pages={pages}
+        disabled
+      />
+    );
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(value()).toBe("/go");
+    rerender(<Composer pages={pages} />);
+    await act(async () => {});
+    expect(screen.queryByRole("listbox", { name: "Goal" })).toBeNull();
+  });
+
+  it("puts the word back when the page closes on blur or when its command goes", async () => {
+    stubSkills();
+    const fx = testPages();
+    const { rerender } = render(<Composer pages={fx.both} />);
+    type("/go");
+    await waitFor(() => expect(options()).toHaveLength(1));
+    key("Enter");
+    act(() => box().blur());
+    expect(value()).toBe("/go");
+    type("/go");
+    await waitFor(() => expect(options()).toHaveLength(1));
+    key("Enter");
+    expect(value()).toBe("");
+    rerender(<Composer pages={[fx.model]} />);
+    expect(screen.queryByRole("listbox", { name: "Goal" })).toBeNull();
+    expect(value()).toBe("/go");
   });
 
   it("draws a page with a back button, its title and its status", async () => {
@@ -1329,6 +1563,46 @@ describe("useSlashMenu pages", () => {
   });
 });
 
+// A layout model for the box's height (jsdom lays nothing out): a list is
+// 30px a row + 10, the rest has no height, the box shows its inline height
+// while one is set, and the composer sits 900px down the window. Returns
+// the restore.
+function layoutModel(): () => void {
+  const live = (el: Element) =>
+    el.closest('[data-slot="slash-page"]:not([data-leaving])') ??
+    el.querySelector('[data-slot="slash-page"]:not([data-leaving])');
+  const rowsHeight = (el: Element | null) =>
+    el ? el.querySelectorAll('[role="option"]').length * 30 + 10 : 0;
+  const scroll = vi
+    .spyOn(HTMLElement.prototype, "scrollHeight", "get")
+    .mockImplementation(function (this: HTMLElement) {
+      return this.getAttribute("role") === "listbox" ? rowsHeight(this) : 0;
+    });
+  const rect = vi
+    .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+    .mockImplementation(function (this: HTMLElement) {
+      const top = this.dataset.testid === "anchor" ? 900 : 0;
+      const height = this.style.height
+        ? parseFloat(this.style.height)
+        : rowsHeight(live(this));
+      return {
+        top,
+        left: 0,
+        width: 600,
+        height,
+        bottom: top + height,
+        right: 600,
+        x: 0,
+        y: top,
+        toJSON: () => ({}),
+      } as DOMRect;
+    });
+  return () => {
+    scroll.mockRestore();
+    rect.mockRestore();
+  };
+}
+
 describe("useSlashMenu motion", () => {
   const leavingPage = () =>
     document.querySelector('[data-slot="slash-page"][data-leaving]');
@@ -1357,6 +1631,118 @@ describe("useSlashMenu motion", () => {
     expect(leavingPage()?.getAttribute("aria-hidden")).toBe("true");
     expect(leavingPage()?.hasAttribute("inert")).toBe(true);
     await waitFor(() => expect(leavingPage()).toBeNull());
+  });
+
+  it("gives the leaving page no ids, so each id is the live page's", async () => {
+    stubSkills();
+    render(<Composer pages={testPages().both} />);
+    type("/");
+    await waitFor(() => expect(options()).toHaveLength(5));
+    key("Enter");
+    expect(leavingPage()).toBeTruthy();
+    expect(leavingPage()!.querySelector("[id]")).toBeNull();
+    const ids = [...document.querySelectorAll("[id]")].map((el) => el.id);
+    expect(ids.length).toBe(new Set(ids).size);
+    expect(document.getElementById(box().getAttribute("aria-controls")!)).toBe(
+      screen.getByRole("listbox", { name: "Goal" })
+    );
+  });
+
+  // Codex, checkpoint A: a box closed while it eases must not keep the
+  // height it eased to when it opens again.
+  it("leaves no fixed height on a menu that closed while easing", async () => {
+    const restore = layoutModel();
+    try {
+      stubSkills();
+      render(<Composer pages={testPages().both} />);
+      type("/");
+      await waitFor(() => expect(options()).toHaveLength(5));
+      key("Enter");
+      const viewport = () =>
+        document.querySelector<HTMLElement>('[data-slot="slash-menu"] > div');
+      expect(viewport()?.style.height).toBe("70px");
+      key("Escape");
+      key("Escape");
+      type("");
+      type("/");
+      await waitFor(() => expect(options()).toHaveLength(5));
+      // The skills read again on opening may ease the box once more; once
+      // that ends, no fixed height is left behind.
+      await waitFor(() => expect(viewport()?.style.height).toBe(""));
+    } finally {
+      restore();
+    }
+  });
+
+  // Independent review, checkpoint A: a page taller than the root eased to
+  // the root's own height (the content was measured squeezed by the box),
+  // then snapped, and the next render dropped it back. A layout model: a
+  // list is 30px a row + 10, the rest has no height, and the box shows its
+  // inline height while one is set.
+  it("eases the box to a taller page's full height, and lets other renders be", async () => {
+    const restore = layoutModel();
+    const big: MenuPage = {
+      ...testPages().model,
+      initial: undefined,
+      rows: () =>
+        ["a", "b", "c", "d", "e", "f"].map((id) => ({
+          id,
+          label: `model-${id}`,
+          run: () => {},
+        })),
+    };
+    try {
+      stubSkills([]);
+      render(<Composer pages={[big]} />);
+      type("/mo");
+      await waitFor(() => expect(options()).toHaveLength(1));
+      const viewport = () =>
+        document.querySelector<HTMLElement>('[data-slot="slash-menu"] > div')!;
+      expect(viewport().style.height).toBe("");
+      key("Enter");
+      expect(options()).toHaveLength(6);
+      // Eased toward the page's own height (6 rows), not held at the root's.
+      expect(viewport().style.height).toBe("190px");
+      expect(viewport().style.transition).toContain("height");
+      // Other renders leave the ease alone.
+      key("ArrowDown");
+      expect(viewport().style.height).toBe("190px");
+      await waitFor(() => expect(viewport().style.height).toBe(""));
+      key("ArrowDown");
+      expect(viewport().style.height).toBe("");
+      // Back to the shorter root: eased down to its height.
+      key("ArrowLeft");
+      expect(viewport().style.height).toBe("40px");
+    } finally {
+      restore();
+    }
+  });
+
+  // Independent review, checkpoint A: a second page change starts its own
+  // leaving layer rather than swapping the snapshot under the running one.
+  it("starts a new leaving layer for each page change", async () => {
+    stubSkills();
+    render(<Composer pages={testPages().both} />);
+    type("/go");
+    await waitFor(() => expect(options()).toHaveLength(1));
+    key("Enter");
+    const first = leavingPage();
+    expect(first).toBeTruthy();
+    key("Escape");
+    expect(leavingPage()).toBeTruthy();
+    expect(leavingPage()).not.toBe(first);
+  });
+
+  // Independent review, checkpoint A: the bar sits 4px in on both sides
+  // (`left-0` after `inset-x-1` in the stylesheet undid the left one).
+  it("insets the highlight bar the same on both sides", async () => {
+    stubSkills();
+    render(<Composer />);
+    type("/");
+    await waitFor(() => expect(options()).toHaveLength(3));
+    const bar = document.querySelector('[data-slot="highlight"]')!;
+    expect(bar.className.split(/\s+/)).toContain("inset-x-1");
+    expect(bar.className).not.toMatch(/(^|\s)(left|right)-/);
   });
 
   it("acts on keys pressed during a transition", async () => {

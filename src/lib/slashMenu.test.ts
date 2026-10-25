@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applySkill, rankSkills, slashTokenAt } from "./slashMenu";
+import { rankSkills, slashTokenAt } from "./slashMenu";
 
 const at = (text: string, caret = text.length) => slashTokenAt(text, caret);
 
@@ -141,31 +141,6 @@ describe("rankSkills", () => {
     expect(
       rankSkills(skills, "paper", ["paper-writing"]).map((s) => s.name)
     ).toEqual(["paper-review", "research-survey"]);
-  });
-});
-
-describe("applySkill", () => {
-  it("puts the name and a space in place of what was typed", () => {
-    const token = at("/pap")!;
-    expect(applySkill("/pap", token, "paper-writing")).toEqual({
-      text: "/paper-writing ",
-      caret: 15,
-    });
-  });
-
-  it("keeps a newline that follows", () => {
-    const token = slashTokenAt("/pa\nDraft the intro", 3)!;
-    expect(applySkill("/pa\nDraft the intro", token, "paper-writing")).toEqual({
-      text: "/paper-writing\nDraft the intro",
-      caret: 15,
-    });
-  });
-
-  it("keeps what follows, without doubling the space", () => {
-    const token = slashTokenAt("/a /pap draft the intro", 7)!;
-    expect(
-      applySkill("/a /pap draft the intro", token, "paper-writing")
-    ).toEqual({ text: "/a /paper-writing draft the intro", caret: 18 });
   });
 });
 

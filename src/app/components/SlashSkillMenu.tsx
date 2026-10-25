@@ -45,10 +45,12 @@ const LISTBOX = "relative m-0 max-h-96 min-h-0 overflow-y-auto px-0 py-1";
 // A row is positioned, so it paints over the highlight bar behind it.
 const OPTION = "relative";
 
-// How long the menu fades out and a page slides out (globals.css cuts the
-// CSS side to nothing for reduced motion; the leaving layers are skipped).
-const EXIT_MS = 120;
+// How long the menu fades out, a page slides out and the box eases
+// (globals.css cuts the CSS side to nothing for reduced motion; the leaving
+// layers and the ease are skipped). Each timer outlasts its animation a bit.
+const EXIT_MS = 130;
 const PAGE_MS = 220;
+const HEIGHT_MS = 200;
 
 // Gap to the composer, and the margin kept from the window's top edge.
 const GAP = 6;
@@ -101,6 +103,28 @@ type Body = Pick<
 const viewKey = (view: SlashView) =>
   view.kind === "page" ? `page:${view.page.word}` : "root";
 
+/** A view's own height, however tall the box around it is now: a list counts
+ *  its rows (up to its max-height), the rest as laid out, and the whole fits
+ *  the room the menu has (its max-height, less the hint row and borders). */
+function naturalHeight(content: HTMLElement, viewport: HTMLElement): number {
+  let total = 0;
+  for (const child of content.children) {
+    const el = child as HTMLElement;
+    if (el.getAttribute("role") === "listbox") {
+      const max = parseFloat(getComputedStyle(el).maxHeight);
+      total += Math.min(el.scrollHeight, Number.isFinite(max) ? max : Infinity);
+    } else {
+      total += el.offsetHeight;
+    }
+  }
+  const menu = viewport.parentElement;
+  const room = menu
+    ? parseFloat(menu.style.maxHeight) -
+      (menu.offsetHeight - viewport.offsetHeight)
+    : NaN;
+  return Number.isFinite(room) ? Math.min(total, Math.max(room, 0)) : total;
+}
+
 /** What Enter does on the highlighted row. */
 function hintFor({ view, active }: Body): string {
   if (view.kind === "page") {
@@ -129,12 +153,15 @@ function MenuBody({
   const { onChoose, onHover, onBack, onBrowse } = body;
   const rowClass = (index: number) =>
     cn(ROW, OPTION, !live && index === active && "bg-accent");
+  // Ids belong to the live view: a leaving snapshot carries none, so the
+  // textarea's aria-controls and aria-activedescendant never reach it.
+  const id = (value: string) => (live ? value : undefined);
   const bar = live && (
     <div
       ref={barRef}
       data-slot="highlight"
       aria-hidden="true"
-      className="pointer-events-none absolute inset-x-1 left-0 top-0 rounded-md bg-accent opacity-0 transition-[transform,height,opacity] duration-150 ease-out"
+      className="pointer-events-none absolute inset-x-1 top-0 rounded-md bg-accent opacity-0 transition-[transform,height,opacity] ease-out [transition-duration:120ms]"
     />
   );
 
@@ -145,7 +172,7 @@ function MenuBody({
       // APG's grouped listbox: the headings are not options, so the keys skip
       // them).
       <div
-        id={listboxId}
+        id={id(listboxId)}
         role="listbox"
         aria-label={
           view.pages.length === 0
@@ -160,12 +187,12 @@ function MenuBody({
         {view.pages.length > 0 && (
           <ul
             role="group"
-            aria-labelledby={`${listboxId}-commands`}
+            aria-labelledby={id(`${listboxId}-commands`)}
             className="m-0 list-none p-0"
           >
             <li
               role="presentation"
-              id={`${listboxId}-commands`}
+              id={id(`${listboxId}-commands`)}
               className={HEADING}
             >
               Commands
@@ -175,7 +202,7 @@ function MenuBody({
               return (
                 <li
                   key={page.word}
-                  id={pageId(page.word)}
+                  id={id(pageId(page.word))}
                   role="option"
                   aria-selected={index === active}
                   onMouseEnter={() => onHover(index)}
@@ -216,7 +243,7 @@ function MenuBody({
         {(view.skills.length > 0 || view.marketplace) && (
           <ul
             role="group"
-            aria-labelledby={`${listboxId}-skills`}
+            aria-labelledby={id(`${listboxId}-skills`)}
             className={cn(
               "m-0 list-none p-0",
               view.pages.length > 0 &&
@@ -225,7 +252,7 @@ function MenuBody({
           >
             <li
               role="presentation"
-              id={`${listboxId}-skills`}
+              id={id(`${listboxId}-skills`)}
               className={HEADING}
             >
               Skills
@@ -236,7 +263,7 @@ function MenuBody({
               return (
                 <li
                   key={skill.name}
-                  id={optionId(skill.name)}
+                  id={id(optionId(skill.name))}
                   role="option"
                   aria-selected={index === active}
                   onMouseEnter={() => onHover(index)}
@@ -263,7 +290,7 @@ function MenuBody({
             })}
             {view.marketplace && (
               <li
-                id={optionId(null)}
+                id={id(optionId(null))}
                 role="option"
                 aria-selected={marketplaceIndex === active}
                 onMouseEnter={() => onHover(marketplaceIndex)}
@@ -319,7 +346,7 @@ function MenuBody({
         </p>
       )}
       <div
-        id={listboxId}
+        id={id(listboxId)}
         role="listbox"
         aria-label={view.page.label}
         className={LISTBOX}
@@ -335,7 +362,7 @@ function MenuBody({
               return (
                 <li
                   key={row.id}
-                  id={rowId(row.id)}
+                  id={id(rowId(row.id))}
                   role="option"
                   aria-selected={index === active}
                   data-tone={row.danger ? "danger" : undefined}
@@ -422,14 +449,18 @@ export function SlashSkillMenu({
   const [leaving, setLeaving] = useState<{
     body: Body;
     back: boolean;
+    /** Each page change its own layer, its slide from the start. */
+    seq: number;
   } | null>(null);
   // The last open render's view, for either to leave from.
   const shown = useRef<{ key: string; body: Body } | null>(null);
   const viewport = useRef<HTMLDivElement | null>(null);
   const current = useRef<HTMLDivElement | null>(null);
   const bar = useRef<HTMLDivElement | null>(null);
-  const height = useRef<{ to: number | null; timer: number }>({
-    to: null,
+  const leaveSeq = useRef(0);
+  // The view's own height last measured, and the timer ending an ease.
+  const height = useRef<{ natural: number | null; timer: number }>({
+    natural: null,
     timer: 0,
   });
 
@@ -464,7 +495,11 @@ export function SlashSkillMenu({
     if (open) {
       setClosing(null);
       if (!last || last.key === key || reduced) return;
-      setLeaving({ body: last.body, back: key === "root" });
+      setLeaving({
+        body: last.body,
+        back: key === "root",
+        seq: ++leaveSeq.current,
+      });
       const timer = window.setTimeout(() => setLeaving(null), PAGE_MS);
       return () => window.clearTimeout(timer);
     }
@@ -479,29 +514,34 @@ export function SlashSkillMenu({
     if (open) shown.current = { key, body };
   });
 
-  // The box eases from its last height to the new one (a new page, rows
-  // filtered away), then follows its content again.
+  // The box eases to the view's own height when that changes (a new page,
+  // rows filtered away), from where it is (mid-ease too), then follows its
+  // content again. The view is measured by its rows, never as the box
+  // squeezes it, and a render that changes nothing leaves an ease alone.
   useLayoutEffect(() => {
     const vp = viewport.current;
     const content = current.current;
     const h = height.current;
     if (!open || !vp || !content) {
-      h.to = null;
+      h.natural = null;
       return;
     }
-    const to = content.offsetHeight;
-    const from = h.to;
-    h.to = to;
-    if (reduced || from === null || from === to) return;
+    const natural = naturalHeight(content, vp);
+    const last = h.natural;
+    if (natural === last) return;
+    h.natural = natural;
+    if (reduced || last === null) return;
+    const from = vp.style.height ? vp.getBoundingClientRect().height : last;
+    vp.style.transition = "none";
     vp.style.height = `${from}px`;
     void vp.offsetHeight;
-    vp.style.transition = "height 200ms cubic-bezier(.2,.8,.2,1)";
-    vp.style.height = `${to}px`;
+    vp.style.transition = `height ${HEIGHT_MS}ms cubic-bezier(.2,.8,.2,1)`;
+    vp.style.height = `${natural}px`;
     window.clearTimeout(h.timer);
     h.timer = window.setTimeout(() => {
       vp.style.height = "";
       vp.style.transition = "";
-    }, PAGE_MS);
+    }, HEIGHT_MS + 20);
   });
   useEffect(() => {
     const h = height.current;
@@ -594,7 +634,7 @@ export function SlashSkillMenu({
               "fixed z-50 flex flex-col overflow-hidden rounded-lg border border-border bg-background shadow-lg",
               open
                 ? "duration-150 animate-in fade-in-0 slide-in-from-bottom-1"
-                : "pointer-events-none duration-100 animate-out fade-out-0 slide-out-to-bottom-1 fill-mode-forwards"
+                : "pointer-events-none animate-out fade-out-0 slide-out-to-bottom-1 fill-mode-forwards [animation-duration:110ms]"
             )}
             style={{
               left: box.left,
@@ -612,6 +652,7 @@ export function SlashSkillMenu({
             >
               {open && leaving && (
                 <div
+                  key={leaving.seq}
                   data-slot="slash-page"
                   data-leaving=""
                   aria-hidden="true"

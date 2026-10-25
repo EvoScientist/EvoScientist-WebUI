@@ -144,16 +144,3 @@ export function rankSkills<T extends { name: string; description: string }>(
     .sort((a, b) => a.r - b.r || a.s.name.localeCompare(b.s.name))
     .map(({ s }) => s);
 }
-
-/** The message with `name` in place of the typed word, and the caret past
- *  the whitespace after it: what followed is kept (a newline stays one), and
- *  a space is added at the end of the message. */
-export function applySkill(
-  text: string,
-  token: SlashToken,
-  name: string
-): { text: string; caret: number } {
-  const head = `${text.slice(0, token.start)}/${name}`;
-  const rest = text.slice(token.end) || " ";
-  return { text: head + rest, caret: head.length + 1 };
-}

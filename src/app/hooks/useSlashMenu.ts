@@ -49,9 +49,14 @@ export type SlashView =
 interface OpenPage {
   word: string;
   /** The typed word the page took out of the composer (with the whitespace
-   *  after it), to put back on the way back; null when opened by its word. */
-  token: { at: number; text: string; word: string } | null;
+   *  after it), to put back on the way back; null when opened by its word.
+   *  `after` is the composer's text without it: text that changed since
+   *  (a message handed back) gets nothing put back. */
+  token: { at: number; text: string; word: string; after: string } | null;
 }
+
+/** What a page's filter takes from composed or pasted text: its first line. */
+const firstLine = (text: string) => text.split(/\r\n|\r|\n/)[0];
 
 /** The length of the whitespace run at `text`'s start (Python's). */
 function leadingSpace(text: string): number {
@@ -80,6 +85,7 @@ export function useSlashMenu({
   leadSkill = null,
   wantSkills = false,
   onSkillsRead,
+  commandWords,
 }: {
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
   value: string;
@@ -104,6 +110,10 @@ export function useSlashMenu({
   wantSkills?: boolean;
   /** Every list read, menu or not: the names a chip can show. */
   onSkillsRead?: (names: ReadonlySet<string>) => void;
+  /** Words that are commands, never pins (a whole one shuts the menu);
+   *  default: the pages' words. "goal" stays one while goal support is
+   *  unknown. */
+  commandWords?: readonly string[];
 }) {
   const listboxId = useId();
   // Ids by name, so the active option's id changes with the match and a
@@ -124,6 +134,11 @@ export function useSlashMenu({
   const [caret, setCaret] = useState<number | null>(null);
   const [focused, setFocused] = useState(false);
   const [composing, setComposing] = useState(false);
+  // Read in the same event the composition starts or ends in.
+  const composingRef = useRef(false);
+  // On a page, the composer's text and caret when a composition began: what
+  // is composed goes to the filter, and the text comes back as it was.
+  const composeBase = useRef<{ value: string; caret: number } | null>(null);
   // Counts the composer's focus events: each reads the list again, so a skill
   // installed while the chat was hidden shows when the composer is back.
   const [focusCount, setFocusCount] = useState(0);
@@ -135,7 +150,12 @@ export function useSlashMenu({
   // What is typed on a page: the page's, not the composer's.
   const [filter, setFilter] = useState("");
   const request = useRef(0);
+  // The menu's read in flight: a highlighted skill waits for it, not longer.
+  const [reading, setReading] = useState(false);
   const everRead = useRef(false);
+  // Every read in order, menu or not: only a newer list is reported.
+  const readSeq = useRef(0);
+  const reported = useRef(0);
   const reportRead = useRef(onSkillsRead);
   useLayoutEffect(() => {
     reportRead.current = onSkillsRead;
@@ -147,7 +167,11 @@ export function useSlashMenu({
   // The root: pages and skills for the word being typed.
   const token =
     !pageDef && usable && !composing && caret !== null
-      ? slashTokenAt(value, caret, new Set(pages.map((p) => p.word)))
+      ? slashTokenAt(
+          value,
+          caret,
+          new Set(commandWords ?? pages.map((p) => p.word))
+        )
       : null;
   const rootKey = token ? `${token.start}:${token.query}` : null;
   const pinned = token
@@ -189,8 +213,9 @@ export function useSlashMenu({
   const open = pageDef ? usable : wanted && count > 0;
   // One index over the rows. The highlight follows its row; only a row that
   // went falls back to its place. A page starts on its initial row.
+  // The initial row is the opening's; a filter starts on its first match.
   const initialIndex =
-    pageDef?.initial !== undefined
+    pageDef?.initial !== undefined && filter === ""
       ? Math.max(0, rows.indexOf(`row:${pageDef.initial}`))
       : 0;
   const kept =
@@ -217,6 +242,7 @@ export function useSlashMenu({
   // A focus reads the list again: until it is back, a highlighted skill
   // isn't in the rows, and Enter would act on whatever row took its place.
   const rereading =
+    reading &&
     skills === null &&
     activeState.key === key &&
     !!activeState.row?.startsWith("skill:");
@@ -225,6 +251,7 @@ export function useSlashMenu({
     ? "/api/skills/pinnable"
     : "/api/skills/pinnable?workspace=0";
   const readSkills = useCallback(async (): Promise<MenuSkill[] | null> => {
+    const id = ++readSeq.current;
     try {
       const res = await fetch(url, { cache: "no-store" });
       if (!res.ok) return null;
@@ -233,7 +260,11 @@ export function useSlashMenu({
         ? (data.skills as MenuSkill[])
         : [];
       everRead.current = true;
-      reportRead.current?.(new Set(list.map((s) => s.name)));
+      // An older read answering after a newer one isn't news.
+      if (id > reported.current) {
+        reported.current = id;
+        reportRead.current?.(new Set(list.map((s) => s.name)));
+      }
       return list;
     } catch {
       return null;
@@ -247,9 +278,12 @@ export function useSlashMenu({
   useEffect(() => {
     if (!wanted) return;
     setSkills(null);
+    setReading(true);
     const id = ++request.current;
     void readSkills().then((list) => {
-      if (list && id === request.current) setSkills(list);
+      if (id !== request.current) return;
+      setReading(false);
+      if (list) setSkills(list);
     });
   }, [wanted, focusCount, readSkills]);
 
@@ -272,14 +306,6 @@ export function useSlashMenu({
       setActiveState(NO_ACTIVE);
     }
   }, [activeState.key, key]);
-
-  // A page whose command went (goal support lost) closes.
-  useEffect(() => {
-    if (page && !pageDef) {
-      setPage(null);
-      setFilter("");
-    }
-  }, [page, pageDef]);
 
   // A caret to place once the text it belongs to is in the box, before the
   // browser paints. The key that moved the text also reports the caret it
@@ -305,18 +331,44 @@ export function useSlashMenu({
     setFilter("");
   };
 
+  // Out of a page with the typed word put back where it was (unless the
+  // composer's text changed meanwhile: the word's place is gone). Returns
+  // where the root's highlight would go.
+  const leavePage = (): { key: string; row: string } | null => {
+    if (!page) return null;
+    closePage();
+    const t = page.token;
+    if (!t || value !== t.after) return null;
+    setValue(value.slice(0, t.at) + t.text + value.slice(t.at));
+    placeCaret(t.at + t.word.length);
+    return { key: `${t.at}:${t.word.slice(1)}`, row: `page:${page.word}` };
+  };
+
+  // A page that can't stay (its command went, the composer was disabled)
+  // leaves as going back does.
+  const pageGone = !!page && (!pageDef || disabled);
+  const leaveRef = useRef(leavePage);
+  useLayoutEffect(() => {
+    leaveRef.current = leavePage;
+  });
+  useEffect(() => {
+    if (pageGone) leaveRef.current();
+  }, [pageGone]);
+
   // A page row: the page takes the typed word (and the whitespace after it)
   // out of the composer, keeping it to put back.
   const openFromToken = (word: string) => {
     if (!token) return;
     const end = token.end + leadingSpace(value.slice(token.end));
-    setValue(value.slice(0, token.start) + value.slice(end));
+    const after = value.slice(0, token.start) + value.slice(end);
+    setValue(after);
     setPage({
       word,
       token: {
         at: token.start,
         text: value.slice(token.start, end),
         word: value.slice(token.start, token.end),
+        after,
       },
     });
     setFilter("");
@@ -332,28 +384,18 @@ export function useSlashMenu({
   };
 
   // Back to the root: the typed word returns, with the page's row
-  // highlighted. A page opened by its word just closes.
+  // highlighted. A page opened by its word just closes, and so does one
+  // whose composer text changed meanwhile (the word's place is gone).
   const back = () => {
-    if (!page) return;
-    closePage();
-    const t = page.token;
-    if (!t) {
-      setActiveState(NO_ACTIVE);
-      return;
-    }
-    setValue(value.slice(0, t.at) + t.text + value.slice(t.at));
-    setActiveState({
-      key: `${t.at}:${t.word.slice(1)}`,
-      index: 0,
-      row: `page:${page.word}`,
-    });
-    placeCaret(t.at + t.word.length);
+    const root = leavePage();
+    setActiveState(root ? { ...root, index: 0 } : NO_ACTIVE);
   };
 
   const pickSkill = (name: string) => {
     if (!token) return;
+    // One skill a message: the pick replaces the pins typed before it.
     const end = token.end + leadingSpace(value.slice(token.end));
-    const rest = value.slice(0, token.start) + value.slice(end);
+    const rest = value.slice(end);
     const from =
       document.getElementById(optionId(name))?.getBoundingClientRect() ?? null;
     // The next caret event finds the next word.
@@ -429,14 +471,20 @@ export function useSlashMenu({
         setActiveState({ key: L.key, index, row: L.rows[index] });
       };
       if (L.onPage) {
-        // A printable key filters the page (Shift for capitals).
+        // Nothing typed on a page reaches the composer: a printable key
+        // filters the page (Shift for capitals), Delete and Shift+Enter do
+        // nothing. Shift+Tab still moves the focus on.
         if (e.key.length === 1) {
           setFilter(L.filter + e.key);
+        } else if (e.key === "Enter") {
+          if (!e.shiftKey) L.choose(L.active);
+        } else if (e.key === "Delete") {
+          // Nothing to delete forward on a page.
         } else if (e.shiftKey) {
           return false;
         } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
           move(e.key === "ArrowDown" ? 1 : -1);
-        } else if (e.key === "Enter" || e.key === "Tab") {
+        } else if (e.key === "Tab") {
           L.choose(L.active);
         } else if (e.key === "ArrowLeft" || e.key === "Escape") {
           L.back();
@@ -459,7 +507,7 @@ export function useSlashMenu({
       } else if (e.key === "Tab" && L.active !== L.marketplaceIndex) {
         if (!L.rereading) L.choose(L.active);
       } else if (e.key === "ArrowRight" && row.startsWith("page:")) {
-        L.choose(L.active);
+        if (!L.rereading) L.choose(L.active);
       } else if (e.key === "Escape") {
         setDismissed(L.rootKey);
         setActiveState(NO_ACTIVE);
@@ -475,9 +523,10 @@ export function useSlashMenu({
   const onChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setFocused(true);
     setCaret(e.target.selectionStart);
-    // Text typed (or pasted, or composed) while a page is open is the
-    // composer's: the page closes.
-    if (page) closePage();
+    // A composition on a page goes to its filter when it ends; any other
+    // change of the composer's text (a drop, say) is the composer's: the
+    // page closes.
+    if (page && !composingRef.current) closePage();
   };
 
   const view: SlashView = pageDef
@@ -506,13 +555,38 @@ export function useSlashMenu({
       },
       onBlur: () => {
         setFocused(false);
-        // A page closes with the focus: it never reopens by itself.
-        closePage();
+        // A page closes with the focus, as going back does: it never
+        // reopens by itself.
+        leavePage();
       },
-      onCompositionStart: () => setComposing(true),
+      onCompositionStart: (e: React.CompositionEvent<HTMLTextAreaElement>) => {
+        composingRef.current = true;
+        setComposing(true);
+        if (page) {
+          composeBase.current = {
+            value,
+            caret: e.currentTarget.selectionStart,
+          };
+        }
+      },
       onCompositionEnd: (e: React.CompositionEvent<HTMLTextAreaElement>) => {
+        composingRef.current = false;
         setComposing(false);
         setCaret(e.currentTarget.selectionStart);
+        const base = composeBase.current;
+        composeBase.current = null;
+        // What was composed on a page is its filter's; the composer's text
+        // comes back as it was.
+        if (page && base) {
+          setFilter((f) => f + firstLine(e.data ?? ""));
+          setValue(base.value);
+          placeCaret(base.caret);
+        }
+      },
+      onPaste: (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+        if (!page) return;
+        e.preventDefault();
+        setFilter((f) => f + firstLine(e.clipboardData.getData("text")));
       },
       "aria-autocomplete": "list" as const,
       "aria-controls": open ? listboxId : undefined,

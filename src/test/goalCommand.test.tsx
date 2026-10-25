@@ -130,6 +130,7 @@ vi.mock("@/app/components/GoalPill", async () => {
 });
 
 import { renderChatInterface } from "@/test/renderChatInterface";
+import { mockWorkspace } from "@/test/mockWorkspace";
 import {
   getLastProps,
   resetComponentSpy,
@@ -286,6 +287,41 @@ describe("/goal in the composer", () => {
     }
   });
 
+  // Independent review, checkpoint A: while goal support is unknown, "goal"
+  // stays a command word, as it always was (only a backend known not to run
+  // goals frees it for skills).
+  it("keeps /goal a command while goal support is unknown", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              skills: [
+                {
+                  name: "research-ideation",
+                  description: "Rank goal ideas",
+                  source: "global",
+                },
+              ],
+            })
+          )
+      )
+    );
+    getActiveMockClient().assistants.getSchemas.mockImplementation(
+      () => new Promise(() => {})
+    );
+    try {
+      const { textarea } = await mount({}, { goals: false });
+      act(() => textarea.focus());
+      fireEvent.change(textarea, { target: { value: "/goal" } });
+      await act(async () => {});
+      expect(screen.queryByRole("listbox")).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("has no Goal row where goals aren't supported", async () => {
     const { textarea } = await mount({}, { goals: false });
     act(() => textarea.focus());
@@ -369,6 +405,28 @@ describe("/goal in the composer", () => {
         expect(getLastProps<{ open: boolean }>("GoalPill")?.open).toBe(true)
       );
       expect(submits()).toHaveLength(0);
+    });
+
+    // Independent review, checkpoint A: the typed word is gone once the
+    // page opened, so a command that can't run says so.
+    it("says so when a command chosen there can't run now", async () => {
+      const { textarea } = await mount(
+        {
+          workspace: {
+            ...mockWorkspace(),
+            refreshing: true,
+            isReady: () => false,
+          },
+        },
+        { threadValues: goalValues("active") }
+      );
+      await openGoalPage(textarea);
+      fireEvent.keyDown(textarea, { key: "ArrowDown" });
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(submits()).toHaveLength(0);
+      expect(toast.info).toHaveBeenCalledWith(
+        "This chat can't run commands yet. Try again in a moment."
+      );
     });
 
     it("puts /goal's words in the box for a new goal", async () => {

@@ -1481,9 +1481,15 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     }, []);
 
     // A command chosen from a page runs as if typed and sent with Enter:
-    // queued while the agent works, the draft left alone.
+    // queued while the agent works, the draft left alone. Its typed word is
+    // gone by then, so one that can't run says so.
     const runMenuCommand = (text: string) => {
-      if (!canSend || hasPendingInterrupt) return;
+      const notNow = () =>
+        toast.info("This chat can't run commands yet. Try again in a moment.");
+      if (!canSend || hasPendingInterrupt) {
+        notNow();
+        return;
+      }
       if (isLoading) {
         setQueuedMessages((prev) => [
           ...prev,
@@ -1491,7 +1497,10 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         ]);
         return;
       }
-      if (!canRunNow()) return;
+      if (!canRunNow()) {
+        notNow();
+        return;
+      }
       sendComposerText(text, []);
     };
 
@@ -1608,6 +1617,9 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       workspaceSkills: filesHere,
       onBrowse: () => onNavigate?.({ view: "skills" }),
       pages: goalPage ? [goalPage, modelPage] : [modelPage],
+      // "goal" is a command while goal support is unknown too: only a
+      // backend known not to run goals leaves the word to skills.
+      commandWords: goalSupported === false ? ["model"] : ["model", "goal"],
       // A picked skill goes first, in place of the typed word.
       onPickSkill: (name, rest) => {
         const next = `/${name} ${rest}`;

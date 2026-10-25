@@ -1508,6 +1508,40 @@ describe("ChatInterface composition", () => {
       expect(stream.getSubmitCalls()).toHaveLength(0);
     });
 
+    // Independent review, checkpoint A: one skill a message, so picking
+    // another replaces a skill typed out before it.
+    it("replaces a typed skill with the one picked", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          async () =>
+            new Response(
+              JSON.stringify({
+                skills: [
+                  {
+                    name: "paper-writing",
+                    description: "Write a paper",
+                    source: "global",
+                  },
+                  {
+                    name: "paper-review",
+                    description: "Review a paper",
+                    source: "global",
+                  },
+                ],
+              })
+            )
+        )
+      );
+      const { container } = renderChatInterface();
+      const textarea = typeInComposer(container, "/paper-review /pa");
+      await waitFor(() =>
+        expect(screen.getAllByRole("option")).toHaveLength(1)
+      );
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(textarea.value).toBe("/paper-writing ");
+    });
+
     // The Model page is on every backend; goalCommand.test has the menu
     // with the Goal page too.
     it("offers the Model page above the skills and opens it when chosen", async () => {
