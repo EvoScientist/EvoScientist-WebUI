@@ -2220,6 +2220,57 @@ describe("ChatInterface composition", () => {
       expect(sent()).toEqual([]);
       fireEvent.keyDown(textarea, { key: "Enter" });
       expect(sent()).toEqual(["/paper-review /evo-memory hi"]);
+      // The notice promised a send that went otherwise (Codex, round 3).
+      expect(toast.dismiss).toHaveBeenCalledWith("skills-pending");
+    });
+
+    // Codex, confirm round 3 (B): a held send let go while a queued message
+    // is being started (the drain's latch, before isLoading) waits its turn
+    // in the queue rather than racing it onto the thread.
+    it("queues a held send let go while a queued message is starting", async () => {
+      let answer: (r: Response) => void = () => {};
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((url: string) =>
+          String(url).includes("/api/skills/pinnable")
+            ? new Promise<Response>((resolve) => {
+                answer = resolve;
+              })
+            : Promise.resolve(new Response("{}"))
+        )
+      );
+      const { container } = renderChatInterface();
+      const textarea = container.querySelector("textarea")!;
+      act(() => {
+        stream.setLoading(true);
+      });
+      write(textarea, "first");
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      write(textarea, "/paper-review /evo-memory hi");
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(sent()).toEqual([]);
+      // The turn ends: the drain starts "first" (isLoading not yet true),
+      // and the names arrive in that gap.
+      act(() => {
+        stream.setLoading(false);
+      });
+      expect(sent()).toEqual(["first"]);
+      await act(async () =>
+        answer(
+          new Response(
+            JSON.stringify({
+              skills: [
+                { name: "paper-review", description: "x", source: "global" },
+                { name: "evo-memory", description: "y", source: "global" },
+              ],
+            })
+          )
+        )
+      );
+      expect(sent()).toEqual(["first"]);
+      expect(screen.getByLabelText("Queued messages").textContent).toContain(
+        "hi"
+      );
     });
 
     // Codex, confirm round B: Python whitespace ahead of a skill (U+0085)

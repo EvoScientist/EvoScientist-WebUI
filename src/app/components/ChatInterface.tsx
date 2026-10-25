@@ -1358,7 +1358,13 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     );
 
     const handleSubmit = useCallback(
-      (e?: FormEvent) => {
+      // `queueIfBusy`: a held send let go joins the queue while a queued
+      // message or an auto-report is being started (their latch covers the
+      // gap before isLoading) or messages wait, rather than racing them.
+      (
+        e?: FormEvent,
+        { queueIfBusy = false }: { queueIfBusy?: boolean } = {}
+      ) => {
         if (e) {
           e.preventDefault();
         }
@@ -1389,7 +1395,11 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
             return;
           }
         }
-        heldRef.current = null;
+        // A send that goes now (a second Enter: as typed) keeps no promise.
+        if (heldRef.current !== null) {
+          heldRef.current = null;
+          toast.dismiss("skills-pending");
+        }
         // Goal mode: nothing written, or a word the core would read as
         // another /goal command, stays here with a hint.
         if (activeGoalMode) {
@@ -1470,7 +1480,12 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         // Agent busy → queue it. The queue drains and sends
         // automatically once this turn finishes (or is stopped); the message is
         // appended as the next turn — it never replaces what's already running.
-        if (isLoading) {
+        if (
+          isLoading ||
+          (queueIfBusy &&
+            (autoFireInFlightRef.current ||
+              queuedMessagesRef.current.length > 0))
+        ) {
           setQueuedMessages((prev) => [
             ...prev,
             {
@@ -1619,7 +1634,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     // typed or brought back meanwhile drops the hold.
     const submitRef = useRef(() => {});
     useLayoutEffect(() => {
-      submitRef.current = () => handleSubmit();
+      submitRef.current = () => handleSubmit(undefined, { queueIfBusy: true });
     });
     const holdOptions = useRef(chipOptions);
     holdOptions.current = chipOptions;
@@ -1627,9 +1642,9 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       const held = heldRef.current;
       if (knownSkills === null || held === null) return;
       heldRef.current = null;
+      toast.dismiss("skills-pending");
       const now = composerStateRef.current.input;
       if (now !== held && now !== oneSkill(held, holdOptions.current)) return;
-      toast.dismiss("skills-pending");
       submitRef.current();
     }, [knownSkills]);
     const lead = composerLead(input, chipOptions);
