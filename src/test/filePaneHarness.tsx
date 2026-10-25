@@ -18,8 +18,9 @@ import { TestWorkspaceProvider } from "@/test/mockWorkspace";
  * issued while mounting, so assert those through `fileParam()`.
  *
  * Re-render state from inside `ui` (a small stateful host) rather than by
- * re-rendering the tree: the adapter clears nuqs' pending URL writes every
- * time it renders. `setInspectorOpen` flips the provider's `inspectorOpen`
+ * re-rendering the tree: the testing adapter clears nuqs' pending URL writes
+ * when it mounts (on every render before nuqs 2.10.1), and these tests don't
+ * depend on which. `setInspectorOpen` flips the provider's `inspectorOpen`
  * that way (open by default, as in the app while the pane is on screen); pass
  * `ui` as a function of it to mount the inspector only while it is open.
  */
