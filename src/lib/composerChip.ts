@@ -194,9 +194,17 @@ export function pinnedLead(
   pinned: readonly string[]
 ): { skills: string[]; rest: string } {
   const skills: string[] = [];
-  let at = pastSpace(text, 0);
+  // Without markers nothing was pinned. With them the backend vouches for
+  // the text, so its whitespace is read unbounded (the bound is live
+  // input's, read every render).
+  if (pinned.length === 0) return { skills, rest: text };
+  const spaces = (from: number) => {
+    let i = from;
+    while (i < text.length && PY_SPACE.test(text[i])) i++;
+    return i;
+  };
+  let at = spaces(0);
   let restAt = 0;
-  if (at < 0) return { skills, rest: text };
   for (const name of pinned) {
     const word = `/${name}`;
     const end = at + word.length;
@@ -207,10 +215,8 @@ export function pinnedLead(
       break;
     }
     skills.push(name);
-    const next = pastSpace(text, end);
-    restAt = next < 0 ? end : next;
-    if (next < 0) break;
-    at = next;
+    at = spaces(end);
+    restAt = at;
   }
   return { skills, rest: text.slice(restAt) };
 }

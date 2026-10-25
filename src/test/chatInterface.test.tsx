@@ -2163,6 +2163,65 @@ describe("ChatInterface composition", () => {
       expect(sent()).toEqual(["/evo-memory hi"]);
     });
 
+    // Codex, confirm round 2 (B): a paste of several skills sent before the
+    // names arrive waits for them (which one stays needs them: the backend
+    // skips /words that aren't skills), then goes with one; a second Enter
+    // sends it as typed (a failed read never strands it).
+    it("holds a send of several skills until the names arrive", async () => {
+      let answer: (r: Response) => void = () => {};
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((url: string) =>
+          String(url).includes("/api/skills/pinnable")
+            ? new Promise<Response>((resolve) => {
+                answer = resolve;
+              })
+            : Promise.resolve(new Response("{}"))
+        )
+      );
+      const { container } = renderChatInterface();
+      const textarea = container.querySelector("textarea")!;
+      write(textarea, "/paper-review /evo-memory hi");
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(sent()).toEqual([]);
+      expect(toast.info).toHaveBeenCalledWith(
+        "Checking which skill this pins: it sends once the skills are read.",
+        { id: "skills-pending" }
+      );
+      await act(async () =>
+        answer(
+          new Response(
+            JSON.stringify({
+              skills: [
+                { name: "paper-review", description: "x", source: "global" },
+                { name: "evo-memory", description: "y", source: "global" },
+              ],
+            })
+          )
+        )
+      );
+      expect(sent()).toEqual(["/evo-memory hi"]);
+      expect(textarea.value).toBe("");
+    });
+
+    it("sends a held text as typed on a second Enter", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((url: string) =>
+          String(url).includes("/api/skills/pinnable")
+            ? new Promise<Response>(() => {})
+            : Promise.resolve(new Response("{}"))
+        )
+      );
+      const { container } = renderChatInterface();
+      const textarea = container.querySelector("textarea")!;
+      write(textarea, "/paper-review /evo-memory hi");
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(sent()).toEqual([]);
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(sent()).toEqual(["/paper-review /evo-memory hi"]);
+    });
+
     // Codex, confirm round B: Python whitespace ahead of a skill (U+0085)
     // asks for the names too.
     it("reads the names for a skill after any whitespace the backend skips", async () => {

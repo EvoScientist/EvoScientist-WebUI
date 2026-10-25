@@ -509,6 +509,9 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     // submit (Send pressed with a page open) closes the menu.
     const openModelPageRef = useRef(() => {});
     const closeMenuRef = useRef(() => {});
+    // A send held until the skill names arrive (several leading /words): the
+    // text it held, sent once they do.
+    const heldRef = useRef<string | null>(null);
     const [pendingFiles, setPendingFiles] = useState<UploadedWorkspaceFile[]>(
       []
     );
@@ -1364,6 +1367,29 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         // Enter on a page is the page's: only Send gets here with one open.
         // It sends what shows, the page's word left out.
         closeMenuRef.current();
+        // Several leading /words and no skill names yet: which one the
+        // message pins (one skill a message) needs them, since the backend
+        // skips /words that aren't skills. The send waits and goes when they
+        // arrive; a second Enter sends the text as typed (a read that fails
+        // never strands it).
+        if (!activeGoalMode && knownSkills === null) {
+          const commands = new Set(
+            goalSupported === false ? MODEL_ONLY : COMMAND_WORDS
+          );
+          const first = pinLead(input, commands);
+          const several =
+            !!first &&
+            pinLead(input.slice(first.lead.length), commands) !== null;
+          if (several && heldRef.current !== input) {
+            heldRef.current = input;
+            toast.info(
+              "Checking which skill this pins: it sends once the skills are read.",
+              { id: "skills-pending" }
+            );
+            return;
+          }
+        }
+        heldRef.current = null;
         // Goal mode: nothing written, or a word the core would read as
         // another /goal command, stays here with a hint.
         if (activeGoalMode) {
@@ -1471,6 +1497,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       },
       [
         input,
+        knownSkills,
         activeGoalMode,
         nudgeComposer,
         applyModelCommand,
@@ -1587,6 +1614,24 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       const names = dropped.trim().split(/\s+/).join(", ");
       toast.info(`A message takes one skill, so ${names} came off.`);
     });
+    // A send held for the skill names goes once they arrive, if the box
+    // still holds its text (or that text with one skill); anything else
+    // typed or brought back meanwhile drops the hold.
+    const submitRef = useRef(() => {});
+    useLayoutEffect(() => {
+      submitRef.current = () => handleSubmit();
+    });
+    const holdOptions = useRef(chipOptions);
+    holdOptions.current = chipOptions;
+    useEffect(() => {
+      const held = heldRef.current;
+      if (knownSkills === null || held === null) return;
+      heldRef.current = null;
+      const now = composerStateRef.current.input;
+      if (now !== held && now !== oneSkill(held, holdOptions.current)) return;
+      toast.dismiss("skills-pending");
+      submitRef.current();
+    }, [knownSkills]);
     const lead = composerLead(input, chipOptions);
     const rest = input.slice(lead.lead.length);
     const chip = lead.chip;

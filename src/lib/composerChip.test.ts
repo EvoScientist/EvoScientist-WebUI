@@ -279,9 +279,19 @@ describe("the whitespace ahead of a pin", () => {
     );
     expect(pinLead(" ".repeat(1025) + "/paper-review hi")).toBeNull();
     expect(mayPin("\n".repeat(1025) + "/x")).toBe(false);
+  });
+
+  // Codex, confirm round 2 (B): a sent message's chips stand on the
+  // backend's markers, so they are read whatever the whitespace; without
+  // markers there's nothing to read.
+  it("doesn't bound a sent message the backend pinned", () => {
     expect(
       pinnedLead("\n".repeat(1025) + "/paper-review hi", ["paper-review"])
         .skills
-    ).toEqual([]);
+    ).toEqual(["paper-review"]);
+    expect(pinnedLead("\n".repeat(1025) + "/x hi", [])).toEqual({
+      skills: [],
+      rest: "\n".repeat(1025) + "/x hi",
+    });
   });
 });
