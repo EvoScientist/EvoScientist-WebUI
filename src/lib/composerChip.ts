@@ -32,21 +32,26 @@ const COMMANDS: ReadonlySet<string> = new Set(["model", "goal"]);
 // paste is never scanned further.
 const MAX_WORD = 65;
 
-/** The installed skill a text's first word pins, with the one whitespace
- *  after it: once the word is whole, and never a command's word. */
+/** The installed skill a text's first word pins, with the whitespace ahead
+ *  of it and the one after it: once the word is whole, and never a
+ *  command's word. The text goes out trimmed and the backend splits it on
+ *  whitespace, so a pin after leading whitespace pins too. */
 function skillLead(
   text: string,
   skills: ReadonlySet<string> | null,
   commands: ReadonlySet<string>
 ): ComposerLead {
-  if (!skills || text[0] !== "/") return NONE;
-  let end = 1;
+  if (!skills) return NONE;
+  let start = 0;
+  while (start < text.length && PY_SPACE.test(text[start])) start++;
+  if (text[start] !== "/") return NONE;
+  let end = start + 1;
   while (end < text.length && !PY_SPACE.test(text[end])) {
-    if (end >= MAX_WORD) return NONE;
+    if (end - start >= MAX_WORD) return NONE;
     end++;
   }
   if (end === text.length) return NONE;
-  const word = text.slice(0, end);
+  const word = text.slice(start, end);
   const name = word.slice(1);
   if (!PIN_WORD.test(word) || commands.has(name) || !skills.has(name)) {
     return NONE;
@@ -76,6 +81,31 @@ export function composerLead(
   return skillLead(text, skills, commands);
 }
 
+/** One skill a message: while the text after a skill's lead starts with
+ *  another skill's, the earlier one goes, so the last of several leading
+ *  skills stays (as a pick or a skill typed over the chip replaces it).
+ *  A goal mode's text is left as it is. */
+export function oneSkill(
+  text: string,
+  options: {
+    skills: ReadonlySet<string> | null;
+    goalMode: GoalMode | null;
+    commands?: ReadonlySet<string>;
+  }
+): string {
+  let out = text;
+  for (;;) {
+    const first = composerLead(out, options);
+    if (first.chip?.kind !== "skill") return out;
+    const rest = out.slice(first.lead.length);
+    if (skillLead(rest, options.skills, options.commands ?? COMMANDS).chip) {
+      out = rest;
+    } else {
+      return out;
+    }
+  }
+}
+
 /** Where a goal command's own text starts: past "/goal", "amend" for an
  *  amend, and the whitespace after each. */
 function goalTextStart(text: string, amend: boolean): number {
@@ -100,9 +130,13 @@ export function previewLead(
   {
     skills,
     goals,
+    commands,
   }: {
     skills: ReadonlySet<string> | null;
     goals: boolean;
+    /** The composer's command words (default: /model, and /goal where
+     *  goals run). */
+    commands?: ReadonlySet<string>;
   }
 ): ComposerLead {
   if (goals) {
@@ -115,7 +149,11 @@ export function previewLead(
       };
     }
   }
-  return skillLead(text, skills, goals ? COMMANDS : new Set(["model"]));
+  return skillLead(
+    text,
+    skills,
+    commands ?? (goals ? COMMANDS : new Set(["model"]))
+  );
 }
 
 /** How a sent message reads: the skills the backend pinned for it (the

@@ -106,13 +106,27 @@ const viewKey = (view: SlashView) =>
 /** A view's own height, however tall the box around it is now: a list counts
  *  its rows (up to its max-height), the rest as laid out, and the whole fits
  *  the room the menu has (its max-height, less the hint row and borders). */
+/** A list's rows as laid out: the bottom of its last child in the flow and
+ *  its padding. Never its scroll height, which counts the highlight bar
+ *  where it last stood (absolutely placed, moved by a transform). */
+function rowsHeight(list: HTMLElement): number {
+  let bottom = 0;
+  for (const child of list.children) {
+    const el = child as HTMLElement;
+    if (el.dataset.slot === "highlight") continue;
+    bottom = Math.max(bottom, el.offsetTop + el.offsetHeight);
+  }
+  const padding = parseFloat(getComputedStyle(list).paddingBottom);
+  return bottom + (Number.isFinite(padding) ? padding : 0);
+}
+
 function naturalHeight(content: HTMLElement, viewport: HTMLElement): number {
   let total = 0;
   for (const child of content.children) {
     const el = child as HTMLElement;
     if (el.getAttribute("role") === "listbox") {
       const max = parseFloat(getComputedStyle(el).maxHeight);
-      total += Math.min(el.scrollHeight, Number.isFinite(max) ? max : Infinity);
+      total += Math.min(rowsHeight(el), Number.isFinite(max) ? max : Infinity);
     } else {
       total += el.offsetHeight;
     }

@@ -972,19 +972,24 @@ describe("useSlashMenu pages", () => {
       />
     );
     await waitFor(() => expect(answers).toHaveLength(1));
+    // The focus reads too (outside the menu), then the opening.
     type("/");
-    await waitFor(() => expect(answers).toHaveLength(2));
+    await waitFor(() => expect(answers).toHaveLength(3));
     await act(async () =>
-      answers[1](new Response(JSON.stringify({ skills: [SKILLS[1]] })))
+      answers[2](new Response(JSON.stringify({ skills: [SKILLS[1]] })))
     );
-    await act(async () =>
-      answers[0](new Response(JSON.stringify({ skills: [SKILLS[0]] })))
-    );
+    for (const older of [answers[1], answers[0]]) {
+      await act(async () =>
+        older(new Response(JSON.stringify({ skills: [SKILLS[0]] })))
+      );
+    }
     expect(onSkillsRead).toHaveBeenCalledTimes(1);
     expect(onSkillsRead).toHaveBeenLastCalledWith(new Set(["paper-writing"]));
   });
 
-  it("reads the skills once when asked outside the menu, and reports every read", async () => {
+  // Agent #10 (checkpoint B): a skill removed meanwhile drops its chip at
+  // the composer's next focus, so a read outside the menu follows each one.
+  it("reads the skills when asked outside the menu, again on each focus, and reports every read", async () => {
     const fetchMock = stubSkills();
     const onSkillsRead = vi.fn();
     const { rerender } = render(<Composer onSkillsRead={onSkillsRead} />);
@@ -1009,9 +1014,17 @@ describe("useSlashMenu pages", () => {
     );
     await act(async () => {});
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    // Each opening reads the list and reports it too.
+    act(() => box().focus());
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    act(() => box().blur());
+    act(() => box().focus());
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    // Each opening reads the list and reports it too (once: the menu's
+    // read, not one outside it as well).
     type("/");
-    await waitFor(() => expect(onSkillsRead).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(onSkillsRead).toHaveBeenCalledTimes(4));
+    await act(async () => {});
+    expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
   it("opens a page by its word", async () => {
@@ -1130,6 +1143,96 @@ describe("useSlashMenu pages", () => {
     fireEvent.compositionEnd(box(), { data: "c" });
     expect(value()).toBe("handed back");
     expect(screen.queryByRole("listbox", { name: "Model" })).toBeNull();
+  });
+
+  // Confirm round N5: Firefox ends a composition before its last input, so
+  // at compositionend only the box holds the committed text.
+  it("takes a composition Firefox commits after its end as the filter", async () => {
+    stubSkills();
+    render(<Composer pages={testPages().both} />);
+    typeAt("/mo hello", 3);
+    await waitFor(() => expect(options()).toHaveLength(1));
+    key("Enter");
+    fireEvent.compositionStart(box());
+    fireEvent.change(box(), { target: { value: "xhello" } });
+    (box() as HTMLTextAreaElement).value = "chello";
+    fireEvent.compositionEnd(box(), { data: "c" });
+    expect(value()).toBe("hello");
+    expect(options()).toEqual([expect.stringContaining("model-c")]);
+    expect(screen.getByRole("listbox", { name: "Model" })).toBeTruthy();
+  });
+
+  // Confirm round N2: a mouse-down on Send blurs the box first, and the word
+  // put back then went out with a message that never showed it. With a
+  // draft the page just closes; the word comes back only into an empty box.
+  it("keeps the word out when the box loses focus with a draft", async () => {
+    stubSkills();
+    render(<Composer pages={testPages().both} />);
+    typeAt("/mo hello", 3);
+    await waitFor(() => expect(options()).toHaveLength(1));
+    key("Enter");
+    act(() => box().blur());
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(value()).toBe("hello");
+  });
+
+  // Confirm round N3: a page and the root are one opening of the menu, so
+  // going back doesn't read the skills again (the root showed only its pages
+  // until the read answered, and a failed read lost them).
+  it("keeps the skills on the way back from a page", async () => {
+    const fetchMock = stubSkills();
+    render(<Composer pages={testPages().both} />);
+    type("/");
+    await waitFor(() => expect(options()).toHaveLength(5));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    key("Enter");
+    expect(screen.getByRole("listbox", { name: "Goal" })).toBeTruthy();
+    key("ArrowLeft");
+    expect(options()).toHaveLength(5);
+    await act(async () => {});
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  // Codex C3: a page opened by its typed word keeps the word through a
+  // switch to another page (the model pill), and gives it back on the way
+  // out.
+  it("keeps the typed word through a switch of pages, and gives it back on the way out", async () => {
+    stubSkills();
+    const api = { current: null as ReturnType<typeof useSlashMenu> | null };
+    render(
+      <Composer
+        pages={testPages().both}
+        apiRef={api}
+      />
+    );
+    typeAt("/go write x", 3);
+    await waitFor(() => expect(options()).toHaveLength(1));
+    key("Enter");
+    expect(value()).toBe("write x");
+    act(() => api.current!.openPage("model"));
+    expect(screen.getByRole("listbox", { name: "Model" })).toBeTruthy();
+    expect(value()).toBe("write x");
+    key("Escape");
+    expect(value()).toBe("/go write x");
+  });
+
+  // Agent #7 (checkpoint B): the model pill closes the menu, a page opened by
+  // a typed word included; the word stays out, so the root doesn't reopen.
+  it("closes the menu, the typed word left out", async () => {
+    stubSkills();
+    const api = { current: null as ReturnType<typeof useSlashMenu> | null };
+    render(
+      <Composer
+        pages={testPages().both}
+        apiRef={api}
+      />
+    );
+    typeAt("/mo hello", 3);
+    await waitFor(() => expect(options()).toHaveLength(1));
+    key("Enter");
+    act(() => api.current!.closeMenu());
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(value()).toBe("hello");
   });
 
   it("takes text pasted on a page as its filter", async () => {
@@ -1636,12 +1739,45 @@ function layoutModel(): () => void {
   const live = (el: Element) =>
     el.closest('[data-slot="slash-page"]:not([data-leaving])') ??
     el.querySelector('[data-slot="slash-page"]:not([data-leaving])');
+  // A list's rows: 30px each under 10px of padding, in its own coordinates.
+  const optionsIn = (el: Element) => [
+    ...el.querySelectorAll('[role="option"]'),
+  ];
   const rowsHeight = (el: Element | null) =>
-    el ? el.querySelectorAll('[role="option"]').length * 30 + 10 : 0;
+    el ? optionsIn(el).length * 30 + 10 : 0;
+  const listOf = (el: Element) => el.parentElement?.closest('[role="listbox"]');
+  const top = vi
+    .spyOn(HTMLElement.prototype, "offsetTop", "get")
+    .mockImplementation(function (this: HTMLElement) {
+      const list = listOf(this);
+      if (!list) return 0;
+      const rows = optionsIn(list);
+      const first =
+        this.getAttribute("role") === "option"
+          ? this
+          : this.querySelector('[role="option"]');
+      return 10 + 30 * (first ? rows.indexOf(first) : rows.length);
+    });
+  const height = vi
+    .spyOn(HTMLElement.prototype, "offsetHeight", "get")
+    .mockImplementation(function (this: HTMLElement) {
+      if (!listOf(this)) return 0;
+      return this.getAttribute("role") === "option"
+        ? 30
+        : optionsIn(this).length * 30;
+    });
+  // As a browser counts it, a list's scroll height takes in the highlight
+  // bar where it stands (absolutely placed, moved by a transform).
   const scroll = vi
     .spyOn(HTMLElement.prototype, "scrollHeight", "get")
     .mockImplementation(function (this: HTMLElement) {
-      return this.getAttribute("role") === "listbox" ? rowsHeight(this) : 0;
+      if (this.getAttribute("role") !== "listbox") return 0;
+      const bar = this.querySelector<HTMLElement>('[data-slot="highlight"]');
+      const barBottom = bar
+        ? (parseFloat(bar.style.transform.replace(/[^\d.]/g, "")) || 0) +
+          (parseFloat(bar.style.height) || 0)
+        : 0;
+      return Math.max(rowsHeight(this), barBottom);
     });
   const rect = vi
     .spyOn(HTMLElement.prototype, "getBoundingClientRect")
@@ -1663,6 +1799,8 @@ function layoutModel(): () => void {
       } as DOMRect;
     });
   return () => {
+    top.mockRestore();
+    height.mockRestore();
     scroll.mockRestore();
     rect.mockRestore();
   };
@@ -1777,6 +1915,38 @@ describe("useSlashMenu motion", () => {
       expect(viewport().style.height).toBe("");
       // Back to the shorter root: eased down to its height.
       key("ArrowLeft");
+      expect(viewport().style.height).toBe("40px");
+    } finally {
+      restore();
+    }
+  });
+
+  // Confirm round N1: a list's scroll height counts the highlight bar where
+  // it last stood, so a filter leaving one row eased to the bar's old bottom
+  // and jumped later. The rows are measured, never the bar.
+  it("eases a filtered page to its rows, not to where the highlight stood", async () => {
+    const restore = layoutModel();
+    const ids = ["a", "b", "c", "d", "e", "f"];
+    const big: MenuPage = {
+      ...testPages().model,
+      initial: "f",
+      rows: (filter) =>
+        ids
+          .filter((id) => `model-${id}`.includes(filter))
+          .map((id) => ({ id, label: `model-${id}`, run: () => {} })),
+    };
+    try {
+      stubSkills([]);
+      render(<Composer pages={[big]} />);
+      type("/mo");
+      await waitFor(() => expect(options()).toHaveLength(1));
+      const viewport = () =>
+        document.querySelector<HTMLElement>('[data-slot="slash-menu"] > div')!;
+      key("Enter");
+      expect(activeOption()?.textContent).toContain("model-f");
+      await waitFor(() => expect(viewport().style.height).toBe(""));
+      key("a");
+      expect(options()).toHaveLength(1);
       expect(viewport().style.height).toBe("40px");
     } finally {
       restore();

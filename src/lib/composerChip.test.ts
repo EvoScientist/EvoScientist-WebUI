@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   GOAL_LEADS,
   composerLead,
+  oneSkill,
   pinnedLead,
   previewLead,
 } from "./composerChip";
@@ -43,8 +44,9 @@ describe("composerLead", () => {
     });
   });
 
-  it("needs the skill's word at the very start", () => {
-    expect(lead(" /paper-review hi").chip).toBeNull();
+  // Leading whitespace is no word (see "composerLead after leading
+  // whitespace" below); another word ahead of it is.
+  it("needs the skill's word first, as written", () => {
     expect(lead("see /paper-review hi").chip).toBeNull();
     expect(lead("/Paper-review hi").chip).toBeNull();
   });
@@ -159,5 +161,81 @@ describe("pinnedLead", () => {
       skills: [],
       rest: "/paper-reviewer hi",
     });
+  });
+});
+
+// Codex, checkpoint B: the composer sends its text trimmed and the backend
+// splits on whitespace, so a pin after leading whitespace still pins.
+describe("composerLead after leading whitespace", () => {
+  it("takes the pin, the whitespace in its lead", () => {
+    expect(lead(" /paper-review hi")).toEqual({
+      chip: skill("paper-review"),
+      lead: " /paper-review ",
+    });
+    expect(lead("\n\t/paper-review\u3000hi")).toEqual({
+      chip: skill("paper-review"),
+      lead: "\n\t/paper-review\u3000",
+    });
+  });
+
+  it("still needs the whole word and a pin", () => {
+    expect(lead("  /paper-review")).toEqual({ chip: null, lead: "" });
+    expect(lead("  /unknown hi")).toEqual({ chip: null, lead: "" });
+    expect(lead("  hi /paper-review x")).toEqual({ chip: null, lead: "" });
+  });
+});
+
+// One skill a message: a change that leads with several keeps the last, as a
+// pick or a typed skill replaces the chip (Codex C2, agent #9).
+describe("oneSkill", () => {
+  const opts = { skills: SKILLS, goalMode: null };
+
+  it("keeps the last of several leading skills", () => {
+    expect(oneSkill("/paper-review /evo-memory hi", opts)).toBe(
+      "/evo-memory hi"
+    );
+    expect(oneSkill(" /evo-memory  /paper-review", opts)).toBe(
+      " /evo-memory  /paper-review"
+    );
+    // What the earlier skill's lead didn't take stays.
+    expect(oneSkill(" /evo-memory  /paper-review x", opts)).toBe(
+      " /paper-review x"
+    );
+  });
+
+  it("leaves one skill, none, a word that isn't installed and goal mode as they are", () => {
+    expect(oneSkill("/paper-review hi /evo-memory", opts)).toBe(
+      "/paper-review hi /evo-memory"
+    );
+    expect(oneSkill("hi", opts)).toBe("hi");
+    expect(oneSkill("/paper-review /unknown hi", opts)).toBe(
+      "/paper-review /unknown hi"
+    );
+    expect(
+      oneSkill("/goal /paper-review /evo-memory x", {
+        skills: SKILLS,
+        goalMode: "goal",
+      })
+    ).toBe("/goal /paper-review /evo-memory x");
+  });
+});
+
+// A queued row reads command words as the composer does: "goal" is one while
+// goal support is unknown.
+describe("previewLead and command words", () => {
+  const skills: ReadonlySet<string> = new Set(["goal", "paper-review"]);
+
+  it("never reads a command word it is given as a skill", () => {
+    expect(
+      previewLead("/goal x", {
+        skills,
+        goals: false,
+        commands: new Set(["model", "goal"]),
+      }).chip
+    ).toBeNull();
+    // Without them, "goal" is a skill where goals don't run.
+    expect(previewLead("/goal x", { skills, goals: false }).chip).toEqual(
+      skill("goal")
+    );
   });
 });

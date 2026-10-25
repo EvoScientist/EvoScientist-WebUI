@@ -40,8 +40,11 @@ const motionOn = () =>
  * stands for the start of the composer's one string; with `onRemove` it has
  * a remove button, without it is a static chip (sent and queued messages).
  * `flyFrom` is where the menu row it was picked from sat: the chip flies in
- * from there (a ghost in the page, since the composer clips), else it pops.
- * A `leaving` chip collapses, then calls `onLeft`.
+ * from there (a ghost in the page, since the composer clips), else it pops;
+ * only the value at its mount counts, so a chip that comes back later
+ * doesn't fly again. A `leaving` chip folds to nothing (width, padding,
+ * border and its gap), then calls `onLeft`. `disabled` disables its remove
+ * button (the composer can't be used).
  */
 export function ComposerChip({
   chip,
@@ -49,6 +52,7 @@ export function ComposerChip({
   flyFrom,
   leaving = false,
   onLeft,
+  disabled = false,
   className,
 }: {
   chip: Chip;
@@ -56,12 +60,14 @@ export function ComposerChip({
   flyFrom?: DOMRect | null;
   leaving?: boolean;
   onLeft?: () => void;
+  disabled?: boolean;
   className?: string;
 }) {
   const ref = useRef<HTMLSpanElement | null>(null);
   const look = LOOK[chip.kind];
   const label = look.label(chip);
-  const flies = !!flyFrom && !leaving && motionOn();
+  const flyFromAtMount = useRef(flyFrom ?? null);
+  const flies = !!flyFromAtMount.current && !leaving && motionOn();
   const leftRef = useRef(onLeft);
   useLayoutEffect(() => {
     leftRef.current = onLeft;
@@ -70,6 +76,7 @@ export function ComposerChip({
   // In from the menu row: a ghost flies over the page to where the chip is,
   // which waits hidden until it lands.
   useLayoutEffect(() => {
+    const flyFrom = flyFromAtMount.current;
     const el = ref.current;
     if (!flyFrom || leaving || !el || !canAnimate(el) || !motionOn()) return;
     const to = el.getBoundingClientRect();
@@ -77,6 +84,8 @@ export function ComposerChip({
     ghost.removeAttribute("data-slot");
     ghost.setAttribute("data-ghost", "composer-chip");
     ghost.setAttribute("aria-hidden", "true");
+    // A copy, remove button and all: out of reach.
+    ghost.setAttribute("inert", "");
     Object.assign(ghost.style, {
       position: "fixed",
       left: `${to.left}px`,
@@ -111,10 +120,12 @@ export function ComposerChip({
     );
     animation.onfinish = land;
     return land;
-  }, [flyFrom, leaving]);
+  }, [leaving]);
 
-  // Out: the chip folds to nothing (the text after it slides over), then
-  // it has left.
+  // Out: the chip folds to nothing, padding, border and the gap after it
+  // included (border-box would keep it 14 px wide), so the text after it
+  // slides to where it stays. Unmounted meanwhile (another chip left), the
+  // fold stops and doesn't say it has left.
   useLayoutEffect(() => {
     if (!leaving) return;
     const el = ref.current;
@@ -123,14 +134,37 @@ export function ComposerChip({
       return;
     }
     const width = el.getBoundingClientRect().width;
+    const style = getComputedStyle(el);
     const animation = el.animate(
       [
-        { width: `${width}px`, opacity: 1, transform: "scale(1)" },
-        { width: "0px", opacity: 0, transform: "scale(0.85)" },
+        {
+          width: `${width}px`,
+          paddingLeft: style.paddingLeft,
+          paddingRight: style.paddingRight,
+          borderLeftWidth: style.borderLeftWidth,
+          borderRightWidth: style.borderRightWidth,
+          marginRight: style.marginRight,
+          opacity: 1,
+          transform: "scale(1)",
+        },
+        {
+          width: "0px",
+          paddingLeft: "0px",
+          paddingRight: "0px",
+          borderLeftWidth: "0px",
+          borderRightWidth: "0px",
+          marginRight: "0px",
+          opacity: 0,
+          transform: "scale(0.85)",
+        },
       ],
       { duration: LEAVE_MS, easing: "ease-in", fill: "forwards" }
     );
     animation.onfinish = () => leftRef.current?.();
+    return () => {
+      animation.onfinish = null;
+      animation.cancel();
+    };
   }, [leaving]);
 
   const Icon = look.icon;
@@ -142,11 +176,16 @@ export function ComposerChip({
       aria-hidden={leaving ? true : undefined}
       title={chip.kind === "skill" ? `/${label}` : undefined}
       className={cn(
-        "inline-flex h-6 max-w-[min(16rem,50%)] shrink-0 items-center gap-1 overflow-hidden rounded-md border border-solid pl-1.5 text-xs font-medium",
+        "inline-flex h-6 max-w-[min(16rem,50%)] shrink-0 items-center gap-1 rounded-md border border-solid pl-1.5 text-xs font-medium",
+        // Only a folding chip clips: the remove button's touch area reaches
+        // out of it (the name truncates by itself).
+        leaving && "overflow-hidden",
         chip.kind === "skill"
           ? "border-[color-mix(in_srgb,var(--brand)_28%,transparent)] bg-[var(--brand-soft)] text-[var(--brand)]"
           : "border-transparent bg-[var(--brand-solid)] text-[var(--brand-foreground)]",
-        onRemove && !leaving ? "pr-0.5" : "pr-1.5",
+        // A folding chip came from the composer: it keeps the remove
+        // button's room, so the fold starts at its own width.
+        onRemove || leaving ? "pr-0.5" : "pr-1.5",
         // Only the composer's chip pops: a sent or queued message's is there
         // with its message.
         onRemove &&
@@ -161,6 +200,17 @@ export function ComposerChip({
         aria-hidden="true"
       />
       <span className="min-w-0 truncate">{label}</span>
+      {leaving && (
+        <span
+          data-slot="remove-room"
+          className="inline-flex size-4 shrink-0 items-center justify-center opacity-60"
+        >
+          <X
+            className="size-3"
+            aria-hidden="true"
+          />
+        </span>
+      )}
       {onRemove && !leaving && (
         <button
           type="button"
@@ -170,7 +220,8 @@ export function ComposerChip({
           // Keep the composer's focus.
           onMouseDown={(e) => e.preventDefault()}
           onClick={onRemove}
-          className="composer-chip-remove relative inline-flex size-4 shrink-0 items-center justify-center rounded-sm opacity-60 transition-opacity hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          disabled={disabled}
+          className="composer-chip-remove relative inline-flex size-4 shrink-0 items-center justify-center rounded-sm opacity-60 transition-opacity focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring enabled:hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-30"
         >
           <X
             className="size-3"

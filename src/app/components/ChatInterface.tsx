@@ -88,6 +88,7 @@ import { ComposerChip } from "@/app/components/ComposerChip";
 import { SwapText } from "@/app/components/SwapText";
 import {
   composerLead,
+  oneSkill,
   previewLead,
   GOAL_LEADS,
   type ComposerChip as ComposerChipValue,
@@ -484,10 +485,21 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       name: string;
       rect: DOMRect | null;
     } | null>(null);
-    // A chip removed by the user, folding away.
-    const [leavingChip, setLeavingChip] = useState<ComposerChipValue | null>(
-      null
-    );
+    // A chip removed by the user, folding away: each its own element (seq),
+    // so one removed while the last still folds starts its own fold.
+    const [leavingChip, setLeavingChip] = useState<{
+      chip: ComposerChipValue;
+      seq: number;
+    } | null>(null);
+    const leaveSeq = useRef(0);
+    const foldChip = (chip: ComposerChipValue) =>
+      setLeavingChip({ chip, seq: (leaveSeq.current += 1) });
+    // The pick a chip flew in from: given to the chip mounted with it, never
+    // to a later one (the same skill typed again or handed back pops).
+    const flown = useRef<typeof flyFrom>(null);
+    useLayoutEffect(() => {
+      flown.current = flyFrom;
+    });
     // Goal mode, which only the Goal page starts: the box's text goes out as
     // the goal (or its amendment) after the mode's words.
     const [goalMode, setGoalMode] = useState<GoalMode | null>(null);
@@ -553,8 +565,16 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     const [goalDetailsOpen, setGoalDetailsOpen] = useState(false);
     const queuedMessagesRef = useRef<QueuedMessage[]>(queuedMessages);
     queuedMessagesRef.current = queuedMessages;
-    const composerStateRef = useRef({ input, pendingFiles });
-    composerStateRef.current = { input, pendingFiles };
+    // What the folds see as the draft: goal mode with nothing written is none
+    // (a hand-back glued its "/goal" to the text it brought back).
+    const foldDraft =
+      goalMode !== null &&
+      input.startsWith(GOAL_LEADS[goalMode]) &&
+      !input.slice(GOAL_LEADS[goalMode].length).trim()
+        ? ""
+        : input;
+    const composerStateRef = useRef({ input: foldDraft, pendingFiles });
+    composerStateRef.current = { input: foldDraft, pendingFiles };
     const onComposerSnapshotReadyRef = useRef(onComposerSnapshotReady);
     onComposerSnapshotReadyRef.current = onComposerSnapshotReady;
     useEffect(() => {
@@ -773,6 +793,8 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
           goalCommandFor(goalSupportedRef.current)
         );
         setQueuedMessages([]);
+        // Text brought back is text: goal mode ends with what it held.
+        if (back.text !== draft) setGoalMode(null);
         setInput(back.text);
         setPendingFiles(back.files);
         sayNotSent(back.notSent);
@@ -963,81 +985,6 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       if (isLoading) autoFireInFlightRef.current = false;
     }, [isLoading]);
 
-    useEffect(() => {
-      if (!liveAgentTasks || liveAgentTasks.length === 0) return;
-      if (!threadId || !autoNotify) return;
-      // One-time migration/baseline: existing terminal tasks predate the setting
-      // and must not replay when this feature first appears or is restored.
-      if (!isThreadAutoNotifyInitialized(threadId)) {
-        initializeThreadAutoNotifyReports(
-          threadId,
-          liveAgentTasks
-            .filter((task) => isTerminalStatus(task.liveStatus))
-            .map(asyncTaskReportKey)
-        );
-        return;
-      }
-      // Don't fire when: off; the thread is busy (the agent's own turn takes the
-      // slot); a report we just sent hasn't started yet; or the USER is composing
-      // a query (draft text) — their message has priority, so we hold the queue
-      // until the composer is clear. Pending completions stay unreported (= the
-      // queue) and drain one per idle window.
-      // An interrupt waiting on the user holds reports too: a report is a run
-      // with a message, which would drop a goal's pending review.
-      if (
-        !canSend ||
-        isLoading ||
-        hasPendingInterrupt ||
-        autoFireInFlightRef.current ||
-        input.trim()
-      )
-        return;
-      // User-queued messages take the idle slot first — hold auto-reports until
-      // the user's own queue has drained.
-      if (queuedMessages.length > 0) return;
-      const reportedKeys = getThreadAutoNotifyReportedKeys(threadId);
-      for (const t of liveAgentTasks) {
-        if (!isTerminalStatus(t.liveStatus)) continue;
-        const key = asyncTaskReportKey(t);
-        if (reportedKeys.has(key)) continue;
-        if (
-          messages.some(
-            (message) =>
-              message.type === "human" &&
-              asyncUpdateMatchesTask(
-                extractStringFromMessageContent(message),
-                t
-              )
-          )
-        ) {
-          markThreadAutoNotifyReported(threadId, key);
-          continue;
-        }
-        if (!canRunNow()) return;
-        autoFireInFlightRef.current = true;
-        markThreadAutoNotifyReported(threadId, key);
-        // A report of finished background work only completes a grading
-        // that waited for it; as a thread turn it would start a new one.
-        sendMessage(formatAsyncUpdateMessage(t), { mode: "followup" });
-        toast.success(
-          `Auto-reported ${agentLabel(t.agent_name)} to the main chat.`
-        );
-        break; // one per idle window; the rest fire once this turn settles
-      }
-    }, [
-      canSend,
-      canRunNow,
-      liveAgentTasks,
-      autoNotify,
-      isLoading,
-      hasPendingInterrupt,
-      input,
-      messages,
-      sendMessage,
-      threadId,
-      queuedMessages,
-    ]);
-
     // Re-engage stick-to-bottom whenever a new run starts (sending a message or
     // resuming an interrupt → isLoading flips true). Without this, if the user had
     // drifted even slightly off the bottom after the previous answer, a short new
@@ -1205,6 +1152,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
           back.text !== draft.trim() ||
           back.files.length !== attached.length
         ) {
+          if (back.text !== draft) setGoalMode(null);
           setInput(back.text);
           setPendingFiles(back.files);
         }
@@ -1433,19 +1381,36 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
             return;
           }
         }
+        // After a skill's chip the box's first word is the command: /model
+        // and /goal answer as typed alone. The chip stays for what needs no
+        // run; a goal request goes without it (it carries no skill).
+        const head = activeGoalMode
+          ? null
+          : composerLead(input, {
+              skills: knownSkills,
+              goalMode: null,
+              commands: new Set(
+                goalSupported === false ? MODEL_ONLY : COMMAND_WORDS
+              ),
+            });
+        const skillHead = head?.chip?.kind === "skill" ? head : null;
+        const commandText = skillHead
+          ? input.slice(skillHead.lead.length).trim()
+          : messageText;
+        const keep = skillHead ? skillHead.lead : "";
         // Intercept `/model` before the agent sees it — purely client-side
         // state on the thread metadata. The textarea clears regardless of
         // outcome so the command echo doesn't linger; a bare `/model` opens
         // the menu's Model page.
-        const modelCmd = parseModelCommand(messageText);
+        const modelCmd = parseModelCommand(commandText);
         if (modelCmd) {
           if (modelCmd.kind === "show") openModelPageRef.current();
           else void applyModelCommand(modelCmd);
-          setInput("");
+          setInput(keep);
           return;
         }
         const goalCmd =
-          goalSupported === true ? parseGoalCommand(messageText) : null;
+          goalSupported === true ? parseGoalCommand(commandText) : null;
         if (goalCmd && pendingFiles.length > 0) {
           toast.warning("A goal can't carry files; send them in a message.");
           return;
@@ -1455,9 +1420,17 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         // the usage line leaves "/goal amend" to be finished.
         if (goalCmd && (goalCmd.kind === "show" || goalCmd.kind === "usage")) {
           runGoalCommand(goalCmd);
-          if (goalCmd.kind === "show") setInput("");
+          if (goalCmd.kind === "show") setInput(keep);
           return;
         }
+        const outText = goalCmd ? commandText : messageText;
+        const dropsSkill = () => {
+          if (goalCmd && skillHead?.chip?.kind === "skill") {
+            toast.info(
+              `A goal doesn't take skills, so /${skillHead.chip.name} came off.`
+            );
+          }
+        };
         // Can't compose with no assistant, a pending interrupt, or files still
         // uploading. (Unlike before, isLoading is NOT a blocker — see below.)
         if (!canSend || hasPendingInterrupt || isUploadingFiles) return;
@@ -1469,11 +1442,12 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
             ...prev,
             {
               id: (queueIdRef.current += 1),
-              text: messageText,
+              text: outText,
               files: pendingFiles,
               threadId,
             },
           ]);
+          dropsSkill();
           setInput("");
           setPendingFiles([]);
           return;
@@ -1483,12 +1457,14 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
           threadId === null && autoApprove;
         // A refused /goal keeps its text: an objective over the limit is to
         // be shortened, amend feedback is wanted again.
-        if (sendComposerText(messageText, pendingFiles) === "kept") return;
+        if (sendComposerText(outText, pendingFiles) === "kept") return;
+        dropsSkill();
         setInput("");
         setPendingFiles([]);
       },
       [
         input,
+        knownSkills,
         activeGoalMode,
         nudgeComposer,
         applyModelCommand,
@@ -1615,7 +1591,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     // request carries none), and says so.
     const enterGoalMode = (mode: GoalMode) => {
       if (chip?.kind === "skill") {
-        setLeavingChip(chip);
+        foldChip(chip);
         toast.info(`A goal doesn't take skills, so /${chip.name} came off.`);
       }
       const body = rest.trimStart();
@@ -1722,11 +1698,14 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
 
     // The `/` menu: the commands' pages, and installed skills to pin while a
     // leading `/name` is typed (in the box: after the chip).
+    // The box can't be used (an answer is waited for, or the thread is
+    // read-only here): nor can the menu, the model pill or a chip.
+    const composerLocked = hasPendingInterrupt || binding.kind === "readOnly";
     const slash = useSlashMenu({
       textareaRef,
       value: rest,
       setValue: (next) => setInput(lead.lead + next),
-      disabled: hasPendingInterrupt,
+      disabled: composerLocked,
       workspaceSkills: filesHere,
       onBrowse: () => onNavigate?.({ view: "skills" }),
       pages: goalPage ? [goalPage, modelPage] : [modelPage],
@@ -1734,8 +1713,9 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       // In goal mode the box holds the goal: a "/" there is text.
       rootMenu: activeGoalMode === null,
       leadSkill: chip?.kind === "skill" ? chip.name : null,
-      // A text that may start with a skill needs the names to show its chip.
-      wantSkills: activeGoalMode === null && input.startsWith("/"),
+      // A text that may start with a skill (whitespace ahead of it too)
+      // needs the names to show its chip.
+      wantSkills: activeGoalMode === null && input.trimStart().startsWith("/"),
       onSkillsRead: setKnownSkills,
       // One skill a message: a picked one takes the chip's place, and flies
       // in from its row; typing goes on after it.
@@ -1752,9 +1732,6 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         slash.openPage("model");
       };
     });
-    // The box can't be used (an answer is waited for, or the thread is
-    // read-only here): nor can the model pill.
-    const composerLocked = hasPendingInterrupt || binding.kind === "readOnly";
     const sendLabel =
       activeGoalMode === "goal"
         ? "Set goal"
@@ -1765,12 +1742,95 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       slash.menuProps.open &&
       slash.menuProps.view.kind === "page" &&
       slash.menuProps.view.page.word === "model";
+    // A page took its typed word out of the box: the user is still typing,
+    // which holds auto-reports as text in the box does.
+    const menuPageOpen =
+      slash.menuProps.open && slash.menuProps.view.kind === "page";
+
+    // Auto-report finished background tasks to the main chat, one per idle
+    // window (its rules are inside).
+    useEffect(() => {
+      if (!liveAgentTasks || liveAgentTasks.length === 0) return;
+      if (!threadId || !autoNotify) return;
+      // One-time migration/baseline: existing terminal tasks predate the setting
+      // and must not replay when this feature first appears or is restored.
+      if (!isThreadAutoNotifyInitialized(threadId)) {
+        initializeThreadAutoNotifyReports(
+          threadId,
+          liveAgentTasks
+            .filter((task) => isTerminalStatus(task.liveStatus))
+            .map(asyncTaskReportKey)
+        );
+        return;
+      }
+      // Don't fire when: off; the thread is busy (the agent's own turn takes the
+      // slot); a report we just sent hasn't started yet; or the USER is composing
+      // a query (draft text) — their message has priority, so we hold the queue
+      // until the composer is clear. Pending completions stay unreported (= the
+      // queue) and drain one per idle window.
+      // An interrupt waiting on the user holds reports too: a report is a run
+      // with a message, which would drop a goal's pending review.
+      if (
+        !canSend ||
+        isLoading ||
+        hasPendingInterrupt ||
+        autoFireInFlightRef.current ||
+        input.trim() ||
+        menuPageOpen
+      )
+        return;
+      // User-queued messages take the idle slot first — hold auto-reports until
+      // the user's own queue has drained.
+      if (queuedMessages.length > 0) return;
+      const reportedKeys = getThreadAutoNotifyReportedKeys(threadId);
+      for (const t of liveAgentTasks) {
+        if (!isTerminalStatus(t.liveStatus)) continue;
+        const key = asyncTaskReportKey(t);
+        if (reportedKeys.has(key)) continue;
+        if (
+          messages.some(
+            (message) =>
+              message.type === "human" &&
+              asyncUpdateMatchesTask(
+                extractStringFromMessageContent(message),
+                t
+              )
+          )
+        ) {
+          markThreadAutoNotifyReported(threadId, key);
+          continue;
+        }
+        if (!canRunNow()) return;
+        autoFireInFlightRef.current = true;
+        markThreadAutoNotifyReported(threadId, key);
+        // A report of finished background work only completes a grading
+        // that waited for it; as a thread turn it would start a new one.
+        sendMessage(formatAsyncUpdateMessage(t), { mode: "followup" });
+        toast.success(
+          `Auto-reported ${agentLabel(t.agent_name)} to the main chat.`
+        );
+        break; // one per idle window; the rest fire once this turn settles
+      }
+    }, [
+      canSend,
+      canRunNow,
+      liveAgentTasks,
+      autoNotify,
+      isLoading,
+      hasPendingInterrupt,
+      input,
+      messages,
+      sendMessage,
+      threadId,
+      queuedMessages,
+      menuPageOpen,
+    ]);
 
     // Backspace at the box's start, or the chip's button (Escape too, for
     // goal mode): the chip goes (and folds away), the text after it stays.
     const removeChip = () => {
       if (!chip) return;
-      setLeavingChip(chip);
+      foldChip(chip);
       if (chip.kind !== "skill") setGoalMode(null);
       setInput(rest);
       textareaRef.current?.focus();
@@ -2528,6 +2588,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                   const preview = previewLead(q.text, {
                     skills: knownSkills,
                     goals: goalSupported === true,
+                    commands: new Set(commandWords),
                   });
                   return (
                     <div
@@ -2583,7 +2644,11 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                           {preview.chip && (
                             <>
                               <span className="sr-only">{preview.lead}</span>
-                              <span aria-hidden="true">
+                              {/* A selection copies the text as sent. */}
+                              <span
+                                aria-hidden="true"
+                                className="select-none"
+                              >
                                 <ComposerChip
                                   chip={preview.chip}
                                   className="mr-1.5 h-5 align-middle"
@@ -2696,9 +2761,10 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
             data-mode={activeGoalMode ?? undefined}
             className={cn(
               "relative z-10 mx-auto mb-2 flex w-[calc(100%-16px)] max-w-[960px] flex-shrink-0 flex-col overflow-hidden rounded-xl border bg-background transition-[color,background-color,border-color,box-shadow] duration-200 ease-in-out sm:mb-4 sm:w-[calc(100%-24px)]",
+              "focus-within:ring-2 focus-within:ring-ring",
               activeGoalMode
                 ? "border-[var(--brand)] shadow-[0_0_0_3px_color-mix(in_srgb,var(--brand)_16%,transparent)]"
-                : "border-border focus-within:ring-2 focus-within:ring-ring"
+                : "border-border"
             )}
           >
             {
@@ -2972,7 +3038,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() =>
                       modelPageOpen
-                        ? slash.menuProps.onBack()
+                        ? slash.closeMenu()
                         : openModelPageRef.current()
                     }
                     disabled={composerLocked}
@@ -3070,19 +3136,23 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                   ))}
                 </div>
               )}
+              {/* The row holds the box's left padding and a chip keeps its gap
+                  on its right: a chip folding away (gap included) leaves the
+                  text where it stays. */}
               <div
                 className={cn(
-                  "flex min-w-0 items-start transition-colors duration-200",
+                  "flex min-w-0 items-start pl-3.5 transition-colors duration-200 sm:pl-4",
                   activeGoalMode &&
                     "bg-[color-mix(in_srgb,var(--brand-soft)_70%,transparent)]"
                 )}
               >
                 {leavingChip && (
                   <ComposerChip
-                    chip={leavingChip}
+                    key={leavingChip.seq}
+                    chip={leavingChip.chip}
                     leaving
                     onLeft={() => setLeavingChip(null)}
-                    className="ml-3.5 mt-3 sm:ml-4"
+                    className="mr-2 mt-3"
                   />
                 )}
                 {chip && (
@@ -3090,15 +3160,15 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                     key={chip.kind === "skill" ? chip.name : chip.kind}
                     chip={chip}
                     onRemove={removeChip}
+                    disabled={composerLocked}
                     flyFrom={
-                      chip.kind === "skill" && flyFrom?.name === chip.name
+                      chip.kind === "skill" &&
+                      flyFrom?.name === chip.name &&
+                      flyFrom !== flown.current
                         ? flyFrom.rect
                         : null
                     }
-                    className={cn(
-                      "mt-3",
-                      leavingChip ? "ml-1.5" : "ml-3.5 sm:ml-4"
-                    )}
+                    className="mr-2 mt-3"
                   />
                 )}
                 {chip && (
@@ -3118,13 +3188,31 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                   value={rest}
                   onChange={(e) => {
                     const next = e.target.value;
-                    // A skill typed out ahead of the chip's takes its place.
+                    // A skill typed or pasted at the box's start takes the
+                    // chip's place: one skill a message, so of several at
+                    // once the last. The caret stays where the typing was.
                     const typedSkill =
-                      chip?.kind === "skill" &&
-                      composerLead(next, chipOptions).chip !== null &&
-                      composerLead(rest, chipOptions).chip === null;
-                    setInput(typedSkill ? next : lead.lead + next);
+                      !activeGoalMode &&
+                      composerLead(rest, chipOptions).chip === null &&
+                      composerLead(next, chipOptions).chip !== null;
+                    if (!typedSkill) {
+                      setInput(lead.lead + next);
+                      slash.onChange(e);
+                      return;
+                    }
+                    const full = oneSkill(next, chipOptions);
+                    const box = full.slice(
+                      composerLead(full, chipOptions).lead.length
+                    );
+                    setInput(full);
                     slash.onChange(e);
+                    slash.placeCaret(
+                      Math.max(
+                        0,
+                        (e.target.selectionStart ?? next.length) -
+                          (next.length - box.length)
+                      )
+                    );
                   }}
                   onKeyDown={handleKeyDown}
                   {...slash.textareaProps}
@@ -3151,10 +3239,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                       : "Ask EvoScientist anything…"
                   }
                   className={cn(
-                    "font-inherit field-sizing-content max-h-[min(30dvh,12rem)] min-h-12 min-w-0 flex-1 resize-none overflow-y-auto border-0 bg-transparent pb-2.5 pt-3 text-sm leading-6 text-primary outline-none placeholder:text-tertiary focus:ring-0 disabled:cursor-not-allowed",
-                    chip || leavingChip
-                      ? "pl-2 pr-3.5 sm:pr-4"
-                      : "px-3.5 sm:px-4"
+                    "font-inherit field-sizing-content max-h-[min(30dvh,12rem)] min-h-12 min-w-0 flex-1 resize-none overflow-y-auto border-0 bg-transparent pb-2.5 pl-0 pr-3.5 pt-3 text-sm leading-6 text-primary outline-none placeholder:text-tertiary focus:ring-0 disabled:cursor-not-allowed sm:pr-4"
                   )}
                   rows={1}
                 />

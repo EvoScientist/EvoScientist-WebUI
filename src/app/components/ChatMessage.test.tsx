@@ -668,6 +668,10 @@ describe("ChatMessage pinned skill chips", () => {
       "/paper-review "
     );
     expect(chips[0].closest('[aria-hidden="true"]')).toBeTruthy();
+    // A selection copies the text as sent, not the skill twice.
+    expect(
+      chips[0].closest('[aria-hidden="true"]')!.className.split(" ")
+    ).toContain("select-none");
     fireEvent.click(screen.getByLabelText("Copy message"));
     await waitFor(() =>
       expect(copyText).toHaveBeenCalledWith("/paper-review hi")

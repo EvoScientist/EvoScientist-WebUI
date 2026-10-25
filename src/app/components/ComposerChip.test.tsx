@@ -19,8 +19,37 @@ const rect = (left: number, top: number) =>
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  delete (Element.prototype as { animate?: unknown }).animate;
   document.body.innerHTML = "";
 });
+
+/** Web Animations that never run: each records its keyframes and is
+ *  finished (or not) by the test. */
+function stubAnimate() {
+  const made: Array<{
+    target: Element;
+    keyframes: Keyframe[];
+    cancel: ReturnType<typeof vi.fn>;
+    finish: () => void;
+  }> = [];
+  Object.defineProperty(Element.prototype, "animate", {
+    configurable: true,
+    value: function (this: Element, keyframes: Keyframe[]) {
+      const animation = {
+        onfinish: null as null | (() => void),
+        cancel: vi.fn(),
+      };
+      made.push({
+        target: this,
+        keyframes,
+        cancel: animation.cancel,
+        finish: () => animation.onfinish?.(),
+      });
+      return animation;
+    },
+  });
+  return made;
+}
 
 describe("ComposerChip", () => {
   it("names each kind and its remove button", () => {
@@ -178,7 +207,10 @@ describe("ComposerChip", () => {
   it("collapses when it leaves, then says it has left", () => {
     const finish: Array<() => void> = [];
     const animate = vi.fn(() => {
-      const animation = { onfinish: null as null | (() => void) };
+      const animation = {
+        onfinish: null as null | (() => void),
+        cancel: () => {},
+      };
       finish.push(() => animation.onfinish?.());
       return animation;
     });
@@ -209,6 +241,154 @@ describe("ComposerChip", () => {
     } finally {
       delete (Element.prototype as { animate?: unknown }).animate;
     }
+  });
+
+  // Codex C4: a chip removed while another still folds takes a new element;
+  // the old fold stops and doesn't clear the new one.
+  it("stops its fold when it is unmounted, and doesn't say it has left", () => {
+    const made = stubAnimate();
+    const onLeft = vi.fn();
+    const { unmount } = render(
+      <ComposerChip
+        chip={{ kind: "skill", name: "paper-review" }}
+        leaving
+        onLeft={onLeft}
+      />
+    );
+    expect(made).toHaveLength(1);
+    unmount();
+    expect(made[0].cancel).toHaveBeenCalled();
+    made[0].finish();
+    expect(onLeft).not.toHaveBeenCalled();
+  });
+
+  // Agent #3: border-box padding and border kept a folded chip 14 px wide,
+  // and the text jumped when it went. It folds to nothing, its gap too.
+  it("folds its width, padding, border and gap to nothing", () => {
+    const made = stubAnimate();
+    render(
+      <ComposerChip
+        chip={{ kind: "skill", name: "paper-review" }}
+        leaving
+        onLeft={() => {}}
+      />
+    );
+    const last = made[0].keyframes[made[0].keyframes.length - 1];
+    expect(last).toMatchObject({
+      width: "0px",
+      paddingLeft: "0px",
+      paddingRight: "0px",
+      borderLeftWidth: "0px",
+      borderRightWidth: "0px",
+      marginRight: "0px",
+    });
+  });
+
+  // Live, checkpoint B fix pass: a folding chip without its remove button
+  // started 16 px narrower, and the text jumped before sliding. It keeps the
+  // button's room (inert) for the fold.
+  it("keeps its remove button's room while it folds", () => {
+    const { container } = render(
+      <ComposerChip
+        chip={{ kind: "skill", name: "paper-review" }}
+        leaving
+        onLeft={() => {}}
+      />
+    );
+    expect(screen.queryByRole("button")).toBeNull();
+    const chip = container.querySelector("[data-kind]")!;
+    expect(chip.querySelector('[data-slot="remove-room"]')).toBeTruthy();
+    expect(chip.className.split(" ")).toContain("pr-0.5");
+  });
+
+  // Agent #4: the chip clipped its remove button's 44 px touch area to its
+  // own 24 px. It clips only while it folds (the name truncates by itself).
+  it("clips only while it folds, so its remove button's touch area reaches out", () => {
+    const { container, rerender } = render(
+      <ComposerChip
+        chip={{ kind: "skill", name: "paper-review" }}
+        onRemove={() => {}}
+      />
+    );
+    const classes = () =>
+      container.querySelector("[data-kind]")!.className.split(" ");
+    expect(classes()).not.toContain("overflow-hidden");
+    rerender(
+      <ComposerChip
+        chip={{ kind: "skill", name: "paper-review" }}
+        leaving
+        onLeft={() => {}}
+      />
+    );
+    expect(classes()).toContain("overflow-hidden");
+  });
+
+  // Agent #5: only a chip just picked flies; one that comes back later
+  // (typed again, handed back) doesn't fly from the old row again.
+  it("flies only from where it was when it appeared", () => {
+    const made = stubAnimate();
+    const { rerender } = render(
+      <ComposerChip
+        chip={{ kind: "skill", name: "paper-review" }}
+        onRemove={() => {}}
+      />
+    );
+    rerender(
+      <ComposerChip
+        chip={{ kind: "skill", name: "paper-review" }}
+        onRemove={() => {}}
+        flyFrom={rect(60, 700)}
+      />
+    );
+    expect(made).toHaveLength(0);
+    document.body.innerHTML = "";
+    const flying = render(
+      <ComposerChip
+        chip={{ kind: "skill", name: "evo-memory" }}
+        onRemove={() => {}}
+        flyFrom={rect(60, 700)}
+      />
+    );
+    expect(made).toHaveLength(1);
+    flying.rerender(
+      <ComposerChip
+        chip={{ kind: "skill", name: "evo-memory" }}
+        onRemove={() => {}}
+      />
+    );
+    // Its flight goes on: clearing flyFrom after the mount doesn't land it.
+    expect(document.querySelector('[data-ghost="composer-chip"]')).toBeTruthy();
+    expect(made).toHaveLength(1);
+  });
+
+  // Agent nit: the ghost is a copy, remove button and all: out of reach.
+  it("keeps the flying ghost out of reach", () => {
+    stubAnimate();
+    render(
+      <ComposerChip
+        chip={{ kind: "skill", name: "paper-review" }}
+        onRemove={() => {}}
+        flyFrom={rect(60, 700)}
+      />
+    );
+    const ghost = document.querySelector('[data-ghost="composer-chip"]')!;
+    expect(ghost.hasAttribute("inert")).toBe(true);
+  });
+
+  // Agent #11: while the composer can't be used, neither can the chip.
+  it("disables its remove button when told", () => {
+    render(
+      <ComposerChip
+        chip={{ kind: "goal" }}
+        onRemove={() => {}}
+        disabled
+      />
+    );
+    expect(
+      screen
+        .getByRole("button", { name: "Leave goal mode" })
+        .hasAttribute("disabled")
+    ).toBe(true);
   });
 
   it("leaves at once without the Web Animations API", () => {

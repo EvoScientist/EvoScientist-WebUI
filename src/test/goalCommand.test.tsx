@@ -336,6 +336,75 @@ describe("/goal in the composer", () => {
     });
   });
 
+  // Agent #1 (checkpoint B): after a skill chip the box's first word is the
+  // command. /model and /goal show answer and the chip stays; a goal request
+  // goes without the skill (said, as Set a goal… says it).
+  it("runs /model and /goal typed after a skill chip as commands", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              skills: [
+                {
+                  name: "paper-review",
+                  description: "Review a paper",
+                  source: "global",
+                },
+              ],
+            })
+          )
+      )
+    );
+    try {
+      const { container, textarea } = await mount(
+        {},
+        { threadValues: goalValues("active") }
+      );
+      const chip = () =>
+        container
+          .querySelector("form")!
+          .querySelector('[data-slot="composer-chip"]')?.textContent;
+      const enter = (text: string) => {
+        fireEvent.change(textarea, { target: { value: text } });
+        fireEvent.keyDown(textarea, { key: "Enter" });
+      };
+      act(() => textarea.focus());
+      fireEvent.change(textarea, { target: { value: "/paper-review hi" } });
+      await waitFor(() => expect(chip()).toBe("paper-review"));
+      enter("/model");
+      expect(screen.getByRole("listbox", { name: "Model" })).toBeTruthy();
+      expect(chip()).toBe("paper-review");
+      expect(textarea.value).toBe("");
+      fireEvent.keyDown(textarea, { key: "Escape" });
+      // Set as the model (this harness can't store it on the thread), not
+      // sent as a message; the chip stays.
+      enter("/model gpt-5.5");
+      await act(async () => {});
+      expect(submits()).toHaveLength(0);
+      expect(textarea.value).toBe("");
+      expect(chip()).toBe("paper-review");
+      enter("/goal");
+      expect(getLastProps<{ open: boolean }>("GoalPill")?.open).toBe(true);
+      expect(chip()).toBe("paper-review");
+      expect(submits()).toHaveLength(0);
+      enter("/goal pause");
+      expect(submits()).toHaveLength(1);
+      expect(submits()[0].values).toMatchObject({
+        messages: [],
+        goal_request: { kind: "pause" },
+      });
+      expect(toast.info).toHaveBeenCalledWith(
+        "A goal doesn't take skills, so /paper-review came off."
+      );
+      expect(chip()).toBeUndefined();
+      expect(textarea.value).toBe("");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   // Review focus 2: text the composer gets back (W02's hand-back here)
   // shows its skill as a chip again.
   it("shows the chip again for a message handed back", async () => {
@@ -513,6 +582,10 @@ describe("/goal in the composer", () => {
       );
       expect(screen.getByRole("button", { name: "Set goal" })).toBeTruthy();
       expect(container.querySelector('[data-mode="goal"]')).toBeTruthy();
+      // Its glow stays, and focus still shows (agent's nit, checkpoint B).
+      expect(
+        container.querySelector('[data-mode="goal"]')!.className.split(" ")
+      ).toContain("focus-within:ring-2");
       expect(
         document.getElementById(textarea.getAttribute("aria-describedby")!)
           ?.textContent
@@ -740,6 +813,62 @@ describe("/goal in the composer", () => {
         queue.querySelector('[data-slot="composer-chip"]')?.textContent
       ).toBe("Goal");
       expect(queue.textContent).toContain("write x");
+    });
+
+    // Agent #8 (checkpoint B): goal mode with nothing written is an empty
+    // draft to a hand-back ("hello\n\n/goal" showed a /goal the user never
+    // saw as text).
+    it("takes goal mode with nothing written as an empty draft for a hand-back", async () => {
+      const { container, textarea, type } = await mount(
+        {},
+        { threadValues: { messages: [] } }
+      );
+      type("hello");
+      const sent = submits()[0].values as { messages: Message[] };
+      act(() => {
+        stream.setMessages([...sent.messages]);
+      });
+      await openGoalPage(textarea);
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(chipOf(container)?.textContent).toBe("Goal");
+      act(() => {
+        stream.emitError(
+          new Error('HTTP 404: {"detail":"Thread or assistant not found."}')
+        );
+      });
+      expect(textarea.value).toBe("hello");
+      expect(chipOf(container)).toBeNull();
+    });
+
+    // Confirm round N4: an open page took its word out of the box, which
+    // looked empty, so a finished task was reported while the user was on
+    // the page. An open page holds reports, as typed text does.
+    it("holds auto-reports while a page is open", async () => {
+      agents.tasks = [
+        { ...FINISHED, status: "running", liveStatus: "running" },
+      ];
+      agents.autoNotify = true;
+      const { textarea } = await mount(
+        {},
+        { threadValues: goalValues("active") }
+      );
+      await openGoalPage(textarea);
+      expect(textarea.value).toBe("");
+      agents.tasks = [FINISHED];
+      act(() => {
+        stream.setMessages([...(goalValues("active").messages as Message[])]);
+      });
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 100));
+      });
+      expect(submits()).toHaveLength(0);
+      // Back (its word in the box again) it still waits; with the box
+      // cleared it goes.
+      fireEvent.keyDown(textarea, { key: "Escape" });
+      expect(textarea.value).toBe("/go");
+      expect(submits()).toHaveLength(0);
+      fireEvent.change(textarea, { target: { value: "" } });
+      await waitFor(() => expect(submits()).toHaveLength(1));
     });
 
     // The box holds the goal: a "/" there is text, not the menu.

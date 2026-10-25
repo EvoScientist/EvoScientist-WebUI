@@ -117,7 +117,10 @@ vi.mock("@/app/components/TasksFilesSidebar", async () => {
   return { FilesPopover: m.stubComponent("FilesPopover") };
 });
 import { mockWorkspace, readyWorkspace } from "@/test/mockWorkspace";
-import { renderChatInterface } from "@/test/renderChatInterface";
+import {
+  chatInterfaceTree,
+  renderChatInterface,
+} from "@/test/renderChatInterface";
 import {
   getAllProps,
   getLastProps,
@@ -1796,6 +1799,47 @@ describe("ChatInterface composition", () => {
       }
     });
 
+    // Agent #7 (checkpoint B): the pill closes a Model page opened by "/mo"
+    // too, the word left out (it went back to the root before).
+    it("closes a Model page opened by its typed word from the model pill", async () => {
+      const { container } = renderChatInterface();
+      const textarea = typeInComposer(container, "/mo");
+      await waitFor(() =>
+        expect(screen.getAllByRole("option")).toHaveLength(1)
+      );
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      const pill = screen.getByRole("button", {
+        name: "Change model for this chat",
+      });
+      expect(pill.getAttribute("aria-expanded")).toBe("true");
+      fireEvent.click(pill);
+      expect(screen.queryByRole("listbox")).toBeNull();
+      expect(textarea.value).toBe("");
+      expect(pill.getAttribute("aria-expanded")).toBe("false");
+    });
+
+    // Confirm round N6: a thread turning read-only under an open page closes
+    // it, as an answer waited for does.
+    it("closes a page when the thread turns read-only", async () => {
+      const ready = readyWorkspace("/home/you/projA");
+      const view = renderChatInterface({ workspace: mockWorkspace(ready) });
+      const textarea = typeInComposer(view.container, "/mo");
+      await waitFor(() =>
+        expect(screen.getAllByRole("option")).toHaveLength(1)
+      );
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(screen.getByRole("listbox", { name: "Model" })).toBeTruthy();
+      view.rerender(
+        chatInterfaceTree({
+          workspace: mockWorkspace({
+            ...ready,
+            runDir: "/home/you/projA/runs/r1",
+          }),
+        })
+      );
+      expect(screen.queryByRole("listbox")).toBeNull();
+    });
+
     it("opens the Skills marketplace when nothing is installed", async () => {
       vi.stubGlobal(
         "fetch",
@@ -2013,6 +2057,161 @@ describe("ChatInterface composition", () => {
       ).toContain("focus-within:ring-2");
     });
 
+    // Agent #2 (checkpoint B): a skill typed ahead of a draft takes the
+    // chip's place, and the caret stays where the typing was (it jumped to
+    // the end).
+    it("keeps the caret where a skill was typed ahead of the draft", async () => {
+      const { container } = renderChatInterface();
+      const textarea = container.querySelector("textarea")!;
+      write(textarea, "/paper-reviewhello world");
+      await act(async () => {});
+      await act(async () => {});
+      fireEvent.change(textarea, {
+        target: {
+          value: "/paper-review hello world",
+          selectionStart: 14,
+          selectionEnd: 14,
+        },
+      });
+      expect(chips(container)).toEqual(["paper-review"]);
+      expect(textarea.value).toBe("hello world");
+      expect(textarea.selectionStart).toBe(0);
+    });
+
+    // Codex C1, live: a text that starts with whitespace and a skill reads
+    // the names too (the chip waited for a "/" at index 0 to ask for them).
+    it("shows the chip of a skill after leading whitespace", async () => {
+      const { container } = renderChatInterface();
+      const textarea = container.querySelector("textarea")!;
+      write(textarea, " /paper-review hi");
+      await waitFor(() => expect(chips(container)).toEqual(["paper-review"]));
+      expect(textarea.value).toBe("hi");
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(sent()).toEqual(["/paper-review hi"]);
+    });
+
+    // Codex C2 / agent #9: one skill a message, a paste of several included:
+    // the last stays.
+    it("keeps the last of several skills pasted in at once", async () => {
+      const { container } = renderChatInterface();
+      const textarea = container.querySelector("textarea")!;
+      write(textarea, "/");
+      await act(async () => {});
+      await act(async () => {});
+      fireEvent.change(textarea, {
+        target: { value: "/paper-review /evo-memory hi" },
+      });
+      expect(chips(container)).toEqual(["evo-memory"]);
+      expect(textarea.value).toBe("hi");
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(sent()).toEqual(["/evo-memory hi"]);
+    });
+
+    // Codex C4: a chip removed while the last one still folds takes its own
+    // element; the old fold stops and doesn't clear the new one.
+    it("folds each removed chip on its own", async () => {
+      const folds: Array<() => void> = [];
+      Object.defineProperty(Element.prototype, "animate", {
+        configurable: true,
+        value: () => {
+          const animation = {
+            onfinish: null as null | (() => void),
+            cancel: () => {},
+          };
+          folds.push(() => animation.onfinish?.());
+          return animation;
+        },
+      });
+      try {
+        const { container } = renderChatInterface();
+        const textarea = container.querySelector("textarea")!;
+        const leaving = () =>
+          document.querySelector('[data-slot="composer-chip-leaving"]');
+        write(textarea, "/paper-review hi");
+        await waitFor(() => expect(chips(container)).toEqual(["paper-review"]));
+        textarea.setSelectionRange(0, 0);
+        fireEvent.keyDown(textarea, { key: "Backspace" });
+        expect(leaving()?.textContent).toBe("paper-review");
+        write(textarea, "/evo-memory hi");
+        expect(chips(container)).toEqual(["evo-memory"]);
+        textarea.setSelectionRange(0, 0);
+        fireEvent.keyDown(textarea, { key: "Backspace" });
+        expect(leaving()?.textContent).toBe("evo-memory");
+        expect(folds).toHaveLength(2);
+        act(() => folds[0]());
+        expect(leaving()?.textContent).toBe("evo-memory");
+        act(() => folds[1]());
+        expect(leaving()).toBeNull();
+      } finally {
+        delete (Element.prototype as { animate?: unknown }).animate;
+      }
+    });
+
+    // Agent #5: a chip flies in from the row it was picked from once; the same
+    // skill coming back later (typed again) doesn't fly from that row again.
+    it("flies a picked chip in once", async () => {
+      const flights: Keyframe[][] = [];
+      Object.defineProperty(Element.prototype, "animate", {
+        configurable: true,
+        value: (keyframes: Keyframe[]) => {
+          if (String(keyframes[0]?.transform ?? "").includes("translate("))
+            flights.push(keyframes);
+          return { onfinish: null, cancel: () => {} };
+        },
+      });
+      try {
+        const { container } = renderChatInterface();
+        const textarea = container.querySelector("textarea")!;
+        write(textarea, "/pa");
+        await waitFor(() =>
+          expect(screen.getAllByRole("option")).toHaveLength(1)
+        );
+        fireEvent.keyDown(textarea, { key: "Enter" });
+        expect(flights).toHaveLength(1);
+        textarea.setSelectionRange(0, 0);
+        fireEvent.keyDown(textarea, { key: "Backspace" });
+        write(textarea, "/paper-review again");
+        expect(chips(container)).toEqual(["paper-review"]);
+        expect(flights).toHaveLength(1);
+      } finally {
+        delete (Element.prototype as { animate?: unknown }).animate;
+      }
+    });
+
+    // Agent #11: while the composer can't be used, neither can its chip.
+    it("disables the chip's remove button while the composer is locked", async () => {
+      const { container } = renderChatInterface();
+      const textarea = container.querySelector("textarea")!;
+      write(textarea, "/paper-review hi");
+      await waitFor(() => expect(chips(container)).toEqual(["paper-review"]));
+      act(() => {
+        stream.setMessages([humanTurn("hi")]);
+        stream.setInterrupt(askUserInterrupt("what next?"));
+      });
+      expect(
+        screen
+          .getByRole("button", { name: "Remove /paper-review" })
+          .hasAttribute("disabled")
+      ).toBe(true);
+    });
+
+    // Agent #3: the box's left edge doesn't move with a chip: the row holds
+    // the padding and a chip keeps its gap on its right, so a fold that takes
+    // the chip and its gap to nothing leaves the text where it stays.
+    it("keeps the text's left edge in the row, a chip's gap on its right", async () => {
+      const { container } = renderChatInterface();
+      const textarea = container.querySelector("textarea")!;
+      const classes = (el: Element) => el.className.split(" ");
+      expect(classes(textarea)).toContain("pl-0");
+      expect(classes(textarea.parentElement!)).toContain("pl-3.5");
+      write(textarea, "/paper-review hi");
+      await waitFor(() => expect(chips(container)).toEqual(["paper-review"]));
+      expect(classes(textarea)).toContain("pl-0");
+      expect(
+        classes(container.querySelector('form [data-slot="composer-chip"]')!)
+      ).toContain("mr-2");
+    });
+
     it("keeps the composer's text as one string for the queue", async () => {
       const { container } = renderChatInterface();
       const textarea = container.querySelector("textarea")!;
@@ -2032,6 +2231,13 @@ describe("ChatInterface composition", () => {
         )
       ).toEqual(["paper-review"]);
       expect(queue.textContent).toContain("hi");
+      // A selection copies the text as sent: the chip isn't selectable.
+      expect(
+        queue
+          .querySelector('[data-slot="composer-chip"]')!
+          .closest('[aria-hidden="true"]')!
+          .className.split(" ")
+      ).toContain("select-none");
       // ↑ on the empty composer takes it back to edit, chip and all.
       fireEvent.keyDown(textarea, { key: "ArrowUp" });
       expect(chips(container)).toEqual(["paper-review"]);

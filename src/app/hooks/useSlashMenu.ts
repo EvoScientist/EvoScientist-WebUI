@@ -214,6 +214,13 @@ export function useSlashMenu({
   const marketplaceIndex = !pageDef && marketplace ? count - 1 : -1;
   // Shut after an Escape until the word changes.
   const wanted = token !== null && rootKey !== dismissed;
+  // One opening of the menu, its pages included: going to a page and back
+  // reads nothing again.
+  const session = wanted || !!pageDef;
+  const sessionRef = useRef(session);
+  useLayoutEffect(() => {
+    sessionRef.current = session;
+  });
   // A page stays open with nothing matching: it says so.
   const open = pageDef ? usable : wanted && count > 0;
   // One index over the rows. The highlight follows its row; only a row that
@@ -281,7 +288,7 @@ export function useSlashMenu({
   // right, a failed read shows no skills (only pages, if any match), and the
   // last answer wins over a slower earlier one.
   useEffect(() => {
-    if (!wanted) return;
+    if (!session) return;
     setSkills(null);
     setReading(true);
     const id = ++request.current;
@@ -290,13 +297,15 @@ export function useSlashMenu({
       setReading(false);
       if (list) setSkills(list);
     });
-  }, [wanted, focusCount, readSkills]);
+  }, [session, focusCount, readSkills]);
 
-  // Outside the menu, once: the names a chip for the composer's text needs.
+  // Outside the menu: the names a chip for the composer's text needs, read
+  // when asked and again at each focus (a skill removed meanwhile drops its
+  // chip). An open menu reads for itself.
   useEffect(() => {
-    if (!wantSkills || everRead.current) return;
+    if (!wantSkills || sessionRef.current) return;
     void readSkills();
-  }, [wantSkills, readSkills]);
+  }, [wantSkills, focusCount, readSkills]);
 
   // An Escape holds only while the word it closed on stays as it was.
   useEffect(() => {
@@ -381,10 +390,20 @@ export function useSlashMenu({
     placeCaret(token.start);
   };
 
+  // A page opened over another keeps the word that one took out, to give it
+  // back on the way out.
   const openPage = (word: string) => {
     if (!pages.some((p) => p.word === word)) return;
-    setPage({ word, token: null });
+    setPage({ word, token: page?.token ?? null });
     setFilter("");
+    setActiveState(NO_ACTIVE);
+  };
+
+  // Shut, a page included, its word left out: the root doesn't reopen on it
+  // (the model pill's second click).
+  const closeMenu = () => {
+    if (page) closePage();
+    else setDismissed(rootKey);
     setActiveState(NO_ACTIVE);
   };
 
@@ -543,6 +562,7 @@ export function useSlashMenu({
     onChange,
     onKeyDown,
     openPage,
+    closeMenu,
     /** Put the caret at `at` once the caller's new text is in the box. */
     placeCaret,
     textareaProps: {
@@ -563,9 +583,11 @@ export function useSlashMenu({
       },
       onBlur: () => {
         setFocused(false);
-        // A page closes with the focus, as going back does: it never
-        // reopens by itself.
-        leavePage();
+        // A page closes with the focus and never reopens by itself. Its word
+        // comes back only into an empty box: with a draft the focus may be
+        // on its way to Send, which must send what shows.
+        if (page?.token && page.token.after.trim()) closePage();
+        else leavePage();
       },
       onCompositionStart: (e: React.CompositionEvent<HTMLTextAreaElement>) => {
         composingRef.current = true;
@@ -586,13 +608,16 @@ export function useSlashMenu({
         if (!page || !base) return;
         // What was composed on a page is its filter's; the composer's text
         // comes back as it was. Text that changed otherwise meanwhile (a
-        // message handed back) stays, and the page closes.
+        // message handed back) stays, and the page closes. The box is read,
+        // not the last change: Firefox ends a composition before its last
+        // input.
         const composed = e.data ?? "";
         const expected =
           base.value.slice(0, base.caret) +
           composed +
           base.value.slice(base.caret);
-        if (value !== expected && value !== base.value) {
+        const now = e.currentTarget.value;
+        if (now !== expected && now !== base.value) {
           closePage();
           return;
         }

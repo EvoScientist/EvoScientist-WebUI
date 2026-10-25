@@ -113,7 +113,11 @@ function UserText({
           <span className="sr-only">
             {text.slice(0, text.length - rest.length)}
           </span>
-          <span aria-hidden="true">
+          {/* A selection copies the text as sent. */}
+          <span
+            aria-hidden="true"
+            className="select-none"
+          >
             {skills.map((name, i) => (
               <ComposerChip
                 key={`${i}:${name}`}
