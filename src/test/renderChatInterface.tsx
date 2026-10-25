@@ -105,10 +105,10 @@ interface RenderChatInterfaceOptions {
   onNotifyReady?: React.ComponentProps<typeof ChatInterface>["onNotifyReady"];
 }
 
-export function renderChatInterface(
-  opts: RenderChatInterfaceOptions = {}
-): RenderResult {
-  return render(
+/** The tree renderChatInterface renders: a test re-renders it with other
+ *  options (another workspace) and keeps the chat's state. */
+export function chatInterfaceTree(opts: RenderChatInterfaceOptions = {}) {
+  return (
     <TestWorkspaceProvider value={opts.workspace ?? mockWorkspace()}>
       <ChatProvider>
         <ChatInterface
@@ -118,7 +118,15 @@ export function renderChatInterface(
           onNotifyReady={opts.onNotifyReady}
         />
       </ChatProvider>
-    </TestWorkspaceProvider>,
+    </TestWorkspaceProvider>
+  );
+}
+
+export function renderChatInterface(
+  opts: RenderChatInterfaceOptions = {}
+): RenderResult {
+  return render(
+    chatInterfaceTree(opts),
     opts.wrapper ? { wrapper: opts.wrapper } : undefined
   );
 }

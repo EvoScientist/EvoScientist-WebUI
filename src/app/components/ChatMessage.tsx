@@ -25,6 +25,8 @@ import { taskSubAgentName, type SubAgentStep } from "@/lib/subAgentActivity";
 import { isAsyncUpdateMessage } from "@/lib/asyncAgents";
 import { bindActionRequestsToToolCalls } from "@/lib/hitl";
 import { pinnedSkillDescription, pinnedSkillName } from "@/lib/pinnedSkill";
+import { pinnedLead } from "@/lib/composerChip";
+import { ComposerChip } from "@/app/components/ComposerChip";
 import { isRubricRevision } from "@/lib/rubricRevision";
 import { messageReasoning } from "@/lib/reasoning";
 import { thoughtLabel, useThoughtSeconds } from "@/lib/thinkingTimer";
@@ -57,7 +59,12 @@ interface ChatMessageProps {
   autoApprove?: boolean;
   approvalAutoResolves?: boolean;
   subAgentSteps?: Record<string, SubAgentStep[]>;
+  /** The skills the backend pinned for this user message (the markers
+   *  after it): drawn as chips while they lead its text. */
+  pinnedSkills?: readonly string[];
 }
+
+const NO_PINS: readonly string[] = [];
 
 const FINISH_REASON_SUCCESS = new Set([
   "stop",
@@ -89,6 +96,43 @@ function showsAsSubAgent(toolCall: ToolCall): boolean {
   return toolCall.name === "task" && taskSubAgentName(toolCall.args) !== null;
 }
 
+/** A user message's text, its pinned skills drawn as chips ahead of it; a
+ *  screen reader reads it as it was sent. */
+function UserText({
+  text,
+  pinnedSkills,
+}: {
+  text: string;
+  pinnedSkills: readonly string[];
+}) {
+  const { skills, rest } = pinnedLead(text, pinnedSkills);
+  return (
+    <p className="m-0 whitespace-pre-wrap break-words text-sm leading-relaxed">
+      {skills.length > 0 && (
+        <>
+          <span className="sr-only">
+            {text.slice(0, text.length - rest.length)}
+          </span>
+          {/* A selection copies the text as sent. */}
+          <span
+            aria-hidden="true"
+            className="select-none"
+          >
+            {skills.map((name, i) => (
+              <ComposerChip
+                key={`${i}:${name}`}
+                chip={{ kind: "skill", name }}
+                className="mr-1.5 h-5 align-middle"
+              />
+            ))}
+          </span>
+        </>
+      )}
+      {rest}
+    </p>
+  );
+}
+
 export const ChatMessage = React.memo<ChatMessageProps>(
   ({
     message,
@@ -107,6 +151,7 @@ export const ChatMessage = React.memo<ChatMessageProps>(
     autoApprove,
     approvalAutoResolves,
     subAgentSteps,
+    pinnedSkills = NO_PINS,
   }) => {
     const isUser = message.type === "human";
     const messageContent = extractStringFromMessageContent(message);
@@ -347,9 +392,10 @@ export const ChatMessage = React.memo<ChatMessageProps>(
                 }
               >
                 {isUser ? (
-                  <p className="m-0 whitespace-pre-wrap break-words text-sm leading-relaxed">
-                    {messageContent}
-                  </p>
+                  <UserText
+                    text={messageContent}
+                    pinnedSkills={pinnedSkills}
+                  />
                 ) : hasContent ? (
                   <MarkdownContent
                     content={messageContent}

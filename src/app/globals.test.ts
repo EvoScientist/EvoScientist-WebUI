@@ -77,3 +77,24 @@ describe("globals.css", () => {
     expect([...declaredBrandTokens(css, ":root")]).toEqual(["--brand"]);
   });
 });
+
+// The composer chip's remove button is inside the phone composer, whose
+// buttons are made 44px: that would blow the chip up. It keeps its size and
+// takes a 44px touch target from a pseudo-element instead.
+describe("the composer chip's remove button", () => {
+  const css = CSS.replace(/\/\*[\s\S]*?\*\//g, "");
+
+  it("keeps its size inside the phone composer", () => {
+    expect(css).toMatch(
+      /\.mobile-composer \.composer-chip-remove\s*\{[^}]*min-height:\s*0[^}]*min-width:\s*0/
+    );
+  });
+
+  // 44 px across too, but no further right than the chip's gap: 3 px of the
+  // text took a tap meant for the caret (agent, confirm round B).
+  it("gives touch screens a 44px target around it, short of the text", () => {
+    expect(css).toMatch(
+      /@media \(pointer: coarse\)\s*\{[^@]*\.composer-chip-remove::after\s*\{[^}]*content:\s*""[^}]*inset:\s*-14px -11px -14px -17px/
+    );
+  });
+});

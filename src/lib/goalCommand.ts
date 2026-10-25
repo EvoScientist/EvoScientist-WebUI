@@ -1,7 +1,6 @@
 import { v4 as uuidv4 } from "uuid";
 import type { GoalStatus, ThreadGoal } from "@/lib/goalState";
 import { PY_SPACE, pySplit, pyStrip } from "@/lib/pythonWhitespace";
-import type { MenuCommand } from "@/lib/slashMenu";
 
 // The /goal command, read and checked the way the core's GoalCommand
 // (commands/implementation/goal.py) does, so the WebUI and the TUI take the
@@ -38,42 +37,6 @@ export const GOAL_USAGE: readonly string[] = [
   "       /goal pause              stop working toward it and grading against it",
   "       /goal resume             continue a paused goal",
   "       /goal clear              drop the goal and its criteria",
-];
-
-/** The `/` menu's /goal rows: the core's GoalCommand and the subcommands a
- *  click can't do, their descriptions word for word. Show is the goal pill
- *  (typing `/goal show` still works). */
-export const GOAL_MENU_COMMANDS: readonly MenuCommand[] = [
-  {
-    word: "goal",
-    label: "goal <objective>",
-    insert: "/goal ",
-    description: "Set a goal with drafted acceptance criteria",
-  },
-  {
-    word: "goal",
-    label: "goal amend <feedback>",
-    insert: "/goal amend ",
-    description: "Revise the goal and its criteria",
-  },
-  {
-    word: "goal",
-    label: "goal pause",
-    insert: "/goal pause",
-    description: "Stop working toward the goal",
-  },
-  {
-    word: "goal",
-    label: "goal resume",
-    insert: "/goal resume",
-    description: "Continue a paused goal",
-  },
-  {
-    word: "goal",
-    label: "goal clear",
-    insert: "/goal clear",
-    description: "Drop the goal and its criteria",
-  },
 ];
 
 /** The core's _NO_GOAL. */
@@ -148,6 +111,80 @@ function refusal(
   }
   const wanted = kind === "pause" ? "an active" : "a paused";
   return `The goal is ${status}; only ${wanted} goal can be ${kind}d.`;
+}
+
+export type GoalPageActionKind =
+  | "create"
+  | "amend"
+  | "pause"
+  | "resume"
+  | "clear"
+  | "show";
+
+/** A row of the `/` menu's Goal page. */
+export interface GoalPageAction {
+  kind: GoalPageActionKind;
+  label: string;
+  description: string;
+}
+
+const PAGE_ROWS: Record<
+  Exclude<GoalPageActionKind, "create">,
+  Omit<GoalPageAction, "kind">
+> = {
+  amend: {
+    label: "Amend the goal…",
+    description: "Change the goal or its criteria",
+  },
+  pause: {
+    label: "Pause",
+    description: "Stop working toward the goal for now",
+  },
+  resume: { label: "Resume", description: "Pick the goal back up" },
+  clear: { label: "Clear", description: "Drop the goal and its criteria" },
+  show: {
+    label: "Show details",
+    description: "The goal, its criteria and the latest grading",
+  },
+};
+
+/** The Goal page's rows: every /goal command the core takes on this goal
+ *  (goalRefusal's rule), the likeliest first and the details last. A new
+ *  goal can always be set; clear takes any goal. */
+export function goalPageActions(goal: ThreadGoal | null): GoalPageAction[] {
+  if (!goal) {
+    return [
+      {
+        kind: "create",
+        label: "Set a goal…",
+        description: "Describe it; its criteria are drafted for you to review",
+      },
+    ];
+  }
+  const allowed = (kind: "amend" | "pause" | "resume") =>
+    ALLOWED[kind].includes(goal.status);
+  const kinds = [
+    ...(allowed("resume") ? (["resume"] as const) : []),
+    ...(allowed("amend") ? (["amend"] as const) : []),
+    ...(allowed("pause") ? (["pause"] as const) : []),
+  ];
+  return [
+    ...kinds.map((kind) => ({ kind, ...PAGE_ROWS[kind] })),
+    {
+      kind: "create",
+      label: "Set a new goal…",
+      description: "Replace this goal with a new one",
+    },
+    { kind: "clear", ...PAGE_ROWS.clear },
+    { kind: "show", ...PAGE_ROWS.show },
+  ];
+}
+
+/** The goal in one line, for the Goal row of the `/` menu. */
+export function goalSummary(goal: ThreadGoal | null): string {
+  if (!goal) return "Set a goal to keep working toward";
+  const status = goal.status[0].toUpperCase() + goal.status.slice(1);
+  return `${status} · ${goal.objective}`;
 }
 
 /** Why the core would refuse this command on this goal, or null. */

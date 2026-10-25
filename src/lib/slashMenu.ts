@@ -9,26 +9,64 @@
 
 import { PY_SPACE } from "./pythonWhitespace";
 
-const PIN_WORD = /^\/[a-z0-9]+(?:-[a-z0-9]+)*$/;
+/** A whole `/name` the backend pins. */
+export const PIN_WORD = /^\/[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const MAX_NAME = 64;
 // What may already be typed of a name: the menu filters as it grows.
 const PARTIAL = /^[a-z0-9-]*$/;
 // The WebUI's own commands: a message that starts with one is the command's.
-const COMMANDS = new Set(["model", "goal"]);
+const COMMANDS: ReadonlySet<string> = new Set(["model", "goal"]);
 
-/** A WebUI command the `/` menu offers as a message's first word. */
-export interface MenuCommand {
+/** A row's icon, by what it does (the menu draws them). */
+export type MenuIcon =
+  | "goal"
+  | "model"
+  | "check"
+  | "plus"
+  | "pencil"
+  | "pause"
+  | "play"
+  | "clear"
+  | "details"
+  | "reset";
+
+/** A row of a page in the `/` menu. */
+export interface MenuRow {
+  /** Unique on its page while it stays: the highlight follows it. */
+  id: string;
+  label: string;
+  description?: string;
+  /** Right-aligned: "default". */
+  tail?: string;
+  icon?: MenuIcon | null;
+  /** A name to read as code: a model's. */
+  mono?: boolean;
+  danger?: boolean;
+  /** Chosen: the menu closes, then this runs. */
+  run: () => void;
+}
+
+/** A WebUI command the `/` menu offers as a page: a row (with ›) while the
+ *  message's first word starts the command's word, and the page it opens. */
+export interface MenuPage {
   /** The command's word after the slash: "goal". */
   word: string;
-  /** The row after the slash: "goal amend <feedback>". */
   label: string;
-  /** What choosing the row writes in place of the typed word. */
-  insert: string;
+  /** The root row's description: what the command is at now. */
   description: string;
-  /** Needs nothing more: chosen with Enter or a click it runs at once, where
-   *  the composer's `runnerFor` can run it (the typed word goes); Tab still
-   *  writes it out. */
-  run?: boolean;
+  /** Right-aligned on the root row: the current model. */
+  tail?: string;
+  icon: MenuIcon;
+  /** Next to the page's title. */
+  status?: string;
+  /** A line above the page's rows (not an option). */
+  note?: string;
+  /** The page's rows for what is typed on the page. */
+  rows: (filter: string) => readonly MenuRow[];
+  /** The row highlighted when the page opens (its id); else the first. */
+  initial?: string;
+  /** Said when nothing matches what is typed on the page. */
+  empty: (filter: string) => string;
 }
 
 export interface SlashToken {
@@ -45,8 +83,13 @@ export interface SlashToken {
 /** The `/name` being typed at `caret`, if the backend would pin it. This runs
  *  on every render of the composer, so it reads no more of a long paste than
  *  a pin can be: each word ends within `/` and 64 characters, and the words
- *  before the caret's stop at the first that isn't a pin. */
-export function slashTokenAt(text: string, caret: number): SlashToken | null {
+ *  before the caret's stop at the first that isn't a pin. A message that
+ *  starts with one of `commandWords` is that command's, never a pin. */
+export function slashTokenAt(
+  text: string,
+  caret: number,
+  commandWords: ReadonlySet<string> = COMMANDS
+): SlashToken | null {
   if (caret <= 0 || caret > text.length) return null;
   // The caret has to end the word, not sit inside it.
   if (caret < text.length && !PY_SPACE.test(text[caret])) return null;
@@ -74,7 +117,7 @@ export function slashTokenAt(text: string, caret: number): SlashToken | null {
     i = j;
   }
   // `/model …` is the WebUI's model command, not a pin.
-  if (COMMANDS.has(pinned[0] ?? query)) return null;
+  if (commandWords.has(pinned[0] ?? query)) return null;
   return { start, end: caret, query, pinned };
 }
 
@@ -100,17 +143,4 @@ export function rankSkills<T extends { name: string; description: string }>(
     .filter(({ r }) => r < 3)
     .sort((a, b) => a.r - b.r || a.s.name.localeCompare(b.s.name))
     .map(({ s }) => s);
-}
-
-/** The message with `name` in place of the typed word, and the caret past
- *  the whitespace after it: what followed is kept (a newline stays one), and
- *  a space is added at the end of the message. */
-export function applySkill(
-  text: string,
-  token: SlashToken,
-  name: string
-): { text: string; caret: number } {
-  const head = `${text.slice(0, token.start)}/${name}`;
-  const rest = text.slice(token.end) || " ";
-  return { text: head + rest, caret: head.length + 1 };
 }

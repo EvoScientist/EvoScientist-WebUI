@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MODEL_MENU_COMMANDS, parseModelCommand } from "./modelCommand";
+import { parseModelCommand } from "./modelCommand";
 
 describe("parseModelCommand", () => {
   it("returns null for non-/model inputs", () => {
@@ -77,25 +77,6 @@ describe("parseModelCommand", () => {
       kind: "set",
       model: "Claude-Sonnet-4-6",
       provider: undefined,
-    });
-  });
-});
-
-describe("MODEL_MENU_COMMANDS", () => {
-  // One row: the picker does the rest (a name, a provider, Reset to
-  // default), so the menu offers /model alone, run at once when chosen.
-  it("offers /model alone, opening the picker", () => {
-    expect(MODEL_MENU_COMMANDS).toEqual([
-      {
-        word: "model",
-        label: "model",
-        insert: "/model",
-        description: "Change model for this chat",
-        run: true,
-      },
-    ]);
-    expect(parseModelCommand(MODEL_MENU_COMMANDS[0].insert)).toEqual({
-      kind: "show",
     });
   });
 });

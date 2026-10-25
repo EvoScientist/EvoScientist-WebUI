@@ -6,6 +6,7 @@
 // the full render tree into scope.
 
 import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
+import { toast } from "sonner";
 import {
   act,
   screen,
@@ -116,7 +117,10 @@ vi.mock("@/app/components/TasksFilesSidebar", async () => {
   return { FilesPopover: m.stubComponent("FilesPopover") };
 });
 import { mockWorkspace, readyWorkspace } from "@/test/mockWorkspace";
-import { renderChatInterface } from "@/test/renderChatInterface";
+import {
+  chatInterfaceTree,
+  renderChatInterface,
+} from "@/test/renderChatInterface";
 import {
   getAllProps,
   getLastProps,
@@ -1503,29 +1507,131 @@ describe("ChatInterface composition", () => {
         expect(screen.getAllByRole("option")).toHaveLength(1)
       );
       fireEvent.keyDown(textarea, { key: "Enter" });
-      expect(textarea.value).toBe("/paper-writing ");
+      // The skill shows as a chip ahead of the (empty) text.
+      expect(
+        container.querySelector('[data-slot="composer-chip"]')?.textContent
+      ).toBe("paper-writing");
+      expect(textarea.value).toBe("");
       expect(stream.getSubmitCalls()).toHaveLength(0);
     });
 
-    // /model works on every backend; goalCommand.test has the menu with
-    // /goal's rows too.
-    it("offers /model above the skills and opens the picker when it is chosen", async () => {
+    // Independent review, checkpoint A: one skill a message, so picking
+    // another replaces a skill typed out before it.
+    it("replaces a typed skill with the one picked", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          async () =>
+            new Response(
+              JSON.stringify({
+                skills: [
+                  {
+                    name: "paper-writing",
+                    description: "Write a paper",
+                    source: "global",
+                  },
+                  {
+                    name: "paper-review",
+                    description: "Review a paper",
+                    source: "global",
+                  },
+                ],
+              })
+            )
+        )
+      );
+      const { container } = renderChatInterface();
+      const textarea = typeInComposer(container, "/paper-review /pa");
+      await waitFor(() =>
+        expect(screen.getAllByRole("option")).toHaveLength(1)
+      );
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(
+        [...container.querySelectorAll('[data-slot="composer-chip"]')].map(
+          (c) => c.textContent
+        )
+      ).toEqual(["paper-writing"]);
+      expect(textarea.value).toBe("");
+    });
+
+    // The Model page is on every backend; goalCommand.test has the menu
+    // with the Goal page too.
+    it("offers the Model page above the skills and opens it when chosen", async () => {
       const { container } = renderChatInterface();
       const textarea = typeInComposer(container, "/");
       await waitFor(() =>
         expect(screen.getAllByRole("option")).toHaveLength(2)
       );
       const rows = screen.getAllByRole("option").map((o) => o.textContent);
-      expect(rows[0]).toBe("/modelChange model for this chat");
+      expect(rows[0]).toContain("Model");
+      expect(rows[0]).toContain("Change the model for this chat");
       expect(rows[1]).toContain("/paper-writing");
       fireEvent.click(screen.getAllByRole("option")[0]);
-      expect(
-        await screen.findByRole("dialog", {
-          name: "Pick a model for this chat",
-        })
-      ).toBeTruthy();
+      expect(screen.getByRole("listbox", { name: "Model" })).toBeTruthy();
       expect(textarea.value).toBe("");
       expect(stream.getSubmitCalls()).toHaveLength(0);
+    });
+
+    it("sets the model from the Model page, and resets it", async () => {
+      const { container } = renderChatInterface();
+      const openModelPage = async () => {
+        const textarea = typeInComposer(container, "/mo");
+        await waitFor(() =>
+          expect(screen.getAllByRole("option")).toHaveLength(1)
+        );
+        fireEvent.keyDown(textarea, { key: "Enter" });
+        return textarea;
+      };
+      let textarea = await openModelPage();
+      // The curated list here (no registry): its first row, then Enter.
+      expect(screen.getAllByRole("option")[0].textContent).toContain(
+        "claude-sonnet-4-6"
+      );
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      await waitFor(() =>
+        expect(toast.success).toHaveBeenCalledWith(
+          "Model set to claude-sonnet-4-6 (anthropic)."
+        )
+      );
+      expect(screen.queryByRole("listbox")).toBeNull();
+      // Back on the page: the current model is highlighted, and Reset to
+      // default is the last row.
+      textarea = await openModelPage();
+      const active = () =>
+        document.getElementById(
+          textarea.getAttribute("aria-activedescendant") ?? ""
+        );
+      expect(active()?.textContent).toContain("claude-sonnet-4-6");
+      const rows = screen.getAllByRole("option");
+      expect(rows[rows.length - 1].textContent).toContain("Reset to default");
+      fireEvent.keyDown(textarea, { key: "ArrowUp" });
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      await waitFor(() =>
+        expect(toast.success).toHaveBeenCalledWith("Model override cleared.")
+      );
+      expect(stream.getSubmitCalls()).toHaveLength(0);
+    });
+
+    it("notes the curated list when the registry didn't load", async () => {
+      const { registryStub } = await import("@/test/mocks/chatInterfaceStubs");
+      registryStub.failed = true;
+      try {
+        const { container } = renderChatInterface();
+        const textarea = typeInComposer(container, "/mo");
+        await waitFor(() =>
+          expect(screen.getAllByRole("option")).toHaveLength(1)
+        );
+        fireEvent.keyDown(textarea, { key: "Enter" });
+        const note = screen.getByText(
+          "Showing a curated list: the backend's model registry didn't load."
+        );
+        expect(note.closest('[role="option"]')).toBeNull();
+        // The curated list's models, none of them the default.
+        expect(screen.getAllByRole("option").length).toBeGreaterThan(3);
+        expect(screen.queryByText("default")).toBeNull();
+      } finally {
+        registryStub.failed = false;
+      }
     });
 
     it("offers only the global skills when the backend's folder is elsewhere", async () => {
@@ -1561,7 +1667,7 @@ describe("ChatInterface composition", () => {
       );
     });
 
-    it("leaves /model to the model picker", async () => {
+    it("opens the Model page for /model, on the current model's row", async () => {
       // A description that mentions models matches "model" too.
       vi.stubGlobal(
         "fetch",
@@ -1585,10 +1691,190 @@ describe("ChatInterface composition", () => {
       await act(async () => {});
       expect(screen.queryByRole("listbox")).toBeNull();
       fireEvent.keyDown(textarea, { key: "Enter" });
-      expect(
-        screen.getByRole("dialog", { name: "Pick a model for this chat" })
-      ).toBeTruthy();
+      expect(screen.getByRole("listbox", { name: "Model" })).toBeTruthy();
+      expect(textarea.value).toBe("");
       expect(stream.getSubmitCalls()).toHaveLength(0);
+      const active = document.getElementById(
+        textarea.getAttribute("aria-activedescendant") ?? ""
+      );
+      expect(active?.textContent).toContain("claude-sonnet-4-6");
+      expect(active?.querySelector("svg.lucide-check")).toBeTruthy();
+    });
+
+    it("opens the Model page from the model pill, and closes it from there", async () => {
+      const { container } = renderChatInterface();
+      const textarea = container.querySelector("textarea")!;
+      const pill = screen.getByRole("button", {
+        name: "Change model for this chat",
+      });
+      expect(pill.getAttribute("aria-expanded")).toBe("false");
+      fireEvent.click(pill);
+      expect(screen.getByRole("listbox", { name: "Model" })).toBeTruthy();
+      expect(document.activeElement).toBe(textarea);
+      expect(pill.getAttribute("aria-expanded")).toBe("true");
+      fireEvent.click(pill);
+      expect(screen.queryByRole("listbox")).toBeNull();
+      expect(pill.getAttribute("aria-expanded")).toBe("false");
+    });
+
+    it("disables the model pill while the composer can't be used", async () => {
+      renderChatInterface();
+      act(() => {
+        stream.setMessages([humanTurn("hi")]);
+        stream.setInterrupt(askUserInterrupt("what next?"));
+      });
+      expect(
+        screen
+          .getByRole("button", { name: "Change model for this chat" })
+          .hasAttribute("disabled")
+      ).toBe(true);
+    });
+
+    // Review focus 3: the registry answering while the page is open
+    // changes its rows in place, and the highlight stays on its model.
+    it("keeps the Model page open while the registry answers, on its row", async () => {
+      const { registryStub } = await import("@/test/mocks/chatInterfaceStubs");
+      registryStub.value = {
+        registry: { entries: [], defaultEntry: null },
+        loading: true,
+        error: null,
+      };
+      try {
+        const { container } = renderChatInterface();
+        const textarea = typeInComposer(container, "/mo");
+        await waitFor(() =>
+          expect(screen.getAllByRole("option")).toHaveLength(1)
+        );
+        fireEvent.keyDown(textarea, { key: "Enter" });
+        expect(screen.getByText("Loading the backend's models…")).toBeTruthy();
+        const active = () =>
+          document.getElementById(
+            textarea.getAttribute("aria-activedescendant") ?? ""
+          );
+        // The curated list meanwhile: down to claude-opus-4-8.
+        fireEvent.keyDown(textarea, { key: "ArrowDown" });
+        fireEvent.keyDown(textarea, { key: "ArrowDown" });
+        expect(active()?.textContent).toContain("claude-opus-4-8");
+        registryStub.value = {
+          registry: {
+            entries: [
+              { name: "gpt-5.5", model_id: "gpt-5.5", provider: "openai" },
+              {
+                name: "claude-opus-4-8",
+                model_id: "claude-opus-4-8",
+                provider: "anthropic",
+              },
+              {
+                name: "claude-sonnet-4-6",
+                model_id: "claude-sonnet-4-6",
+                provider: "anthropic",
+              },
+            ],
+            defaultEntry: { name: "claude-sonnet-4-6", provider: "anthropic" },
+          },
+          loading: false,
+          error: null,
+        };
+        act(() => {
+          stream.setMessages([]);
+        });
+        expect(screen.getByRole("listbox", { name: "Model" })).toBeTruthy();
+        expect(screen.queryByText("Loading the backend's models…")).toBeNull();
+        expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(
+          [
+            expect.stringContaining("gpt-5.5"),
+            expect.stringContaining("claude-opus-4-8"),
+            expect.stringContaining("claude-sonnet-4-6"),
+          ]
+        );
+        expect(active()?.textContent).toContain("claude-opus-4-8");
+        fireEvent.keyDown(textarea, { key: "Enter" });
+        await waitFor(() =>
+          expect(toast.success).toHaveBeenCalledWith(
+            "Model set to claude-opus-4-8 (anthropic)."
+          )
+        );
+      } finally {
+        registryStub.value = null;
+      }
+    });
+
+    // Agent #7 (checkpoint B): the pill closes a Model page opened by "/mo"
+    // too, the word left out (it went back to the root before).
+    it("closes a Model page opened by its typed word from the model pill", async () => {
+      const { container } = renderChatInterface();
+      const textarea = typeInComposer(container, "/mo");
+      await waitFor(() =>
+        expect(screen.getAllByRole("option")).toHaveLength(1)
+      );
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      const pill = screen.getByRole("button", {
+        name: "Change model for this chat",
+      });
+      expect(pill.getAttribute("aria-expanded")).toBe("true");
+      fireEvent.click(pill);
+      expect(screen.queryByRole("listbox")).toBeNull();
+      expect(textarea.value).toBe("");
+      expect(pill.getAttribute("aria-expanded")).toBe("false");
+    });
+
+    // Confirm round N6: a thread turning read-only under an open page closes
+    // it, as an answer waited for does.
+    it("closes a page when the thread turns read-only", async () => {
+      const ready = readyWorkspace("/home/you/projA");
+      const view = renderChatInterface({ workspace: mockWorkspace(ready) });
+      const textarea = typeInComposer(view.container, "/mo");
+      await waitFor(() =>
+        expect(screen.getAllByRole("option")).toHaveLength(1)
+      );
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(screen.getByRole("listbox", { name: "Model" })).toBeTruthy();
+      view.rerender(
+        chatInterfaceTree({
+          workspace: mockWorkspace({
+            ...ready,
+            runDir: "/home/you/projA/runs/r1",
+          }),
+        })
+      );
+      expect(screen.queryByRole("listbox")).toBeNull();
+    });
+
+    // Confirm round 2 (A): Send keeps the composer's focus (a press that
+    // blurred it put "/mo" back after a chip and sent it), and a send closes
+    // an open page (Safari doesn't blur: the page stayed over the empty box).
+    it("sends what shows from Send on a page, and closes the page", async () => {
+      const { container } = renderChatInterface();
+      const textarea = typeInComposer(container, "/paper-writing ");
+      await waitFor(() =>
+        expect(
+          container
+            .querySelector("form")!
+            .querySelector('[data-slot="composer-chip"]')?.textContent
+        ).toBe("paper-writing")
+      );
+      fireEvent.change(textarea, { target: { value: "/mo" } });
+      await waitFor(() =>
+        expect(screen.getAllByRole("option").length).toBeGreaterThan(0)
+      );
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(screen.getByRole("listbox", { name: "Model" })).toBeTruthy();
+      expect(textarea.value).toBe("");
+      const send = screen.getByRole("button", { name: "Send message" });
+      // A browser moves focus on mousedown unless it is held back.
+      if (fireEvent.mouseDown(send)) fireEvent.blur(textarea);
+      fireEvent.mouseUp(send);
+      fireEvent.click(send);
+      expect(
+        stream
+          .getSubmitCalls()
+          .map(
+            (c) =>
+              (c.values as { messages: Array<{ content: string }> }).messages[0]
+                .content
+          )
+      ).toEqual(["/paper-writing"]);
+      expect(screen.queryByRole("listbox")).toBeNull();
     });
 
     it("opens the Skills marketplace when nothing is installed", async () => {
@@ -1623,6 +1909,616 @@ describe("ChatInterface composition", () => {
       expect(calls).toHaveLength(1);
       const body = calls[0].values as { messages: Array<{ content: string }> };
       expect(body.messages[0].content).toBe("/pa");
+    });
+  });
+
+  // A sent message's skills are the pinned_skill markers right after it.
+  it("passes the skills pinned after a user message to it", () => {
+    renderChatInterface();
+    const marker = (name: string, id: string) =>
+      ({
+        id,
+        type: "human",
+        content: `<skill name="${name}" path="/skills/${name}/SKILL.md">\nbody\n</skill>`,
+        additional_kwargs: {
+          lc_source: "pinned_skill",
+          skill: { name, path: `/skills/${name}`, description: "d" },
+        },
+      } as unknown as Message);
+    act(() => {
+      stream.setMessages([
+        humanTurn("/paper-review /evo-memory hi", "u1"),
+        marker("paper-review", "p1"),
+        marker("evo-memory", "p2"),
+        aiTurn("ok", "a1"),
+        humanTurn("/paper-review again", "u2"),
+      ]);
+    });
+    const last = (id: string) =>
+      getAllProps<{ message: Message; pinnedSkills?: readonly string[] }>(
+        "ChatMessage"
+      )
+        .filter((p) => p.message.id === id)
+        .at(-1);
+    expect(last("u1")?.pinnedSkills).toEqual(["paper-review", "evo-memory"]);
+    expect(last("p1")?.pinnedSkills).toEqual([]);
+    expect(last("a1")?.pinnedSkills).toEqual([]);
+    // No marker after it: nothing was pinned.
+    expect(last("u2")?.pinnedSkills).toEqual([]);
+  });
+
+  // The chip: the skill a message's first word pins, shown in the box ahead
+  // of the text; the composer still holds the one string that is sent.
+  describe("composer chips", () => {
+    beforeEach(() => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string) =>
+          String(url).includes("/api/skills/pinnable")
+            ? new Response(
+                JSON.stringify({
+                  skills: [
+                    {
+                      name: "paper-review",
+                      description: "Review a paper",
+                      source: "global",
+                    },
+                    {
+                      name: "evo-memory",
+                      description: "Remember across sessions",
+                      source: "global",
+                    },
+                  ],
+                })
+              )
+            : new Response("{}")
+        )
+      );
+    });
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    // The composer's own chips (a queued message's are in its row).
+    const chips = (container: HTMLElement) =>
+      [
+        ...container
+          .querySelector("form")!
+          .querySelectorAll('[data-slot="composer-chip"]'),
+      ].map((c) => c.textContent);
+    const write = (textarea: HTMLTextAreaElement, text: string) => {
+      act(() => textarea.focus());
+      fireEvent.change(textarea, { target: { value: text } });
+    };
+    const sent = () =>
+      stream
+        .getSubmitCalls()
+        .map(
+          (c) =>
+            (c.values as { messages: Array<{ content: string }> }).messages[0]
+              .content
+        );
+
+    it("shows a picked skill as a chip and keeps the text after it", async () => {
+      const { container } = renderChatInterface();
+      const textarea = container.querySelector("textarea")!;
+      write(textarea, "/pa");
+      await waitFor(() =>
+        expect(screen.getAllByRole("option")).toHaveLength(1)
+      );
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(chips(container)).toEqual(["paper-review"]);
+      expect(textarea.value).toBe("");
+      expect(textarea.placeholder).toBe("Add your message…");
+      write(textarea, "hi");
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(sent()).toEqual(["/paper-review hi"]);
+      expect(chips(container)).toEqual([]);
+    });
+
+    it("replaces the chip's skill when another is picked or typed", async () => {
+      const { container } = renderChatInterface();
+      const textarea = container.querySelector("textarea")!;
+      write(textarea, "/pa");
+      await waitFor(() =>
+        expect(screen.getAllByRole("option")).toHaveLength(1)
+      );
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      // Picked: the chip's own skill isn't offered again.
+      write(textarea, "/");
+      await waitFor(() =>
+        expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(
+          [
+            expect.stringContaining("Model"),
+            expect.stringContaining("/evo-memory"),
+          ]
+        )
+      );
+      fireEvent.keyDown(textarea, { key: "ArrowDown" });
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(chips(container)).toEqual(["evo-memory"]);
+      expect(textarea.value).toBe("");
+      // Typed out with a space after it.
+      write(textarea, "/paper-review ");
+      expect(chips(container)).toEqual(["paper-review"]);
+      expect(textarea.value).toBe("");
+      write(textarea, "go");
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(sent()).toEqual(["/paper-review go"]);
+    });
+
+    it("turns a typed skill name into a chip at the space", async () => {
+      const { container } = renderChatInterface();
+      const textarea = container.querySelector("textarea")!;
+      write(textarea, "/paper-review");
+      await waitFor(() =>
+        expect(screen.getAllByRole("option").length).toBeGreaterThan(0)
+      );
+      expect(chips(container)).toEqual([]);
+      write(textarea, "/paper-review please");
+      expect(chips(container)).toEqual(["paper-review"]);
+      expect(textarea.value).toBe("please");
+    });
+
+    it("removes the chip with Backspace at the start, or its remove button", async () => {
+      const { container } = renderChatInterface();
+      const textarea = container.querySelector("textarea")!;
+      write(textarea, "/paper-review hi");
+      await waitFor(() => expect(chips(container)).toEqual(["paper-review"]));
+      textarea.setSelectionRange(0, 0);
+      // An input method's Backspace is its own.
+      fireEvent.keyDown(textarea, { key: "Backspace", isComposing: true });
+      expect(chips(container)).toEqual(["paper-review"]);
+      fireEvent.keyDown(textarea, { key: "Backspace" });
+      expect(chips(container)).toEqual([]);
+      expect(textarea.value).toBe("hi");
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(sent()).toEqual(["hi"]);
+      write(textarea, "/paper-review again");
+      expect(chips(container)).toEqual(["paper-review"]);
+      fireEvent.click(
+        screen.getByRole("button", { name: "Remove /paper-review" })
+      );
+      expect(chips(container)).toEqual([]);
+      expect(textarea.value).toBe("again");
+    });
+
+    // @tailwindcss/forms rings a focused textarea in blue: next to a chip
+    // it boxed the text alone. The composer box's ring shows the focus.
+    it("draws no focus ring of the box's own", () => {
+      const { container } = renderChatInterface();
+      const textarea = container.querySelector("textarea")!;
+      expect(textarea.className.split(" ")).toContain("focus:ring-0");
+      expect(
+        container.querySelector("form")!.parentElement!.className
+      ).toContain("focus-within:ring-2");
+    });
+
+    // Agent #2 (checkpoint B): a skill typed ahead of a draft takes the
+    // chip's place, and the caret stays where the typing was (it jumped to
+    // the end).
+    it("keeps the caret where a skill was typed ahead of the draft", async () => {
+      const { container } = renderChatInterface();
+      const textarea = container.querySelector("textarea")!;
+      write(textarea, "/paper-reviewhello world");
+      await act(async () => {});
+      await act(async () => {});
+      fireEvent.change(textarea, {
+        target: {
+          value: "/paper-review hello world",
+          selectionStart: 14,
+          selectionEnd: 14,
+        },
+      });
+      expect(chips(container)).toEqual(["paper-review"]);
+      expect(textarea.value).toBe("hello world");
+      expect(textarea.selectionStart).toBe(0);
+    });
+
+    // Codex C1, live: a text that starts with whitespace and a skill reads
+    // the names too (the chip waited for a "/" at index 0 to ask for them).
+    it("shows the chip of a skill after leading whitespace", async () => {
+      const { container } = renderChatInterface();
+      const textarea = container.querySelector("textarea")!;
+      write(textarea, " /paper-review hi");
+      await waitFor(() => expect(chips(container)).toEqual(["paper-review"]));
+      expect(textarea.value).toBe("hi");
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(sent()).toEqual(["/paper-review hi"]);
+    });
+
+    // Codex, confirm round B: a paste made before the skill names arrived
+    // gets the one-skill rule when they do (it pinned both).
+    // CodeRabbit on #103: a chip that forms as the names arrive leaves the
+    // caret where the typing was, not at the box's end.
+    it("keeps the caret in place when a chip forms late", async () => {
+      let answer: (r: Response) => void = () => {};
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((url: string) =>
+          String(url).includes("/api/skills/pinnable")
+            ? new Promise<Response>((resolve) => {
+                answer = resolve;
+              })
+            : Promise.resolve(new Response("{}"))
+        )
+      );
+      const { container } = renderChatInterface();
+      const textarea = container.querySelector("textarea")!;
+      act(() => textarea.focus());
+      fireEvent.change(textarea, { target: { value: "/paper-review hello" } });
+      textarea.setSelectionRange(14, 14);
+      fireEvent.select(textarea);
+      await act(async () =>
+        answer(
+          new Response(
+            JSON.stringify({
+              skills: [
+                { name: "paper-review", description: "x", source: "global" },
+              ],
+            })
+          )
+        )
+      );
+      expect(chips(container)).toEqual(["paper-review"]);
+      expect(textarea.value).toBe("hello");
+      expect(textarea.selectionStart).toBe(0);
+    });
+
+    it("keeps one skill of a paste made before the names arrived", async () => {
+      let answer: (r: Response) => void = () => {};
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((url: string) =>
+          String(url).includes("/api/skills/pinnable")
+            ? new Promise<Response>((resolve) => {
+                answer = resolve;
+              })
+            : Promise.resolve(new Response("{}"))
+        )
+      );
+      const { container } = renderChatInterface();
+      const textarea = container.querySelector("textarea")!;
+      write(textarea, "/paper-review /evo-memory hi");
+      expect(chips(container)).toEqual([]);
+      await act(async () =>
+        answer(
+          new Response(
+            JSON.stringify({
+              skills: [
+                { name: "paper-review", description: "x", source: "global" },
+                { name: "evo-memory", description: "y", source: "global" },
+              ],
+            })
+          )
+        )
+      );
+      expect(chips(container)).toEqual(["evo-memory"]);
+      expect(textarea.value).toBe("hi");
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(sent()).toEqual(["/evo-memory hi"]);
+    });
+
+    // Codex, confirm round 2 (B): a paste of several skills sent before the
+    // names arrive waits for them (which one stays needs them: the backend
+    // skips /words that aren't skills), then goes with one; a second Enter
+    // sends it as typed (a failed read never strands it).
+    it("holds a send of several skills until the names arrive", async () => {
+      let answer: (r: Response) => void = () => {};
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((url: string) =>
+          String(url).includes("/api/skills/pinnable")
+            ? new Promise<Response>((resolve) => {
+                answer = resolve;
+              })
+            : Promise.resolve(new Response("{}"))
+        )
+      );
+      const { container } = renderChatInterface();
+      const textarea = container.querySelector("textarea")!;
+      write(textarea, "/paper-review /evo-memory hi");
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(sent()).toEqual([]);
+      expect(toast.info).toHaveBeenCalledWith(
+        "Checking which skill this pins: it sends once the skills are read.",
+        { id: "skills-pending" }
+      );
+      await act(async () =>
+        answer(
+          new Response(
+            JSON.stringify({
+              skills: [
+                { name: "paper-review", description: "x", source: "global" },
+                { name: "evo-memory", description: "y", source: "global" },
+              ],
+            })
+          )
+        )
+      );
+      expect(sent()).toEqual(["/evo-memory hi"]);
+      expect(textarea.value).toBe("");
+    });
+
+    it("sends a held text as typed on a second Enter", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((url: string) =>
+          String(url).includes("/api/skills/pinnable")
+            ? new Promise<Response>(() => {})
+            : Promise.resolve(new Response("{}"))
+        )
+      );
+      const { container } = renderChatInterface();
+      const textarea = container.querySelector("textarea")!;
+      write(textarea, "/paper-review /evo-memory hi");
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(sent()).toEqual([]);
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(sent()).toEqual(["/paper-review /evo-memory hi"]);
+      // The notice promised a send that went otherwise (Codex, round 3).
+      expect(toast.dismiss).toHaveBeenCalledWith("skills-pending");
+    });
+
+    // Codex, confirm round 3 (B): a held send let go while a queued message
+    // is being started (the drain's latch, before isLoading) waits its turn
+    // in the queue rather than racing it onto the thread.
+    it("queues a held send let go while a queued message is starting", async () => {
+      let answer: (r: Response) => void = () => {};
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((url: string) =>
+          String(url).includes("/api/skills/pinnable")
+            ? new Promise<Response>((resolve) => {
+                answer = resolve;
+              })
+            : Promise.resolve(new Response("{}"))
+        )
+      );
+      const { container } = renderChatInterface();
+      const textarea = container.querySelector("textarea")!;
+      act(() => {
+        stream.setLoading(true);
+      });
+      write(textarea, "first");
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      write(textarea, "/paper-review /evo-memory hi");
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(sent()).toEqual([]);
+      // The turn ends: the drain starts "first" (isLoading not yet true),
+      // and the names arrive in that gap.
+      act(() => {
+        stream.setLoading(false);
+      });
+      expect(sent()).toEqual(["first"]);
+      await act(async () =>
+        answer(
+          new Response(
+            JSON.stringify({
+              skills: [
+                { name: "paper-review", description: "x", source: "global" },
+                { name: "evo-memory", description: "y", source: "global" },
+              ],
+            })
+          )
+        )
+      );
+      expect(sent()).toEqual(["first"]);
+      expect(screen.getByLabelText("Queued messages").textContent).toContain(
+        "hi"
+      );
+    });
+
+    // Codex, confirm round B: Python whitespace ahead of a skill (U+0085)
+    // asks for the names too.
+    it("reads the names for a skill after any whitespace the backend skips", async () => {
+      const { container } = renderChatInterface();
+      const textarea = container.querySelector("textarea")!;
+      write(textarea, "\u0085/paper-review hi");
+      await waitFor(() => expect(chips(container)).toEqual(["paper-review"]));
+      expect(textarea.value).toBe("hi");
+    });
+
+    // Codex C2 / agent #9: one skill a message, a paste of several included:
+    // the last stays.
+    it("keeps the last of several skills pasted in at once", async () => {
+      const { container } = renderChatInterface();
+      const textarea = container.querySelector("textarea")!;
+      write(textarea, "/");
+      await act(async () => {});
+      await act(async () => {});
+      fireEvent.change(textarea, {
+        target: { value: "/paper-review /evo-memory hi" },
+      });
+      expect(chips(container)).toEqual(["evo-memory"]);
+      expect(textarea.value).toBe("hi");
+      // What came off is said (agent, confirm round B: it went silently).
+      expect(toast.info).toHaveBeenCalledWith(
+        "A message takes one skill, so /paper-review came off."
+      );
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(sent()).toEqual(["/evo-memory hi"]);
+    });
+
+    // Codex C4: a chip removed while the last one still folds takes its own
+    // element; the old fold stops and doesn't clear the new one.
+    it("folds each removed chip on its own", async () => {
+      const folds: Array<() => void> = [];
+      Object.defineProperty(Element.prototype, "animate", {
+        configurable: true,
+        value: () => {
+          const animation = {
+            onfinish: null as null | (() => void),
+            cancel: () => {},
+          };
+          folds.push(() => animation.onfinish?.());
+          return animation;
+        },
+      });
+      try {
+        const { container } = renderChatInterface();
+        const textarea = container.querySelector("textarea")!;
+        const leaving = () =>
+          document.querySelector('[data-slot="composer-chip-leaving"]');
+        write(textarea, "/paper-review hi");
+        await waitFor(() => expect(chips(container)).toEqual(["paper-review"]));
+        textarea.setSelectionRange(0, 0);
+        fireEvent.keyDown(textarea, { key: "Backspace" });
+        expect(leaving()?.textContent).toBe("paper-review");
+        write(textarea, "/evo-memory hi");
+        expect(chips(container)).toEqual(["evo-memory"]);
+        textarea.setSelectionRange(0, 0);
+        fireEvent.keyDown(textarea, { key: "Backspace" });
+        expect(leaving()?.textContent).toBe("evo-memory");
+        expect(folds).toHaveLength(2);
+        act(() => folds[0]());
+        expect(leaving()?.textContent).toBe("evo-memory");
+        act(() => folds[1]());
+        expect(leaving()).toBeNull();
+      } finally {
+        delete (Element.prototype as { animate?: unknown }).animate;
+      }
+    });
+
+    // Agent #5: a chip flies in from the row it was picked from once; the same
+    // skill coming back later (typed again) doesn't fly from that row again.
+    it("flies a picked chip in once", async () => {
+      const flights: Keyframe[][] = [];
+      Object.defineProperty(Element.prototype, "animate", {
+        configurable: true,
+        value: (keyframes: Keyframe[]) => {
+          if (String(keyframes[0]?.transform ?? "").includes("translate("))
+            flights.push(keyframes);
+          return { onfinish: null, cancel: () => {} };
+        },
+      });
+      try {
+        const { container } = renderChatInterface();
+        const textarea = container.querySelector("textarea")!;
+        write(textarea, "/pa");
+        await waitFor(() =>
+          expect(screen.getAllByRole("option")).toHaveLength(1)
+        );
+        fireEvent.keyDown(textarea, { key: "Enter" });
+        expect(flights).toHaveLength(1);
+        textarea.setSelectionRange(0, 0);
+        fireEvent.keyDown(textarea, { key: "Backspace" });
+        write(textarea, "/paper-review again");
+        expect(chips(container)).toEqual(["paper-review"]);
+        expect(flights).toHaveLength(1);
+      } finally {
+        delete (Element.prototype as { animate?: unknown }).animate;
+      }
+    });
+
+    // Agent #11: while the composer can't be used, neither can its chip.
+    it("disables the chip's remove button while the composer is locked", async () => {
+      const { container } = renderChatInterface();
+      const textarea = container.querySelector("textarea")!;
+      write(textarea, "/paper-review hi");
+      await waitFor(() => expect(chips(container)).toEqual(["paper-review"]));
+      act(() => {
+        stream.setMessages([humanTurn("hi")]);
+        stream.setInterrupt(askUserInterrupt("what next?"));
+      });
+      expect(
+        screen
+          .getByRole("button", { name: "Remove /paper-review" })
+          .hasAttribute("disabled")
+      ).toBe(true);
+    });
+
+    // Agent #3: a chip's fold leaves the text where it stays: with a chip the
+    // row holds the left padding and the chip keeps its gap on its right.
+    // Without one the padding is the box's again (confirm round B, R1: as
+    // the row's, a press there didn't reach the box); a press on the row
+    // focuses the box either way.
+    it("keeps the text's left edge, the padding the box's without a chip", async () => {
+      const { container } = renderChatInterface();
+      const textarea = container.querySelector("textarea")!;
+      const row = textarea.parentElement!;
+      const classes = (el: Element) => el.className.split(" ");
+      expect(classes(textarea)).toContain("pl-3.5");
+      expect(classes(row)).not.toContain("pl-3.5");
+      write(textarea, "/paper-review hi");
+      await waitFor(() => expect(chips(container)).toEqual(["paper-review"]));
+      expect(classes(textarea)).toContain("pl-0");
+      expect(classes(row)).toContain("pl-3.5");
+      expect(
+        classes(container.querySelector('form [data-slot="composer-chip"]')!)
+      ).toContain("mr-2");
+      act(() => textarea.blur());
+      expect(fireEvent.mouseDown(row)).toBe(false);
+      expect(document.activeElement).toBe(textarea);
+    });
+
+    // Agent, confirm round B (T1): /model after a chip sets the model (a new
+    // chat stages it), the chip staying.
+    it("sets the model from /model typed after a chip", async () => {
+      const { container } = renderChatInterface();
+      const textarea = container.querySelector("textarea")!;
+      write(textarea, "/paper-review hi");
+      await waitFor(() => expect(chips(container)).toEqual(["paper-review"]));
+      fireEvent.change(textarea, { target: { value: "/model gpt-5.5" } });
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      await waitFor(() =>
+        expect(toast.success).toHaveBeenCalledWith("Model set to gpt-5.5.")
+      );
+      expect(chips(container)).toEqual(["paper-review"]);
+      expect(textarea.value).toBe("");
+      expect(sent()).toEqual([]);
+    });
+
+    // Agent, confirm round B (T2): the caret stays where the typing was, the
+    // end of a pasted skill and text included.
+    it("keeps the caret at the end of a pasted skill and text", async () => {
+      const { container } = renderChatInterface();
+      const textarea = container.querySelector("textarea")!;
+      write(textarea, "/");
+      await act(async () => {});
+      await act(async () => {});
+      fireEvent.change(textarea, {
+        target: {
+          value: "/paper-review please review",
+          selectionStart: 27,
+          selectionEnd: 27,
+        },
+      });
+      expect(chips(container)).toEqual(["paper-review"]);
+      expect(textarea.value).toBe("please review");
+      expect(textarea.selectionStart).toBe(13);
+    });
+
+    it("keeps the composer's text as one string for the queue", async () => {
+      const { container } = renderChatInterface();
+      const textarea = container.querySelector("textarea")!;
+      act(() => {
+        stream.setLoading(true);
+      });
+      write(textarea, "/paper-review hi");
+      await waitFor(() => expect(chips(container)).toEqual(["paper-review"]));
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(stream.getSubmitCalls()).toHaveLength(0);
+      expect(chips(container)).toEqual([]);
+      // The queued row shows its skill as a chip too.
+      const queue = screen.getByLabelText("Queued messages");
+      expect(
+        [...queue.querySelectorAll('[data-slot="composer-chip"]')].map(
+          (c) => c.textContent
+        )
+      ).toEqual(["paper-review"]);
+      expect(queue.textContent).toContain("hi");
+      // A selection copies the text as sent: the chip isn't selectable.
+      expect(
+        queue
+          .querySelector('[data-slot="composer-chip"]')!
+          .closest('[aria-hidden="true"]')!
+          .className.split(" ")
+      ).toContain("select-none");
+      // ↑ on the empty composer takes it back to edit, chip and all.
+      fireEvent.keyDown(textarea, { key: "ArrowUp" });
+      expect(chips(container)).toEqual(["paper-review"]);
+      expect(textarea.value).toBe("hi");
     });
   });
 

@@ -5,6 +5,8 @@ import React, {
   useRef,
   useCallback,
   useEffect,
+  useId,
+  useLayoutEffect,
   useMemo,
   FormEvent,
   Fragment,
@@ -71,15 +73,32 @@ import { useTeams } from "@/app/hooks/useTeams";
 import { ExpertsPill } from "@/app/components/ExpertsPill";
 import { GoalPill } from "@/app/components/GoalPill";
 import {
-  GOAL_MENU_COMMANDS,
+  goalPageActions,
   goalRefusal,
   goalRequest,
+  goalSummary,
   goalUsageLine,
   NO_GOAL_TEXT,
   parseGoalCommand,
   type GoalCommand,
+  type GoalPageActionKind,
 } from "@/lib/goalCommand";
 import { SlashSkillMenu } from "@/app/components/SlashSkillMenu";
+import { ComposerChip } from "@/app/components/ComposerChip";
+import { SwapText } from "@/app/components/SwapText";
+import {
+  composerLead,
+  mayPin,
+  oneSkill,
+  pinLead,
+  previewLead,
+  GOAL_LEADS,
+  type ComposerChip as ComposerChipValue,
+  type GoalMode,
+} from "@/lib/composerChip";
+import { canAnimate, prefersReducedMotion } from "@/lib/motion";
+import { pyStrip } from "@/lib/pythonWhitespace";
+import { pinnedSkillName } from "@/lib/pinnedSkill";
 import { useSlashMenu } from "@/app/hooks/useSlashMenu";
 import { cn } from "@/lib/utils";
 import { copyText } from "@/lib/clipboard";
@@ -133,11 +152,12 @@ import { useQueryState } from "nuqs";
 import { toast } from "sonner";
 import { useFilePane } from "@/providers/filePaneContext";
 import {
-  COMMON_MODELS,
-  MODEL_MENU_COMMANDS,
   parseModelCommand,
+  type ModelCommand,
   type ModelOverride,
 } from "@/lib/modelCommand";
+import { modelPageEntries, modelPageModels } from "@/lib/modelPage";
+import type { MenuIcon, MenuPage, MenuRow } from "@/lib/slashMenu";
 import { useAvailableModels } from "@/app/hooks/useAvailableModels";
 import type { NavTarget } from "@/lib/navTarget";
 
@@ -263,9 +283,45 @@ function foldBack(
   return { ...base, notSent: commands };
 }
 
-/** The `/` menu's commands by name, where the backend runs goals; /model's
- *  alone everywhere else. */
-const GOAL_AND_MODEL_COMMANDS = [...GOAL_MENU_COMMANDS, ...MODEL_MENU_COMMANDS];
+/** The Goal page's rows say what they do. */
+const GOAL_ROW_ICONS: Record<GoalPageActionKind, MenuIcon> = {
+  create: "plus",
+  amend: "pencil",
+  pause: "pause",
+  resume: "play",
+  clear: "clear",
+  show: "details",
+};
+
+/** The composer's command words: /goal stays one while goal support is
+ *  unknown; only a backend known not to run goals leaves it to skills. */
+const COMMAND_WORDS: readonly string[] = ["model", "goal"];
+const MODEL_ONLY: readonly string[] = ["model"];
+
+/** A message without pinned skills. */
+const NO_PINS: readonly string[] = [];
+
+/** The skills the backend pinned for the user message at `index`: the
+ *  pinned_skill markers right after it. */
+function pinnedAfter(
+  entries: ReadonlyArray<{ message: Message }>,
+  index: number
+): readonly string[] {
+  const names: string[] = [];
+  for (let i = index + 1; i < entries.length; i++) {
+    const name = pinnedSkillName(entries[i].message);
+    if (name === null) break;
+    names.push(name);
+  }
+  return names.length > 0 ? names : NO_PINS;
+}
+
+/** One toast for goal mode's hints, each replacing the last. */
+const GOAL_HINT_ID = "goal-mode-hint";
+
+/** Whether a page row's label holds what was typed on the page. */
+const rowMatches = (label: string, filter: string) =>
+  label.toLowerCase().includes(filter.trim().toLowerCase());
 
 /** Whether Enter may read a text as a /goal command in the composer it
  *  comes back to: wherever goals are supported, or not known yet (support
@@ -416,11 +472,46 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     >(null);
     const tasksContainerRef = useRef<HTMLDivElement | null>(null);
     const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+    const chipHintId = useId();
     // The composer box, which the `/` menu sits above.
     const composerRef = useRef<HTMLDivElement | null>(null);
     const uploadInputRef = useRef<HTMLInputElement | null>(null);
 
     const [input, setInput] = useState("");
+    // The installed skills' names a chip can show (the `/` menu reads them).
+    const [knownSkills, setKnownSkills] = useState<ReadonlySet<string> | null>(
+      null
+    );
+    // Where a skill was picked in the menu: its chip flies in from there.
+    const [flyFrom, setFlyFrom] = useState<{
+      name: string;
+      rect: DOMRect | null;
+    } | null>(null);
+    // A chip removed by the user, folding away: each its own element (seq),
+    // so one removed while the last still folds starts its own fold.
+    const [leavingChip, setLeavingChip] = useState<{
+      chip: ComposerChipValue;
+      seq: number;
+    } | null>(null);
+    const leaveSeq = useRef(0);
+    const foldChip = (chip: ComposerChipValue) =>
+      setLeavingChip({ chip, seq: (leaveSeq.current += 1) });
+    // The pick a chip flew in from: given to the chip mounted with it, never
+    // to a later one (the same skill typed again or handed back pops).
+    const flown = useRef<typeof flyFrom>(null);
+    useLayoutEffect(() => {
+      flown.current = flyFrom;
+    });
+    // Goal mode, which only the Goal page starts: the box's text goes out as
+    // the goal (or its amendment) after the mode's words.
+    const [goalMode, setGoalMode] = useState<GoalMode | null>(null);
+    // The `/model` command and the model pill open the menu's Model page; a
+    // submit (Send pressed with a page open) closes the menu.
+    const openModelPageRef = useRef(() => {});
+    const closeMenuRef = useRef(() => {});
+    // A send held until the skill names arrive (several leading /words): the
+    // text it held, sent once they do.
+    const heldRef = useRef<string | null>(null);
     const [pendingFiles, setPendingFiles] = useState<UploadedWorkspaceFile[]>(
       []
     );
@@ -481,8 +572,16 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     const [goalDetailsOpen, setGoalDetailsOpen] = useState(false);
     const queuedMessagesRef = useRef<QueuedMessage[]>(queuedMessages);
     queuedMessagesRef.current = queuedMessages;
-    const composerStateRef = useRef({ input, pendingFiles });
-    composerStateRef.current = { input, pendingFiles };
+    // What the folds see as the draft: goal mode with nothing written is none
+    // (a hand-back glued its "/goal" to the text it brought back).
+    const foldDraft =
+      goalMode !== null &&
+      input.startsWith(GOAL_LEADS[goalMode]) &&
+      !input.slice(GOAL_LEADS[goalMode].length).trim()
+        ? ""
+        : input;
+    const composerStateRef = useRef({ input: foldDraft, pendingFiles });
+    composerStateRef.current = { input: foldDraft, pendingFiles };
     const onComposerSnapshotReadyRef = useRef(onComposerSnapshotReady);
     onComposerSnapshotReadyRef.current = onComposerSnapshotReady;
     useEffect(() => {
@@ -523,13 +622,6 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       getThreadAutoApprove(threadId)
     );
     const [autoApproveDialogOpen, setAutoApproveDialogOpen] = useState(false);
-    const [modelPickerOpen, setModelPickerOpen] = useState(false);
-    const [modelSearch, setModelSearch] = useState("");
-    // Reset the search box every time the picker opens — stale filter state
-    // surviving across opens would surprise the user.
-    useEffect(() => {
-      if (modelPickerOpen) setModelSearch("");
-    }, [modelPickerOpen]);
     const {
       registry: modelRegistry,
       loading: modelRegistryLoading,
@@ -544,7 +636,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     useEffect(() => {
       if (isFallbackModelList) {
         console.warn(
-          "[model picker] using curated fallback list — registry fetch failed or empty",
+          "[model page] using curated fallback list — registry fetch failed or empty",
           modelRegistryError ?? "(no error message)"
         );
       }
@@ -553,32 +645,10 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     // to the curated short list when the endpoint isn't available (older
     // deployment, network blip). Registry order is the rank the backend
     // recommends — we don't re-sort.
-    const pickerModels = useMemo(() => {
-      if (modelRegistry.entries.length > 0) {
-        return modelRegistry.entries.map((e) => ({
-          model: e.name,
-          model_provider: e.provider,
-        }));
-      }
-      return COMMON_MODELS.map((m) => ({
-        model: m.model,
-        model_provider: m.model_provider,
-      }));
-    }, [modelRegistry.entries]);
-    // Case-insensitive substring filter on name + provider. Fuzzy match was
-    // discussed but punted — substring catches the common "I know roughly
-    // what I want" case and keeps the picker behavior predictable.
-    const filteredPickerModels = useMemo(() => {
-      const q = modelSearch.trim().toLowerCase();
-      if (!q) return pickerModels;
-      return pickerModels.filter((m) => {
-        const provider = m.model_provider ?? "";
-        return (
-          m.model.toLowerCase().includes(q) ||
-          provider.toLowerCase().includes(q)
-        );
-      });
-    }, [pickerModels, modelSearch]);
+    const pickerModels = useMemo(
+      () => modelPageModels(modelRegistry.entries),
+      [modelRegistry.entries]
+    );
     const previousThreadIdRef = useRef(threadId);
     const migrateAutoApproveForCreatedThreadRef = useRef(false);
     const { scrollRef, contentRef, scrollToBottom, isAtBottom } =
@@ -634,6 +704,33 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     // The goal's details close with the goal: left open, they would pop up
     // by themselves for the next one.
     if (!goal && goalDetailsOpen) setGoalDetailsOpen(false);
+
+    // Goal mode lasts while the box starts with its words and goals run
+    // here: a send, a text put back from outside or a backend without goals
+    // ends it (what is left is ordinary text).
+    const goalModeOn =
+      goalMode !== null &&
+      goalSupported === true &&
+      input.startsWith(GOAL_LEADS[goalMode]);
+    if (goalMode !== null && !goalModeOn) setGoalMode(null);
+    const activeGoalMode = goalModeOn ? goalMode : null;
+
+    // A goal with nothing written: the box shakes a little.
+    const nudgeComposer = useCallback(() => {
+      const el = composerRef.current;
+      if (!canAnimate(el) || prefersReducedMotion()) return;
+      el.animate(
+        [
+          { transform: "none" },
+          { transform: "translateX(-3px)", offset: 0.2 },
+          { transform: "translateX(3px)", offset: 0.4 },
+          { transform: "translateX(-2px)", offset: 0.6 },
+          { transform: "translateX(2px)", offset: 0.8 },
+          { transform: "none" },
+        ],
+        { duration: 280, easing: "ease" }
+      );
+    }, []);
 
     // /goal, answered the way the core's GoalCommand answers it: show opens
     // the goal pill, a refusal is said in the core's words, and anything else
@@ -703,6 +800,9 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
           goalCommandFor(goalSupportedRef.current)
         );
         setQueuedMessages([]);
+        // Text brought back is text: goal mode ends with what it held (a
+        // draft only trimmed is the same text).
+        if (back.text !== draft.trim()) setGoalMode(null);
         setInput(back.text);
         setPendingFiles(back.files);
         sayNotSent(back.notSent);
@@ -893,81 +993,6 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       if (isLoading) autoFireInFlightRef.current = false;
     }, [isLoading]);
 
-    useEffect(() => {
-      if (!liveAgentTasks || liveAgentTasks.length === 0) return;
-      if (!threadId || !autoNotify) return;
-      // One-time migration/baseline: existing terminal tasks predate the setting
-      // and must not replay when this feature first appears or is restored.
-      if (!isThreadAutoNotifyInitialized(threadId)) {
-        initializeThreadAutoNotifyReports(
-          threadId,
-          liveAgentTasks
-            .filter((task) => isTerminalStatus(task.liveStatus))
-            .map(asyncTaskReportKey)
-        );
-        return;
-      }
-      // Don't fire when: off; the thread is busy (the agent's own turn takes the
-      // slot); a report we just sent hasn't started yet; or the USER is composing
-      // a query (draft text) — their message has priority, so we hold the queue
-      // until the composer is clear. Pending completions stay unreported (= the
-      // queue) and drain one per idle window.
-      // An interrupt waiting on the user holds reports too: a report is a run
-      // with a message, which would drop a goal's pending review.
-      if (
-        !canSend ||
-        isLoading ||
-        hasPendingInterrupt ||
-        autoFireInFlightRef.current ||
-        input.trim()
-      )
-        return;
-      // User-queued messages take the idle slot first — hold auto-reports until
-      // the user's own queue has drained.
-      if (queuedMessages.length > 0) return;
-      const reportedKeys = getThreadAutoNotifyReportedKeys(threadId);
-      for (const t of liveAgentTasks) {
-        if (!isTerminalStatus(t.liveStatus)) continue;
-        const key = asyncTaskReportKey(t);
-        if (reportedKeys.has(key)) continue;
-        if (
-          messages.some(
-            (message) =>
-              message.type === "human" &&
-              asyncUpdateMatchesTask(
-                extractStringFromMessageContent(message),
-                t
-              )
-          )
-        ) {
-          markThreadAutoNotifyReported(threadId, key);
-          continue;
-        }
-        if (!canRunNow()) return;
-        autoFireInFlightRef.current = true;
-        markThreadAutoNotifyReported(threadId, key);
-        // A report of finished background work only completes a grading
-        // that waited for it; as a thread turn it would start a new one.
-        sendMessage(formatAsyncUpdateMessage(t), { mode: "followup" });
-        toast.success(
-          `Auto-reported ${agentLabel(t.agent_name)} to the main chat.`
-        );
-        break; // one per idle window; the rest fire once this turn settles
-      }
-    }, [
-      canSend,
-      canRunNow,
-      liveAgentTasks,
-      autoNotify,
-      isLoading,
-      hasPendingInterrupt,
-      input,
-      messages,
-      sendMessage,
-      threadId,
-      queuedMessages,
-    ]);
-
     // Re-engage stick-to-bottom whenever a new run starts (sending a message or
     // resuming an interrupt → isLoading flips true). Without this, if the user had
     // drifted even slightly off the bottom after the previous answer, a short new
@@ -1135,6 +1160,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
           back.text !== draft.trim() ||
           back.files.length !== attached.length
         ) {
+          if (back.text !== draft.trim()) setGoalMode(null);
           setInput(back.text);
           setPendingFiles(back.files);
         }
@@ -1259,13 +1285,49 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     //             aren't in our curated list are still accepted — the backend
     //             accepts anything `init_chat_model` knows, and we'd rather
     //             not block a power user on our curation lagging the registry.
-    const applyModelCommand = useCallback(
-      async (cmd: ReturnType<typeof parseModelCommand>) => {
-        if (!cmd) return;
-        if (cmd.kind === "show") {
-          setModelPickerOpen(true);
-          return;
+    // A model chosen on the Model page, and Reset to default: said with a
+    // toast either way.
+    const chooseModel = useCallback(
+      async (m: ModelOverride): Promise<boolean> => {
+        try {
+          await setModelOverride({
+            model: m.model,
+            ...(m.model_provider ? { model_provider: m.model_provider } : {}),
+          });
+          toast.success(
+            `Model set to ${m.model}${
+              m.model_provider ? ` (${m.model_provider})` : ""
+            }.`
+          );
+          return true;
+        } catch (err) {
+          toast.error(
+            err instanceof Error
+              ? `Couldn't update model: ${err.message}`
+              : "Couldn't update model — try again."
+          );
+          return false;
         }
+      },
+      [setModelOverride]
+    );
+    const resetModel = useCallback(async (): Promise<boolean> => {
+      try {
+        await setModelOverride(null);
+        toast.success("Model override cleared.");
+        return true;
+      } catch (err) {
+        toast.error(
+          err instanceof Error
+            ? `Couldn't clear override: ${err.message}`
+            : "Couldn't clear override — try again."
+        );
+        return false;
+      }
+    }, [setModelOverride]);
+
+    const applyModelCommand = useCallback(
+      async (cmd: Exclude<ModelCommand, { kind: "show" }>) => {
         // Pre-thread picks are staged in useChat and applied to the first
         // run; no threadId guard needed.
         try {
@@ -1296,23 +1358,104 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     );
 
     const handleSubmit = useCallback(
-      (e?: FormEvent) => {
+      // `queueIfBusy`: a held send let go joins the queue while a queued
+      // message or an auto-report is being started (their latch covers the
+      // gap before isLoading) or messages wait, rather than racing them.
+      (
+        e?: FormEvent,
+        { queueIfBusy = false }: { queueIfBusy?: boolean } = {}
+      ) => {
         if (e) {
           e.preventDefault();
         }
         const messageText = input.trim();
         if (!messageText) return;
+        // Enter on a page is the page's: only Send gets here with one open.
+        // It sends what shows, the page's word left out.
+        closeMenuRef.current();
+        // Several leading /words and no skill names yet: which one the
+        // message pins (one skill a message) needs them, since the backend
+        // skips /words that aren't skills. The send waits and goes when they
+        // arrive; a second Enter sends the text as typed (a read that fails
+        // never strands it).
+        if (!activeGoalMode && knownSkills === null) {
+          const commands = new Set(
+            goalSupported === false ? MODEL_ONLY : COMMAND_WORDS
+          );
+          const first = pinLead(input, commands);
+          const several =
+            !!first &&
+            pinLead(input.slice(first.lead.length), commands) !== null;
+          if (several && heldRef.current !== input) {
+            heldRef.current = input;
+            toast.info(
+              "Checking which skill this pins: it sends once the skills are read.",
+              { id: "skills-pending" }
+            );
+            return;
+          }
+        }
+        // A send that goes now (a second Enter: as typed) keeps no promise.
+        if (heldRef.current !== null) {
+          heldRef.current = null;
+          toast.dismiss("skills-pending");
+        }
+        // Goal mode: nothing written, or a word the core would read as
+        // another /goal command, stays here with a hint.
+        if (activeGoalMode) {
+          const body = pyStrip(input.slice(GOAL_LEADS[activeGoalMode].length));
+          if (!body) {
+            nudgeComposer();
+            toast.info(
+              activeGoalMode === "goal"
+                ? "Describe the goal first."
+                : "Say what should change in the goal first.",
+              { id: GOAL_HINT_ID }
+            );
+            return;
+          }
+          if (
+            activeGoalMode === "goal" &&
+            parseGoalCommand(messageText)?.kind !== "create"
+          ) {
+            toast.warning(
+              `“${body}” is a /goal command; describe the goal in more words.`,
+              { id: GOAL_HINT_ID }
+            );
+            return;
+          }
+        }
+        // After a leading /word (a skill's chip) the next word may be the
+        // command: /model and /goal answer as typed alone. The word stays for
+        // what needs no run; a goal request goes without it (it carries no
+        // skill). Read whatever the skill names say, so a text sent before
+        // they arrive reads alike (no "/x /goal …" is a message).
+        const pin = activeGoalMode
+          ? null
+          : pinLead(
+              input,
+              new Set(goalSupported === false ? MODEL_ONLY : COMMAND_WORDS)
+            );
+        const afterPin = pin ? input.slice(pin.lead.length).trim() : "";
+        const commandAfterPin =
+          !!afterPin &&
+          (parseModelCommand(afterPin) !== null ||
+            (goalSupported === true && parseGoalCommand(afterPin) !== null));
+        const commandText = commandAfterPin ? afterPin : messageText;
+        const keep = commandAfterPin && pin ? pin.lead : "";
         // Intercept `/model` before the agent sees it — purely client-side
         // state on the thread metadata. The textarea clears regardless of
-        // outcome so the command echo doesn't linger.
-        const modelCmd = parseModelCommand(messageText);
+        // outcome so the command echo doesn't linger; a bare `/model` opens
+        // the menu's Model page.
+        const modelCmd = parseModelCommand(commandText);
         if (modelCmd) {
-          void applyModelCommand(modelCmd);
-          setInput("");
+          if (modelCmd.kind === "show") openModelPageRef.current();
+          else void applyModelCommand(modelCmd);
+          setInput(keep);
           return;
         }
         const goalCmd =
-          goalSupported === true ? parseGoalCommand(messageText) : null;
+          goalSupported === true ? parseGoalCommand(commandText) : null;
         if (goalCmd && pendingFiles.length > 0) {
           toast.warning("A goal can't carry files; send them in a message.");
           return;
@@ -1322,25 +1465,37 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         // the usage line leaves "/goal amend" to be finished.
         if (goalCmd && (goalCmd.kind === "show" || goalCmd.kind === "usage")) {
           runGoalCommand(goalCmd);
-          if (goalCmd.kind === "show") setInput("");
+          if (goalCmd.kind === "show") setInput(keep);
           return;
         }
+        const outText = goalCmd ? commandText : messageText;
+        const dropsSkill = () => {
+          if (goalCmd && commandAfterPin && pin) {
+            toast.info(`A goal doesn't take skills, so /${pin.name} came off.`);
+          }
+        };
         // Can't compose with no assistant, a pending interrupt, or files still
         // uploading. (Unlike before, isLoading is NOT a blocker — see below.)
         if (!canSend || hasPendingInterrupt || isUploadingFiles) return;
         // Agent busy → queue it. The queue drains and sends
         // automatically once this turn finishes (or is stopped); the message is
         // appended as the next turn — it never replaces what's already running.
-        if (isLoading) {
+        if (
+          isLoading ||
+          (queueIfBusy &&
+            (autoFireInFlightRef.current ||
+              queuedMessagesRef.current.length > 0))
+        ) {
           setQueuedMessages((prev) => [
             ...prev,
             {
               id: (queueIdRef.current += 1),
-              text: messageText,
+              text: outText,
               files: pendingFiles,
               threadId,
             },
           ]);
+          dropsSkill();
           setInput("");
           setPendingFiles([]);
           return;
@@ -1350,12 +1505,16 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
           threadId === null && autoApprove;
         // A refused /goal keeps its text: an objective over the limit is to
         // be shortened, amend feedback is wanted again.
-        if (sendComposerText(messageText, pendingFiles) === "kept") return;
+        if (sendComposerText(outText, pendingFiles) === "kept") return;
+        dropsSkill();
         setInput("");
         setPendingFiles([]);
       },
       [
         input,
+        knownSkills,
+        activeGoalMode,
+        nudgeComposer,
         applyModelCommand,
         canSend,
         canRunNow,
@@ -1373,18 +1532,33 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
 
     // Pull a queued message back into the composer to edit it (also restores its
     // attached files), removing it from the queue. Only ever touches the unsent
-    // draft — the running/sent messages in the thread are untouched.
+    // draft — the running/sent messages in the thread are untouched. A goal
+    // or an amendment comes back in its mode, as its queued row showed it
+    // (the owner's call, 2026-10-25); the composer is empty here (↑ and Edit
+    // need it so), so no chip of its own is in the way.
     const editQueuedMessage = useCallback((id: number) => {
       const target = queuedMessagesRef.current.find((m) => m.id === id);
       if (!target) return;
       setQueuedMessages((prev) => prev.filter((m) => m.id !== id));
-      setInput(target.text);
+      const goalLead = previewLead(target.text, {
+        skills: null,
+        goals: goalSupportedRef.current === true,
+      });
+      const mode: GoalMode | null =
+        goalLead.chip?.kind === "goal" || goalLead.chip?.kind === "amend"
+          ? goalLead.chip.kind
+          : null;
+      const text = mode
+        ? GOAL_LEADS[mode] + target.text.slice(goalLead.lead.length)
+        : target.text;
+      setGoalMode(mode);
+      setInput(text);
       setPendingFiles(target.files);
       requestAnimationFrame(() => {
         const el = textareaRef.current;
         if (el) {
           el.focus();
-          el.setSelectionRange(target.text.length, target.text.length);
+          el.setSelectionRange(text.length, text.length);
         }
       });
     }, []);
@@ -1438,24 +1612,336 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       setQueuedMessages([]);
     }, []);
 
-    // The `/` menu: installed skills to pin while a leading `/name` is typed.
+    // The chip: the composer holds one string, and a chip stands for its
+    // start (the skill its first word pins, or goal mode's words); the box
+    // shows the rest.
+    const commandWords = goalSupported === false ? MODEL_ONLY : COMMAND_WORDS;
+    const chipOptions = {
+      skills: knownSkills,
+      goalMode: activeGoalMode,
+      commands: new Set(commandWords),
+    };
+    // A change typed or pasted before the skill names arrived gets the
+    // one-skill rule once they do, if the box still holds it (a hand-back
+    // meanwhile keeps its text).
+    const [unsorted, setUnsorted] = useState<string | null>(null);
+    // The skills one skill a message took off, said once committed.
+    const droppedRef = useRef<string | null>(null);
+    if (unsorted !== null && knownSkills !== null) {
+      setUnsorted(null);
+      if (input === unsorted) {
+        const one = oneSkill(input, chipOptions);
+        if (one !== input) {
+          droppedRef.current = input.slice(0, input.length - one.length);
+          setInput(one);
+        }
+      }
+    }
+    useEffect(() => {
+      const dropped = droppedRef.current;
+      if (dropped === null) return;
+      droppedRef.current = null;
+      const names = dropped.trim().split(/\s+/).join(", ");
+      toast.info(`A message takes one skill, so ${names} came off.`);
+    });
+    // A send held for the skill names goes once they arrive, if the box
+    // still holds its text (or that text with one skill); anything else
+    // typed or brought back meanwhile drops the hold.
+    const submitRef = useRef(() => {});
+    useLayoutEffect(() => {
+      submitRef.current = () => handleSubmit(undefined, { queueIfBusy: true });
+    });
+    const holdOptions = useRef(chipOptions);
+    holdOptions.current = chipOptions;
+    useEffect(() => {
+      const held = heldRef.current;
+      if (knownSkills === null || held === null) return;
+      heldRef.current = null;
+      toast.dismiss("skills-pending");
+      const now = composerStateRef.current.input;
+      if (now !== held && now !== oneSkill(held, holdOptions.current)) return;
+      submitRef.current();
+    }, [knownSkills]);
+    const lead = composerLead(input, chipOptions);
+    const rest = input.slice(lead.lead.length);
+    const chip = lead.chip;
+
+    // A command chosen from a page runs as if typed and sent with Enter:
+    // queued while the agent works, the draft left alone. Its typed word is
+    // gone by then, so one that can't run says so.
+    const runMenuCommand = (text: string) => {
+      const notNow = () =>
+        toast.info("This chat can't run commands yet. Try again in a moment.");
+      if (!canSend || hasPendingInterrupt) {
+        notNow();
+        return;
+      }
+      if (isLoading) {
+        setQueuedMessages((prev) => [
+          ...prev,
+          { id: (queueIdRef.current += 1), text, files: [], threadId },
+        ]);
+        return;
+      }
+      if (!canRunNow()) {
+        notNow();
+        return;
+      }
+      sendComposerText(text, []);
+    };
+
+    // Set a goal… / Amend the goal…: the mode's words go ahead of the box's
+    // text, and typing goes on after it. A skill's chip comes off (a goal
+    // request carries none), and says so.
+    const enterGoalMode = (mode: GoalMode) => {
+      if (chip?.kind === "skill") {
+        foldChip(chip);
+        toast.info(`A goal doesn't take skills, so /${chip.name} came off.`);
+      }
+      const body = rest.trimStart();
+      setGoalMode(mode);
+      setInput(GOAL_LEADS[mode] + body);
+      slash.placeCaret(body.length);
+    };
+
+    const runGoalPageAction = (kind: GoalPageActionKind) => {
+      if (kind === "show") {
+        setGoalDetailsOpen(true);
+        return;
+      }
+      if (kind === "create" || kind === "amend") {
+        enterGoalMode(kind === "create" ? "goal" : "amend");
+        return;
+      }
+      runMenuCommand(`/goal ${kind}`);
+    };
+
+    // The `/` menu's commands, each a page: the goal's (where goals run) and
+    // the model's (everywhere).
+    const goalPage: MenuPage | null =
+      goalSupported === true
+        ? {
+            word: "goal",
+            label: "Goal",
+            icon: "goal",
+            description: goalSummary(goal),
+            status: goal ? `${goal.objective} · ${goal.status}` : "No goal yet",
+            rows: (filter) =>
+              goalPageActions(goal)
+                .filter((a) => rowMatches(a.label, filter))
+                .map(
+                  (a): MenuRow => ({
+                    id: a.kind,
+                    label: a.label,
+                    description: a.description,
+                    icon: GOAL_ROW_ICONS[a.kind],
+                    danger: a.kind === "clear",
+                    run: () => runGoalPageAction(a.kind),
+                  })
+                ),
+            empty: (filter) => `Nothing here matches “${filter}”.`,
+          }
+        : null;
+    const modelRowId = (model: string, provider?: string) =>
+      `model:${model}|${provider ?? ""}`;
+    const currentEntry = modelPageEntries({
+      models: pickerModels,
+      override: modelOverride,
+      defaultEntry: modelRegistry.defaultEntry,
+      filter: "",
+    }).find((e) => e.current);
+    const modelPage: MenuPage = {
+      word: "model",
+      label: "Model",
+      icon: "model",
+      description: "Change the model for this chat",
+      tail: currentModel?.name,
+      status: currentModel
+        ? `Current: ${currentModel.name}${modelOverride ? "" : " (default)"}`
+        : undefined,
+      note: isFallbackModelList
+        ? "Showing a curated list: the backend's model registry didn't load."
+        : modelRegistryLoading
+        ? "Loading the backend's models…"
+        : undefined,
+      rows: (filter) => {
+        const rows: MenuRow[] = modelPageEntries({
+          models: pickerModels,
+          override: modelOverride,
+          defaultEntry: modelRegistry.defaultEntry,
+          filter,
+        }).map((e) => ({
+          id: modelRowId(e.model, e.provider),
+          label: e.model,
+          description: e.provider,
+          tail: e.isDefault ? "default" : undefined,
+          icon: e.current ? "check" : null,
+          mono: true,
+          run: () =>
+            void chooseModel({ model: e.model, model_provider: e.provider }),
+        }));
+        if (modelOverride && !filter.trim()) {
+          const fallback = modelRegistry.defaultEntry?.name;
+          rows.push({
+            id: "reset",
+            label: "Reset to default",
+            description: fallback
+              ? `Back to ${fallback}`
+              : "Back to the deployment's default",
+            icon: "reset",
+            run: () => void resetModel(),
+          });
+        }
+        return rows;
+      },
+      initial: currentEntry
+        ? modelRowId(currentEntry.model, currentEntry.provider)
+        : undefined,
+      empty: (filter) => `No models match “${filter}”.`,
+    };
+
+    // The `/` menu: the commands' pages, and installed skills to pin while a
+    // leading `/name` is typed (in the box: after the chip).
+    // The box can't be used (an answer is waited for, or the thread is
+    // read-only here): nor can the menu, the model pill or a chip.
+    const composerLocked = hasPendingInterrupt || binding.kind === "readOnly";
     const slash = useSlashMenu({
       textareaRef,
-      value: input,
-      setValue: setInput,
-      disabled: hasPendingInterrupt,
+      value: rest,
+      setValue: (next) => setInput(lead.lead + next),
+      disabled: composerLocked,
       workspaceSkills: filesHere,
       onBrowse: () => onNavigate?.({ view: "skills" }),
-      commands:
-        goalSupported === true ? GOAL_AND_MODEL_COMMANDS : MODEL_MENU_COMMANDS,
-      // /model chosen from the menu opens the picker at once; a run command
-      // this composer can't read stays an ordinary row (written out).
-      runnerFor: (command) => {
-        const cmd = parseModelCommand(command.insert);
-        return cmd ? () => void applyModelCommand(cmd) : null;
+      pages: goalPage ? [goalPage, modelPage] : [modelPage],
+      commandWords,
+      // In goal mode the box holds the goal: a "/" there is text.
+      rootMenu: activeGoalMode === null,
+      leadSkill: chip?.kind === "skill" ? chip.name : null,
+      // A text that may start with a skill (whitespace ahead of it too)
+      // needs the names to show its chip.
+      wantSkills: activeGoalMode === null && mayPin(input),
+      onSkillsRead: setKnownSkills,
+      // One skill a message: a picked one takes the chip's place, and flies
+      // in from its row; typing goes on after it.
+      onPickSkill: (name, after, from) => {
+        setInput(`/${name} ${after}`);
+        setFlyFrom({ name, rect: from });
       },
     });
     const slashKeyDown = slash.onKeyDown;
+    // The model pill and `/model` open the Model page, on the current model.
+    useLayoutEffect(() => {
+      openModelPageRef.current = () => {
+        textareaRef.current?.focus();
+        slash.openPage("model");
+      };
+      closeMenuRef.current = () => {
+        if (slash.menuProps.view.kind === "page") slash.closeMenu();
+      };
+    });
+    const sendLabel =
+      activeGoalMode === "goal"
+        ? "Set goal"
+        : activeGoalMode === "amend"
+        ? "Amend goal"
+        : "Send";
+    const modelPageOpen =
+      slash.menuProps.open &&
+      slash.menuProps.view.kind === "page" &&
+      slash.menuProps.view.page.word === "model";
+    // A page took its typed word out of the box: the user is still typing,
+    // which holds auto-reports as text in the box does.
+    const menuPageOpen =
+      slash.menuProps.open && slash.menuProps.view.kind === "page";
+
+    // Auto-report finished background tasks to the main chat, one per idle
+    // window (its rules are inside).
+    useEffect(() => {
+      if (!liveAgentTasks || liveAgentTasks.length === 0) return;
+      if (!threadId || !autoNotify) return;
+      // One-time migration/baseline: existing terminal tasks predate the setting
+      // and must not replay when this feature first appears or is restored.
+      if (!isThreadAutoNotifyInitialized(threadId)) {
+        initializeThreadAutoNotifyReports(
+          threadId,
+          liveAgentTasks
+            .filter((task) => isTerminalStatus(task.liveStatus))
+            .map(asyncTaskReportKey)
+        );
+        return;
+      }
+      // Don't fire when: off; the thread is busy (the agent's own turn takes the
+      // slot); a report we just sent hasn't started yet; or the USER is composing
+      // a query (draft text) — their message has priority, so we hold the queue
+      // until the composer is clear. Pending completions stay unreported (= the
+      // queue) and drain one per idle window.
+      // An interrupt waiting on the user holds reports too: a report is a run
+      // with a message, which would drop a goal's pending review.
+      if (
+        !canSend ||
+        isLoading ||
+        hasPendingInterrupt ||
+        autoFireInFlightRef.current ||
+        input.trim() ||
+        menuPageOpen
+      )
+        return;
+      // User-queued messages take the idle slot first — hold auto-reports until
+      // the user's own queue has drained.
+      if (queuedMessages.length > 0) return;
+      const reportedKeys = getThreadAutoNotifyReportedKeys(threadId);
+      for (const t of liveAgentTasks) {
+        if (!isTerminalStatus(t.liveStatus)) continue;
+        const key = asyncTaskReportKey(t);
+        if (reportedKeys.has(key)) continue;
+        if (
+          messages.some(
+            (message) =>
+              message.type === "human" &&
+              asyncUpdateMatchesTask(
+                extractStringFromMessageContent(message),
+                t
+              )
+          )
+        ) {
+          markThreadAutoNotifyReported(threadId, key);
+          continue;
+        }
+        if (!canRunNow()) return;
+        autoFireInFlightRef.current = true;
+        markThreadAutoNotifyReported(threadId, key);
+        // A report of finished background work only completes a grading
+        // that waited for it; as a thread turn it would start a new one.
+        sendMessage(formatAsyncUpdateMessage(t), { mode: "followup" });
+        toast.success(
+          `Auto-reported ${agentLabel(t.agent_name)} to the main chat.`
+        );
+        break; // one per idle window; the rest fire once this turn settles
+      }
+    }, [
+      canSend,
+      canRunNow,
+      liveAgentTasks,
+      autoNotify,
+      isLoading,
+      hasPendingInterrupt,
+      input,
+      messages,
+      sendMessage,
+      threadId,
+      queuedMessages,
+      menuPageOpen,
+    ]);
+
+    // Backspace at the box's start, or the chip's button (Escape too, for
+    // goal mode): the chip goes (and folds away), the text after it stays.
+    const removeChip = () => {
+      if (!chip) return;
+      foldChip(chip);
+      if (chip.kind !== "skill") setGoalMode(null);
+      setInput(rest);
+      textareaRef.current?.focus();
+    };
 
     const handleKeyDown = useCallback(
       (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -1468,6 +1954,21 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         if (e.nativeEvent.isComposing || e.keyCode === 229) return;
         // While the `/` menu is open, the arrows, Enter, Tab and Escape are its.
         if (slashKeyDown(e)) return;
+        if (e.key === "Escape" && activeGoalMode) {
+          e.preventDefault();
+          removeChip();
+          return;
+        }
+        if (
+          e.key === "Backspace" &&
+          chip &&
+          e.currentTarget.selectionStart === 0 &&
+          e.currentTarget.selectionEnd === 0
+        ) {
+          e.preventDefault();
+          removeChip();
+          return;
+        }
         // ↑ on an empty composer pulls the most recent queued message back to edit.
         if (
           e.key === "ArrowUp" &&
@@ -1484,10 +1985,14 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
           handleSubmit();
         }
       },
+      // removeChip is this render's (chip, rest): `chip` covers it.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
       [
         handleSubmit,
         hasPendingInterrupt,
         input,
+        chip,
+        activeGoalMode,
         editQueuedMessage,
         slashKeyDown,
       ]
@@ -1781,6 +2286,11 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         return {
           ...data,
           showAvatar: data.message.type !== prevMessage?.type,
+          pinnedSkills:
+            data.message.type === "human" &&
+            pinnedSkillName(data.message) === null
+              ? pinnedAfter(processedArray, index)
+              : NO_PINS,
         };
       });
     }, [messages, actionRequests, interrupt, isLoading, runSettled, stream]);
@@ -1983,153 +2493,6 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
             </DialogFooter>
           </DialogContent>
         </Dialog>
-        <Dialog
-          open={modelPickerOpen}
-          onOpenChange={setModelPickerOpen}
-        >
-          <DialogContent className="sm:max-w-md">
-            <DialogHeader>
-              <DialogTitle>Pick a model for this chat</DialogTitle>
-              <DialogDescription>
-                The choice applies per-thread. Type{" "}
-                <span className="font-mono text-xs">/model &lt;name&gt;</span>{" "}
-                in the composer to use a name not in the list.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="mt-2 space-y-2">
-              <div className="text-xs text-muted-foreground">
-                Current:{" "}
-                <span className="font-mono">
-                  {currentModel
-                    ? `${currentModel.name}${
-                        currentModel.provider
-                          ? ` (${currentModel.provider})`
-                          : ""
-                      }`
-                    : "deployment default"}
-                </span>
-                {modelRegistryLoading && (
-                  <span className="ml-2 italic">loading registry…</span>
-                )}
-              </div>
-              {isFallbackModelList && (
-                <div className="border-[var(--color-warning)]/30 bg-[var(--color-warning)]/5 flex items-start gap-2 rounded-md border px-3 py-2 text-xs text-foreground">
-                  <span
-                    aria-hidden="true"
-                    className="text-base leading-none text-[var(--color-warning)]"
-                  >
-                    {"\u26A0"}
-                  </span>
-                  <span>
-                    Showing a curated subset — the deployment&rsquo;s
-                    <span className="mx-1 font-mono">/api/models</span>
-                    registry didn&rsquo;t load
-                    {modelRegistryError ? ` (${modelRegistryError})` : ""}.
-                    Other short names still work via{" "}
-                    <span className="font-mono">/model &lt;name&gt;</span>.
-                  </span>
-                </div>
-              )}
-              <input
-                type="text"
-                value={modelSearch}
-                onChange={(e) => setModelSearch(e.target.value)}
-                placeholder="Filter by name or provider…"
-                autoFocus
-                className="w-full rounded-md border border-border bg-background px-3 py-1.5 font-mono text-sm placeholder:font-sans placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              />
-              <ul className="max-h-72 space-y-1 overflow-y-auto pl-0">
-                {filteredPickerModels.length === 0 && (
-                  <li className="px-3 py-2 text-xs text-muted-foreground">
-                    No models match &ldquo;{modelSearch}&rdquo;.
-                  </li>
-                )}
-                {filteredPickerModels.map((m) => {
-                  const isActive =
-                    modelOverride?.model === m.model &&
-                    modelOverride?.model_provider === m.model_provider;
-                  const isDefault =
-                    !modelOverride &&
-                    modelRegistry.defaultEntry?.name === m.model &&
-                    (modelRegistry.defaultEntry?.provider ?? null) ===
-                      (m.model_provider ?? null);
-                  return (
-                    <li key={`${m.model}|${m.model_provider ?? ""}`}>
-                      <button
-                        type="button"
-                        aria-label={`Select model ${m.model}${
-                          m.model_provider ? ` from ${m.model_provider}` : ""
-                        }${isDefault ? " (default)" : ""}`}
-                        onClick={async () => {
-                          try {
-                            await setModelOverride({
-                              model: m.model,
-                              ...(m.model_provider
-                                ? { model_provider: m.model_provider }
-                                : {}),
-                            });
-                            toast.success(
-                              `Model set to ${m.model}${
-                                m.model_provider ? ` (${m.model_provider})` : ""
-                              }.`
-                            );
-                            setModelPickerOpen(false);
-                          } catch (err) {
-                            toast.error(
-                              err instanceof Error
-                                ? `Couldn't update model: ${err.message}`
-                                : "Couldn't update model — try again."
-                            );
-                          }
-                        }}
-                        className={cn(
-                          "flex w-full items-center justify-between gap-3 rounded px-3 py-2 text-left text-sm transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
-                          isActive && "bg-accent"
-                        )}
-                      >
-                        <span className="min-w-0 truncate font-mono">
-                          {m.model}
-                          {isDefault && (
-                            <span className="ml-2 text-xs font-normal text-muted-foreground">
-                              · default
-                            </span>
-                          )}
-                        </span>
-                        {m.model_provider && (
-                          <span className="shrink-0 text-xs text-muted-foreground">
-                            {m.model_provider}
-                          </span>
-                        )}
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
-            <DialogFooter>
-              <Button
-                variant="outline"
-                onClick={async () => {
-                  try {
-                    await setModelOverride(null);
-                    toast.success("Model override cleared.");
-                    setModelPickerOpen(false);
-                  } catch (err) {
-                    toast.error(
-                      err instanceof Error
-                        ? `Couldn't clear override: ${err.message}`
-                        : "Couldn't clear override — try again."
-                    );
-                  }
-                }}
-                disabled={!modelOverride}
-              >
-                Reset to default
-              </Button>
-              <Button onClick={() => setModelPickerOpen(false)}>Close</Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
         <div
           className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain"
           ref={scrollRef}
@@ -2254,6 +2617,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                         autoApprove={autoApprove}
                         approvalAutoResolves={approvalAutoResolves}
                         subAgentSteps={subAgentSteps}
+                        pinnedSkills={data.pinnedSkills}
                       />
                     </React.Fragment>
                   );
@@ -2327,6 +2691,12 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                 {queuedMessages.map((q, index) => {
                   const editBlocked =
                     input.trim().length > 0 || pendingFiles.length > 0;
+                  // Its skill or goal as a chip, read as Enter will read it.
+                  const preview = previewLead(q.text, {
+                    skills: knownSkills,
+                    goals: goalSupported === true,
+                    commands: new Set(commandWords),
+                  });
                   return (
                     <div
                       key={q.id}
@@ -2378,7 +2748,22 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                       />
                       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
                         <span className="line-clamp-2 whitespace-pre-wrap break-words pt-0.5 text-foreground">
-                          {q.text}
+                          {preview.chip && (
+                            <>
+                              <span className="sr-only">{preview.lead}</span>
+                              {/* A selection copies the text as sent. */}
+                              <span
+                                aria-hidden="true"
+                                className="select-none"
+                              >
+                                <ComposerChip
+                                  chip={preview.chip}
+                                  className="mr-1.5 h-5 align-middle"
+                                />
+                              </span>
+                            </>
+                          )}
+                          {q.text.slice(preview.lead.length)}
                         </span>
                         {q.files.length > 0 && (
                           <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
@@ -2480,9 +2865,13 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
           )}
           <div
             ref={composerRef}
+            data-mode={activeGoalMode ?? undefined}
             className={cn(
-              "relative z-10 mx-auto mb-2 flex w-[calc(100%-16px)] max-w-[960px] flex-shrink-0 flex-col overflow-hidden rounded-xl border border-border bg-background transition-colors duration-200 ease-in-out sm:mb-4 sm:w-[calc(100%-24px)]",
-              "focus-within:ring-2 focus-within:ring-ring"
+              "relative z-10 mx-auto mb-2 flex w-[calc(100%-16px)] max-w-[960px] flex-shrink-0 flex-col overflow-hidden rounded-xl border bg-background transition-[color,background-color,border-color,box-shadow] duration-200 ease-in-out sm:mb-4 sm:w-[calc(100%-24px)]",
+              "focus-within:ring-2 focus-within:ring-ring",
+              activeGoalMode
+                ? "border-[var(--brand)] shadow-[0_0_0_3px_color-mix(in_srgb,var(--brand)_16%,transparent)]"
+                : "border-border"
             )}
           >
             {
@@ -2751,22 +3140,34 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                 {currentModel && (
                   <button
                     type="button"
-                    onClick={() => setModelPickerOpen(true)}
+                    // Keep the composer's focus: the page opens over it, and
+                    // a second click closes it.
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() =>
+                      modelPageOpen
+                        ? slash.closeMenu()
+                        : openModelPageRef.current()
+                    }
+                    disabled={composerLocked}
+                    aria-haspopup="listbox"
+                    aria-expanded={modelPageOpen}
                     title="Click to change model for this chat"
                     aria-label="Change model for this chat"
-                    className="-mx-1 flex min-w-0 items-center gap-1.5 rounded px-1 py-0.5 transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    className="-mx-1 flex min-w-0 items-center gap-1.5 rounded px-1 py-0.5 transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-transparent"
                   >
                     <Sparkles
                       className="size-3.5 shrink-0 text-[var(--brand)]"
                       aria-hidden="true"
                     />
-                    <span className="truncate font-medium text-foreground">
-                      {currentModel.name}
-                    </span>
+                    <SwapText
+                      text={currentModel.name}
+                      className="truncate font-medium text-foreground"
+                    />
                     {currentModel.provider && (
-                      <span className="hidden shrink-0 sm:inline">
-                        · {currentModel.provider}
-                      </span>
+                      <SwapText
+                        text={`· ${currentModel.provider}`}
+                        className="hidden shrink-0 sm:inline"
+                      />
                     )}
                   </button>
                 )}
@@ -2842,33 +3243,134 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                   ))}
                 </div>
               )}
-              <textarea
-                ref={textareaRef}
-                value={input}
-                onChange={(e) => {
-                  setInput(e.target.value);
-                  slash.onChange(e);
+              {/* With a chip the row holds the box's left padding and the chip
+                  keeps its gap on its right, so a chip folding away (gap
+                  included) leaves the text where it stays; without one the
+                  padding is the box's (pressable). A press on the row itself
+                  focuses the box. */}
+              <div
+                onMouseDown={(e) => {
+                  if (e.target !== e.currentTarget) return;
+                  e.preventDefault();
+                  textareaRef.current?.focus();
                 }}
-                onKeyDown={handleKeyDown}
-                {...slash.textareaProps}
-                aria-label="Message"
-                disabled={hasPendingInterrupt || binding.kind === "readOnly"}
-                placeholder={
-                  binding.kind === "readOnly"
-                    ? binding.reason
-                    : !canSend && workspaceRefreshing
-                    ? workspaceError
-                      ? `Can't read the backend's folder (${workspaceError}). Retrying…`
-                      : "Connecting to the backend…"
-                    : hasPendingInterrupt
-                    ? "Respond to the request above to continue…"
-                    : isLoading
-                    ? "Queue a follow-up — sends when this turn finishes…"
-                    : "Ask EvoScientist anything…"
-                }
-                className="font-inherit field-sizing-content max-h-[min(30dvh,12rem)] min-h-12 flex-1 resize-none overflow-y-auto border-0 bg-transparent px-3.5 pb-2.5 pt-3 text-sm leading-6 text-primary outline-none placeholder:text-tertiary disabled:cursor-not-allowed sm:px-4"
-                rows={1}
-              />
+                className={cn(
+                  "flex min-w-0 cursor-text items-start transition-colors duration-200",
+                  (chip || leavingChip) && "pl-3.5 sm:pl-4",
+                  activeGoalMode &&
+                    "bg-[color-mix(in_srgb,var(--brand-soft)_70%,transparent)]"
+                )}
+              >
+                {leavingChip && (
+                  <ComposerChip
+                    key={leavingChip.seq}
+                    chip={leavingChip.chip}
+                    leaving
+                    onLeft={() => setLeavingChip(null)}
+                    className="mr-2 mt-3"
+                  />
+                )}
+                {chip && (
+                  <ComposerChip
+                    key={chip.kind === "skill" ? chip.name : chip.kind}
+                    chip={chip}
+                    onRemove={removeChip}
+                    disabled={composerLocked}
+                    flyFrom={
+                      chip.kind === "skill" &&
+                      flyFrom?.name === chip.name &&
+                      flyFrom !== flown.current
+                        ? flyFrom.rect
+                        : null
+                    }
+                    className="mr-2 mt-3"
+                  />
+                )}
+                {chip && (
+                  <span
+                    id={chipHintId}
+                    className="sr-only"
+                  >
+                    {chip.kind === "skill"
+                      ? `Skill ${chip.name} pinned. Backspace at the start removes it.`
+                      : chip.kind === "goal"
+                      ? "Setting a goal: what you write is the goal. Escape leaves goal mode."
+                      : "Amending the goal: what you write is the change. Escape leaves amend mode."}
+                  </span>
+                )}
+                <textarea
+                  ref={textareaRef}
+                  value={rest}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    // A skill typed or pasted at the box's start takes the
+                    // chip's place: one skill a message, so of several at
+                    // once the last. The caret stays where the typing was.
+                    const typedSkill =
+                      !activeGoalMode &&
+                      composerLead(rest, chipOptions).chip === null &&
+                      composerLead(next, chipOptions).chip !== null;
+                    if (!typedSkill) {
+                      const full = lead.lead + next;
+                      setInput(full);
+                      setUnsorted(
+                        knownSkills === null && mayPin(full) ? full : null
+                      );
+                      slash.onChange(e);
+                      return;
+                    }
+                    const full = oneSkill(next, chipOptions);
+                    const box = full.slice(
+                      composerLead(full, chipOptions).lead.length
+                    );
+                    // One skill a message: of several, what came off is said.
+                    if (full !== next) {
+                      droppedRef.current = next.slice(
+                        0,
+                        next.length - full.length
+                      );
+                    }
+                    setInput(full);
+                    slash.onChange(e);
+                    slash.placeCaret(
+                      Math.max(
+                        0,
+                        (e.target.selectionStart ?? next.length) -
+                          (next.length - box.length)
+                      )
+                    );
+                  }}
+                  onKeyDown={handleKeyDown}
+                  {...slash.textareaProps}
+                  aria-describedby={chip ? chipHintId : undefined}
+                  aria-label="Message"
+                  disabled={composerLocked}
+                  placeholder={
+                    binding.kind === "readOnly"
+                      ? binding.reason
+                      : !canSend && workspaceRefreshing
+                      ? workspaceError
+                        ? `Can't read the backend's folder (${workspaceError}). Retrying…`
+                        : "Connecting to the backend…"
+                      : hasPendingInterrupt
+                      ? "Respond to the request above to continue…"
+                      : activeGoalMode === "goal"
+                      ? "Describe the goal; its criteria are drafted for you to review…"
+                      : activeGoalMode === "amend"
+                      ? "What should change in the goal?"
+                      : isLoading
+                      ? "Queue a follow-up — sends when this turn finishes…"
+                      : chip
+                      ? "Add your message…"
+                      : "Ask EvoScientist anything…"
+                  }
+                  className={cn(
+                    "font-inherit field-sizing-content max-h-[min(30dvh,12rem)] min-h-12 min-w-0 flex-1 resize-none overflow-y-auto border-0 bg-transparent pb-2.5 pr-3.5 pt-3 text-sm leading-6 text-primary outline-none placeholder:text-tertiary focus:ring-0 disabled:cursor-not-allowed sm:pr-4",
+                    chip || leavingChip ? "pl-0" : "pl-3.5 sm:pl-4"
+                  )}
+                  rows={1}
+                />
+              </div>
               <SlashSkillMenu
                 {...slash.menuProps}
                 anchorRef={composerRef}
@@ -2961,11 +3463,20 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                     type={isLoading ? "button" : "submit"}
                     variant={isLoading ? "destructive" : "default"}
                     onClick={isLoading ? abortRun : handleSubmit}
+                    // The composer keeps its focus: a blur would take an
+                    // open page's word back into the box before the click.
+                    onMouseDown={(e) => e.preventDefault()}
                     disabled={
                       !isLoading &&
                       (submitDisabled || isUploadingFiles || !input.trim())
                     }
-                    aria-label={isLoading ? "Stop generating" : "Send message"}
+                    aria-label={
+                      isLoading
+                        ? "Stop generating"
+                        : activeGoalMode
+                        ? sendLabel
+                        : "Send message"
+                    }
                   >
                     {isLoading ? (
                       <>
@@ -2975,7 +3486,10 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                     ) : (
                       <>
                         <ArrowUp size={18} />
-                        <span className="hidden sm:inline">Send</span>
+                        <SwapText
+                          text={sendLabel}
+                          className="hidden sm:inline"
+                        />
                       </>
                     )}
                   </Button>

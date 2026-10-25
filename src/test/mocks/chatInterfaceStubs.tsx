@@ -57,8 +57,31 @@ export const useAutoNotifyMock = (): [boolean, (on: boolean) => void] => [
 
 // Populated by default so ChatInterface's fallback-list diagnostic warn
 // (fires when the registry settles empty) doesn't spam stderr in every test.
-// Individual tests can re-mock to an empty registry to cover the fallback branch.
-export const useAvailableModelsMock = () => ({
+// A test sets `registryStub.failed` (and puts it back) to cover the fallback
+// branch: the registry settled empty, with an error. `value`, when set, is
+// the answer itself (a registry still loading, then answering).
+type RegistryAnswer = {
+  registry: {
+    entries: Array<{ name: string; model_id: string; provider?: string }>;
+    defaultEntry: { name: string; provider?: string } | null;
+  };
+  loading: boolean;
+  error: string | null;
+};
+export const registryStub: {
+  failed: boolean;
+  value: RegistryAnswer | null;
+} = { failed: false, value: null };
+export const useAvailableModelsMock = () =>
+  registryStub.value ??
+  (registryStub.failed
+    ? {
+        registry: { entries: [], defaultEntry: null },
+        loading: false,
+        error: "HTTP 404",
+      }
+    : populatedRegistry);
+const populatedRegistry = {
   registry: {
     entries: [
       {
@@ -71,7 +94,7 @@ export const useAvailableModelsMock = () => ({
   },
   loading: false,
   error: null,
-});
+};
 
 // Tests of the scrolled-up state set `isAtBottom` to false before rendering and
 // put it back afterwards; `scrollToBottom` can be swapped for a spy.
