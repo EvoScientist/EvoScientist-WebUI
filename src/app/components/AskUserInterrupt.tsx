@@ -1,9 +1,10 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { MessageCircleQuestion } from "lucide-react";
+import { useOverflowing } from "@/app/hooks/useOverflowing";
 import { cn } from "@/lib/utils";
 
 interface Choice {
@@ -25,6 +26,26 @@ interface AskUserInterruptProps {
 }
 
 const OTHER = "__other__";
+
+/** A question's text. A goal's review lists its criteria one per line, up
+ *  to 12,000 characters, so it scrolls; it is a Tab stop only while it does
+ *  (Safari can't scroll it with the keyboard otherwise, and a short question
+ *  would be a stop for nothing). Its focus outline is drawn 2px outside it:
+ *  text scrolled to its edges would run under a ring drawn inside. */
+function QuestionText({ id, children }: { id: string; children: ReactNode }) {
+  const [el, setEl] = useState<HTMLParagraphElement | null>(null);
+  const overflowing = useOverflowing(el);
+  return (
+    <p
+      ref={setEl}
+      id={id}
+      tabIndex={overflowing === false ? undefined : 0}
+      className="mb-2 max-h-[40vh] overflow-y-auto whitespace-pre-wrap break-words rounded-sm text-sm font-medium text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+    >
+      {children}
+    </p>
+  );
+}
 
 export function AskUserInterrupt({
   questions,
@@ -72,13 +93,7 @@ export function AskUserInterrupt({
       <div className="space-y-5">
         {questions.map((q, i) => (
           <div key={i}>
-            <p
-              id={`${questionIdPrefix}-question-${i}`}
-              // A goal's review lists its criteria one per line, up to
-              // 12,000 characters: focusable, so a keyboard can scroll it.
-              tabIndex={0}
-              className="mb-2 max-h-[40vh] overflow-y-auto whitespace-pre-wrap break-words rounded-sm text-sm font-medium text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
+            <QuestionText id={`${questionIdPrefix}-question-${i}`}>
               {q.question}
               {!isOptional(q) && (
                 <>
@@ -92,7 +107,7 @@ export function AskUserInterrupt({
                 </>
               )}
               {isOptional(q) && <span className="sr-only"> (optional)</span>}
-            </p>
+            </QuestionText>
 
             {q.type === "multiple_choice" ? (
               <div

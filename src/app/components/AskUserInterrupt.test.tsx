@@ -6,7 +6,7 @@
 // (required vs optional), multiple-choice picks, the "Other..." fallback,
 // canSubmit gating, and cancel.
 
-import { describe, it, expect, vi } from "vitest";
+import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { AskUserInterrupt, type AskUserQuestion } from "./AskUserInterrupt";
 
@@ -214,9 +214,65 @@ describe("AskUserInterrupt", () => {
     expect(prompt.textContent).toContain("- one\n- two");
     expect(prompt.className).toContain("whitespace-pre-wrap");
     expect(prompt.className).toContain("overflow-y-auto");
-    // A keyboard reaches it to scroll a long one, with a visible focus ring
-    // (CodeRabbit, #102).
+    // Unmeasured (jsdom has no ResizeObserver), it stays a Tab stop, so a
+    // keyboard can always scroll a long one (CodeRabbit, #102), with a
+    // visible focus outline drawn outside it: text scrolled to its edges
+    // never runs under it.
     expect(prompt.getAttribute("tabindex")).toBe("0");
-    expect(prompt.className).toContain("focus-visible:ring-2");
+    expect(prompt.className).toContain("focus-visible:outline-2");
+    expect(prompt.className).toContain("focus-visible:outline-offset-2");
+  });
+});
+
+// A scroll box is a Tab stop only while it has something to scroll: Safari
+// can't scroll one with the keyboard otherwise, and a short question would be
+// a stop for nothing (an independent review of #102).
+describe("AskUserInterrupt question as a Tab stop", () => {
+  beforeEach(() => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      }
+    );
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+  /** jsdom lays nothing out: the question's content and box read this tall. */
+  const heights = (content: number, box: number) => {
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(
+      content
+    );
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(box);
+  };
+
+  it("is not one when the question fits", () => {
+    heights(40, 40);
+    render(
+      <AskUserInterrupt
+        questions={[choiceQ("Accept the criteria?", ["Accept", "Cancel"])]}
+        onSubmit={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    const prompt = screen.getByText(/Accept the criteria\?/);
+    expect(prompt.hasAttribute("tabindex")).toBe(false);
+  });
+
+  it("is one while the question scrolls", () => {
+    heights(900, 300);
+    render(
+      <AskUserInterrupt
+        questions={[choiceQ("Proposed acceptance criteria", ["Accept"])]}
+        onSubmit={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    const prompt = screen.getByText(/Proposed acceptance criteria/);
+    expect(prompt.getAttribute("tabindex")).toBe("0");
   });
 });

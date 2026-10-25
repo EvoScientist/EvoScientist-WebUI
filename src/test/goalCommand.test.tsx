@@ -1394,12 +1394,18 @@ describe("/goal in the composer", () => {
     expect(textarea.value).toBe("my draft");
     expect(notSentToast().duration).toBe(Infinity);
     const { container } = showNotSent();
-    // A list for VoiceOver (Safari drops it without bullets), focusable so a
-    // keyboard can scroll a long command into view.
+    // A list for VoiceOver (Safari drops it without bullets). Unmeasured
+    // (jsdom has no ResizeObserver), it stays a Tab stop, so a keyboard can
+    // always scroll a long command into view.
     const list = container.querySelector("ul");
     expect(list?.className).toContain("overflow-y-auto");
     expect(list?.getAttribute("role")).toBe("list");
     expect(list?.getAttribute("tabindex")).toBe("0");
+    // Its focus outline is drawn outside it, so text scrolled to its edges
+    // never runs under it, and the list sits 2px lower so the outline's 4px
+    // stay clear of the title's descenders (sonner leaves a 2px gap).
+    expect(list?.className).toContain("focus-visible:outline-offset-2");
+    expect(list?.className).toContain("mt-0.5");
     expect(container.querySelector("li span")?.textContent).toBe(text.trim());
     await act(async () => {
       fireEvent.click(
@@ -1407,15 +1413,78 @@ describe("/goal in the composer", () => {
       );
     });
     expect(clipboard.copied).toEqual([text.trim()]);
-    // Said on the button, not in a toast that would cover the notice.
+    // Shown on the button, not in a toast that would cover the notice, and
+    // said once, by sonner's own live region (the toaster: polite, additions
+    // and text): the notice adds no live region of its own, the button's
+    // label is hidden from screen readers and its name stays.
+    const copy = screen.getByRole("button", { name: /^Copy \/goal amend/ });
+    expect(copy.textContent).toBe("Copied");
+    const label = copy.querySelector('[aria-hidden="true"]');
+    expect(label?.textContent).toBe("Copied");
     expect(
-      screen.getByRole("button", { name: /^Copied \/goal amend/ }).textContent
-    ).toBe("Copied");
-    expect(container.querySelector('li [role="status"]')?.textContent).toBe(
-      "Copied."
-    );
+      container.querySelectorAll('[role="status"], [aria-live]')
+    ).toHaveLength(0);
+    const said = within(container).getByText("Copied.");
+    expect(said.className).toContain("sr-only");
+    // A press on the label lands on the button: sonner swipes a toast away
+    // from any other target.
+    expect(label?.className).toContain("pointer-events-none");
+    // A selection across the notice picks up neither.
+    expect(copy.className).toContain("select-none");
+    expect(said.className).toContain("select-none");
     expect(toast.success).not.toHaveBeenCalled();
     expect(toast.dismiss).not.toHaveBeenCalled();
+  });
+
+  // A Tab stop only while it has something to scroll: Safari can't scroll
+  // it with the keyboard otherwise, and a short list would be a stop for
+  // nothing.
+  it("makes the list a Tab stop only while it scrolls", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      }
+    );
+    const heights = (content: number, box: number) => {
+      vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(
+        content
+      );
+      vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(
+        box
+      );
+    };
+    try {
+      const { textarea, type } = await mount(
+        {},
+        { threadValues: goalValues("paused") }
+      );
+      act(() => {
+        stream.setLoading(true);
+      });
+      type("/goal amend x");
+      fireEvent.change(textarea, { target: { value: "my draft" } });
+      act(() => {
+        stream.setLoading(false);
+      });
+      await waitFor(() => expect(notSent()).toEqual(["/goal amend x"]));
+      heights(40, 40);
+      const short = showNotSent();
+      expect(
+        short.container.querySelector("ul")?.hasAttribute("tabindex")
+      ).toBe(false);
+      short.unmount();
+      heights(600, 160);
+      const long = showNotSent();
+      expect(long.container.querySelector("ul")?.getAttribute("tabindex")).toBe(
+        "0"
+      );
+    } finally {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    }
   });
 
   it("copies one command at a time", async () => {
