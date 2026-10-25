@@ -147,7 +147,12 @@ export function ComposerChip({
           ? "border-[color-mix(in_srgb,var(--brand)_28%,transparent)] bg-[var(--brand-soft)] text-[var(--brand)]"
           : "border-transparent bg-[var(--brand-solid)] text-[var(--brand-foreground)]",
         onRemove && !leaving ? "pr-0.5" : "pr-1.5",
-        !flies && !leaving && "duration-150 animate-in fade-in-0 zoom-in-90",
+        // Only the composer's chip pops: a sent or queued message's is there
+        // with its message.
+        onRemove &&
+          !flies &&
+          !leaving &&
+          "duration-150 animate-in fade-in-0 zoom-in-90",
         className
       )}
     >

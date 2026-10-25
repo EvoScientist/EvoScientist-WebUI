@@ -1831,6 +1831,41 @@ describe("ChatInterface composition", () => {
     });
   });
 
+  // A sent message's skills are the pinned_skill markers right after it.
+  it("passes the skills pinned after a user message to it", () => {
+    renderChatInterface();
+    const marker = (name: string, id: string) =>
+      ({
+        id,
+        type: "human",
+        content: `<skill name="${name}" path="/skills/${name}/SKILL.md">\nbody\n</skill>`,
+        additional_kwargs: {
+          lc_source: "pinned_skill",
+          skill: { name, path: `/skills/${name}`, description: "d" },
+        },
+      } as unknown as Message);
+    act(() => {
+      stream.setMessages([
+        humanTurn("/paper-review /evo-memory hi", "u1"),
+        marker("paper-review", "p1"),
+        marker("evo-memory", "p2"),
+        aiTurn("ok", "a1"),
+        humanTurn("/paper-review again", "u2"),
+      ]);
+    });
+    const last = (id: string) =>
+      getAllProps<{ message: Message; pinnedSkills?: readonly string[] }>(
+        "ChatMessage"
+      )
+        .filter((p) => p.message.id === id)
+        .at(-1);
+    expect(last("u1")?.pinnedSkills).toEqual(["paper-review", "evo-memory"]);
+    expect(last("p1")?.pinnedSkills).toEqual([]);
+    expect(last("a1")?.pinnedSkills).toEqual([]);
+    // No marker after it: nothing was pinned.
+    expect(last("u2")?.pinnedSkills).toEqual([]);
+  });
+
   // The chip: the skill a message's first word pins, shown in the box ahead
   // of the text; the composer still holds the one string that is sent.
   describe("composer chips", () => {
@@ -1863,10 +1898,13 @@ describe("ChatInterface composition", () => {
       vi.unstubAllGlobals();
     });
 
+    // The composer's own chips (a queued message's are in its row).
     const chips = (container: HTMLElement) =>
-      [...container.querySelectorAll('[data-slot="composer-chip"]')].map(
-        (c) => c.textContent
-      );
+      [
+        ...container
+          .querySelector("form")!
+          .querySelectorAll('[data-slot="composer-chip"]'),
+      ].map((c) => c.textContent);
     const write = (textarea: HTMLTextAreaElement, text: string) => {
       act(() => textarea.focus());
       fireEvent.change(textarea, { target: { value: text } });
@@ -1975,6 +2013,14 @@ describe("ChatInterface composition", () => {
       fireEvent.keyDown(textarea, { key: "Enter" });
       expect(stream.getSubmitCalls()).toHaveLength(0);
       expect(chips(container)).toEqual([]);
+      // The queued row shows its skill as a chip too.
+      const queue = screen.getByLabelText("Queued messages");
+      expect(
+        [...queue.querySelectorAll('[data-slot="composer-chip"]')].map(
+          (c) => c.textContent
+        )
+      ).toEqual(["paper-review"]);
+      expect(queue.textContent).toContain("hi");
       // ↑ on the empty composer takes it back to edit, chip and all.
       fireEvent.keyDown(textarea, { key: "ArrowUp" });
       expect(chips(container)).toEqual(["paper-review"]);

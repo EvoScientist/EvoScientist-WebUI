@@ -492,8 +492,11 @@ describe("/goal in the composer", () => {
     // Goal mode: Set a goal… / Amend the goal… put a solid chip at the
     // start of the box, the send button and the placeholder say what Enter
     // does, and what is written goes out as the goal request.
+    // The composer's own chip (a queued message's is in its row).
     const chipOf = (container: HTMLElement) =>
-      container.querySelector('[data-slot="composer-chip"]');
+      container
+        .querySelector("form")!
+        .querySelector('[data-slot="composer-chip"]');
     const write = (textarea: HTMLTextAreaElement, text: string) =>
       fireEvent.change(textarea, { target: { value: text } });
 
@@ -719,6 +722,24 @@ describe("/goal in the composer", () => {
       expect(chipOf(container)).toBeNull();
       expect(textarea.value).toBe("hello\n\n/goal write x");
       expect(screen.getByRole("button", { name: "Send message" })).toBeTruthy();
+    });
+
+    it("shows a queued goal as a chip in its row", async () => {
+      const { container, textarea } = await mount();
+      act(() => {
+        stream.setLoading(true);
+      });
+      await openGoalPage(textarea);
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      write(textarea, "write x");
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(submits()).toHaveLength(0);
+      expect(chipOf(container)).toBeNull();
+      const queue = screen.getByLabelText("Queued messages");
+      expect(
+        queue.querySelector('[data-slot="composer-chip"]')?.textContent
+      ).toBe("Goal");
+      expect(queue.textContent).toContain("write x");
     });
 
     // The box holds the goal: a "/" there is text, not the menu.

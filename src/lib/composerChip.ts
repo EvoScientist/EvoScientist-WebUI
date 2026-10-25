@@ -117,3 +117,35 @@ export function previewLead(
   }
   return skillLead(text, skills, goals ? COMMANDS : new Set(["model"]));
 }
+
+/** How a sent message reads: the skills the backend pinned for it (the
+ *  markers after it, in order) while they lead its text, and the rest. A
+ *  word that isn't the next pin ends the chips; without any the text stays
+ *  as it is. */
+export function pinnedLead(
+  text: string,
+  pinned: readonly string[]
+): { skills: string[]; rest: string } {
+  const skills: string[] = [];
+  let at = 0;
+  const spaces = () => {
+    while (at < text.length && PY_SPACE.test(text[at])) at++;
+  };
+  spaces();
+  let restAt = 0;
+  for (const name of pinned) {
+    const word = `/${name}`;
+    const end = at + word.length;
+    if (
+      text.slice(at, end) !== word ||
+      (end < text.length && !PY_SPACE.test(text[end]))
+    ) {
+      break;
+    }
+    skills.push(name);
+    at = end;
+    spaces();
+    restAt = at;
+  }
+  return { skills, rest: text.slice(restAt) };
+}

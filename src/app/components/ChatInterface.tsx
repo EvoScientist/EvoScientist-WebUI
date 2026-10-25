@@ -88,12 +88,14 @@ import { ComposerChip } from "@/app/components/ComposerChip";
 import { SwapText } from "@/app/components/SwapText";
 import {
   composerLead,
+  previewLead,
   GOAL_LEADS,
   type ComposerChip as ComposerChipValue,
   type GoalMode,
 } from "@/lib/composerChip";
 import { canAnimate, prefersReducedMotion } from "@/lib/motion";
 import { pyStrip } from "@/lib/pythonWhitespace";
+import { pinnedSkillName } from "@/lib/pinnedSkill";
 import { useSlashMenu } from "@/app/hooks/useSlashMenu";
 import { cn } from "@/lib/utils";
 import { copyText } from "@/lib/clipboard";
@@ -292,6 +294,24 @@ const GOAL_ROW_ICONS: Record<GoalPageActionKind, MenuIcon> = {
  *  unknown; only a backend known not to run goals leaves it to skills. */
 const COMMAND_WORDS: readonly string[] = ["model", "goal"];
 const MODEL_ONLY: readonly string[] = ["model"];
+
+/** A message without pinned skills. */
+const NO_PINS: readonly string[] = [];
+
+/** The skills the backend pinned for the user message at `index`: the
+ *  pinned_skill markers right after it. */
+function pinnedAfter(
+  entries: ReadonlyArray<{ message: Message }>,
+  index: number
+): readonly string[] {
+  const names: string[] = [];
+  for (let i = index + 1; i < entries.length; i++) {
+    const name = pinnedSkillName(entries[i].message);
+    if (name === null) break;
+    names.push(name);
+  }
+  return names.length > 0 ? names : NO_PINS;
+}
 
 /** One toast for goal mode's hints, each replacing the last. */
 const GOAL_HINT_ID = "goal-mode-hint";
@@ -2099,6 +2119,11 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         return {
           ...data,
           showAvatar: data.message.type !== prevMessage?.type,
+          pinnedSkills:
+            data.message.type === "human" &&
+            pinnedSkillName(data.message) === null
+              ? pinnedAfter(processedArray, index)
+              : NO_PINS,
         };
       });
     }, [messages, actionRequests, interrupt, isLoading, runSettled, stream]);
@@ -2425,6 +2450,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                         autoApprove={autoApprove}
                         approvalAutoResolves={approvalAutoResolves}
                         subAgentSteps={subAgentSteps}
+                        pinnedSkills={data.pinnedSkills}
                       />
                     </React.Fragment>
                   );
@@ -2498,6 +2524,11 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                 {queuedMessages.map((q, index) => {
                   const editBlocked =
                     input.trim().length > 0 || pendingFiles.length > 0;
+                  // Its skill or goal as a chip, read as Enter will read it.
+                  const preview = previewLead(q.text, {
+                    skills: knownSkills,
+                    goals: goalSupported === true,
+                  });
                   return (
                     <div
                       key={q.id}
@@ -2549,7 +2580,18 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                       />
                       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
                         <span className="line-clamp-2 whitespace-pre-wrap break-words pt-0.5 text-foreground">
-                          {q.text}
+                          {preview.chip && (
+                            <>
+                              <span className="sr-only">{preview.lead}</span>
+                              <span aria-hidden="true">
+                                <ComposerChip
+                                  chip={preview.chip}
+                                  className="mr-1.5 h-5 align-middle"
+                                />
+                              </span>
+                            </>
+                          )}
+                          {q.text.slice(preview.lead.length)}
                         </span>
                         {q.files.length > 0 && (
                           <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { GOAL_LEADS, composerLead, previewLead } from "./composerChip";
+import {
+  GOAL_LEADS,
+  composerLead,
+  pinnedLead,
+  previewLead,
+} from "./composerChip";
 
 const SKILLS: ReadonlySet<string> = new Set(["paper-review", "evo-memory"]);
 const lead = (
@@ -105,5 +110,54 @@ describe("previewLead", () => {
   it("covers the spacing before a goal's text", () => {
     expect(preview("/goal \t write x").lead).toBe("/goal \t ");
     expect(preview("/goal AMEND   fix").lead).toBe("/goal AMEND   ");
+  });
+});
+
+// A sent message: the skills the backend pinned for it (its markers), drawn
+// as chips while they lead the text, in order.
+describe("pinnedLead", () => {
+  it("takes the pinned skills that lead the text, in order", () => {
+    expect(
+      pinnedLead("/paper-review /evo-memory hi", ["paper-review", "evo-memory"])
+    ).toEqual({
+      skills: ["paper-review", "evo-memory"],
+      rest: "hi",
+    });
+  });
+
+  it("stops at the first word that wasn't pinned", () => {
+    expect(pinnedLead("/x /paper-review hi", ["paper-review"])).toEqual({
+      skills: [],
+      rest: "/x /paper-review hi",
+    });
+    expect(pinnedLead("/paper-review /x hi", ["paper-review"])).toEqual({
+      skills: ["paper-review"],
+      rest: "/x hi",
+    });
+  });
+
+  it("leaves a text without pins as it is", () => {
+    expect(pinnedLead("/paper-review hi", [])).toEqual({
+      skills: [],
+      rest: "/paper-review hi",
+    });
+  });
+
+  it("takes a pinned word that is the whole text, and one led by whitespace", () => {
+    expect(pinnedLead("/paper-review", ["paper-review"])).toEqual({
+      skills: ["paper-review"],
+      rest: "",
+    });
+    expect(pinnedLead(" /paper-review\thi", ["paper-review"])).toEqual({
+      skills: ["paper-review"],
+      rest: "hi",
+    });
+  });
+
+  it("needs the whole word: a longer one isn't the pin", () => {
+    expect(pinnedLead("/paper-reviewer hi", ["paper-review"])).toEqual({
+      skills: [],
+      rest: "/paper-reviewer hi",
+    });
   });
 });

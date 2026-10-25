@@ -77,11 +77,24 @@ describe("ComposerChip", () => {
 
   it("pops in when it doesn't fly", () => {
     const { container } = render(
-      <ComposerChip chip={{ kind: "skill", name: "paper-review" }} />
+      <ComposerChip
+        chip={{ kind: "skill", name: "paper-review" }}
+        onRemove={() => {}}
+      />
     );
     const chip = container.querySelector('[data-slot="composer-chip"]')!;
     expect(chip.className).toContain("animate-in");
     expect(chip.getAttribute("data-kind")).toBe("skill");
+  });
+
+  // A sent or queued message's chip is there with its message: a thread
+  // opened with its history doesn't pop every one.
+  it("doesn't pop a static chip", () => {
+    const { container } = render(
+      <ComposerChip chip={{ kind: "skill", name: "paper-review" }} />
+    );
+    const chip = container.querySelector('[data-slot="composer-chip"]')!;
+    expect(chip.className).not.toContain("animate-in");
   });
 
   it("doesn't animate without the Web Animations API", () => {

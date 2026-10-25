@@ -5,10 +5,19 @@
 // chat shows a collapsed `Skill · <name>` row on the agent side instead of a
 // bubble; opening it reveals the description and the SKILL.md body.
 
-import { describe, it, expect } from "vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { describe, it, expect, vi } from "vitest";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import type { Message } from "@langchain/langgraph-sdk";
 import { ChatMessage } from "./ChatMessage";
+import { copyText } from "@/lib/clipboard";
+
+vi.mock("@/lib/clipboard", () => ({ copyText: vi.fn(async () => true) }));
 import { createThinkingClock } from "@/lib/thinkingTimer";
 
 const DESCRIPTION = "Self-review a draft across five aspects before submission";
@@ -632,5 +641,48 @@ describe("ChatMessage rubric revision", () => {
     expect(
       screen.queryByText("A grader reviewed your work and asked for revisions.")
     ).toBeNull();
+  });
+});
+
+// A sent message's leading `/name` words the backend pinned (its markers
+// follow it) show as chips, as they did in the composer; the message is
+// still the text that was sent.
+describe("ChatMessage pinned skill chips", () => {
+  const userMessage = (content: string): Message =>
+    ({ id: "h1", type: "human", content } as unknown as Message);
+
+  it("draws the pinned skills as chips ahead of the text", async () => {
+    render(
+      <ChatMessage
+        message={userMessage("/paper-review hi")}
+        toolCalls={[]}
+        pinnedSkills={["paper-review"]}
+      />
+    );
+    const chips = [...document.querySelectorAll('[data-slot="composer-chip"]')];
+    expect(chips.map((c) => c.textContent)).toEqual(["paper-review"]);
+    const bubble = chips[0].closest("p")!;
+    expect(bubble.lastChild?.textContent).toBe("hi");
+    // A screen reader reads the message as sent.
+    expect(bubble.querySelector(".sr-only")?.textContent).toBe(
+      "/paper-review "
+    );
+    expect(chips[0].closest('[aria-hidden="true"]')).toBeTruthy();
+    fireEvent.click(screen.getByLabelText("Copy message"));
+    await waitFor(() =>
+      expect(copyText).toHaveBeenCalledWith("/paper-review hi")
+    );
+  });
+
+  it("leaves a slash word that wasn't pinned as text", () => {
+    render(
+      <ChatMessage
+        message={userMessage("/paper-review hi")}
+        toolCalls={[]}
+        pinnedSkills={[]}
+      />
+    );
+    expect(document.querySelector('[data-slot="composer-chip"]')).toBeNull();
+    expect(screen.getByText("/paper-review hi")).toBeTruthy();
   });
 });
