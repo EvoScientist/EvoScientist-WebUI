@@ -38,6 +38,19 @@ vi.mock("@/app/components/ScheduledTaskActivity", () => ({
 
 import { ScheduledTasksPanel } from "./ScheduledTasksPanel";
 
+// jsdom has no scrollIntoView; Radix Select calls it on the item it focuses
+// when a list opens.
+if (!Element.prototype.scrollIntoView) {
+  Element.prototype.scrollIntoView = function scrollIntoView() {};
+}
+
+/** Picks from one of the builder's in-page lists (Radix Select): open it,
+ *  then choose the option by its name. */
+function pick(list: string, option: string) {
+  fireEvent.click(screen.getByLabelText(list));
+  fireEvent.click(screen.getByRole("option", { name: option }));
+}
+
 function task(overrides: Partial<ScheduledTask>): ScheduledTask {
   return {
     cron_id: "cron-1",
@@ -223,14 +236,32 @@ describe("ScheduledTasksPanel custom cron", () => {
     );
   });
 
+  // The same in-page list as the Settings page's, not the system's popup.
+  it("picks the frequency and the day from in-page lists", () => {
+    render(<ScheduledTasksPanel />);
+    fireEvent.click(screen.getByRole("button", { name: /New task/ }));
+    const frequency = screen.getByLabelText("Schedule frequency");
+    expect(frequency.tagName).toBe("BUTTON");
+    expect(frequency.textContent).toBe("Every day");
+
+    pick("Schedule frequency", "Every month");
+    expect(frequency.textContent).toBe("Every month");
+    pick("Day of month", "Day 15");
+    expect(screen.getByLabelText("Day of month").textContent).toBe("Day 15");
+    expect(screen.getByText(/^Monthly on day 15 at 09:00/)).toBeTruthy();
+
+    pick("Schedule frequency", "Every week");
+    pick("Day of week", "Fri");
+    expect(screen.getByLabelText("Day of week").textContent).toBe("Fri");
+    expect(screen.getByText(/^Every Fri at 09:00/)).toBeTruthy();
+  });
+
   it("starts the builder from a custom cron's time when switched to weekly", () => {
     hook.tasks = [task({ name: "Afternoons", schedule: "30 14 * * 1-5" })];
     render(<ScheduledTasksPanel />);
     openEdit("Afternoons");
 
-    fireEvent.change(screen.getByLabelText("Schedule frequency"), {
-      target: { value: "weekly" },
-    });
+    pick("Schedule frequency", "Every week");
     expect(screen.getByText("Every Mon at 14:30 · Asia/Shanghai")).toBeTruthy();
   });
 
@@ -269,9 +300,7 @@ describe("ScheduledTasksPanel custom cron", () => {
     render(<ScheduledTasksPanel />);
     openEdit("Nines");
 
-    fireEvent.change(screen.getByLabelText("Schedule frequency"), {
-      target: { value: "custom" },
-    });
+    pick("Schedule frequency", "Custom cron");
     expect(customCron()).toBe("00 09 * * *");
     expect(saveButton().hasAttribute("disabled")).toBe(true);
   });
@@ -285,10 +314,8 @@ describe("ScheduledTasksPanel custom cron", () => {
     });
     render(<ScheduledTasksPanel />);
     openEdit("Zeros");
-
-    const frequency = screen.getByLabelText("Schedule frequency");
-    fireEvent.change(frequency, { target: { value: "custom" } });
-    fireEvent.change(frequency, { target: { value: "daily" } });
+    pick("Schedule frequency", "Custom cron");
+    pick("Schedule frequency", "Every day");
     expect(saveButton().hasAttribute("disabled")).toBe(true);
 
     fireEvent.change(screen.getByLabelText("Task name"), {
@@ -312,9 +339,7 @@ describe("ScheduledTasksPanel custom cron", () => {
     render(<ScheduledTasksPanel />);
     openEdit("Zeros");
 
-    fireEvent.change(screen.getByLabelText("Schedule frequency"), {
-      target: { value: "custom" },
-    });
+    pick("Schedule frequency", "Custom cron");
     fireEvent.change(screen.getByLabelText("Task name"), {
       target: { value: "Zeros renamed" },
     });
@@ -340,9 +365,7 @@ describe("ScheduledTasksPanel custom cron", () => {
     render(<ScheduledTasksPanel />);
     openEdit("Legacy");
 
-    fireEvent.change(screen.getByLabelText("Schedule frequency"), {
-      target: { value: "custom" },
-    });
+    pick("Schedule frequency", "Custom cron");
     fireEvent.click(saveButton());
     await waitFor(() =>
       expect(hook.updateScheduledTask).toHaveBeenCalledWith(
@@ -362,9 +385,7 @@ describe("ScheduledTasksPanel custom cron", () => {
     openEdit("Zeros");
 
     fireEvent.change(screen.getByLabelText("Hour"), { target: { value: "8" } });
-    fireEvent.change(screen.getByLabelText("Schedule frequency"), {
-      target: { value: "custom" },
-    });
+    pick("Schedule frequency", "Custom cron");
     expect(customCron()).toBe("9 8 * * *");
     fireEvent.click(saveButton());
     await waitFor(() =>
@@ -378,13 +399,11 @@ describe("ScheduledTasksPanel custom cron", () => {
     hook.tasks = [task({ name: "Zeros", schedule: "09 07 * * *" })];
     render(<ScheduledTasksPanel />);
     openEdit("Zeros");
-
-    const frequency = screen.getByLabelText("Schedule frequency");
     fireEvent.change(screen.getByLabelText("Hour"), { target: { value: "8" } });
-    fireEvent.change(frequency, { target: { value: "custom" } });
-    fireEvent.change(frequency, { target: { value: "daily" } });
+    pick("Schedule frequency", "Custom cron");
+    pick("Schedule frequency", "Every day");
     fireEvent.change(screen.getByLabelText("Hour"), { target: { value: "7" } });
-    fireEvent.change(frequency, { target: { value: "custom" } });
+    pick("Schedule frequency", "Custom cron");
     expect(customCron()).toBe("09 07 * * *");
     expect(saveButton().hasAttribute("disabled")).toBe(true);
   });
@@ -393,10 +412,8 @@ describe("ScheduledTasksPanel custom cron", () => {
     hook.tasks = [task({ name: "Afternoons", schedule: "30 14 * * 1-5" })];
     render(<ScheduledTasksPanel />);
     openEdit("Afternoons");
-
-    const frequency = screen.getByLabelText("Schedule frequency");
-    fireEvent.change(frequency, { target: { value: "weekly" } });
-    fireEvent.change(frequency, { target: { value: "custom" } });
+    pick("Schedule frequency", "Every week");
+    pick("Schedule frequency", "Custom cron");
     expect(customCron()).toBe("30 14 * * 1-5");
     expect(saveButton().hasAttribute("disabled")).toBe(true);
   });
@@ -408,12 +425,8 @@ describe("ScheduledTasksPanel custom cron", () => {
       screen.getByRole("button", { name: /Weekly Research Review/ })
     );
 
-    fireEvent.change(screen.getByLabelText("Day of week"), {
-      target: { value: "1" },
-    });
-    fireEvent.change(screen.getByLabelText("Schedule frequency"), {
-      target: { value: "custom" },
-    });
+    pick("Day of week", "Mon");
+    pick("Schedule frequency", "Custom cron");
     expect(customCron()).toBe("0 17 * * 1");
   });
 
@@ -421,13 +434,11 @@ describe("ScheduledTasksPanel custom cron", () => {
     hook.tasks = [task({ name: "Zeros", schedule: "09 07 * * *" })];
     render(<ScheduledTasksPanel />);
     openEdit("Zeros");
-
-    const frequency = screen.getByLabelText("Schedule frequency");
-    fireEvent.change(frequency, { target: { value: "weekly" } });
-    fireEvent.change(frequency, { target: { value: "custom" } });
+    pick("Schedule frequency", "Every week");
+    pick("Schedule frequency", "Custom cron");
     expect(customCron()).toBe("9 7 * * 1");
-    fireEvent.change(frequency, { target: { value: "daily" } });
-    fireEvent.change(frequency, { target: { value: "custom" } });
+    pick("Schedule frequency", "Every day");
+    pick("Schedule frequency", "Custom cron");
     expect(customCron()).toBe("09 07 * * *");
     expect(saveButton().hasAttribute("disabled")).toBe(true);
   });
@@ -435,13 +446,11 @@ describe("ScheduledTasksPanel custom cron", () => {
   it("fills a new task's Custom cron from the builder each time", () => {
     render(<ScheduledTasksPanel />);
     fireEvent.click(screen.getByRole("button", { name: /New task/ }));
-
-    const frequency = screen.getByLabelText("Schedule frequency");
-    fireEvent.change(frequency, { target: { value: "weekly" } });
-    fireEvent.change(frequency, { target: { value: "custom" } });
+    pick("Schedule frequency", "Every week");
+    pick("Schedule frequency", "Custom cron");
     expect(customCron()).toBe("0 9 * * 1");
-    fireEvent.change(frequency, { target: { value: "daily" } });
-    fireEvent.change(frequency, { target: { value: "custom" } });
+    pick("Schedule frequency", "Every day");
+    pick("Schedule frequency", "Custom cron");
     expect(customCron()).toBe("0 9 * * *");
   });
 
@@ -449,11 +458,9 @@ describe("ScheduledTasksPanel custom cron", () => {
     hook.tasks = [task({ name: "Afternoons", schedule: "30 14 * * 1-5" })];
     render(<ScheduledTasksPanel />);
     openEdit("Afternoons");
-
-    const frequency = screen.getByLabelText("Schedule frequency");
-    fireEvent.change(frequency, { target: { value: "weekly" } });
-    fireEvent.change(frequency, { target: { value: "daily" } });
-    fireEvent.change(frequency, { target: { value: "custom" } });
+    pick("Schedule frequency", "Every week");
+    pick("Schedule frequency", "Every day");
+    pick("Schedule frequency", "Custom cron");
     expect(customCron()).toBe("30 14 * * 1-5");
     expect(saveButton().hasAttribute("disabled")).toBe(true);
   });
@@ -462,15 +469,13 @@ describe("ScheduledTasksPanel custom cron", () => {
     hook.tasks = [task({ name: "Zeros", schedule: "09 07 * * *" })];
     render(<ScheduledTasksPanel />);
     openEdit("Zeros");
-
-    const frequency = screen.getByLabelText("Schedule frequency");
-    fireEvent.change(frequency, { target: { value: "custom" } });
+    pick("Schedule frequency", "Custom cron");
     fireEvent.change(screen.getByPlaceholderText("0 9 * * 1-5"), {
       target: { value: "*/5 * * * *" },
     });
-    fireEvent.change(frequency, { target: { value: "weekly" } });
-    fireEvent.change(frequency, { target: { value: "daily" } });
-    fireEvent.change(frequency, { target: { value: "custom" } });
+    pick("Schedule frequency", "Every week");
+    pick("Schedule frequency", "Every day");
+    pick("Schedule frequency", "Custom cron");
     expect(customCron()).toBe("*/5 * * * *");
   });
 
@@ -478,14 +483,12 @@ describe("ScheduledTasksPanel custom cron", () => {
     hook.tasks = [task({ name: "Zeros", schedule: "09 07 * * *" })];
     render(<ScheduledTasksPanel />);
     openEdit("Zeros");
-
-    const frequency = screen.getByLabelText("Schedule frequency");
-    fireEvent.change(frequency, { target: { value: "custom" } });
+    pick("Schedule frequency", "Custom cron");
     fireEvent.change(screen.getByPlaceholderText("0 9 * * 1-5"), {
       target: { value: "   " },
     });
-    fireEvent.change(frequency, { target: { value: "daily" } });
-    fireEvent.change(frequency, { target: { value: "custom" } });
+    pick("Schedule frequency", "Every day");
+    pick("Schedule frequency", "Custom cron");
     expect(customCron()).toBe("09 07 * * *");
     expect(saveButton().hasAttribute("disabled")).toBe(true);
   });
@@ -497,18 +500,17 @@ describe("ScheduledTasksPanel custom cron", () => {
 
     // The box keeps what the builder cannot show; the edit is still there on
     // Every day.
-    const frequency = screen.getByLabelText("Schedule frequency");
-    fireEvent.change(frequency, { target: { value: "daily" } });
+    pick("Schedule frequency", "Every day");
     fireEvent.change(screen.getByLabelText("Hour"), {
       target: { value: "10" },
     });
     fireEvent.change(screen.getByLabelText("Minute"), {
       target: { value: "30" },
     });
-    fireEvent.change(frequency, { target: { value: "custom" } });
+    pick("Schedule frequency", "Custom cron");
     expect(customCron()).toBe("0 9 * * 1-5");
 
-    fireEvent.change(frequency, { target: { value: "daily" } });
+    pick("Schedule frequency", "Every day");
     expect((screen.getByLabelText("Hour") as HTMLInputElement).value).toBe(
       "10"
     );
@@ -570,9 +572,7 @@ describe("ScheduledTasksPanel custom cron", () => {
     render(<ScheduledTasksPanel />);
     openEdit("Eight");
 
-    fireEvent.change(screen.getByLabelText("Schedule frequency"), {
-      target: { value: "custom" },
-    });
+    pick("Schedule frequency", "Custom cron");
     fireEvent.change(screen.getByPlaceholderText("0 9 * * 1-5"), {
       target: { value: "0 9 * * * 30" },
     });
@@ -587,9 +587,7 @@ describe("ScheduledTasksPanel custom cron", () => {
     render(<ScheduledTasksPanel />);
     openEdit("Nightly");
 
-    fireEvent.change(screen.getByLabelText("Schedule frequency"), {
-      target: { value: "daily" },
-    });
+    pick("Schedule frequency", "Every day");
     expect((screen.getByLabelText("Hour") as HTMLInputElement).value).toBe("0");
     expect(screen.getByText("Every day at 00:00 · Asia/Shanghai")).toBeTruthy();
   });
@@ -628,9 +626,7 @@ describe("ScheduledTasksPanel custom cron", () => {
     openEdit("Zeros");
 
     // Typed in Custom cron, the builder's spelling is an edit like any other.
-    fireEvent.change(screen.getByLabelText("Schedule frequency"), {
-      target: { value: "custom" },
-    });
+    pick("Schedule frequency", "Custom cron");
     fireEvent.change(screen.getByPlaceholderText("0 9 * * 1-5"), {
       target: { value: "9 7 * * *" },
     });

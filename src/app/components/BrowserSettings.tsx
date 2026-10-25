@@ -20,6 +20,7 @@ import { Label } from "@/components/ui/label";
 import { SettingsCard } from "@/app/components/SettingsCard";
 import { deploymentUrlError, sameDeploymentUrl } from "@/lib/deploymentUrl";
 import { useCollapseAgentActions } from "@/lib/uiSettings";
+import { cn } from "@/lib/utils";
 
 interface BrowserSettingsProps {
   /** The address this page talks to now. */
@@ -41,17 +42,30 @@ export function BrowserSettings({
   const [url, setUrl] = useState(deploymentUrl);
   const [seededFrom, setSeededFrom] = useState(deploymentUrl);
   const [error, setError] = useState<string | null>(null);
-  const [confirming, setConfirming] = useState<string | null>(null);
+  // Saving the address it already talks to changes nothing, and says so.
+  const [note, setNote] = useState<string | null>(null);
+  // The address the dialog asks about outlives the dialog's open state, so it
+  // stays in the sentence while the dialog fades out (cleared at once, it
+  // read "Connecting to  drops them.").
+  const [discardDialog, setDiscardDialog] = useState({
+    open: false,
+    url: "",
+  });
+  const closeDiscardDialog = () =>
+    setDiscardDialog((d) => ({ ...d, open: false }));
   const inputRef = useRef<HTMLInputElement | null>(null);
   const saveRef = useRef<HTMLButtonElement | null>(null);
   const { value: collapseAgentActions, setValue: setCollapseAgentActions } =
     useCollapseAgentActions();
 
-  // Follow a new address from the page (a Reconnect, another tab's save).
+  // Follow a new address from the parent. In the app the Settings view is
+  // keyed per backend (page.tsx), so a switch or a Reconnect remounts it and
+  // this doesn't run there; it keeps the field right for any other parent.
   if (seededFrom !== deploymentUrl) {
     setSeededFrom(deploymentUrl);
     setUrl(deploymentUrl);
     setError(null);
+    setNote(null);
   }
 
   const save = () => {
@@ -65,9 +79,14 @@ export function BrowserSettings({
     }
     setError(null);
     const next = url.trim();
-    if (sameDeploymentUrl(next, deploymentUrl)) return;
+    if (sameDeploymentUrl(next, deploymentUrl)) {
+      setUrl(deploymentUrl);
+      setNote("Already using this address.");
+      return;
+    }
+    setNote(null);
     if (hasUnsavedEdits) {
-      setConfirming(next);
+      setDiscardDialog({ open: true, url: next });
       return;
     }
     onSaveDeploymentUrl(next);
@@ -106,6 +125,7 @@ export function BrowserSettings({
                 onChange={(e) => {
                   setUrl(e.target.value);
                   if (error) setError(null);
+                  if (note) setNote(null);
                 }}
                 onKeyDown={(e) => {
                   // keyCode 229: Safari's Enter that ends an IME composition.
@@ -144,6 +164,16 @@ export function BrowserSettings({
                 {error}
               </p>
             )}
+            {/* Always there, so the note is announced when it appears. */}
+            <p
+              role="status"
+              className={cn(
+                "text-sm text-muted-foreground",
+                !note && "sr-only"
+              )}
+            >
+              {note}
+            </p>
           </div>
         </fieldset>
       </SettingsCard>
@@ -183,9 +213,9 @@ export function BrowserSettings({
       </SettingsCard>
 
       <Dialog
-        open={confirming !== null}
+        open={discardDialog.open}
         onOpenChange={(open) => {
-          if (!open) setConfirming(null);
+          if (!open) closeDiscardDialog();
         }}
       >
         <DialogContent
@@ -200,21 +230,24 @@ export function BrowserSettings({
             <DialogTitle>Discard unsaved changes in General?</DialogTitle>
             <DialogDescription>
               Your edits under General have not been saved. Connecting to{" "}
-              {confirming} drops them.
+              {discardDialog.url} drops them.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button
               variant="outline"
-              onClick={() => setConfirming(null)}
+              onClick={closeDiscardDialog}
             >
               Keep Editing
             </Button>
             <Button
               disabled={saving}
               onClick={() => {
-                const next = confirming;
-                setConfirming(null);
+                // The dialog still takes clicks while it fades out: after
+                // Keep Editing, Escape or a click outside, switch nothing.
+                if (!discardDialog.open) return;
+                const next = discardDialog.url;
+                closeDiscardDialog();
                 if (next && !saving) onSaveDeploymentUrl(next);
               }}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
