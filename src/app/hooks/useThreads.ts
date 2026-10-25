@@ -456,18 +456,40 @@ function slugifyForFilename(input: string): string {
 }
 
 /**
- * Download the full thread state as JSON. We fetch via `client.threads.get`
- * which returns the thread plus its current `values` (every message including
- * tool calls, sub-agent output, and assistant thinking) — i.e. everything the
- * backend has, suitable for debugging.
+ * What an export holds, for debugging: the thread record
+ * (`client.threads.get`) with the root's `values`, `next` and `tasks` from
+ * one `/state` read, so they agree with each other. The values are the
+ * conversation's messages (tool calls, assistant thinking, sub-agents'
+ * answers; their own steps are in other threads or namespaces), and a goal's
+ * pending review is in `tasks`, not in the record's `interrupts`. The
+ * record's own values are a nested run's (the goal drafter's while that
+ * review waits) or, while a run is busy, the last finished run's: the backend
+ * writes them when a run ends. Without `/state` the record is all there is,
+ * and `state_error` says so.
  */
+export async function threadExport(client: Client, id: string) {
+  const [thread, state] = await Promise.all([
+    client.threads.get(id),
+    client.threads.getState(id).then(
+      (root) => ({ root }),
+      (error: unknown) => ({
+        error: error instanceof Error ? error.message : String(error),
+      })
+    ),
+  ]);
+  if ("error" in state) return { ...thread, state_error: state.error };
+  const { root } = state;
+  return { ...thread, values: root.values, next: root.next, tasks: root.tasks };
+}
+
+/** Download a thread as JSON (`threadExport`). */
 export async function exportThread(
   id: string,
   filenameHint?: string
 ): Promise<void> {
   const client = makeThreadsClient();
   if (!client) throw new Error("No EvoScientist deployment configured.");
-  const thread = await client.threads.get(id);
+  const thread = await threadExport(client, id);
   const blob = new Blob([JSON.stringify(thread, null, 2)], {
     type: "application/json",
   });

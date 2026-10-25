@@ -100,6 +100,7 @@ import { canAnimate, prefersReducedMotion } from "@/lib/motion";
 import { pyStrip } from "@/lib/pythonWhitespace";
 import { pinnedSkillName } from "@/lib/pinnedSkill";
 import { useSlashMenu } from "@/app/hooks/useSlashMenu";
+import { useOverflowing } from "@/app/hooks/useOverflowing";
 import { cn } from "@/lib/utils";
 import { copyText } from "@/lib/clipboard";
 import { formatModel } from "@/lib/model";
@@ -341,7 +342,11 @@ function firstLineOf(text: string): string {
 
 /** Copy for one left-out command: "Copied" shows on the button (a toast
  *  would cover the notice on a touch screen, where the stack doesn't open
- *  on hover), and is said to screen readers. */
+ *  on hover) and is said once, by sonner's own live region: the toaster is
+ *  polite and reads text that changes in a toast, so a status of our own
+ *  inside it could be read twice, and so could the button's changing label;
+ *  the label is hidden from screen readers and the button keeps its name.
+ *  For use inside a sonner toast only. */
 function CopyLeftOut({ text, name }: { text: string; name: string }) {
   const [copied, setCopied] = useState(false);
   useEffect(() => {
@@ -353,24 +358,77 @@ function CopyLeftOut({ text, name }: { text: string; name: string }) {
     <>
       <button
         type="button"
-        aria-label={`${copied ? "Copied" : "Copy"} ${name}`}
+        aria-label={`Copy ${name}`}
         onClick={() => {
           void copyText(text).then((ok) => {
             if (ok) setCopied(true);
             else toast.error("Couldn't copy the text.");
           });
         }}
-        className="shrink-0 rounded border border-solid border-border px-1.5 py-0.5 text-xs font-medium text-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-md:min-h-11 max-md:min-w-11"
+        className="shrink-0 select-none rounded border border-solid border-border px-1.5 py-0.5 text-xs font-medium text-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-md:min-h-11 max-md:min-w-11"
       >
-        {copied ? "Copied" : "Copy"}
+        {/* Presses go through to the button: sonner starts a swipe on any
+            other target, and a small drift would dismiss the notice. */}
+        <span
+          aria-hidden="true"
+          className="pointer-events-none"
+        >
+          {copied ? "Copied" : "Copy"}
+        </span>
       </button>
-      <span
-        role="status"
-        className="sr-only"
-      >
-        {copied ? "Copied." : ""}
-      </span>
+      <span className="sr-only select-none">{copied ? "Copied." : ""}</span>
     </>
+  );
+}
+
+/** The "Not sent" notice's commands: a list for VoiceOver (Safari drops it
+ *  without bullets). It scrolls past 10rem and is a Tab stop only while it
+ *  does (Safari can't scroll it with the keyboard otherwise). Its focus
+ *  outline is drawn 2px outside it: text scrolled to its edges would run
+ *  under a ring drawn inside. That outline reaches 4px up, and sonner leaves
+ *  2px under the title, so the list sits 2px lower. */
+function NotSentList({
+  items,
+}: {
+  items: ReadonlyArray<{ text: string; files: ComposerItem["files"] }>;
+}) {
+  const [el, setEl] = useState<HTMLUListElement | null>(null);
+  const overflowing = useOverflowing(el);
+  return (
+    <ul
+      ref={setEl}
+      role="list"
+      tabIndex={overflowing === false ? undefined : 0}
+      aria-label="Commands not sent"
+      className="m-0 mt-0.5 flex max-h-40 list-none flex-col gap-2 overflow-y-auto rounded-sm p-0 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+    >
+      {items.map(({ text, files }, index) => (
+        <li
+          key={index}
+          className="mb-0 flex items-start gap-2"
+        >
+          <span className="min-w-0 flex-1 whitespace-pre-wrap break-words">
+            {text}
+            {/* Its files stay in the workspace; named here, as they
+                can't come back with it onto another text. */}
+            {files.length > 0 && (
+              <span className="mt-0.5 block text-xs text-muted-foreground">
+                Attached: {files.map((f) => f.name).join(", ")}
+              </span>
+            )}
+          </span>
+          {/* Two commands can start alike (two amends): say which. */}
+          <CopyLeftOut
+            text={text}
+            name={
+              items.length > 1
+                ? `${index + 1} of ${items.length}: ${firstLineOf(text)}`
+                : firstLineOf(text)
+            }
+          />
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -386,43 +444,7 @@ function sayNotSent(left: ComposerItem[]) {
     items.length > 1 ? `${items.length} commands` : firstLineOf(items[0].text);
   toast.info(`Not sent: ${name}`, {
     duration: Infinity,
-    description: (
-      // A list for VoiceOver (Safari drops it without bullets); focusable so
-      // a keyboard can scroll a long command into view.
-      <ul
-        role="list"
-        tabIndex={0}
-        aria-label="Commands not sent"
-        className="m-0 flex max-h-40 list-none flex-col gap-2 overflow-y-auto p-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      >
-        {items.map(({ text, files }, index) => (
-          <li
-            key={index}
-            className="mb-0 flex items-start gap-2"
-          >
-            <span className="min-w-0 flex-1 whitespace-pre-wrap break-words">
-              {text}
-              {/* Its files stay in the workspace; named here, as they
-                  can't come back with it onto another text. */}
-              {files.length > 0 && (
-                <span className="mt-0.5 block text-xs text-muted-foreground">
-                  Attached: {files.map((f) => f.name).join(", ")}
-                </span>
-              )}
-            </span>
-            {/* Two commands can start alike (two amends): say which. */}
-            <CopyLeftOut
-              text={text}
-              name={
-                items.length > 1
-                  ? `${index + 1} of ${items.length}: ${firstLineOf(text)}`
-                  : firstLineOf(text)
-              }
-            />
-          </li>
-        ))}
-      </ul>
-    ),
+    description: <NotSentList items={items} />,
   });
 }
 
