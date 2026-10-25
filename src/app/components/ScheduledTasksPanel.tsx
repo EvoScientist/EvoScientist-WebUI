@@ -25,6 +25,13 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Dialog,
@@ -34,6 +41,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { INPUT_LIKE_TRIGGER, LIST_MAX_HEIGHT } from "@/lib/fieldStyles";
 import { cn } from "@/lib/utils";
 import { ScheduledTaskActivity } from "@/app/components/ScheduledTaskActivity";
 import {
@@ -200,64 +208,90 @@ function ScheduleBuilder({
   const set = (patch: Partial<ScheduleSpec>) =>
     onChange({ ...value, ...patch });
 
-  const selectClass =
-    "h-9 rounded-md border border-input bg-background py-1.5 pl-2.5 pr-8 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50";
-  const frequencySelectClass = cn(selectClass, "w-full sm:min-w-40");
-  const daySelectClass = cn(selectClass, "w-full sm:w-28");
+  // In-page lists, like the Settings page's (a native <select> opens the
+  // system's own popup). In a form Radix also renders a hidden native
+  // <select>, which can report "" for a value it has no option for yet; no
+  // item has the value "", so that is never a pick.
+  const frequencyTriggerClass = cn(INPUT_LIKE_TRIGGER, "sm:min-w-40");
+  const dayTriggerClass = cn(INPUT_LIKE_TRIGGER, "sm:w-28");
 
   return (
     <div className="space-y-2">
       <div className="grid gap-2 sm:grid-cols-[minmax(9rem,1fr)_auto_auto_auto_auto] sm:items-center">
-        <select
-          aria-label="Schedule frequency"
+        <Select
           value={value.frequency}
-          onChange={(e) => set({ frequency: e.target.value as Frequency })}
-          className={frequencySelectClass}
+          onValueChange={(next) => {
+            if (next) set({ frequency: next as Frequency });
+          }}
         >
-          <option value="daily">Every day</option>
-          <option value="weekly">Every week</option>
-          <option value="monthly">Every month</option>
-          <option value="custom">Custom cron</option>
-        </select>
+          <SelectTrigger
+            aria-label="Schedule frequency"
+            className={frequencyTriggerClass}
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent className={LIST_MAX_HEIGHT}>
+            <SelectItem value="daily">Every day</SelectItem>
+            <SelectItem value="weekly">Every week</SelectItem>
+            <SelectItem value="monthly">Every month</SelectItem>
+            <SelectItem value="custom">Custom cron</SelectItem>
+          </SelectContent>
+        </Select>
 
         {value.frequency !== "custom" && (
           <>
             {value.frequency === "weekly" && (
-              <select
-                aria-label="Day of week"
-                value={value.dayOfWeek}
-                onChange={(e) => set({ dayOfWeek: Number(e.target.value) })}
-                className={daySelectClass}
+              <Select
+                value={String(value.dayOfWeek)}
+                onValueChange={(next) => {
+                  if (next) set({ dayOfWeek: Number(next) });
+                }}
               >
-                {DAY_NAMES.map((day, index) => (
-                  <option
-                    key={day}
-                    value={index}
-                  >
-                    {day}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger
+                  aria-label="Day of week"
+                  className={dayTriggerClass}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className={LIST_MAX_HEIGHT}>
+                  {DAY_NAMES.map((day, index) => (
+                    <SelectItem
+                      key={day}
+                      value={String(index)}
+                    >
+                      {day}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             )}
 
             {value.frequency === "monthly" && (
-              <select
-                aria-label="Day of month"
-                value={value.dayOfMonth}
-                onChange={(e) => set({ dayOfMonth: Number(e.target.value) })}
-                className={daySelectClass}
+              <Select
+                value={String(value.dayOfMonth)}
+                onValueChange={(next) => {
+                  if (next) set({ dayOfMonth: Number(next) });
+                }}
               >
-                {Array.from({ length: 28 }, (_, index) => index + 1).map(
-                  (day) => (
-                    <option
-                      key={day}
-                      value={day}
-                    >
-                      Day {day}
-                    </option>
-                  )
-                )}
-              </select>
+                <SelectTrigger
+                  aria-label="Day of month"
+                  className={dayTriggerClass}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className={LIST_MAX_HEIGHT}>
+                  {Array.from({ length: 28 }, (_, index) => index + 1).map(
+                    (day) => (
+                      <SelectItem
+                        key={day}
+                        value={String(day)}
+                      >
+                        Day {day}
+                      </SelectItem>
+                    )
+                  )}
+                </SelectContent>
+              </Select>
             )}
 
             <span className="hidden text-xs text-muted-foreground sm:block">

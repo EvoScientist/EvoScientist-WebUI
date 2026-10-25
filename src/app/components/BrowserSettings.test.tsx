@@ -3,7 +3,7 @@
 // The Settings page's "This browser" group: the deployment URL this page
 // talks to and the chat display preference, both kept in this browser.
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
   fireEvent,
@@ -43,6 +43,54 @@ beforeEach(() => {
   localStorage.clear();
 });
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+/** jsdom runs no CSS animation, so Radix's Presence unmounts a closed dialog
+ *  at once. Give the dialog an animation name per state, as the shadcn
+ *  classes do in a browser, so it stays mounted (closed, fading out) until
+ *  its animationend, about 200 ms there. */
+function animateDialogs() {
+  const real = window.getComputedStyle.bind(window);
+  vi.spyOn(window, "getComputedStyle").mockImplementation(((
+    el: Element,
+    pseudo?: string | null
+  ) => {
+    const style = real(el, pseudo);
+    if (
+      !(el instanceof HTMLElement) ||
+      !el.matches('[data-slot="dialog-content"], [data-slot="dialog-overlay"]')
+    ) {
+      return style;
+    }
+    return new Proxy(style, {
+      get(target, prop) {
+        if (prop === "animationName") {
+          return el.getAttribute("data-state") === "closed" ? "exit" : "enter";
+        }
+        const value = Reflect.get(target, prop);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+  }) as typeof window.getComputedStyle);
+}
+
+/** Opens the discard dialog for a new address and closes it with Keep
+ *  Editing; returns the dialog, still fading out. */
+async function keepEditingThenFading() {
+  animateDialogs();
+  const onSave = renderSettings({ hasUnsavedEdits: true });
+  type("http://127.0.0.1:7000");
+  fireEvent.click(saveButton());
+  fireEvent.click(await screen.findByRole("button", { name: "Keep Editing" }));
+  const dialog = document.querySelector<HTMLElement>(
+    '[data-slot="dialog-content"]'
+  );
+  expect(dialog?.getAttribute("data-state")).toBe("closed");
+  return { onSave, dialog: dialog! };
+}
+
 describe("BrowserSettings connection", () => {
   it("refuses an empty address and keeps focus on it", () => {
     const onSave = renderSettings();
@@ -72,12 +120,29 @@ describe("BrowserSettings connection", () => {
     expect(onSave).toHaveBeenCalledExactlyOnceWith("http://127.0.0.1:7000");
   });
 
-  it("does nothing for the same address", () => {
+  // #101's leftovers: saving the same address (a slash or spaces more) said
+  // nothing and left the odd spelling in the field.
+  it("says so for the same address, and shows it as saved", () => {
     const onSave = renderSettings();
-    type("http://127.0.0.1:6174/");
+    // The live region is there before it speaks: one added together with its
+    // text is not announced by every screen reader.
+    const status = screen.getByRole("status");
+    expect(status.textContent).toBe("");
+    type(" http://127.0.0.1:6174/ ");
     fireEvent.click(saveButton());
     expect(onSave).not.toHaveBeenCalled();
     expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("status")).toBe(status);
+    expect(status.textContent).toBe("Already using this address.");
+    expect(urlInput().value).toBe(CURRENT);
+  });
+
+  it("drops that note once the address changes", () => {
+    renderSettings();
+    type("http://127.0.0.1:6174/");
+    fireEvent.click(saveButton());
+    type("http://127.0.0.1:7000");
+    expect(screen.getByRole("status").textContent).toBe("");
   });
 
   it("saves on Enter but not while composing", () => {
@@ -105,6 +170,29 @@ describe("BrowserSettings connection", () => {
       await screen.findByRole("button", { name: "Discard and connect" })
     );
     expect(onSave).toHaveBeenCalledExactlyOnceWith("http://127.0.0.1:7000");
+  });
+
+  // #101's leftovers: the sentence lost its address while the dialog faded
+  // out ("Connecting to  drops them.").
+  it("keeps the address in its sentence while the dialog fades out", async () => {
+    const { dialog } = await keepEditingThenFading();
+    expect(
+      dialog.querySelector('[data-slot="dialog-description"]')?.textContent
+    ).toBe(
+      "Your edits under General have not been saved. Connecting to http://127.0.0.1:7000 drops them."
+    );
+  });
+
+  // The fading dialog still takes clicks: one on Discard must not switch
+  // after the user chose to keep editing.
+  it("ignores Discard and connect while the dialog fades out", async () => {
+    const { onSave, dialog } = await keepEditingThenFading();
+    const discard = Array.from(dialog.querySelectorAll("button")).find(
+      (b) => b.textContent === "Discard and connect"
+    );
+    expect(discard).toBeTruthy();
+    fireEvent.click(discard!);
+    expect(onSave).not.toHaveBeenCalled();
   });
 
   it("cannot save the address while EvoScientist is saving", () => {
@@ -170,6 +258,11 @@ describe("BrowserSettings connection", () => {
         {...props}
       />
     );
+    // A note about the old address goes with it.
+    fireEvent.click(saveButton());
+    expect(screen.getByRole("status").textContent).toBe(
+      "Already using this address."
+    );
     rerender(
       <BrowserSettings
         deploymentUrl="http://127.0.0.1:7000"
@@ -177,6 +270,7 @@ describe("BrowserSettings connection", () => {
       />
     );
     expect(urlInput().value).toBe("http://127.0.0.1:7000");
+    expect(screen.getByRole("status").textContent).toBe("");
   });
 });
 

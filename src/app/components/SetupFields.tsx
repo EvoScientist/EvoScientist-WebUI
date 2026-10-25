@@ -44,14 +44,8 @@ import {
   savedText,
   sourceNote,
 } from "@/lib/settingsForm";
+import { INPUT_LIKE_TRIGGER, LIST_MAX_HEIGHT } from "@/lib/fieldStyles";
 import { cn } from "@/lib/utils";
-
-// The provider list's trigger, drawn like the Input next to it (height,
-// padding, background, focus ring, 16 px text below 768 px like the inputs).
-// globals.css sets `button { border: none }`, so the border needs its style
-// back.
-const providerTriggerClass =
-  "h-9 border-solid bg-transparent px-3 py-1 text-base shadow-xs md:text-sm transition-[color,box-shadow] dark:bg-input/30 focus:ring-0 focus:ring-offset-0 focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50";
 
 function FieldNotes({ ctx, field }: { ctx: FieldContext; field: string }) {
   const shadow = shadowOf(ctx, field);
@@ -167,11 +161,11 @@ export function ProviderField({ ctx }: { ctx: FieldContext }) {
       >
         <SelectTrigger
           id="setting-provider"
-          className={providerTriggerClass}
+          className={INPUT_LIKE_TRIGGER}
         >
           <SelectValue placeholder="Choose a provider" />
         </SelectTrigger>
-        <SelectContent className="max-h-[min(18rem,var(--radix-select-content-available-height))]">
+        <SelectContent className={LIST_MAX_HEIGHT}>
           {value && !ctx.payload.providers[value] && (
             <SelectItem value={value}>{value}</SelectItem>
           )}

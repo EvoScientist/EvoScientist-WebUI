@@ -26,6 +26,7 @@ import {
 } from "@/app/hooks/useAvailableModels";
 import { useSettings, useSettingsAccess } from "@/app/hooks/useSettings";
 import { useSettingsDraft } from "@/app/hooks/useSettingsDraft";
+import { useWideEnough } from "@/app/hooks/useWideEnough";
 import {
   MirrorField,
   ModelField,
@@ -155,6 +156,7 @@ export function SetupView({
   const presentSections = formShown ? ALL_SECTION_IDS : BROWSER_SECTION_IDS;
   const [scrollRoot, setScrollRoot] = useState<HTMLDivElement | null>(null);
   const { active, choose } = useActiveSection(scrollRoot, presentSections);
+  const roomForIndex = useWideEnough(scrollRoot, INDEX_MIN_WIDTH);
 
   const reload = (
     <button
@@ -332,22 +334,24 @@ export function SetupView({
           </div>
         </header>
         <div className="flex gap-10">
-          <SectionIndex
-            active={active}
-            present={presentSections}
-            onChoose={(id) => {
-              choose(id);
-              const target = document.getElementById(id);
-              const still = window.matchMedia?.(
-                "(prefers-reduced-motion: reduce)"
-              ).matches;
-              target?.scrollIntoView?.({
-                block: "start",
-                behavior: still ? "auto" : "smooth",
-              });
-              target?.focus({ preventScroll: true });
-            }}
-          />
+          {roomForIndex !== false && (
+            <SectionIndex
+              active={active}
+              present={presentSections}
+              onChoose={(id) => {
+                choose(id);
+                const target = document.getElementById(id);
+                const still = window.matchMedia?.(
+                  "(prefers-reduced-motion: reduce)"
+                ).matches;
+                target?.scrollIntoView?.({
+                  block: "start",
+                  behavior: still ? "auto" : "smooth",
+                });
+                target?.focus({ preventScroll: true });
+              }}
+            />
+          )}
           <div className="min-w-0 max-w-[720px] flex-1 space-y-8">
             <SettingsGroup
               id="settings-general"
@@ -444,6 +448,12 @@ function useActiveSection(
       : present[0] ?? null;
   return { active, choose };
 }
+
+// The page's own width decides the section index, not the window's: with the
+// sidebar and the inspector docked, a 1024 px window leaves the page about
+// 460 px, and the index (9rem and its 2.5rem gap) squeezed the form to about
+// 230 px. From 720 px the form keeps about 500 px beside it.
+const INDEX_MIN_WIDTH = 720;
 
 /** The wide layout's table of contents: a rail with the current section on it. */
 function SectionIndex({

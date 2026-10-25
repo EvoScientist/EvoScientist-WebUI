@@ -890,6 +890,103 @@ describe("the Settings page", () => {
     const index = () =>
       within(screen.getByRole("navigation", { name: "Settings sections" }));
 
+    // #101's leftovers: a 1024 px window with the sidebar and the inspector
+    // docked leaves the page about 460 px, and the index squeezed the form to
+    // about 230 px. The page's own width decides, not the window's.
+    describe("by the page's own width", () => {
+      // A report gives the page's border box (a classic scrollbar inside it
+      // included) and its content box (without the scrollbar).
+      let report: (border: number, content?: number) => void = () => {};
+      // jsdom lays nothing out; every element reads as this wide.
+      const page = (border: number, content = border) => {
+        vi.spyOn(
+          HTMLElement.prototype,
+          "getBoundingClientRect"
+        ).mockReturnValue({
+          width: border,
+          height: 0,
+          x: 0,
+          y: 0,
+          top: 0,
+          left: 0,
+          right: border,
+          bottom: 0,
+          toJSON: () => ({}),
+        } as DOMRect);
+        vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(
+          content
+        );
+      };
+      beforeEach(() => {
+        vi.stubGlobal(
+          "ResizeObserver",
+          class {
+            constructor(callback: ResizeObserverCallback) {
+              report = (border, content = border) =>
+                act(() =>
+                  callback(
+                    [
+                      {
+                        borderBoxSize: [{ inlineSize: border, blockSize: 0 }],
+                        contentRect: { width: content },
+                      } as unknown as ResizeObserverEntry,
+                    ],
+                    this as unknown as ResizeObserver
+                  )
+                );
+            }
+            observe() {}
+            unobserve() {}
+            disconnect() {}
+          }
+        );
+        page(0);
+      });
+      afterEach(() => {
+        vi.restoreAllMocks();
+      });
+      const sectionIndex = () =>
+        screen.queryByRole("navigation", { name: "Settings sections" });
+
+      it("leaves the index out where the page is narrow", async () => {
+        renderSettingsPage();
+        await screen.findByLabelText("OpenAI API key");
+        report(500);
+        expect(sectionIndex()).toBeNull();
+      });
+
+      it("shows the index once the page is wide enough, and not after it narrows", async () => {
+        renderSettingsPage();
+        await screen.findByLabelText("OpenAI API key");
+        report(900);
+        expect(sectionIndex()).toBeTruthy();
+        report(500);
+        expect(sectionIndex()).toBeNull();
+      });
+
+      // Read at mount, so it doesn't wait for the observer's first report
+      // (useWideEnough's own tests pin that it lands before a paint).
+      it("decides at mount, without waiting for the observer", async () => {
+        page(500);
+        renderSettingsPage();
+        await screen.findByLabelText("OpenAI API key");
+        expect(sectionIndex()).toBeNull();
+      });
+
+      // A classic scrollbar (Windows, a mouse on macOS) comes and goes with
+      // the page's height, which the index changes: the form beside it is
+      // narrower and taller. Measured without the scrollbar, the index could
+      // turn itself on and off every frame near the threshold.
+      it("counts a scrollbar's room as page width", async () => {
+        page(730, 715);
+        renderSettingsPage();
+        await screen.findByLabelText("OpenAI API key");
+        expect(sectionIndex()).toBeTruthy();
+        report(730, 715);
+        expect(sectionIndex()).toBeTruthy();
+      });
+    });
+
     it("marks the chosen section as current and moves focus to it", async () => {
       renderSettingsPage();
       await screen.findByLabelText("OpenAI API key");
