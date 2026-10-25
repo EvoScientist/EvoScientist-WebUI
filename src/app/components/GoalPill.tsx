@@ -7,6 +7,7 @@ import { Target } from "lucide-react";
 import type { GoalBusy } from "@/app/hooks/useChat";
 import { RUBRIC_RESULT_TEXT } from "@/lib/goalEvents";
 import type { GoalStatus, RubricVerdict, ThreadGoal } from "@/lib/goalState";
+import { SwapText } from "@/app/components/SwapText";
 
 const PANEL_WIDTH = 320; // w-80
 const GAP = 6;
@@ -175,7 +176,7 @@ export function GoalPill({
           className="size-3"
           aria-hidden="true"
         />
-        {label}
+        <SwapText text={label} />
       </button>
       {shown && typeof document !== "undefined"
         ? createPortal(panel, document.body)

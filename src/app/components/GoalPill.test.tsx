@@ -4,7 +4,7 @@
 // status-bar words, and on opening what /goal show prints, plus the latest
 // grading.
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { act, render, screen, fireEvent } from "@testing-library/react";
 import { GoalPill } from "./GoalPill";
 import type { GoalStatus, RubricVerdict, ThreadGoal } from "@/lib/goalState";
 
@@ -108,6 +108,37 @@ describe("GoalPill", () => {
         "enabled:hover:text-[var(--brand-hover)]",
       ])
     );
+  });
+
+  // A status that changes fades out and back in, like the composer's other
+  // labels (SwapText).
+  it("fades its label when the status changes", () => {
+    const made: Array<{ onfinish: null | (() => void) }> = [];
+    Object.defineProperty(Element.prototype, "animate", {
+      configurable: true,
+      value: () => {
+        const animation = { onfinish: null, cancel: () => {} };
+        made.push(animation);
+        return animation;
+      },
+    });
+    try {
+      const { rerender, onOpenChange } = pill({ goal: goal("active") });
+      rerender(
+        <GoalPill
+          goal={goal("paused")}
+          busy={null}
+          verdict={null}
+          open={false}
+          onOpenChange={onOpenChange}
+        />
+      );
+      expect(screen.getByRole("button", { name: "goal: active" })).toBeTruthy();
+      act(() => made[0].onfinish?.());
+      expect(screen.getByRole("button", { name: "goal: paused" })).toBeTruthy();
+    } finally {
+      delete (Element.prototype as { animate?: unknown }).animate;
+    }
   });
 
   it("shows a grading in progress over the goal's status", () => {

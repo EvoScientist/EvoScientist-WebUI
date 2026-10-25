@@ -6,6 +6,7 @@ import React, {
   useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   FormEvent,
   Fragment,
@@ -84,10 +85,15 @@ import {
 } from "@/lib/goalCommand";
 import { SlashSkillMenu } from "@/app/components/SlashSkillMenu";
 import { ComposerChip } from "@/app/components/ComposerChip";
+import { SwapText } from "@/app/components/SwapText";
 import {
   composerLead,
+  GOAL_LEADS,
   type ComposerChip as ComposerChipValue,
+  type GoalMode,
 } from "@/lib/composerChip";
+import { canAnimate, prefersReducedMotion } from "@/lib/motion";
+import { pyStrip } from "@/lib/pythonWhitespace";
 import { useSlashMenu } from "@/app/hooks/useSlashMenu";
 import { cn } from "@/lib/utils";
 import { copyText } from "@/lib/clipboard";
@@ -140,7 +146,11 @@ import {
 import { useQueryState } from "nuqs";
 import { toast } from "sonner";
 import { useFilePane } from "@/providers/filePaneContext";
-import { parseModelCommand, type ModelOverride } from "@/lib/modelCommand";
+import {
+  parseModelCommand,
+  type ModelCommand,
+  type ModelOverride,
+} from "@/lib/modelCommand";
 import { modelPageEntries, modelPageModels } from "@/lib/modelPage";
 import type { MenuIcon, MenuPage, MenuRow } from "@/lib/slashMenu";
 import { useAvailableModels } from "@/app/hooks/useAvailableModels";
@@ -282,6 +292,9 @@ const GOAL_ROW_ICONS: Record<GoalPageActionKind, MenuIcon> = {
  *  unknown; only a backend known not to run goals leaves it to skills. */
 const COMMAND_WORDS: readonly string[] = ["model", "goal"];
 const MODEL_ONLY: readonly string[] = ["model"];
+
+/** One toast for goal mode's hints, each replacing the last. */
+const GOAL_HINT_ID = "goal-mode-hint";
 
 /** Whether a page row's label holds what was typed on the page. */
 const rowMatches = (label: string, filter: string) =>
@@ -455,6 +468,11 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     const [leavingChip, setLeavingChip] = useState<ComposerChipValue | null>(
       null
     );
+    // Goal mode, which only the Goal page starts: the box's text goes out as
+    // the goal (or its amendment) after the mode's words.
+    const [goalMode, setGoalMode] = useState<GoalMode | null>(null);
+    // The `/model` command and the model pill open the menu's Model page.
+    const openModelPageRef = useRef(() => {});
     const [pendingFiles, setPendingFiles] = useState<UploadedWorkspaceFile[]>(
       []
     );
@@ -557,13 +575,6 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       getThreadAutoApprove(threadId)
     );
     const [autoApproveDialogOpen, setAutoApproveDialogOpen] = useState(false);
-    const [modelPickerOpen, setModelPickerOpen] = useState(false);
-    const [modelSearch, setModelSearch] = useState("");
-    // Reset the search box every time the picker opens — stale filter state
-    // surviving across opens would surprise the user.
-    useEffect(() => {
-      if (modelPickerOpen) setModelSearch("");
-    }, [modelPickerOpen]);
     const {
       registry: modelRegistry,
       loading: modelRegistryLoading,
@@ -578,7 +589,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     useEffect(() => {
       if (isFallbackModelList) {
         console.warn(
-          "[model picker] using curated fallback list — registry fetch failed or empty",
+          "[model page] using curated fallback list — registry fetch failed or empty",
           modelRegistryError ?? "(no error message)"
         );
       }
@@ -591,20 +602,6 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       () => modelPageModels(modelRegistry.entries),
       [modelRegistry.entries]
     );
-    // Case-insensitive substring filter on name + provider. Fuzzy match was
-    // discussed but punted — substring catches the common "I know roughly
-    // what I want" case and keeps the picker behavior predictable.
-    const filteredPickerModels = useMemo(() => {
-      const q = modelSearch.trim().toLowerCase();
-      if (!q) return pickerModels;
-      return pickerModels.filter((m) => {
-        const provider = m.model_provider ?? "";
-        return (
-          m.model.toLowerCase().includes(q) ||
-          provider.toLowerCase().includes(q)
-        );
-      });
-    }, [pickerModels, modelSearch]);
     const previousThreadIdRef = useRef(threadId);
     const migrateAutoApproveForCreatedThreadRef = useRef(false);
     const { scrollRef, contentRef, scrollToBottom, isAtBottom } =
@@ -660,6 +657,33 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     // The goal's details close with the goal: left open, they would pop up
     // by themselves for the next one.
     if (!goal && goalDetailsOpen) setGoalDetailsOpen(false);
+
+    // Goal mode lasts while the box starts with its words and goals run
+    // here: a send, a text put back from outside or a backend without goals
+    // ends it (what is left is ordinary text).
+    const goalModeOn =
+      goalMode !== null &&
+      goalSupported === true &&
+      input.startsWith(GOAL_LEADS[goalMode]);
+    if (goalMode !== null && !goalModeOn) setGoalMode(null);
+    const activeGoalMode = goalModeOn ? goalMode : null;
+
+    // A goal with nothing written: the box shakes a little.
+    const nudgeComposer = useCallback(() => {
+      const el = composerRef.current;
+      if (!canAnimate(el) || prefersReducedMotion()) return;
+      el.animate(
+        [
+          { transform: "none" },
+          { transform: "translateX(-3px)", offset: 0.2 },
+          { transform: "translateX(3px)", offset: 0.4 },
+          { transform: "translateX(-2px)", offset: 0.6 },
+          { transform: "translateX(2px)", offset: 0.8 },
+          { transform: "none" },
+        ],
+        { duration: 280, easing: "ease" }
+      );
+    }, []);
 
     // /goal, answered the way the core's GoalCommand answers it: show opens
     // the goal pill, a refusal is said in the core's words, and anything else
@@ -1285,8 +1309,8 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     //             aren't in our curated list are still accepted — the backend
     //             accepts anything `init_chat_model` knows, and we'd rather
     //             not block a power user on our curation lagging the registry.
-    // A model chosen from the picker or the Model page, and Reset to default:
-    // said with a toast either way.
+    // A model chosen on the Model page, and Reset to default: said with a
+    // toast either way.
     const chooseModel = useCallback(
       async (m: ModelOverride): Promise<boolean> => {
         try {
@@ -1327,12 +1351,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     }, [setModelOverride]);
 
     const applyModelCommand = useCallback(
-      async (cmd: ReturnType<typeof parseModelCommand>) => {
-        if (!cmd) return;
-        if (cmd.kind === "show") {
-          setModelPickerOpen(true);
-          return;
-        }
+      async (cmd: Exclude<ModelCommand, { kind: "show" }>) => {
         // Pre-thread picks are staged in useChat and applied to the first
         // run; no threadId guard needed.
         try {
@@ -1369,12 +1388,39 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         }
         const messageText = input.trim();
         if (!messageText) return;
+        // Goal mode: nothing written, or a word the core would read as
+        // another /goal command, stays here with a hint.
+        if (activeGoalMode) {
+          const body = pyStrip(input.slice(GOAL_LEADS[activeGoalMode].length));
+          if (!body) {
+            nudgeComposer();
+            toast.info(
+              activeGoalMode === "goal"
+                ? "Describe the goal first."
+                : "Say what should change in the goal first.",
+              { id: GOAL_HINT_ID }
+            );
+            return;
+          }
+          if (
+            activeGoalMode === "goal" &&
+            parseGoalCommand(messageText)?.kind !== "create"
+          ) {
+            toast.warning(
+              `“${body}” is a /goal command; describe the goal in more words.`,
+              { id: GOAL_HINT_ID }
+            );
+            return;
+          }
+        }
         // Intercept `/model` before the agent sees it — purely client-side
         // state on the thread metadata. The textarea clears regardless of
-        // outcome so the command echo doesn't linger.
+        // outcome so the command echo doesn't linger; a bare `/model` opens
+        // the menu's Model page.
         const modelCmd = parseModelCommand(messageText);
         if (modelCmd) {
-          void applyModelCommand(modelCmd);
+          if (modelCmd.kind === "show") openModelPageRef.current();
+          else void applyModelCommand(modelCmd);
           setInput("");
           return;
         }
@@ -1423,6 +1469,8 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       },
       [
         input,
+        activeGoalMode,
+        nudgeComposer,
         applyModelCommand,
         canSend,
         canRunNow,
@@ -1505,6 +1553,19 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       setQueuedMessages([]);
     }, []);
 
+    // The chip: the composer holds one string, and a chip stands for its
+    // start (the skill its first word pins, or goal mode's words); the box
+    // shows the rest.
+    const commandWords = goalSupported === false ? MODEL_ONLY : COMMAND_WORDS;
+    const chipOptions = {
+      skills: knownSkills,
+      goalMode: activeGoalMode,
+      commands: new Set(commandWords),
+    };
+    const lead = composerLead(input, chipOptions);
+    const rest = input.slice(lead.lead.length);
+    const chip = lead.chip;
+
     // A command chosen from a page runs as if typed and sent with Enter:
     // queued while the agent works, the draft left alone. Its typed word is
     // gone by then, so one that can't run says so.
@@ -1529,20 +1590,27 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       sendComposerText(text, []);
     };
 
+    // Set a goal… / Amend the goal…: the mode's words go ahead of the box's
+    // text, and typing goes on after it. A skill's chip comes off (a goal
+    // request carries none), and says so.
+    const enterGoalMode = (mode: GoalMode) => {
+      if (chip?.kind === "skill") {
+        setLeavingChip(chip);
+        toast.info(`A goal doesn't take skills, so /${chip.name} came off.`);
+      }
+      const body = rest.trimStart();
+      setGoalMode(mode);
+      setInput(GOAL_LEADS[mode] + body);
+      slash.placeCaret(body.length);
+    };
+
     const runGoalPageAction = (kind: GoalPageActionKind) => {
       if (kind === "show") {
         setGoalDetailsOpen(true);
         return;
       }
       if (kind === "create" || kind === "amend") {
-        const next =
-          (kind === "create" ? "/goal " : "/goal amend ") + input.trimStart();
-        setInput(next);
-        requestAnimationFrame(() => {
-          const el = textareaRef.current;
-          el?.focus();
-          el?.setSelectionRange(next.length, next.length);
-        });
+        enterGoalMode(kind === "create" ? "goal" : "amend");
         return;
       }
       runMenuCommand(`/goal ${kind}`);
@@ -1632,18 +1700,6 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       empty: (filter) => `No models match “${filter}”.`,
     };
 
-    // The chip: the composer holds one string, and a chip stands for its
-    // start (the skill its first word pins); the box shows the rest.
-    const commandWords = goalSupported === false ? MODEL_ONLY : COMMAND_WORDS;
-    const chipOptions = {
-      skills: knownSkills,
-      goalMode: null,
-      commands: new Set(commandWords),
-    };
-    const lead = composerLead(input, chipOptions);
-    const rest = input.slice(lead.lead.length);
-    const chip = lead.chip;
-
     // The `/` menu: the commands' pages, and installed skills to pin while a
     // leading `/name` is typed (in the box: after the chip).
     const slash = useSlashMenu({
@@ -1655,9 +1711,11 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       onBrowse: () => onNavigate?.({ view: "skills" }),
       pages: goalPage ? [goalPage, modelPage] : [modelPage],
       commandWords,
+      // In goal mode the box holds the goal: a "/" there is text.
+      rootMenu: activeGoalMode === null,
       leadSkill: chip?.kind === "skill" ? chip.name : null,
       // A text that may start with a skill needs the names to show its chip.
-      wantSkills: input.startsWith("/"),
+      wantSkills: activeGoalMode === null && input.startsWith("/"),
       onSkillsRead: setKnownSkills,
       // One skill a message: a picked one takes the chip's place, and flies
       // in from its row; typing goes on after it.
@@ -1667,12 +1725,33 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       },
     });
     const slashKeyDown = slash.onKeyDown;
+    // The model pill and `/model` open the Model page, on the current model.
+    useLayoutEffect(() => {
+      openModelPageRef.current = () => {
+        textareaRef.current?.focus();
+        slash.openPage("model");
+      };
+    });
+    // The box can't be used (an answer is waited for, or the thread is
+    // read-only here): nor can the model pill.
+    const composerLocked = hasPendingInterrupt || binding.kind === "readOnly";
+    const sendLabel =
+      activeGoalMode === "goal"
+        ? "Set goal"
+        : activeGoalMode === "amend"
+        ? "Amend goal"
+        : "Send";
+    const modelPageOpen =
+      slash.menuProps.open &&
+      slash.menuProps.view.kind === "page" &&
+      slash.menuProps.view.page.word === "model";
 
-    // Backspace at the box's start, or the chip's button: the chip goes (and
-    // folds away), the text after it stays.
+    // Backspace at the box's start, or the chip's button (Escape too, for
+    // goal mode): the chip goes (and folds away), the text after it stays.
     const removeChip = () => {
       if (!chip) return;
       setLeavingChip(chip);
+      if (chip.kind !== "skill") setGoalMode(null);
       setInput(rest);
       textareaRef.current?.focus();
     };
@@ -1688,6 +1767,11 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         if (e.nativeEvent.isComposing || e.keyCode === 229) return;
         // While the `/` menu is open, the arrows, Enter, Tab and Escape are its.
         if (slashKeyDown(e)) return;
+        if (e.key === "Escape" && activeGoalMode) {
+          e.preventDefault();
+          removeChip();
+          return;
+        }
         if (
           e.key === "Backspace" &&
           chip &&
@@ -1721,6 +1805,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         hasPendingInterrupt,
         input,
         chip,
+        activeGoalMode,
         editQueuedMessage,
         slashKeyDown,
       ]
@@ -2216,124 +2301,6 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
             </DialogFooter>
           </DialogContent>
         </Dialog>
-        <Dialog
-          open={modelPickerOpen}
-          onOpenChange={setModelPickerOpen}
-        >
-          <DialogContent className="sm:max-w-md">
-            <DialogHeader>
-              <DialogTitle>Pick a model for this chat</DialogTitle>
-              <DialogDescription>
-                The choice applies per-thread. Type{" "}
-                <span className="font-mono text-xs">/model &lt;name&gt;</span>{" "}
-                in the composer to use a name not in the list.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="mt-2 space-y-2">
-              <div className="text-xs text-muted-foreground">
-                Current:{" "}
-                <span className="font-mono">
-                  {currentModel
-                    ? `${currentModel.name}${
-                        currentModel.provider
-                          ? ` (${currentModel.provider})`
-                          : ""
-                      }`
-                    : "deployment default"}
-                </span>
-                {modelRegistryLoading && (
-                  <span className="ml-2 italic">loading registry…</span>
-                )}
-              </div>
-              {isFallbackModelList && (
-                <div className="border-[var(--color-warning)]/30 bg-[var(--color-warning)]/5 flex items-start gap-2 rounded-md border px-3 py-2 text-xs text-foreground">
-                  <span
-                    aria-hidden="true"
-                    className="text-base leading-none text-[var(--color-warning)]"
-                  >
-                    {"\u26A0"}
-                  </span>
-                  <span>
-                    Showing a curated subset — the deployment&rsquo;s
-                    <span className="mx-1 font-mono">/api/models</span>
-                    registry didn&rsquo;t load
-                    {modelRegistryError ? ` (${modelRegistryError})` : ""}.
-                    Other short names still work via{" "}
-                    <span className="font-mono">/model &lt;name&gt;</span>.
-                  </span>
-                </div>
-              )}
-              <input
-                type="text"
-                value={modelSearch}
-                onChange={(e) => setModelSearch(e.target.value)}
-                placeholder="Filter by name or provider…"
-                autoFocus
-                className="w-full rounded-md border border-border bg-background px-3 py-1.5 font-mono text-sm placeholder:font-sans placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              />
-              <ul className="max-h-72 space-y-1 overflow-y-auto pl-0">
-                {filteredPickerModels.length === 0 && (
-                  <li className="px-3 py-2 text-xs text-muted-foreground">
-                    No models match &ldquo;{modelSearch}&rdquo;.
-                  </li>
-                )}
-                {filteredPickerModels.map((m) => {
-                  const isActive =
-                    modelOverride?.model === m.model &&
-                    modelOverride?.model_provider === m.model_provider;
-                  const isDefault =
-                    !modelOverride &&
-                    modelRegistry.defaultEntry?.name === m.model &&
-                    (modelRegistry.defaultEntry?.provider ?? null) ===
-                      (m.model_provider ?? null);
-                  return (
-                    <li key={`${m.model}|${m.model_provider ?? ""}`}>
-                      <button
-                        type="button"
-                        aria-label={`Select model ${m.model}${
-                          m.model_provider ? ` from ${m.model_provider}` : ""
-                        }${isDefault ? " (default)" : ""}`}
-                        onClick={async () => {
-                          if (await chooseModel(m)) setModelPickerOpen(false);
-                        }}
-                        className={cn(
-                          "flex w-full items-center justify-between gap-3 rounded px-3 py-2 text-left text-sm transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
-                          isActive && "bg-accent"
-                        )}
-                      >
-                        <span className="min-w-0 truncate font-mono">
-                          {m.model}
-                          {isDefault && (
-                            <span className="ml-2 text-xs font-normal text-muted-foreground">
-                              · default
-                            </span>
-                          )}
-                        </span>
-                        {m.model_provider && (
-                          <span className="shrink-0 text-xs text-muted-foreground">
-                            {m.model_provider}
-                          </span>
-                        )}
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
-            <DialogFooter>
-              <Button
-                variant="outline"
-                onClick={async () => {
-                  if (await resetModel()) setModelPickerOpen(false);
-                }}
-                disabled={!modelOverride}
-              >
-                Reset to default
-              </Button>
-              <Button onClick={() => setModelPickerOpen(false)}>Close</Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
         <div
           className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain"
           ref={scrollRef}
@@ -2684,9 +2651,12 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
           )}
           <div
             ref={composerRef}
+            data-mode={activeGoalMode ?? undefined}
             className={cn(
-              "relative z-10 mx-auto mb-2 flex w-[calc(100%-16px)] max-w-[960px] flex-shrink-0 flex-col overflow-hidden rounded-xl border border-border bg-background transition-colors duration-200 ease-in-out sm:mb-4 sm:w-[calc(100%-24px)]",
-              "focus-within:ring-2 focus-within:ring-ring"
+              "relative z-10 mx-auto mb-2 flex w-[calc(100%-16px)] max-w-[960px] flex-shrink-0 flex-col overflow-hidden rounded-xl border bg-background transition-[color,background-color,border-color,box-shadow] duration-200 ease-in-out sm:mb-4 sm:w-[calc(100%-24px)]",
+              activeGoalMode
+                ? "border-[var(--brand)] shadow-[0_0_0_3px_color-mix(in_srgb,var(--brand)_16%,transparent)]"
+                : "border-border focus-within:ring-2 focus-within:ring-ring"
             )}
           >
             {
@@ -2955,22 +2925,34 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                 {currentModel && (
                   <button
                     type="button"
-                    onClick={() => setModelPickerOpen(true)}
+                    // Keep the composer's focus: the page opens over it, and
+                    // a second click closes it.
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() =>
+                      modelPageOpen
+                        ? slash.menuProps.onBack()
+                        : openModelPageRef.current()
+                    }
+                    disabled={composerLocked}
+                    aria-haspopup="listbox"
+                    aria-expanded={modelPageOpen}
                     title="Click to change model for this chat"
                     aria-label="Change model for this chat"
-                    className="-mx-1 flex min-w-0 items-center gap-1.5 rounded px-1 py-0.5 transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    className="-mx-1 flex min-w-0 items-center gap-1.5 rounded px-1 py-0.5 transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-transparent"
                   >
                     <Sparkles
                       className="size-3.5 shrink-0 text-[var(--brand)]"
                       aria-hidden="true"
                     />
-                    <span className="truncate font-medium text-foreground">
-                      {currentModel.name}
-                    </span>
+                    <SwapText
+                      text={currentModel.name}
+                      className="truncate font-medium text-foreground"
+                    />
                     {currentModel.provider && (
-                      <span className="hidden shrink-0 sm:inline">
-                        · {currentModel.provider}
-                      </span>
+                      <SwapText
+                        text={`· ${currentModel.provider}`}
+                        className="hidden shrink-0 sm:inline"
+                      />
                     )}
                   </button>
                 )}
@@ -3046,7 +3028,13 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                   ))}
                 </div>
               )}
-              <div className="flex min-w-0 items-start">
+              <div
+                className={cn(
+                  "flex min-w-0 items-start transition-colors duration-200",
+                  activeGoalMode &&
+                    "bg-[color-mix(in_srgb,var(--brand-soft)_70%,transparent)]"
+                )}
+              >
                 {leavingChip && (
                   <ComposerChip
                     chip={leavingChip}
@@ -3078,7 +3066,9 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                   >
                     {chip.kind === "skill"
                       ? `Skill ${chip.name} pinned. Backspace at the start removes it.`
-                      : ""}
+                      : chip.kind === "goal"
+                      ? "Setting a goal: what you write is the goal. Escape leaves goal mode."
+                      : "Amending the goal: what you write is the change. Escape leaves amend mode."}
                   </span>
                 )}
                 <textarea
@@ -3098,7 +3088,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                   {...slash.textareaProps}
                   aria-describedby={chip ? chipHintId : undefined}
                   aria-label="Message"
-                  disabled={hasPendingInterrupt || binding.kind === "readOnly"}
+                  disabled={composerLocked}
                   placeholder={
                     binding.kind === "readOnly"
                       ? binding.reason
@@ -3108,6 +3098,10 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                         : "Connecting to the backend…"
                       : hasPendingInterrupt
                       ? "Respond to the request above to continue…"
+                      : activeGoalMode === "goal"
+                      ? "Describe the goal; its criteria are drafted for you to review…"
+                      : activeGoalMode === "amend"
+                      ? "What should change in the goal?"
                       : isLoading
                       ? "Queue a follow-up — sends when this turn finishes…"
                       : chip
@@ -3219,7 +3213,13 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                       !isLoading &&
                       (submitDisabled || isUploadingFiles || !input.trim())
                     }
-                    aria-label={isLoading ? "Stop generating" : "Send message"}
+                    aria-label={
+                      isLoading
+                        ? "Stop generating"
+                        : activeGoalMode
+                        ? sendLabel
+                        : "Send message"
+                    }
                   >
                     {isLoading ? (
                       <>
@@ -3229,7 +3229,10 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                     ) : (
                       <>
                         <ArrowUp size={18} />
-                        <span className="hidden sm:inline">Send</span>
+                        <SwapText
+                          text={sendLabel}
+                          className="hidden sm:inline"
+                        />
                       </>
                     )}
                   </Button>

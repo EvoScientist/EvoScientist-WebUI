@@ -58,16 +58,29 @@ export const useAutoNotifyMock = (): [boolean, (on: boolean) => void] => [
 // Populated by default so ChatInterface's fallback-list diagnostic warn
 // (fires when the registry settles empty) doesn't spam stderr in every test.
 // A test sets `registryStub.failed` (and puts it back) to cover the fallback
-// branch: the registry settled empty, with an error.
-export const registryStub = { failed: false };
+// branch: the registry settled empty, with an error. `value`, when set, is
+// the answer itself (a registry still loading, then answering).
+type RegistryAnswer = {
+  registry: {
+    entries: Array<{ name: string; model_id: string; provider?: string }>;
+    defaultEntry: { name: string; provider?: string } | null;
+  };
+  loading: boolean;
+  error: string | null;
+};
+export const registryStub: {
+  failed: boolean;
+  value: RegistryAnswer | null;
+} = { failed: false, value: null };
 export const useAvailableModelsMock = () =>
-  registryStub.failed
+  registryStub.value ??
+  (registryStub.failed
     ? {
         registry: { entries: [], defaultEntry: null },
         loading: false,
         error: "HTTP 404",
       }
-    : populatedRegistry;
+    : populatedRegistry);
 const populatedRegistry = {
   registry: {
     entries: [

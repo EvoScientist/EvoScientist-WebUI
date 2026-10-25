@@ -48,6 +48,7 @@ function Composer({
   apiRef,
   valueApi,
   commandWords,
+  rootMenu,
 }: {
   onSubmit?: (value: string) => void;
   onBrowse?: () => void;
@@ -61,6 +62,7 @@ function Composer({
   /** Text put in from outside the menu (a refused message coming back). */
   valueApi?: { set: (value: string) => void };
   commandWords?: readonly string[];
+  rootMenu?: boolean;
 }) {
   const [value, setValue] = useState("");
   if (valueApi) valueApi.set = setValue;
@@ -77,6 +79,7 @@ function Composer({
     wantSkills,
     onSkillsRead,
     commandWords,
+    rootMenu,
     onPickSkill: (name, rest, from) => {
       onPickSkill?.(name, rest, from);
       setValue(`/${name} ${rest}`);
@@ -1030,6 +1033,46 @@ describe("useSlashMenu pages", () => {
     key("Escape");
     expect(screen.queryByRole("listbox")).toBeNull();
     expect(value()).toBe("");
+  });
+
+  // Goal mode: the box holds the goal's text, where a "/" is text; a page
+  // still opens by its word (the model pill).
+  it("leaves a typed / as text when the root menu is off, and still opens a page", async () => {
+    const fetchMock = stubSkills();
+    const api = { current: null as ReturnType<typeof useSlashMenu> | null };
+    render(
+      <Composer
+        pages={testPages().both}
+        apiRef={api}
+        rootMenu={false}
+      />
+    );
+    type("/pa");
+    await act(async () => {});
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+    act(() => api.current!.openPage("model"));
+    expect(screen.getByRole("listbox", { name: "Model" })).toBeTruthy();
+    expect(value()).toBe("/pa");
+  });
+
+  // The caller's text first, then the caret: placed in the same frame, so
+  // a key typed right after lands where it was put.
+  it("places the caret where its caller asks once the text is in", () => {
+    const api = { current: null as ReturnType<typeof useSlashMenu> | null };
+    const valueApi = { set: (_: string) => {} };
+    render(
+      <Composer
+        apiRef={api}
+        valueApi={valueApi}
+      />
+    );
+    act(() => box().focus());
+    act(() => {
+      valueApi.set("write x");
+      api.current!.placeCaret(7);
+    });
+    expect((box() as HTMLTextAreaElement).selectionStart).toBe(7);
   });
 
   // Independent review, checkpoint A: one skill a message, so a pick

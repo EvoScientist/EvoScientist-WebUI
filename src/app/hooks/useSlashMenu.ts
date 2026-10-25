@@ -86,6 +86,7 @@ export function useSlashMenu({
   wantSkills = false,
   onSkillsRead,
   commandWords,
+  rootMenu = true,
 }: {
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
   value: string;
@@ -114,6 +115,10 @@ export function useSlashMenu({
    *  default: the pages' words. "goal" stays one while goal support is
    *  unknown. */
   commandWords?: readonly string[];
+  /** Whether a leading `/` typed in the box opens the menu: off, it stays
+   *  text (goal mode, where the box holds the goal); a page still opens
+   *  with `openPage`. */
+  rootMenu?: boolean;
 }) {
   const listboxId = useId();
   // Ids by name, so the active option's id changes with the match and a
@@ -166,7 +171,7 @@ export function useSlashMenu({
 
   // The root: pages and skills for the word being typed.
   const token =
-    !pageDef && usable && !composing && caret !== null
+    rootMenu && !pageDef && usable && !composing && caret !== null
       ? slashTokenAt(
           value,
           caret,
@@ -538,6 +543,8 @@ export function useSlashMenu({
     onChange,
     onKeyDown,
     openPage,
+    /** Put the caret at `at` once the caller's new text is in the box. */
+    placeCaret,
     textareaProps: {
       onSelect: (e: React.SyntheticEvent<HTMLTextAreaElement>) => {
         // The menu is placing the caret: the select the same key reports

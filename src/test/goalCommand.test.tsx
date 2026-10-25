@@ -489,17 +489,267 @@ describe("/goal in the composer", () => {
       );
     });
 
-    it("puts /goal's words in the box for a new goal", async () => {
-      const { textarea } = await mount(
+    // Goal mode: Set a goal… / Amend the goal… put a solid chip at the
+    // start of the box, the send button and the placeholder say what Enter
+    // does, and what is written goes out as the goal request.
+    const chipOf = (container: HTMLElement) =>
+      container.querySelector('[data-slot="composer-chip"]');
+    const write = (textarea: HTMLTextAreaElement, text: string) =>
+      fireEvent.change(textarea, { target: { value: text } });
+
+    it("enters goal mode from Set a goal…, sends what is written as the goal, and leaves the mode", async () => {
+      const { container, textarea } = await mount();
+      await openGoalPage(textarea);
+      expect(labels()).toHaveLength(1);
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(chipOf(container)?.textContent).toBe("Goal");
+      expect(chipOf(container)?.getAttribute("data-kind")).toBe("goal");
+      expect(textarea.value).toBe("");
+      expect(textarea.placeholder).toBe(
+        "Describe the goal; its criteria are drafted for you to review…"
+      );
+      expect(screen.getByRole("button", { name: "Set goal" })).toBeTruthy();
+      expect(container.querySelector('[data-mode="goal"]')).toBeTruthy();
+      expect(
+        document.getElementById(textarea.getAttribute("aria-describedby")!)
+          ?.textContent
+      ).toBe(
+        "Setting a goal: what you write is the goal. Escape leaves goal mode."
+      );
+      write(textarea, "write x");
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(submits()).toHaveLength(1);
+      expect(submits()[0].values).toMatchObject({
+        messages: [],
+        goal_request: { kind: "create", objective: "write x" },
+      });
+      expect(chipOf(container)).toBeNull();
+      expect(container.querySelector("[data-mode]")).toBeNull();
+      expect(screen.getByRole("button", { name: "Send message" })).toBeTruthy();
+      // Typed out afterwards, /goal is text again.
+      write(textarea, "/goal y");
+      expect(chipOf(container)).toBeNull();
+      expect(textarea.value).toBe("/goal y");
+    });
+
+    it("keeps the text after the typed word as the goal's, the caret at its end", async () => {
+      const { container, textarea } = await mount();
+      act(() => textarea.focus());
+      write(textarea, "/go write x");
+      textarea.setSelectionRange(3, 3);
+      fireEvent.select(textarea);
+      await waitFor(() =>
+        expect(screen.getAllByRole("option")).toHaveLength(1)
+      );
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(chipOf(container)?.textContent).toBe("Goal");
+      expect(textarea.value).toBe("write x");
+      expect(textarea.selectionStart).toBe("write x".length);
+    });
+
+    it("enters amend mode from Amend the goal…, and sends what is written as the feedback", async () => {
+      const { container, textarea } = await mount(
         {},
         { threadValues: goalValues("active") }
       );
       await openGoalPage(textarea);
-      fireEvent.keyDown(textarea, { key: "ArrowDown" });
-      fireEvent.keyDown(textarea, { key: "ArrowDown" });
       fireEvent.keyDown(textarea, { key: "Enter" });
-      expect(textarea.value).toBe("/goal ");
+      expect(chipOf(container)?.textContent).toBe("Amend goal");
+      expect(chipOf(container)?.getAttribute("data-kind")).toBe("amend");
+      expect(textarea.placeholder).toBe("What should change in the goal?");
+      expect(screen.getByRole("button", { name: "Amend goal" })).toBeTruthy();
+      expect(
+        document.getElementById(textarea.getAttribute("aria-describedby")!)
+          ?.textContent
+      ).toBe(
+        "Amending the goal: what you write is the change. Escape leaves amend mode."
+      );
+      write(textarea, "make it shorter");
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(submits()).toHaveLength(1);
+      expect(submits()[0].values).toMatchObject({
+        messages: [],
+        goal_request: { kind: "amend", feedback: "make it shorter" },
+      });
+      expect(chipOf(container)).toBeNull();
+    });
+
+    // A goal request carries no skill.
+    it("drops the skill chip when goal mode starts, and says so", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          async () =>
+            new Response(
+              JSON.stringify({
+                skills: [
+                  {
+                    name: "paper-review",
+                    description: "Review a paper",
+                    source: "global",
+                  },
+                ],
+              })
+            )
+        )
+      );
+      try {
+        const { container, textarea } = await mount();
+        act(() => textarea.focus());
+        write(textarea, "/paper-review hi");
+        await waitFor(() =>
+          expect(chipOf(container)?.textContent).toBe("paper-review")
+        );
+        await openGoalPage(textarea);
+        fireEvent.keyDown(textarea, { key: "Enter" });
+        expect(toast.info).toHaveBeenCalledWith(
+          "A goal doesn't take skills, so /paper-review came off."
+        );
+        expect(chipOf(container)?.textContent).toBe("Goal");
+        write(textarea, "write x");
+        fireEvent.keyDown(textarea, { key: "Enter" });
+        expect(submits()[0].values).toMatchObject({
+          messages: [],
+          goal_request: { kind: "create", objective: "write x" },
+        });
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it("refuses an empty goal and a goal that reads as another command", async () => {
+      const animate = vi.fn(() => ({ onfinish: null, cancel: () => {} }));
+      Object.defineProperty(Element.prototype, "animate", {
+        configurable: true,
+        value: animate,
+      });
+      try {
+        const { container, textarea } = await mount(
+          {},
+          { threadValues: goalValues("active") }
+        );
+        await openGoalPage(textarea);
+        fireEvent.keyDown(textarea, { key: "ArrowDown" });
+        fireEvent.keyDown(textarea, { key: "ArrowDown" });
+        fireEvent.keyDown(textarea, { key: "Enter" });
+        expect(chipOf(container)?.textContent).toBe("Goal");
+        // Nothing written: the box nudges and says what to write.
+        fireEvent.keyDown(textarea, { key: "Enter" });
+        expect(submits()).toHaveLength(0);
+        expect(toast.info).toHaveBeenCalledWith("Describe the goal first.", {
+          id: "goal-mode-hint",
+        });
+        const box = container.querySelector('[data-mode="goal"]');
+        expect(animate.mock.contexts).toContain(box);
+        // A word the core reads as another /goal command.
+        write(textarea, "pause");
+        fireEvent.keyDown(textarea, { key: "Enter" });
+        expect(submits()).toHaveLength(0);
+        expect(toast.warning).toHaveBeenCalledWith(
+          "“pause” is a /goal command; describe the goal in more words.",
+          { id: "goal-mode-hint" }
+        );
+        expect(chipOf(container)?.textContent).toBe("Goal");
+        expect(textarea.value).toBe("pause");
+        // Amend with nothing written (the menu is off in goal mode: out of
+        // it first).
+        fireEvent.keyDown(textarea, { key: "Escape" });
+        await openGoalPage(textarea);
+        fireEvent.keyDown(textarea, { key: "Enter" });
+        expect(chipOf(container)?.textContent).toBe("Amend goal");
+        fireEvent.keyDown(textarea, { key: "Enter" });
+        expect(submits()).toHaveLength(0);
+        expect(toast.info).toHaveBeenCalledWith(
+          "Say what should change in the goal first.",
+          { id: "goal-mode-hint" }
+        );
+      } finally {
+        delete (Element.prototype as { animate?: unknown }).animate;
+      }
+    });
+
+    it("leaves goal mode with Escape, Backspace at the start, or the chip's button, keeping the text", async () => {
+      const { container, textarea } = await mount();
+      const enter = async () => {
+        await openGoalPage(textarea);
+        fireEvent.keyDown(textarea, { key: "Enter" });
+        expect(chipOf(container)?.textContent).toBe("Goal");
+      };
+      await enter();
+      write(textarea, "write x");
+      fireEvent.keyDown(textarea, { key: "Escape" });
+      expect(chipOf(container)).toBeNull();
+      expect(textarea.value).toBe("write x");
+      expect(screen.getByRole("button", { name: "Send message" })).toBeTruthy();
+      await enter();
+      write(textarea, "write y");
+      textarea.setSelectionRange(0, 0);
+      fireEvent.keyDown(textarea, { key: "Backspace" });
+      expect(chipOf(container)).toBeNull();
+      expect(textarea.value).toBe("write y");
+      await enter();
+      write(textarea, "write z");
+      fireEvent.click(screen.getByRole("button", { name: "Leave goal mode" }));
+      expect(chipOf(container)).toBeNull();
+      expect(textarea.value).toBe("write z");
       expect(submits()).toHaveLength(0);
+    });
+
+    // Review focus 2: text put back from outside (W02's hand-back here)
+    // that no longer starts with the mode's words ends the mode.
+    it("leaves goal mode when outside text replaces the composer's", async () => {
+      const { container, textarea, type } = await mount(
+        {},
+        { threadValues: { messages: [] } }
+      );
+      type("hello");
+      const sent = submits()[0].values as { messages: Message[] };
+      act(() => {
+        stream.setMessages([...sent.messages]);
+      });
+      await openGoalPage(textarea);
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      write(textarea, "write x");
+      act(() => {
+        stream.emitError(
+          new Error('HTTP 404: {"detail":"Thread or assistant not found."}')
+        );
+      });
+      expect(chipOf(container)).toBeNull();
+      expect(textarea.value).toBe("hello\n\n/goal write x");
+      expect(screen.getByRole("button", { name: "Send message" })).toBeTruthy();
+    });
+
+    // The box holds the goal: a "/" there is text, not the menu.
+    it("keeps a typed / as text in goal mode", async () => {
+      const { container, textarea } = await mount();
+      await openGoalPage(textarea);
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      write(textarea, "/mo");
+      await act(async () => {});
+      expect(screen.queryByRole("listbox")).toBeNull();
+      expect(chipOf(container)?.textContent).toBe("Goal");
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(submits()[0].values).toMatchObject({
+        goal_request: { kind: "create", objective: "/mo" },
+      });
+    });
+
+    // The model pill still opens its page in goal mode, which stays.
+    it("opens the Model page from the model pill in goal mode, and stays in it", async () => {
+      const { container, textarea } = await mount();
+      await openGoalPage(textarea);
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      write(textarea, "write x");
+      fireEvent.click(
+        screen.getByRole("button", { name: "Change model for this chat" })
+      );
+      expect(screen.getByRole("listbox", { name: "Model" })).toBeTruthy();
+      fireEvent.keyDown(textarea, { key: "Escape" });
+      expect(screen.queryByRole("listbox")).toBeNull();
+      expect(chipOf(container)?.textContent).toBe("Goal");
+      expect(textarea.value).toBe("write x");
     });
   });
 

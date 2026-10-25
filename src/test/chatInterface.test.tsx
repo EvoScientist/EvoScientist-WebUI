@@ -1664,7 +1664,7 @@ describe("ChatInterface composition", () => {
       );
     });
 
-    it("leaves /model to the model picker", async () => {
+    it("opens the Model page for /model, on the current model's row", async () => {
       // A description that mentions models matches "model" too.
       vi.stubGlobal(
         "fetch",
@@ -1688,10 +1688,112 @@ describe("ChatInterface composition", () => {
       await act(async () => {});
       expect(screen.queryByRole("listbox")).toBeNull();
       fireEvent.keyDown(textarea, { key: "Enter" });
-      expect(
-        screen.getByRole("dialog", { name: "Pick a model for this chat" })
-      ).toBeTruthy();
+      expect(screen.getByRole("listbox", { name: "Model" })).toBeTruthy();
+      expect(textarea.value).toBe("");
       expect(stream.getSubmitCalls()).toHaveLength(0);
+      const active = document.getElementById(
+        textarea.getAttribute("aria-activedescendant") ?? ""
+      );
+      expect(active?.textContent).toContain("claude-sonnet-4-6");
+      expect(active?.querySelector("svg.lucide-check")).toBeTruthy();
+    });
+
+    it("opens the Model page from the model pill, and closes it from there", async () => {
+      const { container } = renderChatInterface();
+      const textarea = container.querySelector("textarea")!;
+      const pill = screen.getByRole("button", {
+        name: "Change model for this chat",
+      });
+      expect(pill.getAttribute("aria-expanded")).toBe("false");
+      fireEvent.click(pill);
+      expect(screen.getByRole("listbox", { name: "Model" })).toBeTruthy();
+      expect(document.activeElement).toBe(textarea);
+      expect(pill.getAttribute("aria-expanded")).toBe("true");
+      fireEvent.click(pill);
+      expect(screen.queryByRole("listbox")).toBeNull();
+      expect(pill.getAttribute("aria-expanded")).toBe("false");
+    });
+
+    it("disables the model pill while the composer can't be used", async () => {
+      renderChatInterface();
+      act(() => {
+        stream.setMessages([humanTurn("hi")]);
+        stream.setInterrupt(askUserInterrupt("what next?"));
+      });
+      expect(
+        screen
+          .getByRole("button", { name: "Change model for this chat" })
+          .hasAttribute("disabled")
+      ).toBe(true);
+    });
+
+    // Review focus 3: the registry answering while the page is open
+    // changes its rows in place, and the highlight stays on its model.
+    it("keeps the Model page open while the registry answers, on its row", async () => {
+      const { registryStub } = await import("@/test/mocks/chatInterfaceStubs");
+      registryStub.value = {
+        registry: { entries: [], defaultEntry: null },
+        loading: true,
+        error: null,
+      };
+      try {
+        const { container } = renderChatInterface();
+        const textarea = typeInComposer(container, "/mo");
+        await waitFor(() =>
+          expect(screen.getAllByRole("option")).toHaveLength(1)
+        );
+        fireEvent.keyDown(textarea, { key: "Enter" });
+        expect(screen.getByText("Loading the backend's models…")).toBeTruthy();
+        const active = () =>
+          document.getElementById(
+            textarea.getAttribute("aria-activedescendant") ?? ""
+          );
+        // The curated list meanwhile: down to claude-opus-4-8.
+        fireEvent.keyDown(textarea, { key: "ArrowDown" });
+        fireEvent.keyDown(textarea, { key: "ArrowDown" });
+        expect(active()?.textContent).toContain("claude-opus-4-8");
+        registryStub.value = {
+          registry: {
+            entries: [
+              { name: "gpt-5.5", model_id: "gpt-5.5", provider: "openai" },
+              {
+                name: "claude-opus-4-8",
+                model_id: "claude-opus-4-8",
+                provider: "anthropic",
+              },
+              {
+                name: "claude-sonnet-4-6",
+                model_id: "claude-sonnet-4-6",
+                provider: "anthropic",
+              },
+            ],
+            defaultEntry: { name: "claude-sonnet-4-6", provider: "anthropic" },
+          },
+          loading: false,
+          error: null,
+        };
+        act(() => {
+          stream.setMessages([]);
+        });
+        expect(screen.getByRole("listbox", { name: "Model" })).toBeTruthy();
+        expect(screen.queryByText("Loading the backend's models…")).toBeNull();
+        expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(
+          [
+            expect.stringContaining("gpt-5.5"),
+            expect.stringContaining("claude-opus-4-8"),
+            expect.stringContaining("claude-sonnet-4-6"),
+          ]
+        );
+        expect(active()?.textContent).toContain("claude-opus-4-8");
+        fireEvent.keyDown(textarea, { key: "Enter" });
+        await waitFor(() =>
+          expect(toast.success).toHaveBeenCalledWith(
+            "Model set to claude-opus-4-8 (anthropic)."
+          )
+        );
+      } finally {
+        registryStub.value = null;
+      }
     });
 
     it("opens the Skills marketplace when nothing is installed", async () => {
