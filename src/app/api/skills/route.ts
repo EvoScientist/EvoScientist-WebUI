@@ -8,6 +8,7 @@ import {
   isInstalledExpert,
   declaresSkillType,
 } from "@/lib/server/skills";
+import { isCrossOrigin } from "@/lib/server/workspace";
 
 // SKILL_DIRS (the global ~/.evoscientist/skills tier + legacy ~/.config
 // fallback) is the single source of truth, shared with the install route.
@@ -86,7 +87,15 @@ async function readSkills(): Promise<SkillCard[]> {
   return skills.sort((a, b) => a.name.localeCompare(b.name));
 }
 
-export async function GET() {
+// Its own page only, like the workspace and memory routes: a page that
+// rebound its name to this machine could list and remove the skills.
+export async function GET(request: NextRequest) {
+  if (isCrossOrigin(request)) {
+    return NextResponse.json(
+      { error: "Cross-origin access not allowed." },
+      { status: 403 }
+    );
+  }
   try {
     const skills = await readSkills();
     return NextResponse.json({ skills });
@@ -101,6 +110,12 @@ export async function GET() {
 // Uninstall = remove the skill directory. Guard against path traversal and
 // only delete inside the known skill dirs.
 export async function DELETE(req: NextRequest) {
+  if (isCrossOrigin(req)) {
+    return NextResponse.json(
+      { error: "Cross-origin access not allowed." },
+      { status: 403 }
+    );
+  }
   const name = req.nextUrl.searchParams.get("name");
   // Strict name check (blocks dotfiles like `.installed.yaml`, traversal, odd
   // chars) — must match install-side validation, not the old slash/`..`-only one.

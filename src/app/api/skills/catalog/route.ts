@@ -1,9 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCatalog } from "@/lib/server/skills";
+import { isCrossOrigin } from "@/lib/server/workspace";
 
 export const runtime = "nodejs";
 
 export async function GET(request: NextRequest) {
+  if (isCrossOrigin(request)) {
+    return NextResponse.json(
+      { error: "Cross-origin access not allowed." },
+      { status: 403 }
+    );
+  }
   try {
     const force = request.nextUrl.searchParams.get("refresh") === "1";
     const skills = await getCatalog(force);
