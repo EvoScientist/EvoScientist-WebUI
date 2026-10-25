@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MarkdownContent } from "./MarkdownContent";
 
@@ -255,5 +256,27 @@ describe("MarkdownContent raw HTML", () => {
     expect(html).toContain(
       "It returns Array&lt;Message&gt;; if a&lt;b and c&gt;d stop."
     );
+  });
+});
+
+// KaTeX 0.18 prefixed its internal classes, so the stylesheet layout.tsx
+// imports (katex/dist) styles only the KaTeX it comes from, and every
+// renderer must load that one: rehype-katex 7, mermaid 11's core build
+// (`import("katex")` for `$$` labels) and micromark-extension-math still ask
+// for ^0.16, and package.json's overrides gives them ours. One entry in the
+// lockfile means one copy in every install from it (`npm ci`, CI, the build).
+describe("KaTeX copies", () => {
+  it("installs one KaTeX, the one whose stylesheet the app loads", () => {
+    const lock = JSON.parse(
+      readFileSync(
+        new URL("../../../package-lock.json", import.meta.url),
+        "utf8"
+      )
+    ) as { packages: Record<string, unknown> };
+    const copies = Object.keys(lock.packages).filter(
+      (key) =>
+        key === "node_modules/katex" || key.endsWith("/node_modules/katex")
+    );
+    expect(copies).toEqual(["node_modules/katex"]);
   });
 });
