@@ -32,6 +32,12 @@ export interface RunOptions {
   onStderrLine?: (line: string) => void;
   /** Extra stdio entries after the three pipes, e.g. "ipc" for the UI server. */
   extraStdio?: SpawnOptions["stdio"];
+  /** On macOS and Linux, start the child in its own process group, so
+   *  `killTree(pid, log, platform, true)` ends what it started too (the
+   *  install script's uv or curl). Ignored on Windows, where `detached` would
+   *  give the child its own console and take it out of the app's job object;
+   *  `taskkill /T` covers the tree there. */
+  group?: boolean;
 }
 
 export interface Running {
@@ -54,6 +60,7 @@ export function run(file: string, args: string[], opts: RunOptions): Running {
     stdio: ["pipe", "pipe", "pipe", ...extra],
     windowsHide: true,
     shell: false,
+    detached: Boolean(opts.group) && process.platform !== "win32",
   });
   const outLines = new LineSplitter();
   const errLines = new LineSplitter();
@@ -110,14 +117,16 @@ export function withTimeout<T>(
 
 /**
  * Ends a process. On Windows `taskkill /T /F` ends its descendants too, itself
- * started with `windowsHide`; elsewhere only the process gets SIGTERM, then
- * SIGKILL after a grace period (process groups come with macOS and Linux
- * packaging in W06).
+ * started with `windowsHide`. Elsewhere the process gets SIGTERM, then SIGKILL
+ * after a grace period; with `group` (a child started with `group: true`) the
+ * signals go to its whole process group, else only to the process (the
+ * backend's tree comes with macOS and Linux packaging in W06).
  */
 export async function killTree(
   pid: number,
   log: Logger,
-  platform: NodeJS.Platform = process.platform
+  platform: NodeJS.Platform = process.platform,
+  group = false
 ): Promise<void> {
   if (platform === "win32") {
     const k = run("taskkill.exe", ["/T", "/F", "/PID", String(pid)], {
@@ -134,24 +143,27 @@ export async function killTree(
     );
     return;
   }
+  // A negative pid signals the process group whose leader is `pid`.
+  const target = group ? -pid : pid;
+  const what = group ? `process group ${pid}` : `pid ${pid}`;
   const alive = () => {
     try {
-      process.kill(pid, 0);
+      process.kill(target, 0);
       return true;
     } catch {
       return false;
     }
   };
   try {
-    process.kill(pid, "SIGTERM");
+    process.kill(target, "SIGTERM");
   } catch {
     return;
   }
   for (let i = 0; i < 50 && alive(); i++) await sleep(100);
   if (alive()) {
-    log.warn(`pid ${pid} did not end on SIGTERM; sending SIGKILL`);
+    log.warn(`${what} did not end on SIGTERM; sending SIGKILL`);
     try {
-      process.kill(pid, "SIGKILL");
+      process.kill(target, "SIGKILL");
     } catch {
       // already gone
     }

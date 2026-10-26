@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { killTree, run, runCollect, withTimeout } from "./proc";
 
 const node = process.execPath;
@@ -82,6 +82,51 @@ describe("killTree", () => {
     expect(e).not.toBe("timeout");
   });
 });
+
+describe.skipIf(process.platform === "win32")(
+  "killTree with a process group",
+  () => {
+    const alive = (pid: number) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    // A shell that starts a long-running child, as install.sh starts uv or
+    // curl, and prints that child's pid.
+    async function shellWithChild(group: boolean) {
+      let child = 0;
+      const r = run("bash", ["-c", "sleep 30 & echo $!; wait"], {
+        cwd: process.cwd(),
+        env: process.env,
+        group,
+        onStdoutLine: (l) => (child = Number(l)),
+      });
+      await vi.waitFor(() => expect(child).toBeGreaterThan(0));
+      return { r, child };
+    }
+
+    it("ends the shell and the child it started", async () => {
+      const { r, child } = await shellWithChild(true);
+      await killTree(r.child.pid!, quiet, process.platform, true);
+      expect(await withTimeout(r.closed, 5000)).not.toBe("timeout");
+      await vi.waitFor(() => expect(alive(child)).toBe(false));
+    });
+
+    it("without a group only the shell ends, and its child stays", async () => {
+      const { r, child } = await shellWithChild(false);
+      try {
+        await killTree(r.child.pid!, quiet, process.platform);
+        await withTimeout(r.exited, 5000);
+        expect(alive(child)).toBe(true);
+      } finally {
+        process.kill(child, "SIGKILL");
+      }
+    });
+  }
+);
 
 describe("runCollect", () => {
   it("collects stdout lines and the exit code", async () => {
