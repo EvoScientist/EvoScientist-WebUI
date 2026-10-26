@@ -128,10 +128,21 @@ let ui: UiServer | null = null;
 let uiBackendUrl: string | null = null;
 /** The window shows the UI (not the status page). */
 let showingUi = false;
+/** The UI page the window showed or was loading before a status screen
+ *  replaced it, and the folder it belongs to: Retry and Restart backend
+ *  bring the user back to it. */
+let lastUiUrl: string | null = null;
+let lastUiWorkspace: string | null = null;
 /** A launch, restart or action on the error screen is running. */
 let working = false;
 let quitState: "none" | "checking" | "waiting" | "stopping" = "none";
 let quitCancelled = false;
+/** A backend loss or UI server exit that came while a quit was being
+ *  decided; shown if the quit is cancelled. */
+let heldError: BootError | null = null;
+/** The stop of a `deploy` that a restart or relaunch already let go of; a
+ *  quit waits for it. */
+let stoppingDeploy: Promise<"stopped" | "killed"> | null = null;
 let relaunchAfterExit = false;
 const sessionEnd = new SessionEnd();
 let exiting = false;
@@ -142,6 +153,12 @@ const uiOrigin = (): string | null => (ui ? new URL(ui.url).origin : null);
 
 function showScreen(s: Screen): void {
   screen = s;
+  // Only an http page counts: a load still in progress never records the
+  // status page.
+  if (showingUi && win) {
+    const page = win.webContents.getURL();
+    if (page.startsWith("http")) lastUiUrl = page;
+  }
   showingUi = false;
   if (!win) return;
   if (onStatusPage) {
@@ -234,8 +251,9 @@ async function launchLocked(): Promise<void> {
     const old = session;
     session = null;
     ready = null;
-    await old.stop();
+    await stopDeploy(old);
   }
+  if (quitState !== "none") return;
   try {
     mkdirSync(folders.dataDir, { recursive: true });
   } catch (e) {
@@ -280,27 +298,33 @@ async function launchLocked(): Promise<void> {
       `ready without ${filled.missing.join(", ")}; using the app's own folders`
     );
   ready = filled.ready;
-  const current = result.session;
-  current.onLost((e) => {
-    if (session !== current || quitState !== "none") return;
-    ready = null;
-    const shown = sessionEnd.report(() => {
-      if (session === current && quitState === "none")
-        showError({
-          code: e.code,
-          message: e.message,
-          detail: e.detail as Record<string, unknown>,
-        });
-    });
-    if (shown !== "now")
-      log.info(`backend lost during the end of the session: ${shown}`);
-  });
   const logDir = dirname(ready.logFile);
   log.moveTo(logDir);
   uiLog.moveTo(logDir);
   log.info(
     `backend ready at ${ready.url} (owned ${ready.owned}) for ${ready.workspace}`
   );
+  // Registered last: a loss that came before registration is delivered at
+  // once and clears `ready`.
+  const current = result.session;
+  current.onLost((e) => {
+    if (session !== current) return;
+    ready = null;
+    const error = {
+      code: e.code,
+      message: e.message,
+      detail: e.detail as Record<string, unknown>,
+    };
+    if (quitState !== "none") {
+      heldError = error;
+      return;
+    }
+    const shown = sessionEnd.report(() => {
+      if (session === current && quitState === "none") showError(error);
+    });
+    if (shown !== "now")
+      log.info(`backend lost during the end of the session: ${shown}`);
+  });
   await showUiLocked();
 }
 
@@ -349,16 +373,21 @@ async function startUiLocked(r: DeployReady): Promise<void> {
     writeUiRecord(record, null);
     ui = null;
     uiBackendUrl = null;
-    if (!showingUi || quitState !== "none") return;
+    if (!showingUi) return;
+    const error = {
+      code: "ui_server_exited",
+      message: `The WebUI server exited (code ${exit.code}${
+        exit.signal ? `, signal ${exit.signal}` : ""
+      }).`,
+      detail: { exit_code: exit.code },
+    };
+    // A backend loss held first is the error the user has to act on.
+    if (quitState !== "none") {
+      heldError ??= error;
+      return;
+    }
     const shown = sessionEnd.report(() => {
-      if (ui === null && quitState === "none")
-        showError({
-          code: "ui_server_exited",
-          message: `The WebUI server exited (code ${exit.code}${
-            exit.signal ? `, signal ${exit.signal}` : ""
-          }).`,
-          detail: { exit_code: exit.code },
-        });
+      if (ui === null && quitState === "none") showError(error);
     });
     if (shown !== "now")
       log.info(`UI server exited during the end of the session: ${shown}`);
@@ -378,6 +407,8 @@ async function showUiLocked(): Promise<void> {
     }
   } catch (e) {
     await stopUi();
+    // A backend lost meanwhile has shown its own error.
+    if (ready !== r) return;
     return showError({
       code: "ui_server_exited",
       message: `The WebUI server did not start: ${
@@ -386,11 +417,23 @@ async function showUiLocked(): Promise<void> {
       detail: { server_js: UI_SERVER_JS },
     });
   }
-  if (!win || !ui) return;
+  if (ready !== r || !win || !ui) return;
+  // The same folder gets back the page the user was on, on the current UI
+  // server (its port can change); a new folder starts at `/`, since the
+  // WebUI would show the old folder's thread read-only.
+  const page = new URL(ui.url);
+  if (lastUiUrl && lastUiWorkspace === r.workspace) {
+    const saved = new URL(lastUiUrl);
+    page.pathname = saved.pathname;
+    page.search = saved.search;
+    page.hash = saved.hash;
+  }
   onStatusPage = false;
   showingUi = true;
+  lastUiUrl = page.href;
+  lastUiWorkspace = r.workspace;
   try {
-    await win.loadURL(ui.url);
+    await win.loadURL(page.href);
   } catch (e) {
     log.warn(`loading the UI: ${e}`);
     return; // did-fail-load shows the native dialog
@@ -494,9 +537,32 @@ function restartBackend(): void {
     const old = session;
     session = null;
     ready = null;
-    log.info(`restart backend: stopping deploy (${await old.stop()})`);
+    log.info(`restart backend: stopping deploy (${await stopDeploy(old)})`);
     await launchLocked();
   });
+}
+
+/** Stops a `deploy` the app has let go of, recorded so a quit waits for it. */
+async function stopDeploy(old: DeploySession): Promise<"stopped" | "killed"> {
+  const stop = old.stop();
+  stoppingDeploy = stop;
+  try {
+    return await stop;
+  } finally {
+    if (stoppingDeploy === stop) stoppingDeploy = null;
+  }
+}
+
+/** After a cancelled quit: shows an error held during the quit question, or
+ *  brings back the UI that a restart or launch left for the quit. */
+function resumeAfterCancelledQuit(): void {
+  const error = heldError;
+  heldError = null;
+  if (error) return showError(error);
+  if (working || showingUi || screen.kind !== "progress") return;
+  void exclusive(async () =>
+    ready && session ? showUiLocked() : launchLocked()
+  );
 }
 
 /** The end of the system session (D5): no confirmation, no memory wait. On
@@ -518,10 +584,12 @@ function endOfSession(why: string): void {
 async function requestQuit(): Promise<void> {
   if (quitState !== "none") return;
   quitState = "checking";
+  heldError = null;
   try {
     const owned = Boolean(ready?.owned && session);
     if (owned && !sessionEnd.ending && !(await confirmStop("quit"))) {
       quitState = "none";
+      resumeAfterCancelledQuit();
       return;
     }
     // Hidden, never destroyed: a destroyed window gets no `session-end` (D5).
@@ -536,11 +604,14 @@ async function requestQuit(): Promise<void> {
         cancelled: () => quitCancelled || sessionEnd.ending,
       });
       log.info(`memory workers: ${r}`);
-      if (r === "cancelled" && quitCancelled) {
+      // A second launch during the last probe cancels too, whatever the
+      // wait returned.
+      if (quitCancelled && !sessionEnd.ending) {
         quitState = "none";
         log.info("second launch during the wait: quit cancelled");
         for (const w of shown) if (!w.isDestroyed()) w.show();
         win?.focus();
+        resumeAfterCancelledQuit();
         return;
       }
     }
@@ -551,11 +622,13 @@ async function requestQuit(): Promise<void> {
       session = null;
       // A reused backend keeps running: its `deploy` only detaches.
       log.info(
-        `stopping deploy (${
-          ready?.owned ? "owned" : "reused"
-        }): ${await s.stop()}`
+        `stopping deploy (${owned ? "owned" : "reused"}): ${await s.stop()}`
       );
     }
+    // A restart's stop still under way finishes, so the job object does not
+    // end `deploy` in the middle of it.
+    if (stoppingDeploy)
+      log.info(`waiting for the deploy being stopped: ${await stoppingDeploy}`);
   } catch (e) {
     log.warn(`while quitting: ${e instanceof Error ? e.stack : e}`);
   }
