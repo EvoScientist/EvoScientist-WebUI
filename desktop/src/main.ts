@@ -480,10 +480,13 @@ function restartBackend(): void {
       return;
     }
     if (!(await confirmStop("restart"))) return;
+    // The backend may have gone while the question was open: start a new one.
+    const current = ready;
+    if (!current || !session) return launchLocked();
     showScreen(progressScreen("stopping"));
     // The same wait as at quit, so the last turn's observation linker runs.
     log.info("waiting for the memory workers before restarting the backend");
-    const memory = await waitForMemoryWorkers(backendRequest(ready.url), {
+    const memory = await waitForMemoryWorkers(backendRequest(current.url), {
       cancelled: () => quitState !== "none" || sessionEnd.ending,
     });
     log.info(`memory workers: ${memory}`);

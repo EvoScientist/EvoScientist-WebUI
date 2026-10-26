@@ -46,6 +46,9 @@ export function startDeploy(
   let stopped = false;
   let lostCb: ((e: DeployError) => void) | null = null;
   let lostReported = false;
+  // A loss before `onLost` is registered (ready and an exit in one chunk)
+  // is kept and delivered on registration.
+  let lostError: DeployError | null = null;
   let resolveOutcome!: (o: DeployOutcome) => void;
   const outcome = new Promise<DeployOutcome>((r) => (resolveOutcome = r));
 
@@ -53,7 +56,8 @@ export function startDeploy(
     if (stopping || lostReported) return;
     lostReported = true;
     deps.log.warn(`backend lost: ${error.code} ${error.message}`);
-    lostCb?.(error);
+    if (lostCb) lostCb(error);
+    else lostError = error;
   };
 
   const proc: Running = spawnFn(evosci, ["deploy", "--json"], {
@@ -105,6 +109,9 @@ export function startDeploy(
     pid: proc.child.pid,
     onLost: (cb) => {
       lostCb = cb;
+      const pending = lostError;
+      lostError = null;
+      if (pending) cb(pending);
     },
     closeStdinNow: () => {
       stopping = true;

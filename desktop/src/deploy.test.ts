@@ -79,6 +79,25 @@ describe("startDeploy", () => {
     });
   });
 
+  it("keeps a loss that comes before onLost is registered, and reports it once", async () => {
+    const s = startDeploy("EvoSci", process.cwd(), process.env, {
+      log: quiet,
+      spawn: fakeDeploy(
+        `${READY}; console.log(JSON.stringify({protocol:1,event:"error",code:"backend_exited",message:"gone",detail:{}})); process.exit(1)`
+      ),
+    });
+    expect((await s.outcome).kind).toBe("ready");
+    await new Promise((r) => setTimeout(r, 300));
+    const lost = vi.fn();
+    s.onLost(lost);
+    expect(lost).toHaveBeenCalledTimes(1);
+    expect(lost).toHaveBeenCalledWith(
+      expect.objectContaining({ code: "backend_exited" })
+    );
+    s.onLost(lost);
+    expect(lost).toHaveBeenCalledTimes(1);
+  });
+
   it("ends the tree when deploy ignores its closed stdin", async () => {
     const kill = vi.fn(async () => {});
     const s = startDeploy("EvoSci", process.cwd(), process.env, {
