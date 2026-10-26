@@ -40,15 +40,16 @@ describe("locateEvoSci", () => {
   it("uses ~/.local/bin without any uv, then PATH", async () => {
     const local = touch("home", ".local", "bin", "evosci");
     const toolBinDir = vi.fn(async () => null);
-    expect(
-      await locateEvoSci({
-        dataDir: join(root, "data"),
-        env: { PATH: "" },
-        platform: "linux",
-        home: join(root, "home"),
-        toolBinDir,
-      })
-    ).toEqual({ path: local, via: "local-bin" });
+    const inLocal = await locateEvoSci({
+      dataDir: join(root, "data"),
+      env: { PATH: "" },
+      platform: "linux",
+      home: join(root, "home"),
+      toolBinDir,
+    });
+    // A case-insensitive file system (Windows) finds it as "EvoSci" first.
+    expect(inLocal?.via).toBe("local-bin");
+    expect(inLocal?.path.toLowerCase()).toBe(local.toLowerCase());
     expect(toolBinDir).not.toHaveBeenCalled();
 
     rmSync(local);

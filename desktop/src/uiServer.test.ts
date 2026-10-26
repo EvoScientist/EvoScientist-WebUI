@@ -47,7 +47,7 @@ describe("uiServerEnv", () => {
       PORT: "4718",
       EVOSCIENTIST_LANGGRAPH_DEV_PORT: "6200",
       EVOSCIENTIST_DATA_DIR: "/d",
-      XDG_CONFIG_HOME: "/c",
+      XDG_CONFIG_HOME: join("/c"),
       NO_PROXY: "corp.example,127.0.0.1,localhost,::1",
       no_proxy: "corp.example,127.0.0.1,localhost,::1",
       EVOSCIENTIST_UI_SERVER_JS: "/app/ui/server.js",
