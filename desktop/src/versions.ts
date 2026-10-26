@@ -64,6 +64,7 @@ export function parseRange(range: string): Clause[] | null {
   return clauses;
 }
 
+/** Whether a release satisfies one clause. */
 function holds(clause: Clause, release: Release): boolean {
   const c = compareReleases(release, clause.release);
   switch (clause.op) {
@@ -87,6 +88,7 @@ function holds(clause: Clause, release: Release): boolean {
  */
 export type Placement = "inside" | "below" | "above" | "invalid";
 
+/** Where a version falls against a range: inside, below, above, or invalid. */
 export function placeInRange(version: string, range: string): Placement {
   const release = parseRelease(version);
   const clauses = parseRange(range);
@@ -100,6 +102,7 @@ export function placeInRange(version: string, range: string): Placement {
   return "inside";
 }
 
+/** Whether a version is a plain release inside the range. */
 export function inRange(version: string, range: string): boolean {
   return placeInRange(version, range) === "inside";
 }

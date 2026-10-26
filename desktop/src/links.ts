@@ -6,6 +6,7 @@ export type LinkTarget = "app" | "browser" | "block";
 
 const EXTERNAL = new Set(["http:", "https:", "mailto:"]);
 
+/** Where a link opens: in the app (same origin), in the system browser (http, https, mailto) or nowhere. */
 export function classifyLink(url: string, uiOrigin: string | null): LinkTarget {
   let u: URL;
   try {

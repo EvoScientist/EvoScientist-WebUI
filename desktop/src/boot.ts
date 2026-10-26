@@ -96,6 +96,7 @@ export interface BootDeps {
   startDeploy(evosci: string, workspace: string): DeploySession;
 }
 
+/** The one-line install command from the core's install guide for this platform. */
 const installCommand = (platform: NodeJS.Platform) =>
   platform === "win32" ? INSTALL_COMMANDS.win32 : INSTALL_COMMANDS.posix;
 
@@ -183,6 +184,7 @@ export function resolveWorkspace(
   return { ok: true, folder };
 }
 
+/** The launch sequence up to `ready`: find and check the core, run the node setup stage, resolve the workspace and start `deploy`. Reports each phase through `onState`. */
 export async function boot(
   deps: BootDeps,
   onState: (s: BootState) => void

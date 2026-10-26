@@ -14,6 +14,7 @@ export interface UiRecord {
   startTime: string;
 }
 
+/** The recorded UI server, or null when there is none or it does not parse. */
 export function readUiRecord(file: string): UiRecord | null {
   try {
     const r = JSON.parse(readFileSync(file, "utf8")) as Partial<UiRecord>;
@@ -28,6 +29,7 @@ export function readUiRecord(file: string): UiRecord | null {
   }
 }
 
+/** Records the running UI server, or removes the record for null. */
 export function writeUiRecord(file: string, r: UiRecord | null): void {
   try {
     if (r) writeFileSync(file, JSON.stringify(r));
@@ -37,6 +39,7 @@ export function writeUiRecord(file: string, r: UiRecord | null): void {
   }
 }
 
+/** Where the UI server record lives in the app's userData folder. */
 export const uiRecordPath = (userData: string) =>
   join(userData, "ui-server.json");
 
@@ -77,6 +80,7 @@ export function processStartTime(
   });
 }
 
+/** Ends a UI server left behind by a crashed app, only when its pid still has the recorded start time. */
 export async function stopLeftoverUi(
   record: UiRecord | null,
   deps: {

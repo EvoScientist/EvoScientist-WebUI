@@ -48,6 +48,7 @@ export interface UiServerTarget {
   serverJs: string;
 }
 
+/** The UI server's environment: the app's without secrets, plus what the bundled WebUI needs. */
 export function uiServerEnv(
   base: NodeJS.ProcessEnv,
   t: UiServerTarget
@@ -107,6 +108,7 @@ export interface UiServer {
   pid: number | undefined;
 }
 
+/** Starts the UI server with Electron's own Node and the entry script. */
 export function startUiServer(opts: {
   execPath: string;
   entryScript: string;

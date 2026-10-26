@@ -8,6 +8,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 
+/** The executable's file name on this platform. */
 const exe = (name: string, platform: NodeJS.Platform) =>
   platform === "win32" ? `${name}.exe` : name;
 
@@ -73,6 +74,7 @@ export interface Located {
   via: "uv-tool-bin" | "local-bin" | "path";
 }
 
+/** Finds `EvoSci`: uv's tool bin folder, else `~/.local/bin` when no uv is found, then PATH. */
 export async function locateEvoSci(opts: {
   dataDir: string;
   env: NodeJS.ProcessEnv;

@@ -12,6 +12,7 @@ import type { ActionId, Screen } from "./screens";
 
 const CONFIG_KEY = "evoscientist-config";
 
+/** Puts the backend URL into the WebUI's saved settings before its first script runs. */
 function handOverBackendUrl(): void {
   const url = ipcRenderer.sendSync("desktop:backend-url") as string | null;
   if (!url) return;

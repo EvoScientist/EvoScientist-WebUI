@@ -18,6 +18,7 @@ const LABELS = {
 const $ = (id) => document.getElementById(id);
 let shownPortKey = null;
 
+/** One line of screen text as a paragraph. */
 function paragraph(text, cls) {
   const p = document.createElement("p");
   p.textContent = text;
@@ -25,6 +26,7 @@ function paragraph(text, cls) {
   return p;
 }
 
+/** Draws a progress or error screen: title, lines, command, port field and buttons. */
 function render(s) {
   if (!s) return;
   const error = s.kind === "error";
@@ -68,6 +70,7 @@ function render(s) {
   $("paths").textContent = paths.join("  ·  ");
 }
 
+/** Sends an action to the main process; the port field's value goes with `set_port`. */
 async function run(id) {
   const arg = id === "set_port" ? Number($("port-input").value) : undefined;
   for (const b of document.querySelectorAll("button")) b.disabled = true;

@@ -72,6 +72,7 @@ export interface CrashInfo {
   logs: string[];
 }
 
+/** A file-name-safe UTC time stamp, sortable as text. */
 const stamp = (d: Date) =>
   d
     .toISOString()
@@ -111,6 +112,7 @@ export function writeCrashReport(
   return file;
 }
 
+/** Removes all but the newest `keep` crash reports in `dir`. */
 export function pruneCrashReports(dir: string, keep = CRASH_KEEP): void {
   let names: string[];
   try {

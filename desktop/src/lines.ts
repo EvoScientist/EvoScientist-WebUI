@@ -43,8 +43,10 @@ export function parseJsonLine(line: string): Json | null {
   }
 }
 
+/** The value when it is a string. */
 const str = (v: unknown): string | undefined =>
   typeof v === "string" ? v : undefined;
+/** The value when it is a plain object, else an empty one. */
 const obj = (v: unknown): Json =>
   v && typeof v === "object" && !Array.isArray(v) ? (v as Json) : {};
 
@@ -97,6 +99,7 @@ export type DeployEvent =
   | { event: "stopped" }
   | { event: "other"; raw: Json };
 
+/** One `deploy --json` stdout line as an event, or null when it is not a protocol line. */
 export function parseDeployEvent(line: string): DeployEvent | null {
   const v = parseJsonLine(line);
   if (!v || typeof v.event !== "string") return null;
@@ -153,6 +156,7 @@ export interface StageEvent {
 
 const STATUSES: readonly string[] = ["running", "done", "skipped", "error"];
 
+/** One `setup --json` stdout line as a stage event, or null when it is not one. */
 export function parseStageEvent(line: string): StageEvent | null {
   const v = parseJsonLine(line);
   if (!v) return null;

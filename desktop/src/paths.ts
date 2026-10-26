@@ -56,6 +56,7 @@ export interface Folders {
   xdgConfigHomeSet: boolean;
 }
 
+/** The data and config folders from the app's environment, as the core resolves them. */
 export function resolveFolders(env: Env, home = homedir()): Folders {
   const xdg = sharedDirFromEnv("XDG_CONFIG_HOME", env, home);
   return {
@@ -152,6 +153,7 @@ export function readConfigFile(configDir: string): Record<string, unknown> {
   }
 }
 
+/** A port number from a number or a digit string, or null when it is not 1 to 65535. */
 function validPort(value: unknown): number | null {
   const n =
     typeof value === "number"
@@ -162,6 +164,7 @@ function validPort(value: unknown): number | null {
   return Number.isInteger(n) && n >= 1 && n <= 65535 ? n : null;
 }
 
+/** The string when it is not blank (Python's strip rule), else null. */
 const nonEmpty = (v: unknown): string | null =>
   typeof v === "string" && pyStrip(v) !== "" ? v : null;
 

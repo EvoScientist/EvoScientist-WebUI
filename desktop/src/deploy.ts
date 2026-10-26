@@ -33,6 +33,7 @@ export interface DeployDeps {
   kill?: (pid: number) => Promise<void>;
 }
 
+/** Starts `EvoSci deploy --json` in the workspace and returns its session. */
 export function startDeploy(
   evosci: string,
   workspace: string,

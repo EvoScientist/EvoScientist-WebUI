@@ -39,6 +39,7 @@ export interface ErrorScreen {
 
 export type Screen = ProgressScreen | ErrorScreen;
 
+/** The progress screen for a launch phase, the UI start or a stop. */
 export function progressScreen(
   state: BootState | "starting_ui" | "stopping"
 ): ProgressScreen {
@@ -67,6 +68,7 @@ export function progressScreen(
   return { kind: "progress", title, message };
 }
 
+/** The value when it is a non-empty string. */
 const str = (v: unknown): string | null =>
   typeof v === "string" && v !== "" ? v : null;
 
@@ -87,6 +89,7 @@ const ENV_PORT_LINE =
 const ENV_WORKSPACE_LINE =
   "EVOSCIENTIST_WORKSPACE_DIR is set in the app's environment and wins over a saved folder. Change or remove it, restart the app, then press Retry.";
 
+/** The error screen for a code: its own text and the actions that can fix it. */
 export function errorScreen(error: BootError, ctx: ScreenContext): ErrorScreen {
   const d = error.detail ?? {};
   const terminal = ctx.platform === "win32" ? "PowerShell" : "a terminal";

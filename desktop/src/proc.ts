@@ -45,6 +45,7 @@ export interface Running {
   closeStdin(): void;
 }
 
+/** Starts a child the app's way: no shell, three pipes, hidden window, read until both output streams end. */
 export function run(file: string, args: string[], opts: RunOptions): Running {
   const extra = Array.isArray(opts.extraStdio) ? opts.extraStdio : [];
   const child = spawn(file, args, {
@@ -89,6 +90,7 @@ export function run(file: string, args: string[], opts: RunOptions): Running {
   };
 }
 
+/** Resolves after `ms`. */
 export const sleep = (ms: number) =>
   new Promise<void>((r) => setTimeout(r, ms));
 

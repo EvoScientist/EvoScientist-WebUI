@@ -23,6 +23,7 @@ export function isBackgroundThread(
   return null;
 }
 
+/** The `metadata.run_kind` of a thread or cron, if any. */
 const runKindOf = (item: unknown): unknown =>
   item && typeof item === "object"
     ? (item as { metadata?: { run_kind?: unknown } }).metadata?.run_kind
@@ -50,17 +51,20 @@ export type WorkCheck =
     }
   | { kind: "unknown"; reason: string };
 
+/** Whether stopping now needs a question: work runs, a task is scheduled, or the check failed. */
 export const hasWork = (c: WorkCheck): boolean =>
   c.kind === "unknown" ||
   c.busyThreads > 0 ||
   c.jobs.length > 0 ||
   c.scheduledTasks > 0;
 
+/** The body of a 200 answer; anything else throws with the endpoint's name. */
 function ok(r: JsonResponse, what: string): unknown {
   if (r.status !== 200) throw new Error(`${what} answered ${r.status}`);
   return r.body;
 }
 
+/** The busy threads, up to BUSY_LIMIT, background threads included (filtered by the caller). */
 async function busyThreads(req: Request): Promise<unknown[]> {
   const body = ok(
     await req("/threads/search", {
@@ -81,6 +85,7 @@ async function busyThreads(req: Request): Promise<unknown[]> {
   return body;
 }
 
+/** The names of the running background jobs (their process id when unnamed). */
 async function runningJobs(req: Request): Promise<string[]> {
   const body = ok(
     await req("/api/bg_processes/running", { timeoutMs: PROBE_TIMEOUT_MS }),
@@ -129,6 +134,7 @@ async function scheduledTasks(req: Request): Promise<number> {
   return count;
 }
 
+/** Busy chats, running jobs and enabled scheduled tasks, or `unknown` when any probe fails. */
 export async function checkWork(req: Request): Promise<WorkCheck> {
   try {
     const [threads, jobs, tasks] = await Promise.all([
@@ -222,6 +228,7 @@ export interface Confirmation {
   defaultId: 0 | 1;
 }
 
+/** `n` with the singular or plural noun phrase. */
 const plural = (n: number, one: string, many: string) =>
   `${n} ${n === 1 ? one : many}`;
 

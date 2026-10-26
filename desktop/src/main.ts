@@ -147,6 +147,7 @@ let relaunchAfterExit = false;
 const sessionEnd = new SessionEnd();
 let exiting = false;
 
+/** The running UI server's origin: links to it stay in the app. */
 const uiOrigin = (): string | null => (ui ? new URL(ui.url).origin : null);
 
 // --- Screens --------------------------------------------------------------------
@@ -169,6 +170,7 @@ function showScreen(s: Screen): void {
   win.loadFile(STATUS_HTML).catch((e) => log.warn(`status page: ${e}`));
 }
 
+/** Writes a crash report next to the logs and returns its path. */
 function crashReport(code: string, message: string, detail?: unknown) {
   const file = writeCrashReport(log.folder, {
     appVersion: app.getVersion(),
@@ -189,6 +191,7 @@ function crashReport(code: string, message: string, detail?: unknown) {
   return file;
 }
 
+/** Shows the error screen for a code, with a crash report for fatal codes; nothing while quitting. */
 function showError(error: BootError): void {
   // A quit ends the backend and the UI server on purpose; what fails because
   // of that is no crash and has no window to show in.
@@ -331,6 +334,7 @@ async function launchLocked(): Promise<void> {
   await showUiLocked();
 }
 
+/** Starts the UI server for a backend and waits until it answers. Callers hold `working`. */
 async function startUiLocked(r: DeployReady): Promise<void> {
   await stopUi();
   if (quitState !== "none") throw new Error("the app is quitting");
@@ -453,6 +457,7 @@ async function showUiLocked(): Promise<void> {
   }
 }
 
+/** Stops the UI server and removes its record. */
 async function stopUi(): Promise<void> {
   const current = ui;
   if (!current) return;
@@ -480,6 +485,7 @@ async function exclusive(task: () => Promise<void>): Promise<void> {
   }
 }
 
+/** Retry: the whole launch sequence again. */
 const launch = () => exclusive(launchLocked);
 
 // --- Close check, restart, quit ----------------------------------------------
@@ -509,6 +515,7 @@ async function confirmStop(purpose: StopPurpose): Promise<boolean> {
   return r.response === 0;
 }
 
+/** File > Restart backend: asks, waits for the memory workers, stops the owned backend and launches again. A reused backend is left alone. */
 function restartBackend(): void {
   void exclusive(async () => {
     if (!ready || !session) return launchLocked();
@@ -584,6 +591,7 @@ function endOfSession(why: string): void {
   ui?.closeStdinNow();
 }
 
+/** Closing the window or Quit: asks when work runs on an owned backend, hides the windows, waits for the memory workers, stops what the app started, then exits. */
 async function requestQuit(): Promise<void> {
   if (quitState !== "none") return;
   quitState = "checking";
@@ -638,6 +646,7 @@ async function requestQuit(): Promise<void> {
   exitNow();
 }
 
+/** Ends the app (and relaunches it when a second launch came during the stop). */
 function exitNow(): void {
   exiting = true;
   log.info(relaunchAfterExit ? "exit, then relaunch" : "exit");
@@ -670,6 +679,7 @@ function guard(contents: WebContents): void {
   });
 }
 
+/** The one app window, hidden instead of closed until the app exits. */
 function createWindow(): BrowserWindow {
   const w = new BrowserWindow({
     width: 1280,
@@ -719,6 +729,7 @@ function createWindow(): BrowserWindow {
   return w;
 }
 
+/** The app menu: File (Restart backend, Open log folder, Quit), Edit, View and Window. */
 function buildMenu(): void {
   const mac = process.platform === "darwin";
   const template: MenuItemConstructorOptions[] = [
@@ -747,6 +758,7 @@ function buildMenu(): void {
 const fromStatusPage = (e: IpcMainEvent | IpcMainInvokeEvent) =>
   e.senderFrame?.url.startsWith("file:") === true;
 
+/** Saves one config key with `EvoSci config set`; true when it worked. */
 async function setConfig(key: string, value: string): Promise<boolean> {
   if (!evosci) return false;
   const r = await runCollect(evosci, ["config", "set", key, value], {
@@ -771,6 +783,7 @@ async function setConfig(key: string, value: string): Promise<boolean> {
   return false;
 }
 
+/** Runs an action from the error screen's buttons. */
 async function act(id: ActionId, arg: unknown): Promise<void> {
   const s = screen as ErrorScreen;
   switch (id) {
@@ -820,6 +833,7 @@ async function act(id: ActionId, arg: unknown): Promise<void> {
   }
 }
 
+/** The IPC the status page and the preload use; each channel answers only its own kind of page. */
 function registerIpc(): void {
   ipcMain.handle("status:get", (e) => (fromStatusPage(e) ? screen : null));
   ipcMain.handle("status:act", (e, id: ActionId, arg: unknown) =>

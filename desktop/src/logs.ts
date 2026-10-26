@@ -56,10 +56,12 @@ export class FileLog implements Logger {
     return this.dir;
   }
 
+  /** Writes an INFO line. */
   info(msg: string): void {
     this.write("INFO", msg);
   }
 
+  /** Writes a WARN line. */
   warn(msg: string): void {
     this.write("WARN", msg);
   }
@@ -76,6 +78,7 @@ export class FileLog implements Logger {
     this.open(true);
   }
 
+  /** Closes the file; later lines are dropped. */
   close(): void {
     if (this.fd === null) return;
     try {
