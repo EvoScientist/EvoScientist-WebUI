@@ -16,6 +16,7 @@ const LABELS = {
 };
 
 const $ = (id) => document.getElementById(id);
+let shownPortKey = null;
 
 function paragraph(text, cls) {
   const p = document.createElement("p");
@@ -44,8 +45,11 @@ function render(s) {
   $("command-text").textContent = (error && s.command) || "";
   const wantsPort = error && s.actions.includes("set_port");
   $("port").hidden = !wantsPort;
-  if (wantsPort && !$("port-input").value)
+  // Each new error screen suggests its own port; typing is kept until then.
+  const portKey = wantsPort ? `${s.code}:${s.port}` : null;
+  if (portKey && portKey !== shownPortKey)
     $("port-input").value = String(s.port ?? "");
+  shownPortKey = portKey;
   const buttons = error
     ? s.actions.map((id, i) => {
         const b = document.createElement("button");

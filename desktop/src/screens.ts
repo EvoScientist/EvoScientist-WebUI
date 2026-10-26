@@ -3,6 +3,7 @@
 // come from the configuration or the machine, so Retry alone does not fix
 // them, and the settings page that could needs a running backend.
 import type { BootError, BootState } from "./boot";
+import { DEFAULT_BACKEND_PORT } from "./paths";
 
 export type ActionId =
   | "retry"
@@ -170,7 +171,7 @@ export function errorScreen(error: BootError, ctx: ScreenContext): ErrorScreen {
           "Choose another port. The app saves it as langgraph_dev_port.",
         ],
         actions: ["set_port", "retry", "open_config"],
-        port: 6174,
+        port: DEFAULT_BACKEND_PORT,
       };
       break;
     case "workspace_conflict": {

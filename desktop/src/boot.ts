@@ -256,6 +256,8 @@ export async function boot(
 
   onState({ phase: "starting_backend", workspace: ws.folder });
   const session = deps.startDeploy(evosci, ws.folder);
+  // No limit here: the core's own start timeout (`wait_ready`, 60 s) ends
+  // `deploy` with an error, and its exit settles the outcome.
   const outcome = await session.outcome;
   if (outcome.kind === "error") {
     return fail({

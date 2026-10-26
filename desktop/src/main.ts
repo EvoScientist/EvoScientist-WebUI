@@ -166,6 +166,12 @@ function crashReport(code: string, message: string, detail?: unknown) {
 }
 
 function showError(error: BootError): void {
+  // A quit ends the backend and the UI server on purpose; what fails because
+  // of that is no crash and has no window to show in.
+  if (quitState !== "none") {
+    log.info(`error during quit, not shown: ${error.code}: ${error.message}`);
+    return;
+  }
   log.warn(`error screen ${error.code}: ${error.message}`);
   const report = FATAL_CODES.has(error.code)
     ? crashReport(error.code, error.message, error.detail)
@@ -464,6 +470,13 @@ function restartBackend(): void {
     }
     if (!(await confirmStop("restart"))) return;
     showScreen(progressScreen("stopping"));
+    // The same wait as at quit, so the last turn's observation linker runs.
+    log.info("waiting for the memory workers before restarting the backend");
+    const memory = await waitForMemoryWorkers(backendRequest(ready.url), {
+      cancelled: () => quitState !== "none" || sessionEnd.ending,
+    });
+    log.info(`memory workers: ${memory}`);
+    if (quitState !== "none" || sessionEnd.ending || !session) return;
     const old = session;
     session = null;
     ready = null;
@@ -498,7 +511,9 @@ async function requestQuit(): Promise<void> {
       return;
     }
     // Hidden, never destroyed: a destroyed window gets no `session-end` (D5).
-    win?.hide();
+    // Windows opened from the UI hide too.
+    const shown = BrowserWindow.getAllWindows().filter((w) => w.isVisible());
+    for (const w of shown) w.hide();
     if (owned && ready && !sessionEnd.ending) {
       quitState = "waiting";
       quitCancelled = false;
@@ -510,7 +525,7 @@ async function requestQuit(): Promise<void> {
       if (r === "cancelled" && quitCancelled) {
         quitState = "none";
         log.info("second launch during the wait: quit cancelled");
-        win?.show();
+        for (const w of shown) if (!w.isDestroyed()) w.show();
         win?.focus();
         return;
       }

@@ -1,5 +1,5 @@
-// Child processes the way the app starts every one of them (`EvoSci`, the UI
-// server, `taskkill`): directly, never through a shell (Node destroys a
+// Child processes the way the app starts its long-running and streamed ones
+// (`EvoSci`, the UI server, `taskkill`): directly, never through a shell (Node destroys a
 // child's stdin when that child exits, so an intermediate shell would end the
 // stdin of a command that still runs); with three pipes and `windowsHide`;
 // and read until both output streams end, not until the process exits. On
@@ -107,9 +107,10 @@ export function withTimeout<T>(
 }
 
 /**
- * Ends a process and its descendants. On Windows `taskkill /T /F`, itself
- * started with `windowsHide`; elsewhere SIGTERM, then SIGKILL after a grace
- * period (macOS and Linux packaging is W06).
+ * Ends a process. On Windows `taskkill /T /F` ends its descendants too, itself
+ * started with `windowsHide`; elsewhere only the process gets SIGTERM, then
+ * SIGKILL after a grace period (process groups come with macOS and Linux
+ * packaging in W06).
  */
 export async function killTree(
   pid: number,
