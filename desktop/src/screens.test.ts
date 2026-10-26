@@ -45,6 +45,24 @@ describe("errorScreen", () => {
     ).toContain("set_port");
   });
 
+  it("offers no port or folder choice when an environment variable wins", () => {
+    const env = { ...ctx, portFromEnv: true, workspaceFromEnv: true };
+    for (const e of [
+      err("port_conflict", { reason: "foreign" }),
+      err("invalid_port", { port: 0 }),
+    ]) {
+      const s = errorScreen(e, env);
+      expect(s.actions).not.toContain("set_port");
+      expect(s.lines.join(" ")).toContain("EVOSCIENTIST_LANGGRAPH_DEV_PORT");
+    }
+    const w = errorScreen(err("workspace_unavailable"), env);
+    expect(w.actions).not.toContain("choose_folder");
+    expect(w.lines.join(" ")).toContain("EVOSCIENTIST_WORKSPACE_DIR");
+    expect(errorScreen(err("workspace_unavailable"), ctx).actions).toContain(
+      "choose_folder"
+    );
+  });
+
   it("says to stop another EvoScientist backend on the port", () => {
     for (const reason of ["no_record", "record_mismatch"]) {
       const s = errorScreen(

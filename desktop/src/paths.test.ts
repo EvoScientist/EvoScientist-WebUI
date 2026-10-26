@@ -8,6 +8,7 @@ import {
   readStartConfig,
   resolveFolders,
   sharedDirFromEnv,
+  withReadyFolders,
 } from "./paths";
 
 const HOME = resolve("/home/u");
@@ -128,5 +129,41 @@ describe("expandWorkdir", () => {
   it("expands ~ and makes the path absolute", () => {
     expect(expandWorkdir("~/w", HOME)).toBe(join(HOME, "w"));
     expect(expandWorkdir("w", HOME)).toBe(resolve("w"));
+  });
+});
+
+describe("withReadyFolders", () => {
+  const folders = {
+    dataDir: join(HOME, ".evoscientist"),
+    configDir: join(HOME, ".config", "evoscientist"),
+    xdgConfigHomeSet: false,
+  };
+
+  it("keeps the folders the core sent", () => {
+    const ready = {
+      url: "u",
+      dataDir: "/d",
+      configDir: "/c",
+      logFile: "/l/x.log",
+    };
+    expect(withReadyFolders(ready, folders, HOME)).toEqual({
+      ready,
+      missing: [],
+    });
+  });
+
+  it("fills in the app's own folders for missing fields and names them", () => {
+    const r = withReadyFolders(
+      { url: "u", dataDir: "", configDir: "", logFile: "" },
+      folders,
+      HOME
+    );
+    expect(r.ready).toEqual({
+      url: "u",
+      dataDir: folders.dataDir,
+      configDir: folders.configDir,
+      logFile: join(HOME, ".config", "evoscientist", "langgraph_dev.log"),
+    });
+    expect(r.missing).toEqual(["data_dir", "config_dir", "log_file"]);
   });
 });

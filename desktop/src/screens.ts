@@ -76,7 +76,16 @@ export interface ScreenContext {
   port: number;
   logFolder: string;
   crashReport: string | null;
+  /** `EVOSCIENTIST_LANGGRAPH_DEV_PORT` / `EVOSCIENTIST_WORKSPACE_DIR` are set:
+   *  they win over what the app saves, so the screen offers no choice. */
+  portFromEnv?: boolean;
+  workspaceFromEnv?: boolean;
 }
+
+const ENV_PORT_LINE =
+  "EVOSCIENTIST_LANGGRAPH_DEV_PORT is set in the app's environment and wins over a saved port. Change or remove it, restart the app, then press Retry.";
+const ENV_WORKSPACE_LINE =
+  "EVOSCIENTIST_WORKSPACE_DIR is set in the app's environment and wins over a saved folder. Change or remove it, restart the app, then press Retry.";
 
 export function errorScreen(error: BootError, ctx: ScreenContext): ErrorScreen {
   const d = error.detail ?? {};
@@ -136,9 +145,13 @@ export function errorScreen(error: BootError, ctx: ScreenContext): ErrorScreen {
         title: "The workspace folder is not available",
         lines: [
           error.message,
-          "Choose another folder for your work. The app saves it as default_workdir and starts there from now on.",
+          ctx.workspaceFromEnv
+            ? ENV_WORKSPACE_LINE
+            : "Choose another folder for your work. The app saves it as default_workdir and starts there from now on.",
         ],
-        actions: ["choose_folder", "retry", "open_config"],
+        actions: ctx.workspaceFromEnv
+          ? ["retry", "open_config"]
+          : ["choose_folder", "retry", "open_config"],
       };
       break;
     case "port_conflict": {
@@ -148,9 +161,13 @@ export function errorScreen(error: BootError, ctx: ScreenContext): ErrorScreen {
             title: `Port ${ctx.port} is in use`,
             lines: [
               `Another program uses port ${ctx.port}, the backend's port.`,
-              "Choose another port. The app saves it as langgraph_dev_port and starts the backend there.",
+              ctx.portFromEnv
+                ? ENV_PORT_LINE
+                : "Choose another port. The app saves it as langgraph_dev_port and starts the backend there.",
             ],
-            actions: ["set_port", "retry", "open_logs"],
+            actions: ctx.portFromEnv
+              ? ["retry", "open_logs"]
+              : ["set_port", "retry", "open_logs"],
             port: ctx.port + 1,
           }
         : {
@@ -168,9 +185,13 @@ export function errorScreen(error: BootError, ctx: ScreenContext): ErrorScreen {
         title: "The backend port is not valid",
         lines: [
           error.message,
-          "Choose another port. The app saves it as langgraph_dev_port.",
+          ctx.portFromEnv
+            ? ENV_PORT_LINE
+            : "Choose another port. The app saves it as langgraph_dev_port.",
         ],
-        actions: ["set_port", "retry", "open_config"],
+        actions: ctx.portFromEnv
+          ? ["retry", "open_config"]
+          : ["set_port", "retry", "open_config"],
         port: DEFAULT_BACKEND_PORT,
       };
       break;

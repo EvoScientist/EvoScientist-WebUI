@@ -90,6 +90,41 @@ export function runtimeDir(home = homedir()): string {
   return join(home, ".config", "evoscientist");
 }
 
+/**
+ * `ready`'s folder fields, with the app's own folders for any the core left
+ * out (a contract slip: the core always sends them). An empty log file would
+ * move the app's logs into its working directory and an empty data folder
+ * would reach the UI server as `EVOSCIENTIST_DATA_DIR=""`. `missing` names
+ * the fields that were filled in.
+ */
+export function withReadyFolders<
+  R extends { dataDir: string; configDir: string; logFile: string }
+>(
+  ready: R,
+  folders: Folders,
+  home = homedir()
+): { ready: R; missing: string[] } {
+  const missing: string[] = [];
+  const pick = (value: string, field: string, fallback: string) => {
+    if (value) return value;
+    missing.push(field);
+    return fallback;
+  };
+  return {
+    ready: {
+      ...ready,
+      dataDir: pick(ready.dataDir, "data_dir", folders.dataDir),
+      configDir: pick(ready.configDir, "config_dir", folders.configDir),
+      logFile: pick(
+        ready.logFile,
+        "log_file",
+        join(runtimeDir(home), "langgraph_dev.log")
+      ),
+    },
+    missing,
+  };
+}
+
 export const DEFAULT_BACKEND_PORT = 6174;
 
 export interface StartConfig {

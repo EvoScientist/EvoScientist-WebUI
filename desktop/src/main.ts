@@ -51,6 +51,7 @@ import {
   readStartConfig,
   resolveFolders,
   runtimeDir,
+  withReadyFolders,
   type StartConfig,
 } from "./paths";
 import { killTree, runCollect } from "./proc";
@@ -182,6 +183,8 @@ function showError(error: BootError): void {
       port: startConfig?.port ?? DEFAULT_BACKEND_PORT,
       logFolder: log.folder,
       crashReport: report,
+      portFromEnv: Boolean(process.env.EVOSCIENTIST_LANGGRAPH_DEV_PORT?.trim()),
+      workspaceFromEnv: Boolean(process.env.EVOSCIENTIST_WORKSPACE_DIR?.trim()),
     })
   );
 }
@@ -268,7 +271,12 @@ async function launchLocked(): Promise<void> {
   if (!result.ok) return showError(result.error);
 
   core = result.core;
-  ready = result.ready;
+  const filled = withReadyFolders(result.ready, folders);
+  if (filled.missing.length > 0)
+    log.warn(
+      `ready without ${filled.missing.join(", ")}; using the app's own folders`
+    );
+  ready = filled.ready;
   const current = result.session;
   current.onLost((e) => {
     if (session !== current || quitState !== "none") return;
@@ -691,10 +699,6 @@ async function act(id: ActionId, arg: unknown): Promise<void> {
     case "set_port": {
       const port = Number(arg);
       if (!Number.isInteger(port) || port < 1 || port > 65535) return;
-      if (process.env.EVOSCIENTIST_LANGGRAPH_DEV_PORT)
-        log.warn(
-          "EVOSCIENTIST_LANGGRAPH_DEV_PORT is set and wins over the saved port"
-        );
       return exclusive(async () => {
         if (await setConfig("langgraph_dev_port", String(port)))
           await launchLocked();
