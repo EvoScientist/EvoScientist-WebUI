@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -72,29 +72,39 @@ const [major, minor] = process.versions.node.split(".").map(Number);
 describe.skipIf(major < 24 || (major === 24 && minor < 5))(
   "NODE_USE_ENV_PROXY",
   () => {
-    it("does not reach a fresh agent", () => {
+    // The child talks to this process's server, so it runs asynchronously:
+    // a spawnSync would block the event loop that has to answer it.
+    const run = (script: string, env: NodeJS.ProcessEnv) =>
+      new Promise<string>((resolve) =>
+        execFile(
+          process.execPath,
+          ["-e", script],
+          { env, encoding: "utf8", timeout: 10_000 },
+          (_e, stdout) => resolve(stdout.trim())
+        )
+      );
+
+    it("does not reach a fresh agent", async () => {
       const script = (agent: string) =>
         `require('http').get(${JSON.stringify(
           base + "/ok"
         )}, { agent: ${agent} }, (r) => { console.log(r.statusCode); r.resume(); }).on('error', (e) => console.log('error ' + e.code))`;
-      const env = {
-        ...process.env,
+      // Only this test's proxy settings: a no_proxy from the machine would
+      // exempt 127.0.0.1 and hide the difference.
+      const env: NodeJS.ProcessEnv = Object.fromEntries(
+        Object.entries(process.env).filter(([k]) => !/_proxy$/i.test(k))
+      );
+      Object.assign(env, {
         NODE_USE_ENV_PROXY: "1",
         HTTP_PROXY: "http://127.0.0.1:9",
-        NO_PROXY: "",
-      };
-      const viaGlobal = spawnSync(
-        process.execPath,
-        ["-e", script("undefined")],
-        { env, encoding: "utf8" }
-      );
-      const viaFresh = spawnSync(
-        process.execPath,
-        ["-e", script("new (require('http').Agent)()")],
-        { env, encoding: "utf8" }
-      );
-      expect(viaGlobal.stdout.trim()).toMatch(/^error/);
-      expect(viaFresh.stdout.trim()).toBe("200");
+        http_proxy: "http://127.0.0.1:9",
+        NO_PROXY: "example.invalid",
+        no_proxy: "example.invalid",
+      });
+      const viaGlobal = await run(script("undefined"), env);
+      const viaFresh = await run(script("new (require('http').Agent)()"), env);
+      expect(viaGlobal).toMatch(/^error/);
+      expect(viaFresh).toBe("200");
     });
   }
 );
