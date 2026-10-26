@@ -14,6 +14,8 @@ export default tseslint.config(
       ".claude/**",
       ".codex-qa/**",
       ".langgraph_api/**",
+      // The desktop app has its own lint config (desktop/eslint.config.js).
+      "desktop/**",
     ],
   },
   {

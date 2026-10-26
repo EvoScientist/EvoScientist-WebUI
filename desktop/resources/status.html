@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self' file:; style-src 'self' file:"
+    />
+    <meta
+      name="color-scheme"
+      content="light dark"
+    />
+    <title>EvoScientist</title>
+    <link
+      rel="stylesheet"
+      href="status.css"
+    />
+    <script
+      src="status.js"
+      defer
+    ></script>
+  </head>
+  <body>
+    <main
+      id="screen"
+      aria-live="polite"
+    >
+      <h1 id="title">Starting EvoScientist</h1>
+      <div
+        id="spinner"
+        class="spinner"
+        role="progressbar"
+        aria-label="Working"
+      ></div>
+      <div id="lines"></div>
+      <div
+        id="command"
+        hidden
+      >
+        <code id="command-text"></code>
+      </div>
+      <div
+        id="port"
+        hidden
+      >
+        <label for="port-input">Backend port</label>
+        <input
+          id="port-input"
+          type="number"
+          min="1"
+          max="65535"
+        />
+      </div>
+      <div id="actions"></div>
+      <p
+        id="paths"
+        class="muted"
+      ></p>
+    </main>
+  </body>
+</html>

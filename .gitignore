@@ -12,6 +12,11 @@ next-env.d.ts
 /build
 /dist
 
+# desktop app (desktop/): dependencies, compiled main process, packaged builds
+/desktop/node_modules/
+/desktop/dist/
+/desktop/release/
+
 # npm pack output
 *.tgz
 
