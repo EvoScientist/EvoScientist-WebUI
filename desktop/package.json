@@ -11,7 +11,8 @@
     "lint": "eslint . && tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "pack": "npm run build && electron-builder --dir"
+    "pack": "npm run fetch-core-scripts && electron-builder --dir",
+    "fetch-core-scripts": "npm run build && node --use-env-proxy scripts/fetch-core-scripts.mjs"
   },
   "evoscientist": {
     "coreRange": ">=0.3.8,<0.4",
@@ -67,6 +68,15 @@
       {
         "from": "resources/ui-entry.mjs",
         "to": "ui-entry.mjs"
+      },
+      {
+        "from": "core-scripts",
+        "to": "core-scripts",
+        "filter": [
+          "install.ps1",
+          "install.sh",
+          "source.json"
+        ]
       }
     ],
     "asar": true,
@@ -81,6 +91,7 @@
     },
     "linux": {
       "target": "dir"
-    }
+    },
+    "beforePack": "./scripts/before-pack.cjs"
   }
 }

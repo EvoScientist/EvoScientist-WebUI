@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   bundledUiVersion,
+  installVersion,
   compareReleases,
   inRange,
   parseRange,
@@ -102,5 +103,19 @@ describe("bundledUiVersion", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("installVersion", () => {
+  it("is the range's lower bound", () => {
+    expect(installVersion(">=0.3.8,<0.4")).toBe("0.3.8");
+    expect(installVersion("<0.4, >=0.3.10")).toBe("0.3.10");
+  });
+
+  it("is null without exactly one >= clause", () => {
+    expect(installVersion(">0.3.7,<0.4")).toBeNull();
+    expect(installVersion("<0.4")).toBeNull();
+    expect(installVersion(">=0.3.8,>=0.3.9")).toBeNull();
+    expect(installVersion("not a range")).toBeNull();
   });
 });

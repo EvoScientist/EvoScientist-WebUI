@@ -106,3 +106,14 @@ export function placeInRange(version: string, range: string): Placement {
 export function inRange(version: string, range: string): boolean {
   return placeInRange(version, range) === "inside";
 }
+
+/**
+ * The core version the app installs: the lower bound of its core range
+ * (">=0.3.8,<0.4" installs 0.3.8), or null when the range has no single `>=`
+ * clause. Raising the lower bound makes everyone update together, and
+ * brings that release's install scripts (scripts/fetch-core-scripts.mjs).
+ */
+export function installVersion(range: string): string | null {
+  const lower = (parseRange(range) ?? []).filter((c) => c.op === ">=");
+  return lower.length === 1 ? lower[0].release.join(".") : null;
+}
