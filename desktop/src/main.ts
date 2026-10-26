@@ -41,6 +41,13 @@ import {
 } from "./leftover";
 import { classifyLink } from "./links";
 import { locateEvoSci, uvToolBinDir } from "./locate";
+import {
+  backupConfig,
+  installCommand,
+  isWindowsArm64,
+  runInstallScript,
+  updateLockHeld,
+} from "./install";
 import { DESKTOP_LOG, DESKTOP_UI_LOG, FileLog } from "./logs";
 import {
   folderEnv,
@@ -50,8 +57,9 @@ import {
 } from "./paths";
 import { killTree, runCollect } from "./proc";
 import type { ActionId } from "./screens";
+import { readSetupRecord, runSetup, writeSetupRecord } from "./setup";
 import { pickUiPort, startUiServer, uiServerEnv } from "./uiServer";
-import { bundledUiVersion } from "./versions";
+import { bundledUiVersion, installVersion } from "./versions";
 
 const STATUS_HTML = join(__dirname, "..", "resources", "status.html");
 const PRELOAD = join(__dirname, "preload.js");
@@ -65,6 +73,11 @@ const UI_SERVER_JS = app.isPackaged
   ? join(process.resourcesPath, "ui", "server.js")
   : join(__dirname, "..", "..", "dist", "server.js");
 
+/** The core's install scripts, downloaded by the build (outside asar). */
+const CORE_SCRIPTS = app.isPackaged
+  ? join(process.resourcesPath, "core-scripts")
+  : join(__dirname, "..", "core-scripts");
+
 const pkg = JSON.parse(
   readFileSync(join(app.getAppPath(), "package.json"), "utf8")
 ) as {
@@ -77,6 +90,9 @@ const manifest: Manifest = {
   // then stops at the missing server.js anyway.
   uiVersion: bundledUiVersion(UI_SERVER_JS) ?? app.getVersion(),
 };
+
+/** The core version the bundled install script installs (D11). */
+const INSTALL_VERSION = installVersion(manifest.coreRange);
 
 const folders = resolveFolders(process.env);
 const childEnv = folderEnv(process.env, folders) as NodeJS.ProcessEnv;
@@ -94,6 +110,19 @@ const WEB_PREFERENCES = {
 let win: BrowserWindow | null = null;
 
 const uiRecord = () => uiRecordPath(app.getPath("userData"));
+const userFile = (name: string) => join(app.getPath("userData"), name);
+
+/** The first-launch mirror answer, kept in userData (`mirror.json`). */
+function readKeptMirror(): boolean | null {
+  try {
+    const v = JSON.parse(readFileSync(userFile("mirror.json"), "utf8")) as {
+      cn?: unknown;
+    };
+    return typeof v.cn === "boolean" ? v.cn : null;
+  } catch {
+    return null;
+  }
+}
 
 const desktop = createApp({
   appVersion: app.getVersion(),
@@ -172,6 +201,55 @@ const desktop = createApp({
       log,
     }),
   processStartTime: (pid) => processStartTime(pid),
+
+  keptMirror: readKeptMirror,
+  keepMirror: (cn) => {
+    try {
+      writeFileSync(userFile("mirror.json"), JSON.stringify({ cn }));
+    } catch (e) {
+      log.warn(`cannot keep the mirror answer: ${e}`);
+    }
+  },
+  windowsArm64: () =>
+    isWindowsArm64(
+      (file, args) =>
+        runCollect(file, args, {
+          cwd: process.env.SystemRoot ?? folders.dataDir,
+          env: process.env,
+          timeoutMs: 15_000,
+          log,
+        }),
+      log
+    ),
+  updateLockHeld: () => updateLockHeld(folders.dataDir, process.platform),
+  backupConfig: () => backupConfig(folders.configDir),
+  runInstall: (cn, onLine) => {
+    if (!INSTALL_VERSION)
+      throw new Error(
+        `the core range ${manifest.coreRange} names no version to install`
+      );
+    return runInstallScript(
+      installCommand({
+        platform: process.platform,
+        scriptsDir: CORE_SCRIPTS,
+        version: INSTALL_VERSION,
+        cn,
+        env: childEnv,
+      }),
+      { cwd: folders.dataDir, log, onLine }
+    );
+  },
+  runSetup: (file, cn, stages, onUpdate) =>
+    runSetup(file, {
+      cn,
+      stages,
+      cwd: folders.dataDir,
+      env: childEnv,
+      log,
+      onUpdate,
+    }),
+  readSetupRecord: () => readSetupRecord(userFile("setup.json")),
+  writeSetupRecord: (v) => writeSetupRecord(userFile("setup.json"), v),
 
   checkWork: (url) => checkWork(backendRequest(url)),
   waitForMemoryWorkers: (url, cancelled) =>
@@ -338,7 +416,7 @@ function start(): void {
       process.versions.electron
     }, ${process.platform} ${process.arch}), WebUI ${
       manifest.uiVersion
-    }, core range ${manifest.coreRange}`
+    }, core range ${manifest.coreRange} (installs ${INSTALL_VERSION ?? "none"})`
   );
   log.info(`data ${folders.dataDir}, config ${folders.configDir}`);
   process.on("uncaughtException", (e) => {

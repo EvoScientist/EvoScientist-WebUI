@@ -1,11 +1,17 @@
 // The desktop app's controller: the state and the flows of the main process
-// (launch, the UI server, restart backend, quit, the end of the session, the
-// status page's actions), with Electron and the processes behind injected
+// (launch with install, repair and setup, the UI server, restart backend,
+// quit, the end of the session, the status page's actions), with Electron and the processes behind injected
 // dependencies so they can be tested without either. main.ts builds the
 // dependencies and wires Electron's events to the methods here.
 import type { MessageBoxOptions } from "electron";
 import { dirname, join } from "node:path";
-import { boot, type BootError, type Manifest } from "./boot";
+import {
+  boot,
+  type BootError,
+  type BootOptions,
+  type BootState,
+  type Manifest,
+} from "./boot";
 import {
   confirmation,
   type MemoryWaitResult,
@@ -14,6 +20,7 @@ import {
 } from "./closeCheck";
 import { FATAL_CODES, type CrashInfo } from "./crash";
 import type { DeploySession } from "./deploy";
+import type { InstallRun } from "./install";
 import type { UiRecord } from "./leftover";
 import type { DeployReady, VersionInfo } from "./lines";
 import type { Located } from "./locate";
@@ -26,9 +33,13 @@ import {
 } from "./paths";
 import type { Collected, Logger } from "./proc";
 import { SessionEnd } from "./sessionEnd";
+import type { SetupRun, Stage } from "./setup";
 import {
   errorScreen,
+  installScreen,
+  mirrorQuestion,
   progressScreen,
+  setupScreen,
   type ActionId,
   type ErrorScreen,
   type Screen,
@@ -37,6 +48,9 @@ import type { UiServer } from "./uiServer";
 
 /** How long the UI server gets to answer `/` after it starts. */
 export const UI_START_MS = 60_000;
+/** The install script's lines and setup's stages reach the status page at
+ *  most this often. */
+export const SCREEN_INTERVAL_MS = 100;
 
 /** The log files as the controller uses them (FileLog). */
 export interface AppLog extends Logger {
@@ -143,6 +157,23 @@ export interface AppDeps {
     cancelled: () => boolean
   ): Promise<MemoryWaitResult>;
 
+  // Install, repair and setup (W03b)
+  keptMirror(): boolean | null;
+  keepMirror(cn: boolean): void;
+  windowsArm64(): Promise<boolean>;
+  updateLockHeld(): boolean;
+  backupConfig(): string | null;
+  runInstall(cn: boolean, onLine: (line: string) => void): InstallRun;
+  runSetup(
+    evosci: string,
+    cn: boolean,
+    stages: Stage[],
+    onUpdate: (stages: Stage[]) => void
+  ): SetupRun;
+  readSetupRecord(): string | null;
+  writeSetupRecord(coreVersion: string): void;
+  pause?(ms: number): Promise<void>;
+
   sessionEnd?: SessionEnd;
 }
 
@@ -209,6 +240,19 @@ export function createApp(deps: AppDeps): App {
   let stoppingDeploy: Promise<"stopped" | "killed"> | null = null;
   let relaunchAfterExit = false;
   let exiting = false;
+  /** The install script or setup while it runs: closing asks, then stops it (D14). */
+  let step: { kind: "install" | "setup"; cancel(): Promise<void> } | null =
+    null;
+  /** Answers the mirror question on the screen. */
+  let answerMirror: ((cn: boolean) => void) | null = null;
+  /** The next launch's choices from the error screen (Retry with mirrors,
+   *  Continue). */
+  let nextBoot: BootOptions = {};
+  let pendingScreen: Screen | null = null;
+  let pendingTimer: ReturnType<typeof setTimeout> | null = null;
+  let lastSent = 0;
+  const pause =
+    deps.pause ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
 
   /** The running UI server's origin: links to it stay in the app. */
   const uiOrigin = (): string | null => (ui ? new URL(ui.url).origin : null);
@@ -216,6 +260,11 @@ export function createApp(deps: AppDeps): App {
   // --- Screens ------------------------------------------------------------------
 
   function showScreen(s: Screen): void {
+    if (pendingTimer) {
+      clearTimeout(pendingTimer);
+      pendingTimer = null;
+      pendingScreen = null;
+    }
     screen = s;
     // Only an http page counts: a load still in progress never records the
     // status page.
@@ -231,6 +280,51 @@ export function createApp(deps: AppDeps): App {
     }
     onStatusPage = true;
     win.loadStatusPage().catch((e) => log.warn(`status page: ${e}`));
+  }
+
+  /** Shows a screen that changes with every output line (install, setup) at
+   *  most every SCREEN_INTERVAL_MS; the latest one wins. */
+  function showSoon(s: Screen): void {
+    pendingScreen = s;
+    if (pendingTimer) return;
+    const wait = Math.max(0, lastSent + SCREEN_INTERVAL_MS - Date.now());
+    pendingTimer = setTimeout(() => {
+      pendingTimer = null;
+      const next = pendingScreen;
+      pendingScreen = null;
+      if (!next) return;
+      lastSent = Date.now();
+      showScreen(next);
+    }, wait);
+  }
+
+  /** The screen for a launch phase; none for the end phases. */
+  function onBootState(state: BootState): void {
+    switch (state.phase) {
+      case "ready":
+      case "error":
+      case "asking_mirror":
+        return;
+      case "installing":
+        return showSoon(installScreen(state));
+      case "setting_up":
+        return showSoon(setupScreen(state.stages));
+      default:
+        return showScreen(progressScreen(state));
+    }
+  }
+
+  /** Keeps the install script or setup while it runs, for the close question. */
+  function track<R extends InstallRun | SetupRun>(
+    kind: "install" | "setup",
+    r: R
+  ): R {
+    const current = { kind, cancel: r.cancel };
+    step = current;
+    void r.done.finally(() => {
+      if (step === current) step = null;
+    });
+    return r;
   }
 
   /** Writes a crash report next to the logs and returns its path. */
@@ -257,6 +351,9 @@ export function createApp(deps: AppDeps): App {
     // A quit ends the backend and the UI server on purpose; what fails because
     // of that is no crash and has no window to show in.
     if (quitState !== "none") {
+      // During the quit question the quit may still be cancelled: keep it.
+      if (quitState === "checking" && error.code !== "quitting")
+        heldError ??= error;
       log.info(`error during quit, not shown: ${error.code}: ${error.message}`);
       return;
     }
@@ -310,6 +407,8 @@ export function createApp(deps: AppDeps): App {
       await stopDeploy(old);
     }
     if (quitState !== "none") return;
+    const options = nextBoot;
+    nextBoot = {};
     try {
       deps.ensureDir(folders.dataDir);
     } catch (e) {
@@ -333,11 +432,29 @@ export function createApp(deps: AppDeps): App {
         ensureDir: deps.ensureDir,
         startDeploy: (file, workspace) =>
           (session = deps.startDeploy(file, workspace)),
+        keptMirror: deps.keptMirror,
+        keepMirror: deps.keepMirror,
+        askMirror: () =>
+          new Promise<boolean>((resolve) => {
+            answerMirror = resolve;
+            showScreen(mirrorQuestion());
+          }),
+        windowsArm64: deps.windowsArm64,
+        updateLockHeld: deps.updateLockHeld,
+        pause,
+        // Decided, not only asked: an error during the close question is
+        // held and shown if the quit is cancelled.
+        stopping: () => quitState === "stopping",
+        backupConfig: deps.backupConfig,
+        runInstall: (cn, onLine) =>
+          track("install", deps.runInstall(cn, onLine)),
+        runSetup: (file, cn, stages, onUpdate) =>
+          track("setup", deps.runSetup(file, cn, stages, onUpdate)),
+        setupRecord: deps.readSetupRecord,
+        recordSetup: deps.writeSetupRecord,
       },
-      (state) => {
-        if (state.phase !== "ready" && state.phase !== "error")
-          showScreen(progressScreen(state));
-      }
+      onBootState,
+      options
     );
     if (!result.ok) return showError(result.error);
 
@@ -552,6 +669,28 @@ export function createApp(deps: AppDeps): App {
     return r.response === 0;
   }
 
+  /** The question before closing while the install script or setup runs;
+   *  true to quit. */
+  async function confirmStopStep(kind: "install" | "setup"): Promise<boolean> {
+    const what =
+      kind === "install"
+        ? "EvoScientist is being installed."
+        : "EvoScientist is being set up.";
+    const r = await deps.messageBox({
+      type: "warning",
+      title: "EvoScientist",
+      message: what,
+      detail:
+        "Quitting stops it now. The app runs it again at the next launch.",
+      buttons: ["Quit", "Cancel"],
+      defaultId: 1,
+      cancelId: 1,
+      noLink: true,
+    });
+    log.info(`confirmation (${kind}): ${r.response === 0 ? "Quit" : "Cancel"}`);
+    return r.response === 0;
+  }
+
   /** File > Restart backend: asks, waits for the memory workers, stops the owned backend and launches again. A reused backend is left alone. */
   function restartBackend(): Promise<void> {
     return exclusive(async () => {
@@ -635,6 +774,13 @@ export function createApp(deps: AppDeps): App {
     quitState = "checking";
     heldError = null;
     try {
+      // The install script or setup runs (D14): ask, then stop its tree. The
+      // next launch runs that step again.
+      if (step && !sessionEnd.ending && !(await confirmStopStep(step.kind))) {
+        quitState = "none";
+        resumeAfterCancelledQuit();
+        return;
+      }
       const owned = Boolean(ready?.owned && session);
       if (owned && !sessionEnd.ending && !(await confirmStop("quit"))) {
         quitState = "none";
@@ -665,6 +811,11 @@ export function createApp(deps: AppDeps): App {
         }
       }
       quitState = "stopping";
+      if (step) {
+        const running = step;
+        log.info(`stopping the ${running.kind} step`);
+        await running.cancel();
+      }
       await stopUi();
       if (session) {
         const s = session;
@@ -774,6 +925,19 @@ export function createApp(deps: AppDeps): App {
         return;
       case "quit":
         return requestQuit();
+      case "mirror_cn":
+      case "mirror_default": {
+        const answer = answerMirror;
+        answerMirror = null;
+        answer?.(id === "mirror_cn");
+        return;
+      }
+      case "retry_cn":
+        nextBoot = { cn: true };
+        return launch();
+      case "continue":
+        nextBoot = { skipSetup: true };
+        return launch();
     }
   }
 

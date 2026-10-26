@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { errorScreen } from "./screens";
+import {
+  errorScreen,
+  installScreen,
+  mirrorQuestion,
+  progressScreen,
+  setupScreen,
+} from "./screens";
 
 const ctx = {
   platform: "win32" as const,
@@ -14,14 +20,77 @@ const err = (code: string, detail: Record<string, unknown> = {}) => ({
 });
 
 describe("errorScreen", () => {
-  it("shows the install command for a missing or old core", () => {
-    for (const code of ["core_missing", "core_too_old"]) {
-      const s = errorScreen(err(code, { install_command: "irm x | iex" }), ctx);
-      expect(s.command).toBe("irm x | iex");
-      expect(s.actions).toEqual(
-        expect.arrayContaining(["retry", "copy_command"])
-      );
-    }
+  it("shows the install command for an old core (until W03c)", () => {
+    const s = errorScreen(
+      err("core_too_old", { install_command: "irm x | iex" }),
+      ctx
+    );
+    expect(s.command).toBe("irm x | iex");
+    expect(s.actions).toEqual(
+      expect.arrayContaining(["retry", "copy_command"])
+    );
+  });
+
+  it("shows a failed install's output, and mirrors only while they are off", () => {
+    const output = ["Error: Cannot download x", "more"];
+    const off = errorScreen(err("install_failed", { output, cn: false }), ctx);
+    expect(off).toMatchObject({
+      title: "EvoScientist could not be installed",
+      output,
+      actions: ["retry", "retry_cn", "open_logs"],
+    });
+    const on = errorScreen(
+      err("install_failed", { output, cn: true, repair: true }),
+      ctx
+    );
+    expect(on.title).toBe("EvoScientist could not be repaired");
+    expect(on.actions).toEqual(["retry", "open_logs"]);
+  });
+
+  it("says to close the running programs when the script refused", () => {
+    const s = errorScreen(
+      err("install_failed", {
+        output: ["Error: EvoScientist is running"],
+        running: true,
+      }),
+      ctx
+    );
+    expect(s.lines[1]).toMatch(
+      /Close the programs listed below, then press Retry/
+    );
+  });
+
+  it("lists the failed setup steps with Retry and Continue", () => {
+    const s = errorScreen(
+      err("setup_failed", {
+        cn: false,
+        failed: [
+          {
+            id: "node",
+            title: "Node.js",
+            code: "download_failed",
+            message: "blocked",
+          },
+        ],
+      }),
+      ctx
+    );
+    expect(s.stages).toEqual([
+      {
+        id: "node",
+        title: "Node.js",
+        state: "error",
+        code: "download_failed",
+        message: "blocked",
+      },
+    ]);
+    expect(s.actions).toEqual(["retry", "retry_cn", "continue", "open_logs"]);
+  });
+
+  it("has nothing to retry on an unsupported platform", () => {
+    const s = errorScreen(err("unsupported_platform"), ctx);
+    expect(s.actions).toEqual(["open_logs"]);
+    expect(s.lines).toContain("Nothing was installed.");
   });
 
   it("asks to update the app for a newer core, an unknown protocol or a refused UI", () => {
@@ -127,5 +196,36 @@ describe("errorScreen", () => {
     });
     expect(s.crashReport).toBe("C:\\logs\\desktop-crash-1.txt");
     expect(s.actions).toContain("open_crash");
+  });
+});
+
+describe("first-launch screens", () => {
+  it("asks about mirrors with one button per answer", () => {
+    expect(mirrorQuestion()).toMatchObject({
+      kind: "question",
+      actions: ["mirror_default", "mirror_cn"],
+    });
+  });
+
+  it("shows the install output, and setup's stages", () => {
+    expect(installScreen({ repair: true, lines: ["a"] })).toMatchObject({
+      kind: "install",
+      title: "Repairing EvoScientist",
+      output: ["a"],
+    });
+    const stages = [
+      { id: "node", title: "Node.js", state: "running" as const },
+    ];
+    expect(setupScreen(stages)).toEqual({
+      kind: "setup",
+      title: "Setting up EvoScientist",
+      stages,
+    });
+  });
+
+  it("names an update that is finishing", () => {
+    expect(progressScreen({ phase: "update_finishing" }).title).toBe(
+      "An update of EvoScientist is finishing"
+    );
   });
 });

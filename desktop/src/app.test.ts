@@ -5,7 +5,9 @@ import type { MemoryWaitResult, WorkCheck } from "./closeCheck";
 import type { DeployOutcome, DeploySession } from "./deploy";
 import type { DeployError, DeployReady } from "./lines";
 import type { Collected, ExitInfo } from "./proc";
+import type { InstallRun } from "./install";
 import { SessionEnd } from "./sessionEnd";
+import type { SetupRun, Stage } from "./setup";
 import type { UiServer } from "./uiServer";
 
 const READY: DeployReady = {
@@ -221,6 +223,17 @@ function harness(over: Partial<AppDeps> = {}) {
     processStartTime: async () => null,
     checkWork: async () => NO_WORK,
     waitForMemoryWorkers: async () => "quiet",
+    keptMirror: () => null,
+    keepMirror: vi.fn(),
+    windowsArm64: async () => false,
+    updateLockHeld: () => false,
+    backupConfig: () => null,
+    runInstall: () => installRun(0),
+    runSetup: () => setupRun(0, []),
+    // Set up before: launches go straight to the node stage.
+    readSetupRecord: () => "0.3.8",
+    writeSetupRecord: vi.fn(),
+    pause: async () => {},
     sessionEnd,
     ...over,
   };
@@ -239,6 +252,57 @@ function harness(over: Partial<AppDeps> = {}) {
     later,
     setNow: (t: number) => void (now = t),
   };
+}
+
+/** An install script or setup stand-in that ends when `finish` is called. */
+function pendingRun<T>(result: T) {
+  const done = deferred<T>();
+  const cancel = vi.fn(async () => done.resolve(result));
+  return {
+    run: { done: done.promise, cancel },
+    finish: () => done.resolve(result),
+    cancel,
+  };
+}
+
+function installRun(code: number, lines: string[] = []): InstallRun {
+  return {
+    done: Promise.resolve({ exit: { code, signal: null }, lines }),
+    cancel: async () => {},
+  };
+}
+
+function setupRun(code: number, stages: Stage[]): SetupRun {
+  return {
+    done: Promise.resolve({ exit: { code, signal: null }, stages }),
+    cancel: async () => {},
+  };
+}
+
+const VERSION_LINE = JSON.stringify({
+  version: "0.3.8",
+  protocol: 1,
+  webui_compat: ">=0.3,<0.5",
+});
+
+/** A harness on a machine without EvoSci until the install script ran. */
+function freshMachine(over: Partial<AppDeps> = {}) {
+  const state = { installed: false };
+  const h = harness({
+    locateEvoSci: async () =>
+      state.installed
+        ? { path: "C:\\bin\\EvoSci.exe", via: "uv-tool-bin" }
+        : null,
+    readSetupRecord: () => null,
+    runCollect: async (_f, args) =>
+      args[0] === "--version"
+        ? ok([VERSION_LINE])
+        : args[1] === "--manifest"
+        ? ok(['{"protocol":1,"stages":[{"id":"node","title":"Node.js"}]}'])
+        : ok([]),
+    ...over,
+  });
+  return { ...h, state };
 }
 
 /** A harness whose app has launched and shows the UI. */
@@ -582,10 +646,17 @@ describe("second launch", () => {
 });
 
 describe("status page actions", () => {
+  /** A core older than the range: its screen has the install command. */
   async function onError(over: Partial<AppDeps> = {}) {
-    const h = harness({ locateEvoSci: async () => null, ...over });
+    const h = harness({
+      runCollect: async (_f, args) =>
+        args[0] === "--version"
+          ? ok([VERSION_LINE.replace("0.3.8", "0.3.7")])
+          : ok([]),
+      ...over,
+    });
     await h.app.launch();
-    expect(h.app.screen).toMatchObject({ kind: "error", code: "core_missing" });
+    expect(h.app.screen).toMatchObject({ kind: "error", code: "core_too_old" });
     return h;
   }
 
@@ -602,12 +673,14 @@ describe("status page actions", () => {
   });
 
   it("retry launches again", async () => {
-    let found = false;
+    let version = "0.3.7";
     const h = await onError({
-      locateEvoSci: async () =>
-        found ? { path: "C:\\bin\\EvoSci.exe", via: "uv-tool-bin" } : null,
+      runCollect: async (_f, args) =>
+        args[0] === "--version"
+          ? ok([VERSION_LINE.replace("0.3.8", version)])
+          : ok([]),
     });
-    found = true;
+    version = "0.3.8";
     await h.app.act("retry", undefined);
     expect(h.sessions).toHaveLength(1);
     expect(h.win.calls.at(-1)).toBe("load http://127.0.0.1:4718/");
@@ -642,14 +715,14 @@ describe("status page actions", () => {
   });
 
   it("a failed config set adds its output to the error screen", async () => {
-    // --version fails (core_missing), so EvoSci is known but the core is not.
     const h = await onError({
-      locateEvoSci: async () => ({ path: "C:\\bin\\EvoSci.exe", via: "path" }),
       runCollect: async (_f, args) =>
-        args[0] === "config" ? ok(["locked"], 1) : ok([], 1),
+        args[0] === "config"
+          ? ok(["locked"], 1)
+          : ok([VERSION_LINE.replace("0.3.8", "0.3.7")]),
     });
     await h.app.act("set_port", 6200);
-    expect(h.app.screen).toMatchObject({ kind: "error", code: "core_missing" });
+    expect(h.app.screen).toMatchObject({ kind: "error", code: "core_too_old" });
     expect((h.app.screen as { lines: string[] }).lines.at(-1)).toBe(
       "Could not save langgraph_dev_port: locked"
     );
@@ -661,6 +734,152 @@ describe("status page actions", () => {
     await h.app.act("quit", undefined);
     expect(checkWork).not.toHaveBeenCalled();
     expect(h.exit).toHaveBeenCalledWith(false);
+  });
+});
+
+describe("first launch", () => {
+  it("asks about mirrors, installs with the answer, sets up and shows the UI", async () => {
+    const runInstall = vi.fn((_cn: boolean, onLine: (l: string) => void) => {
+      onLine("Downloading uv 0.12.23...");
+      f.state.installed = true;
+      return installRun(0, ["Downloading uv 0.12.23..."]);
+    });
+    const f = freshMachine({ runInstall });
+    const launch = f.app.launch();
+    await vi.waitFor(() =>
+      expect(f.app.screen).toMatchObject({ kind: "question" })
+    );
+    await f.app.act("mirror_cn", undefined);
+    await launch;
+    expect(f.deps.keepMirror).toHaveBeenCalledWith(true);
+    expect(runInstall).toHaveBeenCalledWith(true, expect.any(Function));
+    expect(f.deps.writeSetupRecord).toHaveBeenCalledWith("0.3.8");
+    expect(f.win.calls.at(-1)).toBe("load http://127.0.0.1:4718/");
+  });
+
+  it("shows the install output on its own screen", async () => {
+    const p = pendingRun({ exit: { code: 0, signal: null }, lines: [] });
+    const f = freshMachine({
+      keptMirror: () => false,
+      runInstall: (_cn, onLine) => {
+        onLine("Resolved 149 packages");
+        return p.run;
+      },
+    });
+    const launch = f.app.launch();
+    await vi.waitFor(() =>
+      expect(f.app.screen).toMatchObject({
+        kind: "install",
+        output: ["Resolved 149 packages"],
+      })
+    );
+    f.state.installed = true;
+    p.finish();
+    await launch;
+  });
+
+  it("closing during the install asks; Cancel lets it go on, Quit stops its tree and exits", async () => {
+    const p = pendingRun({ exit: { code: 1, signal: null }, lines: [] });
+    const f = freshMachine({
+      keptMirror: () => false,
+      runInstall: () => p.run,
+    });
+    const launch = f.app.launch();
+    await vi.waitFor(() => expect(f.app.screen.kind).toBe("install"));
+    f.messageBox.mockResolvedValueOnce({ response: 1 });
+    await f.app.requestQuit();
+    expect(f.messageBox.mock.calls[0][0]).toMatchObject({
+      message: "EvoScientist is being installed.",
+      buttons: ["Quit", "Cancel"],
+      defaultId: 1,
+    });
+    expect(p.cancel).not.toHaveBeenCalled();
+    expect(f.exit).not.toHaveBeenCalled();
+    await f.app.requestQuit();
+    expect(p.cancel).toHaveBeenCalledTimes(1);
+    expect(f.exit).toHaveBeenCalledWith(false);
+    await launch;
+    // The killed script's exit is no error to show.
+    expect(f.app.screen.kind).not.toBe("error");
+    expect(f.deps.writeCrashReport).not.toHaveBeenCalled();
+  });
+
+  it("an install that fails during the close question shows its error on Cancel", async () => {
+    const p = pendingRun({
+      exit: { code: 1, signal: null },
+      lines: ["Error: Cannot download x"],
+    });
+    const f = freshMachine({
+      keptMirror: () => false,
+      runInstall: () => p.run,
+    });
+    const launch = f.app.launch();
+    await vi.waitFor(() => expect(f.app.screen.kind).toBe("install"));
+    f.messageBox.mockImplementationOnce(async () => {
+      p.finish();
+      await launch;
+      return { response: 1 };
+    });
+    await f.app.requestQuit();
+    expect(f.app.screen).toMatchObject({
+      kind: "error",
+      code: "install_failed",
+    });
+  });
+
+  it("closing during setup asks with its own text", async () => {
+    const p = pendingRun({
+      exit: { code: 1, signal: null },
+      stages: [] as Stage[],
+    });
+    const f = freshMachine({ keptMirror: () => false, runSetup: () => p.run });
+    f.state.installed = true;
+    const launch = f.app.launch();
+    await vi.waitFor(() => expect(f.app.screen.kind).toBe("setup"));
+    await f.app.requestQuit();
+    expect(f.messageBox.mock.calls[0][0]).toMatchObject({
+      message: "EvoScientist is being set up.",
+    });
+    expect(p.cancel).toHaveBeenCalledTimes(1);
+    await launch;
+    expect(f.exit).toHaveBeenCalled();
+  });
+
+  it("Retry with mainland China mirrors installs with -Cn once", async () => {
+    const runInstall = vi.fn((_cn: boolean, _onLine: (l: string) => void) =>
+      installRun(1, ["Error: x"])
+    );
+    const f = freshMachine({ keptMirror: () => false, runInstall });
+    await f.app.launch();
+    expect(f.app.screen).toMatchObject({
+      kind: "error",
+      code: "install_failed",
+      actions: ["retry", "retry_cn", "open_logs"],
+    });
+    await f.app.act("retry_cn", undefined);
+    await f.app.act("retry", undefined);
+    expect(runInstall.mock.calls.map((c) => c[0])).toEqual([
+      false,
+      true,
+      false,
+    ]);
+  });
+
+  it("Continue after a failed setup starts without it, and records nothing", async () => {
+    const stages: Stage[] = [
+      { id: "node", title: "Node.js", state: "error", code: "download_failed" },
+    ];
+    const f = freshMachine({ runSetup: () => setupRun(1, stages) });
+    f.state.installed = true;
+    await f.app.launch();
+    expect(f.app.screen).toMatchObject({
+      kind: "error",
+      code: "setup_failed",
+      actions: ["retry", "retry_cn", "continue", "open_logs"],
+    });
+    await f.app.act("continue", undefined);
+    expect(f.win.calls.at(-1)).toBe("load http://127.0.0.1:4718/");
+    expect(f.deps.writeSetupRecord).not.toHaveBeenCalled();
   });
 });
 
