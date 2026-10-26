@@ -3,11 +3,32 @@
 // app's own core range. Only plain release numbers match: a pre-release, a
 // post-release or a local version never does, as the core skips them for
 // WebUI releases. Node's `semver` cannot read the comma form.
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 export type Release = number[];
 
 const RELEASE = /^\d+(\.\d+)*$/;
 const CLAUSE = /^(>=|<=|==|>|<)\s*(\d+(?:\.\d+)*)$/;
+
+/**
+ * The bundled WebUI's version: the `version` of the `package.json` next to
+ * its `server.js` (the root's, kept in `dist/`), or null when it cannot be
+ * read. The core's `webui_compat` is checked against it; the app's own
+ * version (desktop/package.json) is not bumped by WebUI releases.
+ */
+export function bundledUiVersion(serverJs: string): string | null {
+  try {
+    const pkg = JSON.parse(
+      readFileSync(join(dirname(serverJs), "package.json"), "utf8")
+    ) as { version?: unknown };
+    return typeof pkg.version === "string" && pkg.version !== ""
+      ? pkg.version
+      : null;
+  } catch {
+    return null;
+  }
+}
 
 /** The release number of a version, or null when it is anything else. */
 export function parseRelease(version: string): Release | null {

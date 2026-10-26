@@ -69,6 +69,7 @@ import {
   uiServerEnv,
   type UiServer,
 } from "./uiServer";
+import { bundledUiVersion } from "./versions";
 
 /** How long the UI server gets to answer `/` after it starts. */
 const UI_START_MS = 60_000;
@@ -93,7 +94,9 @@ const pkg = JSON.parse(
 const manifest: Manifest = {
   coreRange: pkg.evoscientist.coreRange,
   protocols: pkg.evoscientist.protocols,
-  uiVersion: app.getVersion(),
+  // Without a readable bundle the app's own version stands in; the launch
+  // then stops at the missing server.js anyway.
+  uiVersion: bundledUiVersion(UI_SERVER_JS) ?? app.getVersion(),
 };
 
 const folders = resolveFolders(process.env);
@@ -765,7 +768,9 @@ function start(): void {
   log.info(
     `EvoScientist desktop ${app.getVersion()} (Electron ${
       process.versions.electron
-    }, ${process.platform} ${process.arch}), core range ${manifest.coreRange}`
+    }, ${process.platform} ${process.arch}), WebUI ${
+      manifest.uiVersion
+    }, core range ${manifest.coreRange}`
   );
   log.info(`data ${folders.dataDir}, config ${folders.configDir}`);
   process.on("uncaughtException", (e) => {

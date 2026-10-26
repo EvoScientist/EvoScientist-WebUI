@@ -1,5 +1,9 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  bundledUiVersion,
   compareReleases,
   inRange,
   parseRange,
@@ -82,5 +86,21 @@ describe("inRange", () => {
     expect(inRange("0.4.0", ">=0.3,<0.5")).toBe(true);
     expect(inRange("0.5.0", ">=0.3,<0.5")).toBe(false);
     expect(inRange("0.4.1-beta.1", ">=0.3,<0.5")).toBe(false);
+  });
+});
+
+describe("bundledUiVersion", () => {
+  it("reads the version next to server.js, or gives null", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ui-version-"));
+    try {
+      const serverJs = join(dir, "server.js");
+      expect(bundledUiVersion(serverJs)).toBeNull();
+      writeFileSync(join(dir, "package.json"), '{"version": "0.4.2"}');
+      expect(bundledUiVersion(serverJs)).toBe("0.4.2");
+      writeFileSync(join(dir, "package.json"), "{");
+      expect(bundledUiVersion(serverJs)).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
