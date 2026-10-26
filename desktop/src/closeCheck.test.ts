@@ -97,6 +97,7 @@ describe("checkWork", () => {
     expect(req.calls.find((c) => c.path === "/threads/search")?.body).toEqual({
       status: "busy",
       limit: 100,
+      select: ["thread_id", "status", "metadata"],
     });
   });
 

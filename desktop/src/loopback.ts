@@ -106,6 +106,10 @@ export function answers(
       (res) => {
         res.resume();
         res.on("end", () => resolve(res.statusCode ?? 0));
+        // A response cut after its headers never ends and, with no `error`
+        // listener, emits no error; `close` always comes (after `end` it
+        // changes nothing).
+        res.on("close", () => resolve(null));
       }
     );
     req.setTimeout(timeoutMs, () => {

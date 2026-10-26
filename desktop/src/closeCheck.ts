@@ -65,7 +65,13 @@ async function busyThreads(req: Request): Promise<unknown[]> {
   const body = ok(
     await req("/threads/search", {
       method: "POST",
-      body: { status: "busy", limit: BUSY_LIMIT },
+      // Only the fields the probes read: a chat thread's `values` can be
+      // large, and this runs every 500 ms during the memory wait.
+      body: {
+        status: "busy",
+        limit: BUSY_LIMIT,
+        select: ["thread_id", "status", "metadata"],
+      },
       timeoutMs: PROBE_TIMEOUT_MS,
     }),
     "threads/search"

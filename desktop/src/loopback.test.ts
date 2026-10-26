@@ -15,6 +15,11 @@ beforeAll(async () => {
     req.on("end", () => {
       seen.push({ method: req.method, origin: req.headers.origin, body });
       if (req.url === "/slow") return; // never answers
+      if (req.url === "/cut") {
+        res.writeHead(200, { "content-length": "100" });
+        res.write("partial");
+        return void setTimeout(() => res.socket?.destroy(), 20);
+      }
       if (req.url === "/text") return res.end("hello");
       res.setHeader("content-type", "application/json");
       res.end(JSON.stringify({ url: req.url }));
@@ -64,6 +69,10 @@ describe("answers", () => {
     expect(await answers(`${base}/`, 2000)).toBe(200);
     expect(await answers("http://127.0.0.1:9/", 2000)).toBeNull();
   });
+
+  it("gives null when the connection drops in the middle of the body", async () => {
+    expect(await answers(`${base}/cut`, 5000)).toBeNull();
+  }, 1500);
 });
 
 // The premise of this module: with NODE_USE_ENV_PROXY=1 and a proxy set,
