@@ -62,9 +62,11 @@ describe("the UI server record", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  // On Windows each read starts PowerShell, which took 2.5 to over 5 s on
+  // the CI runner; the limit covers two reads at their own 15 s timeout.
   it("reads this process's start time the same way twice", async () => {
     const a = await processStartTime(process.pid);
     expect(a).not.toBeNull();
     expect(await processStartTime(process.pid)).toBe(a);
-  });
+  }, 40_000);
 });
