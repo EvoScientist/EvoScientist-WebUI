@@ -172,6 +172,9 @@ function showScreen(s: Screen): void {
 function crashReport(code: string, message: string, detail?: unknown) {
   const file = writeCrashReport(log.folder, {
     appVersion: app.getVersion(),
+    // Read again: when the bundle cannot be read (a missing server.js),
+    // manifest.uiVersion has fallen back to the app's version.
+    uiVersion: bundledUiVersion(UI_SERVER_JS) ?? "unknown",
     coreVersion: core?.version ?? null,
     code,
     message,

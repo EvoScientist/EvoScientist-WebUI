@@ -60,7 +60,10 @@ export function tail(path: string, max = CRASH_TAIL_BYTES): string {
 }
 
 export interface CrashInfo {
+  /** The app's own version (desktop/package.json). */
   appVersion: string;
+  /** The bundled WebUI's version, or "unknown" when the bundle cannot be read. */
+  uiVersion: string;
   coreVersion: string | null;
   code: string;
   message: string;
@@ -85,7 +88,7 @@ export function writeCrashReport(
 ): string | null {
   const lines = [
     `EvoScientist desktop crash report, ${now.toISOString()}`,
-    `app ${info.appVersion} (bundled WebUI), core ${
+    `app ${info.appVersion}, WebUI ${info.uiVersion}, core ${
       info.coreVersion ?? "unknown"
     }`,
     `platform ${process.platform} ${process.arch}`,

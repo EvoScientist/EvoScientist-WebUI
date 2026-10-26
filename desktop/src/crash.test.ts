@@ -32,13 +32,14 @@ describe("writeCrashReport", () => {
     writeFileSync(log, "x".repeat(70 * 1024) + "\nlast line\n");
     const file = writeCrashReport(dir, {
       appVersion: "0.4.0",
+      uiVersion: "0.4.2",
       coreVersion: "0.3.8",
       code: "ui_server_exited",
       message: "boom",
       logs: [log, join(dir, "langgraph_dev.log")],
     })!;
     const text = readFileSync(file, "utf8");
-    expect(text).toContain("app 0.4.0 (bundled WebUI), core 0.3.8");
+    expect(text).toContain("app 0.4.0, WebUI 0.4.2, core 0.3.8");
     expect(text).toContain("code ui_server_exited");
     expect(text).toContain("last line");
     expect(text).toContain("(cannot read: ENOENT)");
@@ -48,6 +49,7 @@ describe("writeCrashReport", () => {
   it(`keeps only the newest ${CRASH_KEEP}`, () => {
     const info = {
       appVersion: "0.4.0",
+      uiVersion: "0.4.2",
       coreVersion: null,
       code: "c",
       message: "m",
