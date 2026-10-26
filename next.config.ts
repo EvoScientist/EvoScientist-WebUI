@@ -9,8 +9,14 @@ const nextConfig: NextConfig = {
   // published the package (#62). With this, /_next/image answers 404.
   images: { unoptimized: true },
   // `unoptimized` alone still traces sharp into the standalone output.
+  // Routes that resolve dynamic paths trace the whole project root, which
+  // includes the desktop app (and its packed build after `npm run pack`).
   outputFileTracingExcludes: {
-    "*": ["**/node_modules/sharp/**/*", "**/node_modules/@img/**/*"],
+    "*": [
+      "**/node_modules/sharp/**/*",
+      "**/node_modules/@img/**/*",
+      "desktop/**/*",
+    ],
   },
 };
 

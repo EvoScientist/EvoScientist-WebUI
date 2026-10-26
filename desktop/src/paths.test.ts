@@ -78,10 +78,11 @@ describe("readStartConfig", () => {
   it("reads the three keys and ignores the rest", () => {
     writeFileSync(
       join(dir, "config.yaml"),
-      "default_workdir: 'C:\\Users\\a\\work'\nlanggraph_dev_port: '6200'\nmirror: cn\nanthropic_api_key: secret\n"
+      // Unquoted, with brackets, as PyYAML (`EvoSci config set`) writes it.
+      "default_workdir: C:\\Users\\a\\[lab] work\nlanggraph_dev_port: '6200'\nmirror: cn\nanthropic_api_key: secret\n"
     );
     expect(readStartConfig(dir, {})).toEqual({
-      defaultWorkdir: "C:\\Users\\a\\work",
+      defaultWorkdir: "C:\\Users\\a\\[lab] work",
       port: 6200,
       mirror: "cn",
     });
