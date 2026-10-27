@@ -933,6 +933,8 @@ export function createApp(deps: AppDeps): App {
         return;
       }
       case "retry_cn":
+        // Remembered: kept as the mirror answer, and setup saves `mirror: cn`.
+        deps.keepMirror(true);
         nextBoot = { cn: true };
         return launch();
       case "continue":

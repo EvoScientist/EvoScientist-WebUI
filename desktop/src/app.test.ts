@@ -845,11 +845,16 @@ describe("first launch", () => {
     expect(f.exit).toHaveBeenCalled();
   });
 
-  it("Retry with mainland China mirrors installs with -Cn once", async () => {
+  it("Retry with mainland China mirrors installs with -Cn and keeps the choice", async () => {
     const runInstall = vi.fn((_cn: boolean, _onLine: (l: string) => void) =>
       installRun(1, ["Error: x"])
     );
-    const f = freshMachine({ keptMirror: () => false, runInstall });
+    let kept: boolean | null = false;
+    const f = freshMachine({
+      keptMirror: () => kept,
+      keepMirror: (cn) => void (kept = cn),
+      runInstall,
+    });
     await f.app.launch();
     expect(f.app.screen).toMatchObject({
       kind: "error",
@@ -857,12 +862,14 @@ describe("first launch", () => {
       actions: ["retry", "retry_cn", "open_logs"],
     });
     await f.app.act("retry_cn", undefined);
+    expect(kept).toBe(true);
+    expect(f.app.screen).toMatchObject({
+      code: "install_failed",
+      actions: ["retry", "open_logs"],
+    });
+    // A plain Retry later still uses them: the answer was kept.
     await f.app.act("retry", undefined);
-    expect(runInstall.mock.calls.map((c) => c[0])).toEqual([
-      false,
-      true,
-      false,
-    ]);
+    expect(runInstall.mock.calls.map((c) => c[0])).toEqual([false, true, true]);
   });
 
   it("Continue after a failed setup starts without it, and records nothing", async () => {

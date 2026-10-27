@@ -145,7 +145,9 @@ export interface BootDeps {
 /** One launch's choices from the error screen. */
 export interface BootOptions {
   /** "Retry with mainland China mirrors": the install script and setup get
-   *  `-Cn` / `--cn` this time. */
+   *  `-Cn` / `--cn` this launch, also over `mirror: default` in config.yaml.
+   *  The choice is remembered: the app keeps it as the mirror answer, and
+   *  `EvoSci setup --cn` saves `mirror: cn` to config.yaml. */
   cn?: boolean;
   /** "Continue" after a failed setup: start without it this time; the core
    *  version stays not set up, so the next launch runs setup again. */
@@ -298,14 +300,22 @@ const QUITTING: BootError = {
  * with the bundled install script, after the mirror question (a fresh install
  * only), the arm64 check and the wait for an update that is still finishing.
  * A repair copies config.yaml first. The mirror choice it installed with
- * when the script exited 0, else the error.
+ * and the script's lines when it exited 0, else the error.
  */
 async function installCore(
   deps: BootDeps,
   onState: (s: BootState) => void,
   repair: boolean,
   options: BootOptions
-): Promise<{ cn: boolean } | BootError> {
+): Promise<{ cn: boolean; lines: string[] } | BootError> {
+  // Before the question: on Windows on Arm the answer would change nothing.
+  if (deps.platform === "win32" && (await deps.windowsArm64()))
+    return {
+      code: "unsupported_platform",
+      message:
+        "EvoScientist cannot be installed on Windows on Arm yet: the install script supports x64 Windows only.",
+      detail: { arch: "ARM64" },
+    };
   let cn = options.cn
     ? true
     : mirrorChoice(deps.startConfig(), deps.keptMirror());
@@ -319,13 +329,6 @@ async function installCore(
     }
   }
   if (deps.stopping()) return QUITTING;
-  if (deps.platform === "win32" && (await deps.windowsArm64()))
-    return {
-      code: "unsupported_platform",
-      message:
-        "EvoScientist cannot be installed on Windows on Arm yet: the install script supports x64 Windows only.",
-      detail: { arch: "ARM64" },
-    };
   while (deps.updateLockHeld()) {
     onState({ phase: "update_finishing" });
     await deps.pause(UPDATE_LOCK_POLL_MS);
@@ -359,7 +362,7 @@ async function installCore(
   });
   const { exit, lines } = await run.done;
   if (deps.stopping()) return QUITTING;
-  if (exit.code === 0) return { cn };
+  if (exit.code === 0) return { cn, lines };
   const output = failureOutput(lines);
   return {
     code: "install_failed",
@@ -377,8 +380,9 @@ async function installCore(
 }
 
 /** `EvoSci setup --json --skip webui` with its stage list; null after exit 0,
- *  which records the core version as set up. Mirrors as config.yaml or the
- *  kept answer say, else as the install of this launch used them. */
+ *  which records the core version as set up. Mirrors: "Retry with mainland
+ *  China mirrors" first, then config.yaml or the kept answer, else as the
+ *  install of this launch used them. */
 async function setUp(
   deps: BootDeps,
   onState: (s: BootState) => void,
@@ -402,6 +406,9 @@ async function setUp(
     (mirrorChoice(deps.startConfig(), deps.keptMirror()) ??
       installedCn ??
       false);
+  // Closing during `--manifest` does not ask (no step runs yet): nothing new
+  // starts once a quit began.
+  if (deps.stopping()) return QUITTING;
   onState({ phase: "setting_up", stages: stages ?? [] });
   const run = deps.runSetup(evosci, cn, stages ?? [], (s) =>
     onState({ phase: "setting_up", stages: s })
@@ -464,22 +471,26 @@ export async function boot(
   }
 
   let installedCn: boolean | null = null;
+  let freshInstall = false;
   if (!evosci || check?.kind !== "ok") {
-    const installed = await installCore(
-      deps,
-      onState,
-      Boolean(evosci),
-      options
-    );
+    const repair = Boolean(evosci);
+    const installed = await installCore(deps, onState, repair, options);
     if ("code" in installed) return fail(installed);
     installedCn = installed.cn;
+    freshInstall = !repair;
+    // The script exited 0, so its last lines, not an `Error:` line.
+    const after = {
+      repair,
+      cn: installed.cn,
+      output: failureOutput(installed.lines),
+    };
     onState({ phase: "checking_core" });
     evosci = await deps.locate();
     if (!evosci)
       return fail({
         code: "install_failed",
         message: "The install script finished, but EvoSci was not found.",
-        detail: { output: [] },
+        detail: after,
       });
     deps.log.info(`EvoSci after the install: ${evosci}`);
     check = await checkVersion(deps, evosci);
@@ -488,7 +499,7 @@ export async function boot(
       return fail({
         code: "install_failed",
         message: `EvoScientist still does not run after the install (${check.why}).`,
-        detail: { evosci, output: [] },
+        detail: { ...after, evosci },
       });
   }
   const info = check.info;
@@ -498,10 +509,15 @@ export async function boot(
   const incompatible = checkCore(info, deps.manifest, deps.platform);
   if (incompatible) return fail(incompatible);
 
-  // Setup on the first launch and after the core version changed; it covers
-  // the node stage. "Continue" after a failed setup skips it this time.
+  // Setup after a fresh install (whatever the record says: the core's data
+  // folder may be new), on the first launch and after the core version
+  // changed; it covers the node stage. "Continue" after a failed setup skips
+  // it this time.
   let setUpNow = false;
-  if (!options.skipSetup && setupNeeded(deps.setupRecord(), info.version)) {
+  if (
+    !options.skipSetup &&
+    (freshInstall || setupNeeded(deps.setupRecord(), info.version))
+  ) {
     const error = await setUp(
       deps,
       onState,

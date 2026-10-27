@@ -131,23 +131,33 @@ export function runSetup(
   };
 }
 
-/** The core version whose setup last exited 0, kept in `userData`. */
-export function readSetupRecord(file: string): string | null {
+/** The core version whose setup last exited 0 for this data folder, kept in
+ *  `userData`. Setup's results (Node, Git, the research environment) live in
+ *  the data folder, so a record for another folder counts as none. */
+export function readSetupRecord(file: string, dataDir: string): string | null {
   try {
     const v = JSON.parse(readFileSync(file, "utf8")) as {
       coreVersion?: unknown;
+      dataDir?: unknown;
     };
-    return typeof v.coreVersion === "string" ? v.coreVersion : null;
+    return typeof v.coreVersion === "string" && v.dataDir === dataDir
+      ? v.coreVersion
+      : null;
   } catch {
     return null;
   }
 }
 
-/** Records a setup that exited 0 for this core version. */
-export function writeSetupRecord(file: string, coreVersion: string): void {
+/** Records a setup that exited 0 for this core version and data folder. */
+export function writeSetupRecord(
+  file: string,
+  coreVersion: string,
+  dataDir: string
+): void {
   writeFileSync(
     file,
-    JSON.stringify({ coreVersion, at: new Date().toISOString() }) + "\n"
+    JSON.stringify({ coreVersion, dataDir, at: new Date().toISOString() }) +
+      "\n"
   );
 }
 

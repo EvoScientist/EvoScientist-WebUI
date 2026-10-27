@@ -248,8 +248,17 @@ const desktop = createApp({
       log,
       onUpdate,
     }),
-  readSetupRecord: () => readSetupRecord(userFile("setup.json")),
-  writeSetupRecord: (v) => writeSetupRecord(userFile("setup.json"), v),
+  readSetupRecord: () =>
+    readSetupRecord(userFile("setup.json"), folders.dataDir),
+  writeSetupRecord: (v) => {
+    // A setup that worked still counts when its record cannot be written;
+    // the next launch then runs setup again.
+    try {
+      writeSetupRecord(userFile("setup.json"), v, folders.dataDir);
+    } catch (e) {
+      log.warn(`cannot record the setup: ${e}`);
+    }
+  },
 
   checkWork: (url) => checkWork(backendRequest(url)),
   waitForMemoryWorkers: (url, cancelled) =>

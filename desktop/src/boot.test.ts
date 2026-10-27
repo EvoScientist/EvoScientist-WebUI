@@ -394,14 +394,52 @@ describe("first launch and repair", () => {
     });
   });
 
-  it("refuses Windows on arm64 before running anything", async () => {
-    const { d, runInstall } = freshMachine({ windowsArm64: async () => true });
+  it("keeps repair, mirrors and the script's last lines when EvoSci is missing or broken after exit 0", async () => {
+    const missing = freshMachine({
+      locate: async () => null,
+      startConfig: () => ({ defaultWorkdir: null, port: 6174, mirror: "cn" }),
+      runInstall: () => installRun(0, ["Installed 3 executables", "Done."]),
+    });
+    expect((await runBoot(missing.d)).result).toMatchObject({
+      error: {
+        code: "install_failed",
+        detail: {
+          repair: false,
+          cn: true,
+          output: ["Installed 3 executables", "Done."],
+        },
+      },
+    });
+    const broken = await runBoot(
+      deps({
+        runCollect: async () => ok([], 1),
+        runInstall: () => installRun(0, ["Done."]),
+      })
+    );
+    expect(broken.result).toMatchObject({
+      error: {
+        code: "install_failed",
+        detail: { repair: true, cn: false, output: ["Done."] },
+      },
+    });
+  });
+
+  it("refuses Windows on arm64 before running anything, and before the mirror question", async () => {
+    const askMirror = vi.fn(async () => false);
+    const keepMirror = vi.fn();
+    const { d, runInstall } = freshMachine({
+      windowsArm64: async () => true,
+      askMirror,
+      keepMirror,
+    });
     const { result } = await runBoot(d);
     expect(result).toMatchObject({
       ok: false,
       error: { code: "unsupported_platform" },
     });
     expect(runInstall).not.toHaveBeenCalled();
+    expect(askMirror).not.toHaveBeenCalled();
+    expect(keepMirror).not.toHaveBeenCalled();
     const linux = freshMachine({
       platform: "linux",
       windowsArm64: async () => true,
@@ -436,6 +474,26 @@ describe("first launch and repair", () => {
     const { result } = await runBoot(d);
     expect(result).toMatchObject({ ok: false, error: { code: "quitting" } });
     expect(startDeploy).not.toHaveBeenCalled();
+  });
+
+  it("does not start setup when a quit began during setup --manifest", async () => {
+    let quitting = false;
+    const runSetupFn = vi.fn(() => setupRun(0, []));
+    const { d } = freshMachine({
+      runCollect: async (_f, args) => {
+        if (args[0] === "--version") return ok([versionLine()]);
+        if (args[1] === "--manifest") {
+          quitting = true;
+          return ok([MANIFEST]);
+        }
+        return ok([]);
+      },
+      stopping: () => quitting,
+      runSetup: runSetupFn,
+    });
+    const { result } = await runBoot(d);
+    expect(result).toMatchObject({ ok: false, error: { code: "quitting" } });
+    expect(runSetupFn).not.toHaveBeenCalled();
   });
 
   it("is setup_failed with the failed stages; nothing is recorded", async () => {
@@ -500,6 +558,36 @@ describe("first launch and repair", () => {
     await boot(d, () => {}, { cn: true });
     expect(runInstall).toHaveBeenCalledWith(true, expect.any(Function));
     expect(runSetupFn.mock.calls[0][1]).toBe(true);
+  });
+
+  it("runs setup after a fresh install even when the record names this version", async () => {
+    const runSetupFn = vi.fn(() => setupRun(0, []));
+    const { d } = freshMachine({
+      setupRecord: () => "0.3.8",
+      runSetup: runSetupFn,
+    });
+    expect((await runBoot(d)).result.ok).toBe(true);
+    expect(runSetupFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("a repair of a set-up version runs the node stage, not setup", async () => {
+    const runSetupFn = vi.fn(() => setupRun(0, []));
+    let repaired = false;
+    const { result, states } = await runBoot(
+      deps({
+        runCollect: async (_f, args) =>
+          args[0] === "--version" && !repaired
+            ? ok([], 1)
+            : args[0] === "--version"
+            ? ok([versionLine()])
+            : ok([]),
+        runInstall: () => ((repaired = true), installRun(0, [])),
+        runSetup: runSetupFn,
+      })
+    );
+    expect(result.ok).toBe(true);
+    expect(runSetupFn).not.toHaveBeenCalled();
+    expect(states).toContain("preparing_node");
   });
 
   it("runs setup when the core version changed since the last one", async () => {

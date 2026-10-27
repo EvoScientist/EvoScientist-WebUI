@@ -146,14 +146,22 @@ describe("applyStageEvent", () => {
 describe("setup record", () => {
   it("is the version of the last setup that exited 0", () => {
     const file = join(tempDir(), "setup.json");
-    expect(readSetupRecord(file)).toBeNull();
+    expect(readSetupRecord(file, "/data")).toBeNull();
     expect(setupNeeded(null, "0.3.8")).toBe(true);
-    writeSetupRecord(file, "0.3.8");
-    expect(readSetupRecord(file)).toBe("0.3.8");
+    writeSetupRecord(file, "0.3.8", "/data");
+    expect(readSetupRecord(file, "/data")).toBe("0.3.8");
     expect(setupNeeded("0.3.8", "0.3.8")).toBe(false);
     expect(setupNeeded("0.3.8", "0.3.9")).toBe(true);
     writeFileSync(file, "{broken");
-    expect(readSetupRecord(file)).toBeNull();
+    expect(readSetupRecord(file, "/data")).toBeNull();
+  });
+
+  it("counts only for the data folder it was written for", () => {
+    const file = join(tempDir(), "setup.json");
+    writeSetupRecord(file, "0.3.8", "/data");
+    expect(readSetupRecord(file, "/other")).toBeNull();
+    writeFileSync(file, JSON.stringify({ coreVersion: "0.3.8" }));
+    expect(readSetupRecord(file, "/data")).toBeNull();
   });
 });
 

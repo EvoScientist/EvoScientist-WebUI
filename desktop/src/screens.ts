@@ -78,6 +78,10 @@ export type Screen =
   | SetupScreen
   | ErrorScreen;
 
+/** Shown next to "Retry with mainland China mirrors": the choice stays. */
+const MIRROR_RETRY_LINE =
+  "Retry with mainland China mirrors also keeps the mirrors for later downloads; the settings page can change it.";
+
 /** The first-launch question, before the install script runs (D15). */
 export function mirrorQuestion(): QuestionScreen {
   return {
@@ -113,7 +117,7 @@ export function setupScreen(stages: Stage[]): SetupScreen {
 
 /** The progress screen for a launch phase, the UI start or a stop. */
 export function progressScreen(
-  state: BootState | "starting_ui" | "stopping" | "stopping_step"
+  state: BootState | "starting_ui" | "stopping"
 ): ProgressScreen {
   const s = typeof state === "string" ? state : state.phase;
   const text: Record<string, [string, string]> = {
@@ -189,6 +193,7 @@ export function errorScreen(error: BootError, ctx: ScreenContext): ErrorScreen {
           d.running
             ? "EvoScientist is running. Close the programs listed below, then press Retry."
             : "Press Retry to run the install again.",
+          ...(d.cn ? [] : [MIRROR_RETRY_LINE]),
         ],
         ...(output.length > 0 ? { output } : {}),
         actions: d.cn
@@ -217,7 +222,8 @@ export function errorScreen(error: BootError, ctx: ScreenContext): ErrorScreen {
         title: "Some setup steps failed",
         lines: [
           error.message,
-          "Retry runs setup again. Continue starts EvoScientist without these steps; the next launch runs setup again.",
+          "Retry runs setup again. Continue starts EvoScientist without these steps (only the Node step runs); the next launch runs setup again.",
+          ...(d.cn ? [] : [MIRROR_RETRY_LINE]),
         ],
         stages: failed.map((f) => ({
           id: f.id,

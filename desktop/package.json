@@ -37,7 +37,7 @@
     "vitest": "^4.1.9"
   },
   "engines": {
-    "node": ">=24"
+    "node": ">=24.5"
   },
   "build": {
     "appId": "com.evoscientist.desktop",
