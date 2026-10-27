@@ -9,6 +9,7 @@ import type { InstallRun } from "./install";
 import { SessionEnd } from "./sessionEnd";
 import type { SetupRun, Stage } from "./setup";
 import type { UiServer } from "./uiServer";
+import type { UpdateOutcome, UpdateRun, UpdateView } from "./update";
 
 const READY: DeployReady = {
   event: "ready",
@@ -234,6 +235,16 @@ function harness(over: Partial<AppDeps> = {}) {
     readSetupRecord: () => "0.3.8",
     writeSetupRecord: vi.fn(),
     pause: async () => {},
+    lookupRelease: async () => ({
+      ok: true,
+      version: "0.3.8",
+      url: "https://pypi.org/simple/evoscientist/",
+    }),
+    runUpdate: () => {
+      throw new Error("no update expected");
+    },
+    backendAnswers: async () => false,
+    uvToolEnvExists: async () => true,
     sessionEnd,
     ...over,
   };
@@ -651,7 +662,7 @@ describe("status page actions", () => {
     const h = harness({
       runCollect: async (_f, args) =>
         args[0] === "--version"
-          ? ok([VERSION_LINE.replace("0.3.8", "0.3.7")])
+          ? ok([VERSION_LINE.replace("0.3.8", "0.3.8rc1")])
           : ok([]),
       ...over,
     });
@@ -673,7 +684,7 @@ describe("status page actions", () => {
   });
 
   it("retry launches again", async () => {
-    let version = "0.3.7";
+    let version = "0.3.8rc1";
     const h = await onError({
       runCollect: async (_f, args) =>
         args[0] === "--version"
@@ -719,7 +730,7 @@ describe("status page actions", () => {
       runCollect: async (_f, args) =>
         args[0] === "config"
           ? ok(["locked"], 1)
-          : ok([VERSION_LINE.replace("0.3.8", "0.3.7")]),
+          : ok([VERSION_LINE.replace("0.3.8", "0.3.8rc1")]),
     });
     await h.app.act("set_port", 6200);
     expect(h.app.screen).toMatchObject({ kind: "error", code: "core_too_old" });
@@ -978,5 +989,227 @@ describe("native error", () => {
     h.messageBox.mockResolvedValueOnce({ response: 1 });
     await h.app.nativeError("renderer_gone", "gone");
     await vi.waitFor(() => expect(h.exit).toHaveBeenCalled());
+  });
+});
+
+describe("core update (W03c)", () => {
+  const versionOf = (version: string) =>
+    JSON.stringify({ version, protocol: 1, webui_compat: ">=0.3,<0.5" });
+
+  /** A 0.3.7 core and an `EvoSci update` that ends when `finish` is called. */
+  function oldCore(over: Partial<AppDeps> = {}) {
+    const state = { version: "0.3.7" };
+    let onUpdate: ((v: UpdateView) => void) | null = null;
+    const done = deferred<{ outcome: UpdateOutcome; view: UpdateView }>();
+    let waiting = false;
+    const cancelWhenWaiting = vi.fn(() => waiting);
+    const run: UpdateRun = {
+      done: done.promise,
+      cancelWhenWaiting,
+      waiting: () => waiting,
+    };
+    const view = (w: UpdateView["waiting"]): UpdateView => ({
+      update: { progress: 0.25, message: "Update pending" },
+      stages: [{ id: "node", title: "Node.js", state: "pending" }],
+      waiting: w,
+    });
+    const h = harness({
+      readSetupRecord: () => "0.3.7",
+      runCollect: async (_f, args) =>
+        args[0] === "--version"
+          ? ok([versionOf(state.version)])
+          : args[1] === "--manifest"
+          ? ok(['{"protocol":1,"stages":[{"id":"node","title":"Node.js"}]}'])
+          : ok(['{"protocol":1,"stage":"node","status":"done"}']),
+      runUpdate: (_f, _v, _s, cb) => {
+        onUpdate = cb;
+        return run;
+      },
+      ...over,
+    });
+    return {
+      ...h,
+      state,
+      cancelWhenWaiting,
+      /** The update reports a line. */
+      report: (w: UpdateView["waiting"]) => {
+        waiting = w !== null;
+        onUpdate?.(view(w));
+      },
+      finish: (outcome: UpdateOutcome = { kind: "done", version: "0.3.8" }) => {
+        if (outcome.kind === "done") state.version = "0.3.8";
+        waiting = false;
+        done.resolve({ outcome, view: view(null) });
+      },
+    };
+  }
+
+  const PYTHON = [{ pid: 7, name: "python", path: "C:\\env\\python.exe" }];
+
+  it("offers the update; Update runs it with its rows, records setup and shows the UI", async () => {
+    const c = oldCore();
+    const launch = c.app.launch();
+    await vi.waitFor(() =>
+      expect(c.app.screen).toMatchObject({
+        kind: "question",
+        title: "Update EvoScientist",
+        actions: ["update", "quit"],
+      })
+    );
+    await c.app.act("update", undefined);
+    await vi.waitFor(() => expect(c.app.screen.kind).toBe("setup"));
+    c.report(null);
+    await vi.waitFor(() =>
+      expect(c.app.screen).toMatchObject({
+        kind: "setup",
+        title: "Updating EvoScientist",
+        stages: [
+          { id: "update", state: "running", progress: 0.25 },
+          { id: "node", state: "pending" },
+        ],
+      })
+    );
+    c.finish();
+    await launch;
+    expect(c.deps.writeSetupRecord).toHaveBeenCalledWith("0.3.8");
+    expect(c.win.calls.at(-1)).toBe("load http://127.0.0.1:4718/");
+  });
+
+  it("the waiting screen lists the processes; Cancel creates the cancel file", async () => {
+    const c = oldCore();
+    const launch = c.app.launch();
+    await vi.waitFor(() => expect(c.app.screen.kind).toBe("question"));
+    await c.app.act("update", undefined);
+    await vi.waitFor(() => expect(c.app.screen.kind).toBe("setup"));
+    c.report(PYTHON);
+    await vi.waitFor(() =>
+      expect(c.app.screen).toMatchObject({
+        kind: "setup",
+        actions: ["cancel_update"],
+        lines: expect.arrayContaining(["python (7): C:\\env\\python.exe"]),
+      })
+    );
+    await c.app.act("cancel_update", undefined);
+    expect(c.cancelWhenWaiting).toHaveBeenCalledTimes(1);
+    c.finish({
+      kind: "error",
+      code: "environment_busy",
+      message: "Update cancelled",
+      detail: { waiting_for: PYTHON },
+    });
+    await launch;
+    expect(c.app.screen).toMatchObject({
+      kind: "error",
+      code: "environment_busy",
+      actions: ["retry", "open_logs"],
+    });
+  });
+
+  it("closing during the update asks, keeps the window, and quits after its terminal line", async () => {
+    const c = oldCore();
+    const launch = c.app.launch();
+    await vi.waitFor(() => expect(c.app.screen.kind).toBe("question"));
+    await c.app.act("update", undefined);
+    await vi.waitFor(() => expect(c.app.screen.kind).toBe("setup"));
+    c.report(null);
+    const quit = c.app.requestQuit();
+    await vi.waitFor(() =>
+      expect(c.app.screen).toMatchObject({
+        title: "Finishing the update",
+        lines: ["The app quits when the update is done."],
+      })
+    );
+    expect(c.messageBox.mock.calls[0][0]).toMatchObject({
+      message: "EvoScientist is being updated.",
+      detail: expect.stringContaining("The update finishes first"),
+      buttons: ["Quit after the update", "Cancel"],
+      defaultId: 1,
+    });
+    // Cancel is requested for a wait that may still come.
+    expect(c.cancelWhenWaiting).toHaveBeenCalled();
+    expect(c.win.calls).not.toContain("hide");
+    await settle();
+    expect(c.exit).not.toHaveBeenCalled();
+    c.finish();
+    await quit;
+    await launch;
+    expect(c.exit).toHaveBeenCalledWith(false);
+    // Nothing new started after the update: no UI, no record.
+    expect(c.uis).toHaveLength(0);
+    expect(c.deps.writeSetupRecord).not.toHaveBeenCalled();
+  });
+
+  it("closing while it waits says that closing cancels it", async () => {
+    const c = oldCore();
+    const launch = c.app.launch();
+    await vi.waitFor(() => expect(c.app.screen.kind).toBe("question"));
+    await c.app.act("update", undefined);
+    await vi.waitFor(() => expect(c.app.screen.kind).toBe("setup"));
+    c.report(PYTHON);
+    const quit = c.app.requestQuit();
+    await vi.waitFor(() => expect(c.cancelWhenWaiting).toHaveBeenCalled());
+    expect(c.messageBox.mock.calls[0][0]).toMatchObject({
+      detail: expect.stringContaining("Closing cancels the update"),
+    });
+    c.finish({
+      kind: "error",
+      code: "environment_busy",
+      message: "m",
+      detail: {},
+    });
+    await quit;
+    await launch;
+    expect(c.exit).toHaveBeenCalled();
+  });
+
+  it("Cancel at the close question lets the update go on", async () => {
+    const c = oldCore();
+    const launch = c.app.launch();
+    await vi.waitFor(() => expect(c.app.screen.kind).toBe("question"));
+    await c.app.act("update", undefined);
+    await vi.waitFor(() => expect(c.app.screen.kind).toBe("setup"));
+    c.messageBox.mockResolvedValueOnce({ response: 1 });
+    await c.app.requestQuit();
+    expect(c.cancelWhenWaiting).not.toHaveBeenCalled();
+    expect(c.app.quitState).toBe("none");
+    c.finish();
+    await launch;
+    expect(c.exit).not.toHaveBeenCalled();
+    expect(c.win.calls.at(-1)).toBe("load http://127.0.0.1:4718/");
+  });
+
+  it("after a separate install for a pip core, says once that the pip copy is still the old one", async () => {
+    const c = oldCore({
+      uvToolEnvExists: async () => false,
+      runInstall: () => {
+        c.state.version = "0.3.8";
+        return installRun(0);
+      },
+    });
+    const launch = c.app.launch();
+    await vi.waitFor(() => expect(c.app.screen.kind).toBe("question"));
+    await c.app.act("update", undefined);
+    await vi.waitFor(() => expect(c.app.screen.kind).toBe("setup"));
+    c.finish({
+      kind: "error",
+      code: "manual_update",
+      message: "Installed with pip or conda.",
+      detail: {},
+    });
+    await vi.waitFor(() =>
+      expect(c.app.screen).toMatchObject({
+        kind: "question",
+        title: "Install a separate copy for the app?",
+        actions: ["install_copy", "quit"],
+      })
+    );
+    await c.app.act("install_copy", undefined);
+    await launch;
+    expect(c.win.calls.at(-1)).toBe("load http://127.0.0.1:4718/");
+    const info = c.messageBox.mock.calls.find((m) => m[0].type === "info");
+    expect(info?.[0]).toMatchObject({
+      message: "EvoScientist was installed for the app.",
+      detail: expect.stringContaining("is still 0.3.7"),
+    });
   });
 });

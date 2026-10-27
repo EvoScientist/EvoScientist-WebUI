@@ -12,6 +12,7 @@ import type { DeployOutcome, DeploySession } from "./deploy";
 import type { InstallRun } from "./install";
 import type { Collected } from "./proc";
 import type { SetupRun, Stage } from "./setup";
+import type { UpdateOutcome, UpdateRun, UpdateView } from "./update";
 
 const manifest = {
   coreRange: ">=0.3.8,<0.4",
@@ -74,7 +75,27 @@ function deps(over: Partial<BootDeps> = {}): BootDeps {
     // This version was set up before: the node stage runs instead of setup.
     setupRecord: () => "0.3.8",
     recordSetup: () => {},
+    askUpdate: async () => {},
+    askSeparateInstall: async () => {},
+    stopOwnBackend: async () => true,
+    lookupRelease: async () => ({ ok: true, version: "0.3.8", url: INDEX }),
+    runUpdate: () => updateRun({ kind: "done", version: "0.3.8" }),
+    backendAnswers: async () => false,
+    uvToolEnvExists: async () => true,
     ...over,
+  };
+}
+
+const INDEX = "https://pypi.org/simple/evoscientist/";
+
+function updateRun(
+  outcome: UpdateOutcome,
+  view: UpdateView = { update: {}, stages: [], waiting: null }
+): UpdateRun {
+  return {
+    done: Promise.resolve({ outcome, view }),
+    cancelWhenWaiting: () => false,
+    waiting: () => false,
   };
 }
 
@@ -801,5 +822,493 @@ describe("resolveWorkspace", () => {
         detail: { source: "default_workdir" },
       },
     });
+  });
+});
+
+describe("core update (W03c)", () => {
+  const UPDATE_MANIFEST =
+    '{"protocol":1,"stages":[{"id":"node","title":"Node.js"},{"id":"research-env","title":"Python research environment"},{"id":"webui","title":"WebUI"}]}';
+
+  /** A core at `from` until an update or the install script brings 0.3.8. */
+  function oldCore(from: string, over: Partial<BootDeps> = {}) {
+    const state = { version: from };
+    const calls: string[][] = [];
+    const runUpdate = vi.fn(
+      (
+        _f: string,
+        _v: string,
+        _s: Stage[],
+        onUpdate: (v: UpdateView) => void
+      ) => {
+        onUpdate({ update: { progress: 0.3 }, stages: [], waiting: null });
+        state.version = "0.3.8";
+        return updateRun({ kind: "done", version: "0.3.8" });
+      }
+    );
+    const runInstall = vi.fn(() => {
+      state.version = "0.3.8";
+      return installRun(0, ["Done."]);
+    });
+    let record: string | null = from;
+    const recordSetup = vi.fn((v: string | null) => void (record = v));
+    const runSetup = vi.fn(() => setupRun(0, []));
+    const askUpdate = vi.fn(async () => {});
+    const d = deps({
+      runCollect: async (_f, args) => {
+        calls.push(args);
+        if (args[0] === "--version") return ok([versionLine(state.version)]);
+        if (args[1] === "--manifest") return ok([UPDATE_MANIFEST]);
+        return ok(['{"protocol":1,"stage":"node","status":"done"}']);
+      },
+      runUpdate,
+      runInstall,
+      recordSetup,
+      runSetup,
+      askUpdate,
+      setupRecord: () => record,
+      ...over,
+    });
+    return {
+      d,
+      state,
+      calls,
+      runUpdate,
+      runInstall,
+      recordSetup,
+      runSetup,
+      askUpdate,
+    };
+  }
+
+  it("0.3.7: offer, lookup, update with the manifest's stages, record, node stage, ready", async () => {
+    const lookupRelease = vi.fn(async () => ({
+      ok: true as const,
+      version: "0.3.8",
+      url: INDEX,
+    }));
+    const c = oldCore("0.3.7", { lookupRelease });
+    const { result, states } = await runBoot(c.d);
+    expect(result).toMatchObject({ ok: true, core: { version: "0.3.8" } });
+    expect(c.askUpdate).toHaveBeenCalledWith("0.3.7");
+    expect(lookupRelease).toHaveBeenCalledWith(false);
+    expect(c.runUpdate).toHaveBeenCalledWith(
+      "C:\\bin\\EvoSci.exe",
+      "0.3.8",
+      [
+        { id: "node", title: "Node.js", state: "pending" },
+        {
+          id: "research-env",
+          title: "Python research environment",
+          state: "pending",
+        },
+      ],
+      expect.any(Function)
+    );
+    // The update ran setup: recorded, and only the node stage runs after it.
+    expect(c.recordSetup).toHaveBeenCalledWith("0.3.8");
+    expect(c.runSetup).not.toHaveBeenCalled();
+    expect(c.runInstall).not.toHaveBeenCalled();
+    expect(states).toEqual([
+      "checking_core",
+      "asking_update",
+      "looking_up_release",
+      "updating",
+      "updating",
+      "checking_core",
+      "preparing_node",
+      "starting_backend",
+      "ready",
+    ]);
+  });
+
+  it("asks again when the user keeps the app's backend running", async () => {
+    const answers = [false, true];
+    const stopOwnBackend = vi.fn(async () => answers.shift()!);
+    const c = oldCore("0.3.7", { stopOwnBackend });
+    const { result } = await runBoot(c.d);
+    expect(result.ok).toBe(true);
+    expect(c.askUpdate).toHaveBeenCalledTimes(2);
+    expect(stopOwnBackend).toHaveBeenCalledTimes(2);
+  });
+
+  it("looks up on the Tsinghua mirror with mirror: cn in config.yaml only", async () => {
+    const lookupRelease = vi.fn(async () => ({
+      ok: true as const,
+      version: "0.3.8",
+      url: INDEX,
+    }));
+    await runBoot(
+      oldCore("0.3.7", {
+        lookupRelease,
+        startConfig: () => ({ defaultWorkdir: null, port: 6174, mirror: "cn" }),
+      }).d
+    );
+    // The kept answer does not reach `EvoSci update`.
+    await runBoot(
+      oldCore("0.3.7", { lookupRelease, keptMirror: () => true }).d
+    );
+    expect(lookupRelease.mock.calls).toEqual([[true], [false]]);
+  });
+
+  it("is release_lookup_failed when the lookup fails, and runs nothing", async () => {
+    const c = oldCore("0.3.7", {
+      lookupRelease: async () => ({
+        ok: false,
+        reason: "net::ERR_INTERNET_DISCONNECTED",
+        url: INDEX,
+      }),
+    });
+    const { result } = await runBoot(c.d);
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "release_lookup_failed",
+        detail: {
+          url: INDEX,
+          reason: "net::ERR_INTERNET_DISCONNECTED",
+          cn: false,
+        },
+      },
+    });
+    expect(c.runUpdate).not.toHaveBeenCalled();
+  });
+
+  it("waits for an update that took its lock after the lookup, then checks again", async () => {
+    const locks = [false, true, true, false];
+    const c = oldCore("0.3.7");
+    const runUpdate = vi.fn(c.runUpdate);
+    const { result, states } = await runBoot({
+      ...c.d,
+      runUpdate,
+      updateLockHeld: () => locks.shift() ?? false,
+    });
+    expect(states).toContain("update_finishing");
+    // The second pass offered the update again and ran it once.
+    expect(runUpdate).toHaveBeenCalledTimes(1);
+    expect(result.ok).toBe(true);
+  });
+
+  it.each([
+    [
+      "no terminal line",
+      { kind: "no_terminal_line", exit: { code: 0, signal: null } },
+      "update_failed",
+    ],
+    [
+      "environment_busy",
+      {
+        kind: "error",
+        code: "environment_busy",
+        message: "Update cancelled",
+        detail: { waiting_for: [] },
+      },
+      "environment_busy",
+    ],
+    [
+      "download_failed",
+      { kind: "error", code: "download_failed", message: "m", detail: {} },
+      "download_failed",
+    ],
+  ] as const)("%s ends in %s, nothing recorded", async (_n, outcome, code) => {
+    const c = oldCore("0.3.7", {
+      runUpdate: () => updateRun(outcome as UpdateOutcome),
+    });
+    const { result } = await runBoot(c.d);
+    expect(result).toMatchObject({ ok: false, error: { code } });
+    if (code !== "update_failed")
+      expect(!result.ok && result.error.detail.update).toBe(true);
+    expect(c.recordSetup).not.toHaveBeenCalled();
+  });
+
+  it("server_running: the app's own text, the port and the core's message", async () => {
+    const c = oldCore("0.3.7", {
+      runUpdate: () =>
+        updateRun({
+          kind: "error",
+          code: "server_running",
+          message: "kill $(lsof -ti :6174)",
+          detail: {},
+        }),
+    });
+    const { result } = await runBoot(c.d);
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: "server_running",
+        message: "A backend started in a terminal is running.",
+        detail: { port: 6174, core_message: "kill $(lsof -ti :6174)" },
+      },
+    });
+  });
+
+  it("setup_failed: the failed stages from the update, not recorded", async () => {
+    const stages: Stage[] = [
+      { id: "node", title: "Node.js", state: "done" },
+      {
+        id: "research-env",
+        title: "Python research environment",
+        state: "error",
+        code: "install_failed",
+        message: "no wheel",
+      },
+    ];
+    const c = oldCore("0.3.7", {
+      runUpdate: () =>
+        updateRun(
+          {
+            kind: "error",
+            code: "setup_failed",
+            message: "m",
+            detail: {},
+          },
+          { update: {}, stages, waiting: null }
+        ),
+    });
+    const { result } = await runBoot(c.d);
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "setup_failed",
+        message: "One setup step failed after the update.",
+        detail: {
+          update: true,
+          cn: false,
+          failed: [
+            {
+              id: "research-env",
+              title: "Python research environment",
+              code: "install_failed",
+              message: "no wheel",
+            },
+          ],
+        },
+      },
+    });
+    expect(c.recordSetup).not.toHaveBeenCalled();
+  });
+
+  it("after done, a core that does not run is update_failed; one that hangs is version_check_timeout", async () => {
+    const broken = oldCore("0.3.7");
+    let updated = false;
+    const runCollect = async (_f: string, args: string[]) =>
+      args[0] === "--version"
+        ? updated
+          ? ok([], 1)
+          : ok([versionLine("0.3.7")])
+        : ok([UPDATE_MANIFEST]);
+    const { result } = await runBoot({
+      ...broken.d,
+      runCollect,
+      runUpdate: () => {
+        updated = true;
+        return updateRun({ kind: "done", version: "0.3.8" });
+      },
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "update_failed" },
+    });
+
+    updated = false;
+    const hangs = oldCore("0.3.7");
+    const { result: r2 } = await runBoot({
+      ...hangs.d,
+      runCollect: async (f, args) =>
+        updated && args[0] === "--version"
+          ? { timedOut: true, code: null, stdout: [] }
+          : runCollect(f, args),
+      runUpdate: () => {
+        updated = true;
+        return updateRun({ kind: "done", version: "0.3.8" });
+      },
+    });
+    expect(r2).toMatchObject({
+      ok: false,
+      error: { code: "version_check_timeout" },
+    });
+    expect(broken.recordSetup).not.toHaveBeenCalled();
+  });
+
+  it("records nothing when the updated core is still outside the range", async () => {
+    // `done` while the core stays at 0.3.7: the version check after the
+    // update is the guard, and the error is the plain range error.
+    const c = oldCore("0.3.7", {
+      runUpdate: () => updateRun({ kind: "done", version: "0.3.7" }),
+    });
+    const { result } = await runBoot(c.d);
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "core_too_old" },
+    });
+    expect(c.recordSetup).not.toHaveBeenCalled();
+    expect(c.askUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it("manual_update with a uv tool install, or when uv does not answer: the core's message only", async () => {
+    for (const env of [true, null]) {
+      const askSeparateInstall = vi.fn(async () => {});
+      const c = oldCore("0.3.7", {
+        uvToolEnvExists: async () => env,
+        askSeparateInstall,
+        runUpdate: () =>
+          updateRun({
+            kind: "error",
+            code: "manual_update",
+            message: "installed from a checkout",
+            detail: {},
+          }),
+      });
+      const { result } = await runBoot(c.d);
+      expect(result).toMatchObject({
+        ok: false,
+        error: { code: "manual_update", message: "installed from a checkout" },
+      });
+      expect(askSeparateInstall).not.toHaveBeenCalled();
+      expect(c.runInstall).not.toHaveBeenCalled();
+    }
+  });
+
+  it("manual_update without a uv tool install: separate copy with config.yaml backup, setup, then the notice", async () => {
+    const askSeparateInstall = vi.fn(async () => {});
+    const backupConfig = vi.fn(() => "/c/config.yaml.bak-x");
+    const askMirror = vi.fn(async () => true);
+    const c = oldCore("0.3.7", {
+      uvToolEnvExists: async () => false,
+      askSeparateInstall,
+      backupConfig,
+      askMirror,
+      runUpdate: () =>
+        updateRun({
+          kind: "error",
+          code: "manual_update",
+          message: "pip or conda",
+          detail: {},
+        }),
+    });
+    const states: BootState[] = [];
+    const result = await boot(c.d, (s) => states.push(s));
+    expect(askSeparateInstall).toHaveBeenCalledWith("pip or conda", "0.3.7");
+    expect(backupConfig).toHaveBeenCalled();
+    expect(askMirror).not.toHaveBeenCalled();
+    expect(states).toContainEqual({
+      phase: "installing",
+      repair: true,
+      update: true,
+      lines: [],
+    });
+    // A new version: W03b's setup runs.
+    expect(c.runSetup).toHaveBeenCalled();
+    expect(result).toMatchObject({
+      ok: true,
+      core: { version: "0.3.8" },
+      notice: expect.stringContaining("is still 0.3.7"),
+    });
+  });
+
+  it("0.3.6: a terminal backend on the port stops it before anything runs", async () => {
+    const backendAnswers = vi.fn(async () => true);
+    const c = oldCore("0.3.6", {
+      backendAnswers,
+      startConfig: () => ({ defaultWorkdir: null, port: 6200, mirror: null }),
+    });
+    const { result } = await runBoot(c.d);
+    expect(backendAnswers).toHaveBeenCalledWith(6200);
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "server_running", detail: { port: 6200 } },
+    });
+    expect(c.runInstall).not.toHaveBeenCalled();
+    expect(c.runUpdate).not.toHaveBeenCalled();
+  });
+
+  it("0.3.6: the bundled script as an update (backup, no question, no lookup), then setup", async () => {
+    const lookupRelease = vi.fn();
+    const backupConfig = vi.fn(() => null);
+    const c = oldCore("0.3.6", { lookupRelease, backupConfig });
+    const { result } = await runBoot(c.d);
+    expect(result).toMatchObject({ ok: true, core: { version: "0.3.8" } });
+    expect(c.runInstall).toHaveBeenCalled();
+    expect(backupConfig).toHaveBeenCalled();
+    expect(lookupRelease).not.toHaveBeenCalled();
+    expect(c.runUpdate).not.toHaveBeenCalled();
+    expect(c.runSetup).toHaveBeenCalled();
+    expect(!result.ok || result.notice).toBeUndefined();
+  });
+
+  it("a failed script for 0.3.6 says the update failed", async () => {
+    const c = oldCore("0.3.6", {
+      runInstall: () => installRun(1, ["Error: no network"]),
+    });
+    const { result } = await runBoot(c.d);
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "install_failed",
+        message: "EvoScientist could not be updated.",
+        detail: { repair: true, update: true },
+      },
+    });
+  });
+
+  it("offers no update for a version that is not a release", async () => {
+    const c = oldCore("0.3.8rc1");
+    const { result } = await runBoot(c.d);
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "core_too_old", detail: { not_a_release: true } },
+    });
+    expect(c.askUpdate).not.toHaveBeenCalled();
+  });
+
+  it("runs the update with no stage rows when the manifest gives none, and not at all after a quit during the lookup", async () => {
+    const c = oldCore("0.3.7");
+    const { result } = await runBoot({
+      ...c.d,
+      runCollect: async (f, args) =>
+        args[1] === "--manifest"
+          ? ok(["not json"], 2)
+          : c.d.runCollect(f, args, "", 0),
+    });
+    expect(result.ok).toBe(true);
+    expect(c.runUpdate.mock.calls[0][2]).toEqual([]);
+
+    let quitting = false;
+    const q = oldCore("0.3.7", {
+      lookupRelease: async () => {
+        quitting = true;
+        return { ok: true, version: "0.3.8", url: INDEX };
+      },
+      stopping: () => quitting,
+    });
+    expect((await runBoot(q.d)).result).toMatchObject({
+      ok: false,
+      error: { code: "quitting" },
+    });
+    expect(q.runUpdate).not.toHaveBeenCalled();
+  });
+
+  it("starts nothing once a quit began, before or after the update", async () => {
+    let quitting = false;
+    const early = oldCore("0.3.7", {
+      askUpdate: async () => void (quitting = true),
+      stopping: () => quitting,
+    });
+    expect((await runBoot(early.d)).result).toMatchObject({
+      ok: false,
+      error: { code: "quitting" },
+    });
+    expect(early.runUpdate).not.toHaveBeenCalled();
+
+    let done = false;
+    const late = oldCore("0.3.7", { stopping: () => done });
+    const { result } = await runBoot({
+      ...late.d,
+      runUpdate: () => {
+        done = true;
+        return updateRun({ kind: "done", version: "0.3.8" });
+      },
+    });
+    expect(result).toMatchObject({ ok: false, error: { code: "quitting" } });
+    expect(late.recordSetup).not.toHaveBeenCalled();
   });
 });

@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { findUv, locateEvoSci } from "./locate";
+import { findUv, locateEvoSci, uvToolEnvExists } from "./locate";
 
 describe("locateEvoSci", () => {
   let root: string;
@@ -91,5 +91,57 @@ describe("findUv", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("uvToolEnvExists", () => {
+  let root: string;
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "evosci-toolenv-"));
+  });
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  const withUv = () => {
+    mkdirSync(join(root, "bin"), { recursive: true });
+    writeFileSync(join(root, "bin", "uv"), "");
+    return { PATH: join(root, "bin") };
+  };
+
+  it("is false without uv, and never asks it", async () => {
+    const toolDir = vi.fn(async () => root);
+    expect(
+      await uvToolEnvExists({
+        dataDir: join(root, "data"),
+        env: { PATH: join(root, "nothing") },
+        platform: "linux",
+        toolDir,
+      })
+    ).toBe(false);
+    expect(toolDir).not.toHaveBeenCalled();
+  });
+
+  it("looks for <uv tool dir>/evoscientist", async () => {
+    const env = withUv();
+    const tools = join(root, "uv tools ąę");
+    const opts = {
+      dataDir: join(root, "data"),
+      env,
+      platform: "linux" as const,
+      toolDir: async () => tools,
+    };
+    expect(await uvToolEnvExists(opts)).toBe(false);
+    mkdirSync(join(tools, "evoscientist"), { recursive: true });
+    expect(await uvToolEnvExists(opts)).toBe(true);
+  });
+
+  it("is null when uv does not answer", async () => {
+    expect(
+      await uvToolEnvExists({
+        dataDir: join(root, "data"),
+        env: withUv(),
+        platform: "linux",
+        toolDir: async () => null,
+      })
+    ).toBeNull();
   });
 });
