@@ -137,6 +137,7 @@ export function progressScreen(
       "An update of EvoScientist is finishing",
       "The app waits until it is done, then goes on.",
     ],
+    setting_up: ["Setting up EvoScientist", "Preparing the setup steps..."],
   };
   const [title, message] = text[s] ?? ["Starting EvoScientist", ""];
   if (typeof state !== "string" && state.phase === "starting_backend")

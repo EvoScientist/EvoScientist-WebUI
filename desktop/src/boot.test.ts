@@ -458,6 +458,64 @@ describe("first launch and repair", () => {
     expect(states.filter((s) => s === "update_finishing")).toHaveLength(2);
     expect(pause).toHaveBeenCalledWith(3000);
     expect(runInstall).toHaveBeenCalledTimes(1);
+    expect(states.indexOf("installing")).toBeGreaterThan(
+      states.lastIndexOf("update_finishing")
+    );
+  });
+
+  it("waits for the update lock before checking the core, so a core the update just finished is not reinstalled", async () => {
+    let held = 2;
+    const backupConfig = vi.fn(() => null);
+    const runInstall = vi.fn(() => installRun(0, []));
+    const { result, states } = await runBoot(
+      deps({
+        updateLockHeld: () => held-- > 0,
+        runCollect: async (_f, args) =>
+          args[0] === "--version"
+            ? held > 0
+              ? ok(["Traceback ..."], 1)
+              : ok([versionLine()])
+            : ok(['{"protocol":1,"stage":"node","status":"done"}']),
+        backupConfig,
+        runInstall,
+      })
+    );
+    expect(result.ok).toBe(true);
+    expect(backupConfig).not.toHaveBeenCalled();
+    expect(runInstall).not.toHaveBeenCalled();
+    expect(states.slice(0, 3)).toEqual([
+      "update_finishing",
+      "update_finishing",
+      "checking_core",
+    ]);
+  });
+
+  it("an update that takes its lock before the script runs: waits, looks again, and installs nothing over it", async () => {
+    let kept: boolean | null = null;
+    let coreThere = false;
+    const lock = [false, true, true, false];
+    const askMirror = vi.fn(async () => false);
+    const runInstall = vi.fn(() => installRun(0, []));
+    const { result, states } = await runBoot(
+      deps({
+        locate: async () => (coreThere ? "C:\\bin\\EvoSci.exe" : null),
+        keptMirror: () => kept,
+        keepMirror: (cn) => void (kept = cn),
+        askMirror,
+        updateLockHeld: () => lock.shift() ?? false,
+        pause: async () => void (coreThere = true),
+        runInstall,
+      })
+    );
+    expect(result.ok).toBe(true);
+    expect(runInstall).not.toHaveBeenCalled();
+    expect(askMirror).toHaveBeenCalledTimes(1);
+    expect(states.slice(0, 4)).toEqual([
+      "checking_core",
+      "asking_mirror",
+      "update_finishing",
+      "checking_core",
+    ]);
   });
 
   it("starts nothing new once a quit has begun", async () => {
@@ -537,13 +595,19 @@ describe("first launch and repair", () => {
     expect(recordSetup).not.toHaveBeenCalled();
   });
 
-  it("Continue skips setup this time and runs the node stage", async () => {
+  it("Continue skips setup and runs the node stage, but a fresh install still sets up", async () => {
     const runSetupFn = vi.fn(() => setupRun(0, []));
-    const { d, calls } = freshMachine({ runSetup: runSetupFn });
+    const { d, calls } = freshMachine({
+      locate: async () => "C:\\bin\\EvoSci.exe",
+      runSetup: runSetupFn,
+    });
     const result = await boot(d, () => {}, { skipSetup: true });
     expect(result.ok).toBe(true);
     expect(runSetupFn).not.toHaveBeenCalled();
     expect(calls).toContainEqual(["setup", "--stage", "node", "--json"]);
+    const fresh = freshMachine({ runSetup: runSetupFn });
+    await boot(fresh.d, () => {}, { skipSetup: true });
+    expect(runSetupFn).toHaveBeenCalledTimes(1);
   });
 
   it("Retry with mirrors uses them for the install script and setup", async () => {
@@ -588,6 +652,77 @@ describe("first launch and repair", () => {
     expect(result.ok).toBe(true);
     expect(runSetupFn).not.toHaveBeenCalled();
     expect(states).toContain("preparing_node");
+  });
+
+  it("a fresh install forgets an old setup record, so a setup stopped or failed after it runs again", async () => {
+    let record: string | null = "0.3.8";
+    let manifests = 0;
+    let quitting = false;
+    let setupExit = 1;
+    const runSetupFn = vi.fn(() => setupRun(setupExit, []));
+    const { d } = freshMachine({
+      setupRecord: () => record,
+      recordSetup: (v) => void (record = v),
+      runSetup: runSetupFn,
+      stopping: () => quitting,
+      runCollect: async (_f, args) => {
+        if (args[0] === "--version") return ok([versionLine()]);
+        if (args[1] === "--manifest") {
+          quitting = ++manifests === 1;
+          return ok([MANIFEST]);
+        }
+        return ok([]);
+      },
+    });
+    expect((await runBoot(d)).result).toMatchObject({
+      ok: false,
+      error: { code: "quitting" },
+    });
+    expect(record).toBeNull();
+    expect((await runBoot(d)).result).toMatchObject({
+      ok: false,
+      error: { code: "setup_failed" },
+    });
+    setupExit = 0;
+    expect((await runBoot(d)).result.ok).toBe(true);
+    expect(runSetupFn).toHaveBeenCalledTimes(2);
+    expect(record).toBe("0.3.8");
+  });
+
+  it("a repair takes mirrors from config.yaml first, then the kept answer, and never asks", async () => {
+    const cases = [
+      { mirror: null, kept: true, cn: true },
+      { mirror: "default", kept: true, cn: false },
+      { mirror: "cn", kept: false, cn: true },
+    ];
+    for (const c of cases) {
+      let repaired = false;
+      const askMirror = vi.fn(async () => !c.cn);
+      const runInstall = vi.fn((_cn: boolean, _onLine: (l: string) => void) => {
+        repaired = true;
+        return installRun(0, []);
+      });
+      await runBoot(
+        deps({
+          askMirror,
+          keptMirror: () => c.kept,
+          startConfig: () => ({
+            defaultWorkdir: null,
+            port: 6174,
+            mirror: c.mirror,
+          }),
+          runCollect: async (_f, args) =>
+            args[0] === "--version"
+              ? repaired
+                ? ok([versionLine()])
+                : ok([], 1)
+              : ok([]),
+          runInstall,
+        })
+      );
+      expect(runInstall).toHaveBeenCalledWith(c.cn, expect.any(Function));
+      expect(askMirror).not.toHaveBeenCalled();
+    }
   });
 
   it("runs setup when the core version changed since the last one", async () => {

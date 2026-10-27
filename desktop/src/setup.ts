@@ -148,10 +148,11 @@ export function readSetupRecord(file: string, dataDir: string): string | null {
   }
 }
 
-/** Records a setup that exited 0 for this core version and data folder. */
+/** Records a setup that exited 0 for this core version and data folder;
+ *  null before a fresh install. */
 export function writeSetupRecord(
   file: string,
-  coreVersion: string,
+  coreVersion: string | null,
   dataDir: string
 ): void {
   writeFileSync(

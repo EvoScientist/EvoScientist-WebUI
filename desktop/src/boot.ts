@@ -139,7 +139,8 @@ export interface BootDeps {
   ): SetupRun;
   /** The core version whose setup last exited 0. */
   setupRecord(): string | null;
-  recordSetup(coreVersion: string): void;
+  /** Records a setup that exited 0; null forgets the record. */
+  recordSetup(coreVersion: string | null): void;
 }
 
 /** One launch's choices from the error screen. */
@@ -149,8 +150,9 @@ export interface BootOptions {
    *  The choice is remembered: the app keeps it as the mirror answer, and
    *  `EvoSci setup --cn` saves `mirror: cn` to config.yaml. */
   cn?: boolean;
-  /** "Continue" after a failed setup: start without it this time; the core
-   *  version stays not set up, so the next launch runs setup again. */
+  /** "Continue" after a failed setup: start without it for the rest of this
+   *  session, unless the core is installed again; the core version stays
+   *  not set up, so the next launch runs setup again. */
   skipSetup?: boolean;
 }
 
@@ -297,17 +299,17 @@ const QUITTING: BootError = {
 
 /**
  * Installs the core (none found) or repairs it (found, but it does not run)
- * with the bundled install script, after the mirror question (a fresh install
- * only), the arm64 check and the wait for an update that is still finishing.
- * A repair copies config.yaml first. The mirror choice it installed with
- * and the script's lines when it exited 0, else the error.
+ * with the bundled install script, after the arm64 check and the mirror
+ * question (a fresh install only). A repair copies config.yaml first. The
+ * mirror choice it installed with and the script's lines when it exited 0,
+ * "update" when an update took its lock meanwhile, else the error.
  */
 async function installCore(
   deps: BootDeps,
   onState: (s: BootState) => void,
   repair: boolean,
   options: BootOptions
-): Promise<{ cn: boolean; lines: string[] } | BootError> {
+): Promise<{ cn: boolean; lines: string[] } | BootError | "update"> {
   // Before the question: on Windows on Arm the answer would change nothing.
   if (deps.platform === "win32" && (await deps.windowsArm64()))
     return {
@@ -329,11 +331,10 @@ async function installCore(
     }
   }
   if (deps.stopping()) return QUITTING;
-  while (deps.updateLockHeld()) {
-    onState({ phase: "update_finishing" });
-    await deps.pause(UPDATE_LOCK_POLL_MS);
-    if (deps.stopping()) return QUITTING;
-  }
+  if (deps.updateLockHeld()) return "update";
+  // An older record for this version would make a setup that fails or is
+  // stopped after this install count as done; a repair keeps it.
+  if (!repair && deps.setupRecord() !== null) deps.recordSetup(null);
   if (repair) {
     try {
       const copy = deps.backupConfig();
@@ -377,6 +378,23 @@ async function installCore(
       running: refusedAsRunning(output),
     },
   };
+}
+
+/** Waits while `EvoSci update` holds `tools/update.lock`: its helper replaces
+ *  the environment meanwhile, so the core looks missing or broken. False
+ *  when a quit began. */
+async function waitForUpdate(
+  deps: BootDeps,
+  onState: (s: BootState) => void
+): Promise<boolean> {
+  if (!deps.updateLockHeld()) return true;
+  deps.log.info("update_in_progress: an update holds tools/update.lock");
+  do {
+    onState({ phase: "update_finishing" });
+    await deps.pause(UPDATE_LOCK_POLL_MS);
+    if (deps.stopping()) return false;
+  } while (deps.updateLockHeld());
+  return true;
 }
 
 /** `EvoSci setup --json --skip webui` with its stage list; null after exit 0,
@@ -457,6 +475,7 @@ export async function boot(
     return { ok: false, error };
   };
 
+  if (!(await waitForUpdate(deps, onState))) return fail(QUITTING);
   onState({ phase: "checking_core" });
   let evosci = await deps.locate();
   let check: VersionCheck | null = null;
@@ -475,6 +494,9 @@ export async function boot(
   if (!evosci || check?.kind !== "ok") {
     const repair = Boolean(evosci);
     const installed = await installCore(deps, onState, repair, options);
+    // An update took its lock: wait for it and check the core again; the
+    // mirror answer is kept, so nothing is asked twice.
+    if (installed === "update") return boot(deps, onState, options);
     if ("code" in installed) return fail(installed);
     installedCn = installed.cn;
     freshInstall = !repair;
@@ -509,14 +531,14 @@ export async function boot(
   const incompatible = checkCore(info, deps.manifest, deps.platform);
   if (incompatible) return fail(incompatible);
 
-  // Setup after a fresh install (whatever the record says: the core's data
-  // folder may be new), on the first launch and after the core version
-  // changed; it covers the node stage. "Continue" after a failed setup skips
-  // it this time.
+  // Setup after a fresh install (the script ran with -NoSetup, and the
+  // core's data folder may be new), on the first launch and after the core
+  // version changed; it covers the node stage. "Continue" after a failed
+  // setup skips it for the rest of the session, except after a fresh install.
   let setUpNow = false;
   if (
-    !options.skipSetup &&
-    (freshInstall || setupNeeded(deps.setupRecord(), info.version))
+    freshInstall ||
+    (!options.skipSetup && setupNeeded(deps.setupRecord(), info.version))
   ) {
     const error = await setUp(
       deps,

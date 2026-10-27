@@ -906,6 +906,68 @@ describe("first launch", () => {
     expect(f.win.calls.at(-1)).toBe("load http://127.0.0.1:4718/");
     expect(f.deps.writeSetupRecord).not.toHaveBeenCalled();
   });
+
+  it("Continue holds for the session: Restart backend does not run the failed setup again", async () => {
+    const stages: Stage[] = [
+      { id: "node", title: "Node.js", state: "error", code: "download_failed" },
+    ];
+    const runSetup = vi.fn(() => setupRun(1, stages));
+    const f = freshMachine({ runSetup });
+    f.state.installed = true;
+    await f.app.launch();
+    await f.app.act("continue", undefined);
+    await f.app.restartBackend();
+    expect(runSetup).toHaveBeenCalledTimes(1);
+    expect(f.sessions).toHaveLength(2);
+    expect(f.win.calls.at(-1)).toBe("load http://127.0.0.1:4718/");
+  });
+
+  it("a setup that ends during the close question: Cancel brings up the UI, with no error", async () => {
+    const p = pendingRun({
+      exit: { code: 0, signal: null },
+      stages: [] as Stage[],
+    });
+    const f = freshMachine({ keptMirror: () => false, runSetup: () => p.run });
+    f.state.installed = true;
+    const launch = f.app.launch();
+    await vi.waitFor(() => expect(f.app.screen.kind).toBe("setup"));
+    f.messageBox.mockImplementationOnce(async () => {
+      p.finish();
+      await launch;
+      return { response: 1 };
+    });
+    await f.app.requestQuit();
+    await vi.waitFor(() =>
+      expect(f.win.calls.at(-1)).toBe("load http://127.0.0.1:4718/")
+    );
+    expect(f.app.screen.kind).not.toBe("error");
+    expect(f.deps.writeCrashReport).not.toHaveBeenCalled();
+  });
+
+  it("shows a progress screen while setup --manifest runs", async () => {
+    const manifest = deferred<Collected>();
+    const f = freshMachine({
+      runCollect: async (_f, args) =>
+        args[0] === "--version"
+          ? ok([VERSION_LINE])
+          : args[1] === "--manifest"
+          ? manifest.promise
+          : ok([]),
+    });
+    f.state.installed = true;
+    const launch = f.app.launch();
+    await vi.waitFor(() =>
+      expect(f.app.screen).toMatchObject({
+        kind: "progress",
+        title: "Setting up EvoScientist",
+        message: "Preparing the setup steps...",
+      })
+    );
+    manifest.resolve(
+      ok(['{"protocol":1,"stages":[{"id":"node","title":"Node.js"}]}'])
+    );
+    await launch;
+  });
 });
 
 describe("native error", () => {

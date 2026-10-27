@@ -171,7 +171,7 @@ export interface AppDeps {
     onUpdate: (stages: Stage[]) => void
   ): SetupRun;
   readSetupRecord(): string | null;
-  writeSetupRecord(coreVersion: string): void;
+  writeSetupRecord(coreVersion: string | null): void;
   pause?(ms: number): Promise<void>;
 
   sessionEnd?: SessionEnd;
@@ -245,13 +245,13 @@ export function createApp(deps: AppDeps): App {
     null;
   /** Answers the mirror question on the screen. */
   let answerMirror: ((cn: boolean) => void) | null = null;
-  /** The next launch's choices from the error screen (Retry with mirrors,
-   *  Continue). */
-  let nextBoot: BootOptions = {};
   /** "Retry with mainland China mirrors" holds for the rest of this session:
    *  a later plain Retry uses them too, also over `mirror: default` in
    *  config.yaml, which only a setup with `--cn` changes. */
   let preferCn = false;
+  /** "Continue" after a failed setup holds for the rest of this session too
+   *  (Restart backend, Retry), except after a fresh install. */
+  let skipSetup = false;
   let pendingScreen: Screen | null = null;
   let pendingTimer: ReturnType<typeof setTimeout> | null = null;
   let lastSent = 0;
@@ -312,7 +312,10 @@ export function createApp(deps: AppDeps): App {
       case "installing":
         return showSoon(installScreen(state));
       case "setting_up":
-        return showSoon(setupScreen(state.stages));
+        // Before `setup --manifest` answers there is no stage list yet.
+        return state.stages.length > 0
+          ? showSoon(setupScreen(state.stages))
+          : showScreen(progressScreen(state));
       default:
         return showScreen(progressScreen(state));
     }
@@ -411,10 +414,7 @@ export function createApp(deps: AppDeps): App {
       await stopDeploy(old);
     }
     if (quitState !== "none") return;
-    const options: BootOptions = preferCn
-      ? { ...nextBoot, cn: true }
-      : nextBoot;
-    nextBoot = {};
+    const options: BootOptions = { cn: preferCn, skipSetup };
     try {
       deps.ensureDir(folders.dataDir);
     } catch (e) {
@@ -580,6 +580,10 @@ export function createApp(deps: AppDeps): App {
       await stopUi();
       // A backend lost meanwhile has shown its own error.
       if (ready !== r) return;
+      // Refused because a quit is being decided (a step ended during the
+      // close question): Cancel starts the UI again, Quit stops everything.
+      if (quitState !== "none")
+        return log.info(`UI start during the quit question, not shown: ${e}`);
       return showError({
         code: "ui_server_exited",
         message: `The WebUI server did not start: ${
@@ -942,10 +946,9 @@ export function createApp(deps: AppDeps): App {
         // Remembered: kept as the mirror answer, and setup saves `mirror: cn`.
         deps.keepMirror(true);
         preferCn = true;
-        nextBoot = { cn: true };
         return launch();
       case "continue":
-        nextBoot = { skipSetup: true };
+        skipSetup = true;
         return launch();
     }
   }
