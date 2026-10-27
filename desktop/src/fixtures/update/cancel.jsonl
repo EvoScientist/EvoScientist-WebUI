@@ -1,0 +1,4 @@
+{"protocol": 1, "stage": "update", "status": "running", "progress": 0.0, "message": "Checking for releases"}
+{"protocol": 1, "stage": "update", "status": "running", "progress": 0.1, "message": "Downloading the constraints of EvoScientist 0.3.8"}
+{"protocol": 1, "stage": "update", "status": "running", "progress": 0.25, "message": "Update pending until you close: python (995313)", "detail": {"waiting_for": [{"pid": 995313, "name": "python", "path": "/home/user/box \u0105\u0119/home/.local/share/uv/tools/evoscientist/bin/python"}], "cancel_file": "/tmp/evosci-update-20v4wo39/cancel"}}
+{"protocol": 1, "stage": "update", "status": "error", "message": "Update cancelled while these still ran from EvoScientist: python (995313). Nothing was changed. Close them and run EvoSci update again.", "detail": {"waiting_for": [{"pid": 995313, "name": "python", "path": "/home/user/box \u0105\u0119/home/.local/share/uv/tools/evoscientist/bin/python"}]}, "code": "environment_busy"}
