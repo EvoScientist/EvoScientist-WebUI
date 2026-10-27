@@ -248,6 +248,10 @@ export function createApp(deps: AppDeps): App {
   /** The next launch's choices from the error screen (Retry with mirrors,
    *  Continue). */
   let nextBoot: BootOptions = {};
+  /** "Retry with mainland China mirrors" holds for the rest of this session:
+   *  a later plain Retry uses them too, also over `mirror: default` in
+   *  config.yaml, which only a setup with `--cn` changes. */
+  let preferCn = false;
   let pendingScreen: Screen | null = null;
   let pendingTimer: ReturnType<typeof setTimeout> | null = null;
   let lastSent = 0;
@@ -407,7 +411,9 @@ export function createApp(deps: AppDeps): App {
       await stopDeploy(old);
     }
     if (quitState !== "none") return;
-    const options = nextBoot;
+    const options: BootOptions = preferCn
+      ? { ...nextBoot, cn: true }
+      : nextBoot;
     nextBoot = {};
     try {
       deps.ensureDir(folders.dataDir);
@@ -935,6 +941,7 @@ export function createApp(deps: AppDeps): App {
       case "retry_cn":
         // Remembered: kept as the mirror answer, and setup saves `mirror: cn`.
         deps.keepMirror(true);
+        preferCn = true;
         nextBoot = { cn: true };
         return launch();
       case "continue":

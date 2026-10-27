@@ -872,6 +872,24 @@ describe("first launch", () => {
     expect(runInstall.mock.calls.map((c) => c[0])).toEqual([false, true, true]);
   });
 
+  it("a plain Retry after Retry with mirrors still uses them over mirror: default in config.yaml", async () => {
+    const runInstall = vi.fn((_cn: boolean, _onLine: (l: string) => void) =>
+      installRun(1, ["Error: x"])
+    );
+    const f = freshMachine({
+      readStartConfig: () => ({
+        defaultWorkdir: null,
+        port: 6174,
+        mirror: "default",
+      }),
+      runInstall,
+    });
+    await f.app.launch();
+    await f.app.act("retry_cn", undefined);
+    await f.app.act("retry", undefined);
+    expect(runInstall.mock.calls.map((c) => c[0])).toEqual([false, true, true]);
+  });
+
   it("Continue after a failed setup starts without it, and records nothing", async () => {
     const stages: Stage[] = [
       { id: "node", title: "Node.js", state: "error", code: "download_failed" },

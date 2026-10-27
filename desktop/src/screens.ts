@@ -80,7 +80,7 @@ export type Screen =
 
 /** Shown next to "Retry with mainland China mirrors": the choice stays. */
 const MIRROR_RETRY_LINE =
-  "Retry with mainland China mirrors also keeps the mirrors for later downloads; the settings page can change it.";
+  "Retry with mainland China mirrors keeps using them while the app runs, and setup saves them for later launches; the settings page can change it.";
 
 /** The first-launch question, before the install script runs (D15). */
 export function mirrorQuestion(): QuestionScreen {

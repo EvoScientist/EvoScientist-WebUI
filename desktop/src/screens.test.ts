@@ -46,8 +46,8 @@ describe("errorScreen", () => {
     expect(on.title).toBe("EvoScientist could not be repaired");
     expect(on.actions).toEqual(["retry", "open_logs"]);
     // The mirror retry says that the choice stays, and only where offered.
-    expect(off.lines.join(" ")).toMatch(/keeps the mirrors for later/);
-    expect(on.lines.join(" ")).not.toMatch(/keeps the mirrors/);
+    expect(off.lines.join(" ")).toMatch(/keeps using them while the app runs/);
+    expect(on.lines.join(" ")).not.toMatch(/keeps using them/);
   });
 
   it("says to close the running programs when the script refused", () => {
@@ -89,7 +89,7 @@ describe("errorScreen", () => {
     ]);
     expect(s.actions).toEqual(["retry", "retry_cn", "continue", "open_logs"]);
     expect(s.lines.join(" ")).toMatch(/only the Node step runs/);
-    expect(s.lines.join(" ")).toMatch(/keeps the mirrors for later/);
+    expect(s.lines.join(" ")).toMatch(/keeps using them while the app runs/);
   });
 
   it("has nothing to retry on an unsupported platform", () => {
