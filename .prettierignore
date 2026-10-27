@@ -44,3 +44,4 @@ package-lock.json
 desktop/node_modules
 desktop/dist
 desktop/release
+desktop/core-scripts

@@ -1,0 +1,991 @@
+// The desktop app's controller: the state and the flows of the main process
+// (launch with install, repair and setup, the UI server, restart backend,
+// quit, the end of the session, the status page's actions), with Electron and the processes behind injected
+// dependencies so they can be tested without either. main.ts builds the
+// dependencies and wires Electron's events to the methods here.
+import type { MessageBoxOptions } from "electron";
+import { dirname, join } from "node:path";
+import {
+  boot,
+  type BootError,
+  type BootOptions,
+  type BootState,
+  type Manifest,
+} from "./boot";
+import {
+  confirmation,
+  type MemoryWaitResult,
+  type StopPurpose,
+  type WorkCheck,
+} from "./closeCheck";
+import { FATAL_CODES, type CrashInfo } from "./crash";
+import type { DeploySession } from "./deploy";
+import type { InstallRun } from "./install";
+import type { UiRecord } from "./leftover";
+import type { DeployReady, VersionInfo } from "./lines";
+import type { Located } from "./locate";
+import {
+  DEFAULT_BACKEND_PORT,
+  withReadyFolders,
+  type Env,
+  type Folders,
+  type StartConfig,
+} from "./paths";
+import type { Collected, Logger } from "./proc";
+import { SessionEnd } from "./sessionEnd";
+import type { SetupRun, Stage } from "./setup";
+import {
+  errorScreen,
+  installScreen,
+  mirrorQuestion,
+  progressScreen,
+  setupScreen,
+  type ActionId,
+  type ErrorScreen,
+  type Screen,
+} from "./screens";
+import type { UiServer } from "./uiServer";
+
+/** How long the UI server gets to answer `/` after it starts. */
+export const UI_START_MS = 60_000;
+/** The install script's lines and setup's stages reach the status page at
+ *  most this often. */
+export const SCREEN_INTERVAL_MS = 100;
+
+/** The log files as the controller uses them (FileLog). */
+export interface AppLog extends Logger {
+  readonly path: string;
+  readonly folder: string;
+  moveTo(dir: string): void;
+  close(): void;
+}
+
+/** The main window, as far as the controller drives it. */
+export interface AppWindow {
+  /** Loads the static status page, which then asks for the screen. */
+  loadStatusPage(): Promise<void>;
+  /** Sends a screen to the status page that is already loaded. */
+  sendScreen(s: Screen): void;
+  loadUrl(url: string): Promise<void>;
+  /** The page the window shows or is loading. */
+  currentUrl(): string;
+  /** Restores, shows and focuses the window (a second launch). */
+  bringToFront(): void;
+  focus(): void;
+  /** Hides every visible window of the app, the ones the UI opened too, and
+   *  returns a function that shows them again. */
+  hideAll(): () => void;
+}
+
+export interface AppDeps {
+  appVersion: string;
+  platform: NodeJS.Platform;
+  /** The app's own environment (`process.env`). */
+  env: Env;
+  manifest: Manifest;
+  /** The fixed UI port from package.json. */
+  uiPort: number;
+  folders: Folders;
+  /** The environment of every `EvoSci` child (folderEnv). */
+  childEnv: NodeJS.ProcessEnv;
+  /** Where `langgraph_dev.log` is before `ready` names it. */
+  runtimeDir: string;
+  /** The bundled WebUI's `server.js` and the entry script that runs it. */
+  uiServerJs: string;
+  uiEntry: string;
+  /** Electron's binary, which runs the UI server as Node. */
+  execPath: string;
+  /** The bundled WebUI's version, read again for each crash report: when the
+   *  bundle cannot be read (a missing server.js), the manifest's uiVersion has
+   *  fallen back to the app's version. */
+  bundledUiVersion(): string | null;
+  log: AppLog;
+  uiLog: AppLog;
+
+  // Electron
+  messageBox(opts: MessageBoxOptions): Promise<{ response: number }>;
+  /** A native folder dialog; null when cancelled. */
+  chooseFolder(title: string): Promise<string | null>;
+  openPath(path: string): void;
+  showItemInFolder(path: string): void;
+  copyText(text: string): void;
+  documentsDir(): string;
+  /** Ends the process, after a relaunch when asked. */
+  exit(relaunch: boolean): void;
+
+  // Files
+  fileExists(path: string): boolean;
+  ensureDir(path: string): void;
+  recordEvoSci(found: Located): void;
+  readUiRecord(): UiRecord | null;
+  writeUiRecord(record: UiRecord | null): void;
+  writeCrashReport(dir: string, info: CrashInfo): string | null;
+  readStartConfig(): StartConfig;
+
+  // Processes
+  locateEvoSci(): Promise<Located | null>;
+  runCollect(
+    file: string,
+    args: string[],
+    cwd: string,
+    timeoutMs: number
+  ): Promise<Collected>;
+  startDeploy(evosci: string, workspace: string): DeploySession;
+  pickUiPort(preferred: number): Promise<{ port: number; fallback: boolean }>;
+  startUiServer(opts: {
+    execPath: string;
+    entryScript: string;
+    cwd: string;
+    env: NodeJS.ProcessEnv;
+    port: number;
+    log: Logger;
+  }): UiServer;
+  uiServerEnv(target: {
+    uiPort: number;
+    backendUrl: string;
+    dataDir: string;
+    configDir: string;
+    serverJs: string;
+  }): NodeJS.ProcessEnv;
+  stopLeftoverUi(record: UiRecord | null): Promise<unknown>;
+  processStartTime(pid: number): Promise<string | null>;
+
+  // The backend
+  checkWork(url: string): Promise<WorkCheck>;
+  waitForMemoryWorkers(
+    url: string,
+    cancelled: () => boolean
+  ): Promise<MemoryWaitResult>;
+
+  // Install, repair and setup (W03b)
+  keptMirror(): boolean | null;
+  keepMirror(cn: boolean): void;
+  windowsArm64(): Promise<boolean>;
+  updateLockHeld(): boolean;
+  backupConfig(): string | null;
+  runInstall(cn: boolean, onLine: (line: string) => void): InstallRun;
+  runSetup(
+    evosci: string,
+    cn: boolean,
+    stages: Stage[],
+    onUpdate: (stages: Stage[]) => void
+  ): SetupRun;
+  readSetupRecord(): string | null;
+  writeSetupRecord(coreVersion: string | null): void;
+  pause?(ms: number): Promise<void>;
+
+  sessionEnd?: SessionEnd;
+}
+
+export type QuitState = "none" | "checking" | "waiting" | "stopping";
+
+export interface App {
+  attachWindow(w: AppWindow): void;
+  /** Shows the first screen and starts the launch. */
+  start(): void;
+  launch(): Promise<void>;
+  restartBackend(): Promise<void>;
+  requestQuit(): Promise<void>;
+  act(id: ActionId, arg: unknown): Promise<void>;
+  /** The renderer or the preload is broken: a native dialog instead. */
+  nativeError(code: string, message: string): Promise<void>;
+  crashReport(code: string, message: string, detail?: unknown): string | null;
+  secondInstance(): void;
+  querySessionEnd(reasons: string[]): void;
+  endOfSession(why: string): void;
+  /** The current screen, for `status:get`. */
+  readonly screen: Screen;
+  /** The UI's origin while a UI server runs. */
+  uiOrigin(): string | null;
+  /** The backend URL for the preload of a page from `senderOrigin` (D6). */
+  backendUrlFor(senderOrigin: string | null): string | null;
+  /** True once the app exits: close and quit events go through. */
+  readonly exiting: boolean;
+  readonly quitState: QuitState;
+}
+
+/** Builds the controller; main.ts attaches the window and calls `start()`. */
+export function createApp(deps: AppDeps): App {
+  const { log, uiLog, folders } = deps;
+  const sessionEnd = deps.sessionEnd ?? new SessionEnd();
+
+  let win: AppWindow | null = null;
+  let screen: Screen = progressScreen({ phase: "checking_core" });
+  let onStatusPage = false;
+  let evosci: string | null = null;
+  let core: VersionInfo | null = null;
+  let startConfig: StartConfig | null = null;
+  /** The current `deploy` process, from its start on (also before `ready`). */
+  let session: DeploySession | null = null;
+  let ready: DeployReady | null = null;
+  let ui: UiServer | null = null;
+  /** The backend URL the running UI server was started with. */
+  let uiBackendUrl: string | null = null;
+  /** The window shows the UI (not the status page). */
+  let showingUi = false;
+  /** The UI page the window showed or was loading before a status screen
+   *  replaced it, and the folder it belongs to: Retry and Restart backend
+   *  bring the user back to it. */
+  let lastUiUrl: string | null = null;
+  let lastUiWorkspace: string | null = null;
+  /** A launch, restart or action on the error screen is running. */
+  let working = false;
+  let quitState: QuitState = "none";
+  let quitCancelled = false;
+  /** A backend loss or UI server exit that came while a quit was being
+   *  decided; shown if the quit is cancelled. */
+  let heldError: BootError | null = null;
+  /** The stop of a `deploy` that a restart or relaunch already let go of; a
+   *  quit waits for it. */
+  let stoppingDeploy: Promise<"stopped" | "killed"> | null = null;
+  let relaunchAfterExit = false;
+  let exiting = false;
+  /** The install script or setup while it runs: closing asks, then stops it (D14). */
+  let step: { kind: "install" | "setup"; cancel(): Promise<void> } | null =
+    null;
+  /** Answers the mirror question on the screen. */
+  let answerMirror: ((cn: boolean) => void) | null = null;
+  /** "Retry with mainland China mirrors" holds for the rest of this session:
+   *  a later plain Retry uses them too, also over `mirror: default` in
+   *  config.yaml, which only a setup with `--cn` changes. */
+  let preferCn = false;
+  /** "Continue" after a failed setup holds for the rest of this session too
+   *  (Restart backend, Retry), except after a fresh install. */
+  let skipSetup = false;
+  let pendingScreen: Screen | null = null;
+  let pendingTimer: ReturnType<typeof setTimeout> | null = null;
+  let lastSent = 0;
+  const pause =
+    deps.pause ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+
+  /** The running UI server's origin: links to it stay in the app. */
+  const uiOrigin = (): string | null => (ui ? new URL(ui.url).origin : null);
+
+  // --- Screens ------------------------------------------------------------------
+
+  function showScreen(s: Screen): void {
+    if (pendingTimer) {
+      clearTimeout(pendingTimer);
+      pendingTimer = null;
+      pendingScreen = null;
+    }
+    screen = s;
+    // Only an http page counts: a load still in progress never records the
+    // status page.
+    if (showingUi && win) {
+      const page = win.currentUrl();
+      if (page.startsWith("http")) lastUiUrl = page;
+    }
+    showingUi = false;
+    if (!win) return;
+    if (onStatusPage) {
+      win.sendScreen(s);
+      return;
+    }
+    onStatusPage = true;
+    win.loadStatusPage().catch((e) => log.warn(`status page: ${e}`));
+  }
+
+  /** Shows a screen that changes with every output line (install, setup) at
+   *  most every SCREEN_INTERVAL_MS; the latest one wins. */
+  function showSoon(s: Screen): void {
+    pendingScreen = s;
+    if (pendingTimer) return;
+    const wait = Math.max(0, lastSent + SCREEN_INTERVAL_MS - Date.now());
+    pendingTimer = setTimeout(() => {
+      pendingTimer = null;
+      const next = pendingScreen;
+      pendingScreen = null;
+      if (!next) return;
+      lastSent = Date.now();
+      showScreen(next);
+    }, wait);
+  }
+
+  /** The screen for a launch phase; none for the end phases. */
+  function onBootState(state: BootState): void {
+    switch (state.phase) {
+      case "ready":
+      case "error":
+      case "asking_mirror":
+        return;
+      case "installing":
+        return showSoon(installScreen(state));
+      case "setting_up":
+        // Before `setup --manifest` answers there is no stage list yet.
+        return state.stages.length > 0
+          ? showSoon(setupScreen(state.stages))
+          : showScreen(progressScreen(state));
+      default:
+        return showScreen(progressScreen(state));
+    }
+  }
+
+  /** Keeps the install script or setup while it runs, for the close question. */
+  function track<R extends InstallRun | SetupRun>(
+    kind: "install" | "setup",
+    r: R
+  ): R {
+    const current = { kind, cancel: r.cancel };
+    step = current;
+    void r.done.finally(() => {
+      if (step === current) step = null;
+    });
+    return r;
+  }
+
+  /** Writes a crash report next to the logs and returns its path. */
+  function crashReport(code: string, message: string, detail?: unknown) {
+    const file = deps.writeCrashReport(log.folder, {
+      appVersion: deps.appVersion,
+      uiVersion: deps.bundledUiVersion() ?? "unknown",
+      coreVersion: core?.version ?? null,
+      code,
+      message,
+      detail,
+      logs: [
+        log.path,
+        uiLog.path,
+        ready?.logFile ?? join(deps.runtimeDir, "langgraph_dev.log"),
+      ],
+    });
+    if (file) log.warn(`crash report: ${file}`);
+    return file;
+  }
+
+  /** Shows the error screen for a code, with a crash report for fatal codes; nothing while quitting. */
+  function showError(error: BootError): void {
+    // A quit ends the backend and the UI server on purpose; what fails because
+    // of that is no crash and has no window to show in.
+    if (quitState !== "none") {
+      // During the quit question the quit may still be cancelled: keep it.
+      if (quitState === "checking" && error.code !== "quitting")
+        heldError ??= error;
+      log.info(`error during quit, not shown: ${error.code}: ${error.message}`);
+      return;
+    }
+    log.warn(`error screen ${error.code}: ${error.message}`);
+    const report = FATAL_CODES.has(error.code)
+      ? crashReport(error.code, error.message, error.detail)
+      : null;
+    showScreen(
+      errorScreen(error, {
+        platform: deps.platform,
+        port: startConfig?.port ?? DEFAULT_BACKEND_PORT,
+        logFolder: log.folder,
+        crashReport: report,
+        portFromEnv: Boolean(deps.env.EVOSCIENTIST_LANGGRAPH_DEV_PORT?.trim()),
+        workspaceFromEnv: Boolean(deps.env.EVOSCIENTIST_WORKSPACE_DIR?.trim()),
+      })
+    );
+  }
+
+  /** The renderer or the preload is broken: the status page may not render
+   *  either, so a native dialog shows the error. */
+  async function nativeError(code: string, message: string): Promise<void> {
+    const report = crashReport(code, message);
+    const r = await deps.messageBox({
+      type: "error",
+      title: "EvoScientist",
+      message: "The EvoScientist window stopped working.",
+      detail: `${message}${report ? `\n\nCrash report: ${report}` : ""}`,
+      buttons: ["Reload", "Quit"],
+      defaultId: 0,
+      noLink: true,
+    });
+    if (r.response === 1) return void requestQuit();
+    if (showingUi && ui) {
+      win?.loadUrl(ui.url).catch((e) => log.warn(`reload: ${e}`));
+    } else {
+      onStatusPage = false;
+      showScreen(screen);
+    }
+  }
+
+  // --- Launch -------------------------------------------------------------------
+
+  /** Version check and `deploy` (a running `deploy` is stopped first), then
+   *  the UI. Callers hold `working`. */
+  async function launchLocked(): Promise<void> {
+    if (session) {
+      const old = session;
+      session = null;
+      ready = null;
+      await stopDeploy(old);
+    }
+    if (quitState !== "none") return;
+    const options: BootOptions = { cn: preferCn, skipSetup };
+    try {
+      deps.ensureDir(folders.dataDir);
+    } catch (e) {
+      log.warn(`cannot create ${folders.dataDir}: ${e}`);
+    }
+    const result = await boot(
+      {
+        manifest: deps.manifest,
+        platform: deps.platform,
+        log,
+        dataDir: folders.dataDir,
+        locate: async () => {
+          const found = await deps.locateEvoSci();
+          evosci = found?.path ?? null;
+          if (found) deps.recordEvoSci(found);
+          return evosci;
+        },
+        runCollect: deps.runCollect,
+        startConfig: () => (startConfig = deps.readStartConfig()),
+        documentsDir: deps.documentsDir,
+        ensureDir: deps.ensureDir,
+        startDeploy: (file, workspace) =>
+          (session = deps.startDeploy(file, workspace)),
+        keptMirror: deps.keptMirror,
+        keepMirror: deps.keepMirror,
+        askMirror: () =>
+          new Promise<boolean>((resolve) => {
+            answerMirror = resolve;
+            showScreen(mirrorQuestion());
+          }),
+        windowsArm64: deps.windowsArm64,
+        updateLockHeld: deps.updateLockHeld,
+        pause,
+        // Decided, not only asked: an error during the close question is
+        // held and shown if the quit is cancelled.
+        stopping: () => quitState === "stopping",
+        backupConfig: deps.backupConfig,
+        runInstall: (cn, onLine) =>
+          track("install", deps.runInstall(cn, onLine)),
+        runSetup: (file, cn, stages, onUpdate) =>
+          track("setup", deps.runSetup(file, cn, stages, onUpdate)),
+        setupRecord: deps.readSetupRecord,
+        recordSetup: deps.writeSetupRecord,
+      },
+      onBootState,
+      options
+    );
+    if (!result.ok) return showError(result.error);
+
+    core = result.core;
+    const filled = withReadyFolders(result.ready, folders);
+    if (filled.missing.length > 0)
+      log.warn(
+        `ready without ${filled.missing.join(
+          ", "
+        )}; using the app's own folders`
+      );
+    ready = filled.ready;
+    const logDir = dirname(ready.logFile);
+    log.moveTo(logDir);
+    uiLog.moveTo(logDir);
+    log.info(
+      `backend ready at ${ready.url} (owned ${ready.owned}) for ${ready.workspace}`
+    );
+    // Registered last: a loss that came before registration is delivered at
+    // once and clears `ready`.
+    const current = result.session;
+    current.onLost((e) => {
+      if (session !== current) return;
+      ready = null;
+      const error = {
+        code: e.code,
+        message: e.message,
+        detail: e.detail as Record<string, unknown>,
+      };
+      if (quitState !== "none") {
+        heldError = error;
+        return;
+      }
+      const shown = sessionEnd.report(() => {
+        if (session === current && quitState === "none") showError(error);
+      });
+      if (shown !== "now")
+        log.info(`backend lost during the end of the session: ${shown}`);
+    });
+    await showUiLocked();
+  }
+
+  /** Starts the UI server for a backend and waits until it answers. Callers hold `working`. */
+  async function startUiLocked(r: DeployReady): Promise<void> {
+    await stopUi();
+    if (quitState !== "none") throw new Error("the app is quitting");
+    await deps.stopLeftoverUi(deps.readUiRecord());
+    const { port, fallback } = await deps.pickUiPort(deps.uiPort);
+    if (fallback)
+      log.warn(
+        `UI port ${deps.uiPort} is taken; using ${port}. The WebUI's saved settings belong to the port, so they start empty.`
+      );
+    if (!deps.fileExists(deps.uiServerJs))
+      throw new Error(`the bundled WebUI is missing: ${deps.uiServerJs}`);
+    const started = deps.startUiServer({
+      execPath: deps.execPath,
+      entryScript: deps.uiEntry,
+      cwd: folders.dataDir,
+      env: deps.uiServerEnv({
+        uiPort: port,
+        backendUrl: r.url,
+        dataDir: r.dataDir,
+        configDir: r.configDir,
+        serverJs: deps.uiServerJs,
+      }),
+      port,
+      log: uiLog,
+    });
+    ui = started;
+    uiBackendUrl = r.url;
+    log.info(`UI server pid ${started.pid} on ${started.url}`);
+    if (started.pid) {
+      const pid = started.pid;
+      void deps.processStartTime(pid).then((startTime) => {
+        if (startTime && ui === started)
+          deps.writeUiRecord({ pid, port, startTime });
+      });
+    }
+    started.exited.then((exit) => {
+      if (ui !== started) return;
+      deps.writeUiRecord(null);
+      ui = null;
+      uiBackendUrl = null;
+      if (!showingUi) return;
+      const error = {
+        code: "ui_server_exited",
+        message: `The WebUI server exited (code ${exit.code}${
+          exit.signal ? `, signal ${exit.signal}` : ""
+        }).`,
+        detail: { exit_code: exit.code },
+      };
+      // A backend loss held first is the error the user has to act on.
+      if (quitState !== "none") {
+        heldError ??= error;
+        return;
+      }
+      const shown = sessionEnd.report(() => {
+        if (ui === null && quitState === "none") showError(error);
+      });
+      if (shown !== "now")
+        log.info(`UI server exited during the end of the session: ${shown}`);
+    });
+    await started.whenAnswering(UI_START_MS);
+  }
+
+  /** Starts the UI server when none runs for this backend URL (a new port
+   *  restarts it), then loads it. */
+  async function showUiLocked(): Promise<void> {
+    const r = ready;
+    if (!r) return;
+    try {
+      if (!ui || uiBackendUrl !== r.url) {
+        showScreen(progressScreen("starting_ui"));
+        await startUiLocked(r);
+      }
+    } catch (e) {
+      await stopUi();
+      // A backend lost meanwhile has shown its own error.
+      if (ready !== r) return;
+      // Refused because a quit is being decided (a step ended during the
+      // close question): Cancel starts the UI again, Quit stops everything.
+      if (quitState !== "none")
+        return log.info(`UI start during the quit question, not shown: ${e}`);
+      return showError({
+        code: "ui_server_exited",
+        message: `The WebUI server did not start: ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+        detail: { server_js: deps.uiServerJs },
+      });
+    }
+    if (ready !== r || !win || !ui) return;
+    // The same folder gets back the page the user was on, on the current UI
+    // server (its port can change); a new folder starts at `/`, since the
+    // WebUI would show the old folder's thread read-only.
+    const page = new URL(ui.url);
+    if (lastUiUrl && lastUiWorkspace === r.workspace) {
+      const saved = new URL(lastUiUrl);
+      page.pathname = saved.pathname;
+      page.search = saved.search;
+      page.hash = saved.hash;
+    }
+    onStatusPage = false;
+    showingUi = true;
+    lastUiUrl = page.href;
+    lastUiWorkspace = r.workspace;
+    try {
+      await win.loadUrl(page.href);
+    } catch (e) {
+      log.warn(`loading the UI: ${e}`);
+      return; // did-fail-load shows the native dialog
+    }
+    if (r.warnings.length > 0) {
+      void deps.messageBox({
+        type: "warning",
+        title: "EvoScientist",
+        message: "EvoScientist started with warnings.",
+        detail: r.warnings.join("\n\n"),
+        buttons: ["OK"],
+        noLink: true,
+      });
+    }
+  }
+
+  /** Stops the UI server and removes its record. */
+  async function stopUi(): Promise<void> {
+    const current = ui;
+    if (!current) return;
+    ui = null;
+    uiBackendUrl = null;
+    await current.stop();
+    deps.writeUiRecord(null);
+  }
+
+  /** Runs one launch, restart or screen action at a time. */
+  async function exclusive(task: () => Promise<void>): Promise<void> {
+    if (working || quitState !== "none") return;
+    working = true;
+    try {
+      await task();
+    } catch (e) {
+      log.warn(`unexpected: ${e instanceof Error ? e.stack : e}`);
+      showError({
+        code: "internal_error",
+        message: e instanceof Error ? e.message : String(e),
+        detail: {},
+      });
+    } finally {
+      working = false;
+    }
+  }
+
+  /** Retry: the whole launch sequence again. */
+  const launch = () => exclusive(launchLocked);
+
+  // --- Close check, restart, quit ----------------------------------------------
+
+  /** The busy check before stopping an owned backend; true to go on. */
+  async function confirmStop(purpose: StopPurpose): Promise<boolean> {
+    if (!ready) return true;
+    const check = await deps.checkWork(ready.url);
+    log.info(`work check before ${purpose}: ${JSON.stringify(check)}`);
+    const c = confirmation(check, purpose);
+    if (!c) return true;
+    const r = await deps.messageBox({
+      type: "warning",
+      title: "EvoScientist",
+      message: c.message,
+      detail: c.detail,
+      buttons: c.buttons,
+      defaultId: c.defaultId,
+      cancelId: 1,
+      noLink: true,
+    });
+    log.info(`confirmation: ${r.response === 0 ? c.buttons[0] : "Cancel"}`);
+    return r.response === 0;
+  }
+
+  /** The question before closing while the install script or setup runs;
+   *  true to quit. */
+  async function confirmStopStep(kind: "install" | "setup"): Promise<boolean> {
+    const what =
+      kind === "install"
+        ? "EvoScientist is being installed."
+        : "EvoScientist is being set up.";
+    const r = await deps.messageBox({
+      type: "warning",
+      title: "EvoScientist",
+      message: what,
+      detail:
+        "Quitting stops it now. The app runs it again at the next launch.",
+      buttons: ["Quit", "Cancel"],
+      defaultId: 1,
+      cancelId: 1,
+      noLink: true,
+    });
+    log.info(`confirmation (${kind}): ${r.response === 0 ? "Quit" : "Cancel"}`);
+    return r.response === 0;
+  }
+
+  /** File > Restart backend: asks, waits for the memory workers, stops the owned backend and launches again. A reused backend is left alone. */
+  function restartBackend(): Promise<void> {
+    return exclusive(async () => {
+      if (!ready || !session) return launchLocked();
+      if (!ready.owned) {
+        log.info("restart backend: reused backend, nothing changed");
+        await deps.messageBox({
+          type: "info",
+          title: "EvoScientist",
+          message: "This backend was started outside the app.",
+          detail:
+            "Restart EvoScientist where it was started, for example in its terminal. The app changed nothing.",
+          buttons: ["OK"],
+          noLink: true,
+        });
+        return;
+      }
+      if (!(await confirmStop("restart"))) return;
+      // The backend may have gone while the question was open: start a new one.
+      const current = ready;
+      if (!current || !session) return launchLocked();
+      showScreen(progressScreen("stopping"));
+      // The same wait as at quit, so the last turn's observation linker runs.
+      log.info("waiting for the memory workers before restarting the backend");
+      const memory = await deps.waitForMemoryWorkers(
+        current.url,
+        () => quitState !== "none" || sessionEnd.ending
+      );
+      log.info(`memory workers: ${memory}`);
+      if (quitState !== "none" || sessionEnd.ending || !session) return;
+      const old = session;
+      session = null;
+      ready = null;
+      log.info(`restart backend: stopping deploy (${await stopDeploy(old)})`);
+      await launchLocked();
+    });
+  }
+
+  /** Stops a `deploy` the app has let go of, recorded so a quit waits for it. */
+  async function stopDeploy(old: DeploySession): Promise<"stopped" | "killed"> {
+    const stop = old.stop();
+    stoppingDeploy = stop;
+    try {
+      return await stop;
+    } finally {
+      if (stoppingDeploy === stop) stoppingDeploy = null;
+    }
+  }
+
+  /** After a cancelled quit: shows an error held during the quit question, or
+   *  brings back the UI that a restart or launch left for the quit. */
+  function resumeAfterCancelledQuit(): void {
+    const error = heldError;
+    heldError = null;
+    if (error) return showError(error);
+    if (working || showingUi || screen.kind !== "progress") return;
+    void exclusive(async () =>
+      ready && session ? showUiLocked() : launchLocked()
+    );
+  }
+
+  /** The end of the system session (D5): no confirmation, no memory wait. On
+   *  Windows the process ends right after `session-end` returns, so this only
+   *  writes one log line (synchronously) and closes both stdin pipes; the
+   *  backend's job object does the rest if `deploy` dies first. At a real
+   *  sign-out Windows has usually ended `deploy` already, right after
+   *  `query-session-end` (see sessionEnd.ts). */
+  function endOfSession(why: string): void {
+    if (sessionEnd.ending) return;
+    sessionEnd.end();
+    log.info(
+      `${why}: stopping without confirmation; closing the stdin of deploy and the UI server`
+    );
+    session?.closeStdinNow();
+    ui?.closeStdinNow();
+  }
+
+  /** Closing the window or Quit: asks when work runs on an owned backend, hides the windows, waits for the memory workers, stops what the app started, then exits. */
+  async function requestQuit(): Promise<void> {
+    if (quitState !== "none") return;
+    quitState = "checking";
+    heldError = null;
+    try {
+      // The install script or setup runs (D14): ask, then stop its tree. The
+      // next launch runs that step again.
+      if (step && !sessionEnd.ending && !(await confirmStopStep(step.kind))) {
+        quitState = "none";
+        resumeAfterCancelledQuit();
+        return;
+      }
+      const owned = Boolean(ready?.owned && session);
+      if (owned && !sessionEnd.ending && !(await confirmStop("quit"))) {
+        quitState = "none";
+        resumeAfterCancelledQuit();
+        return;
+      }
+      // Hidden, never destroyed: a destroyed window gets no `session-end` (D5).
+      // Windows opened from the UI hide too.
+      const showAgain = win ? win.hideAll() : () => {};
+      if (owned && ready && !sessionEnd.ending) {
+        quitState = "waiting";
+        quitCancelled = false;
+        log.info("waiting for the memory workers before stopping the backend");
+        const r = await deps.waitForMemoryWorkers(
+          ready.url,
+          () => quitCancelled || sessionEnd.ending
+        );
+        log.info(`memory workers: ${r}`);
+        // A second launch during the last probe cancels too, whatever the
+        // wait returned.
+        if (quitCancelled && !sessionEnd.ending) {
+          quitState = "none";
+          log.info("second launch during the wait: quit cancelled");
+          showAgain();
+          win?.focus();
+          resumeAfterCancelledQuit();
+          return;
+        }
+      }
+      quitState = "stopping";
+      if (step) {
+        const running = step;
+        log.info(`stopping the ${running.kind} step`);
+        await running.cancel();
+      }
+      await stopUi();
+      if (session) {
+        const s = session;
+        session = null;
+        // A reused backend keeps running: its `deploy` only detaches.
+        log.info(
+          `stopping deploy (${owned ? "owned" : "reused"}): ${await s.stop()}`
+        );
+      }
+      // A restart's stop still under way finishes, so the job object does not
+      // end `deploy` in the middle of it.
+      if (stoppingDeploy)
+        log.info(
+          `waiting for the deploy being stopped: ${await stoppingDeploy}`
+        );
+    } catch (e) {
+      log.warn(`while quitting: ${e instanceof Error ? e.stack : e}`);
+    }
+    exitNow();
+  }
+
+  /** Ends the app (and relaunches it when a second launch came during the stop). */
+  function exitNow(): void {
+    exiting = true;
+    log.info(relaunchAfterExit ? "exit, then relaunch" : "exit");
+    log.close();
+    uiLog.close();
+    deps.exit(relaunchAfterExit);
+  }
+
+  /** A second launch: cancels a quit that waits for the memory workers,
+   *  relaunches after one that is stopping, else brings the window back. */
+  function secondInstance(): void {
+    log.info(`second launch (quit state ${quitState})`);
+    if (quitState === "waiting") {
+      quitCancelled = true;
+      return;
+    }
+    if (quitState === "stopping") {
+      relaunchAfterExit = true;
+      return;
+    }
+    win?.bringToFront();
+  }
+
+  // --- Status page actions ---------------------------------------------------
+
+  /** Saves one config key with `EvoSci config set`; true when it worked. */
+  async function setConfig(key: string, value: string): Promise<boolean> {
+    if (!evosci) return false;
+    const r = await deps.runCollect(
+      evosci,
+      ["config", "set", key, value],
+      folders.dataDir,
+      60_000
+    );
+    log.info(`EvoSci config set ${key}: exit ${r.code} ${r.stdout.join(" ")}`);
+    if (r.code === 0) return true;
+    const s = screen;
+    if (s.kind === "error")
+      showScreen({
+        ...s,
+        lines: [
+          ...s.lines,
+          `Could not save ${key}: ${
+            r.stdout.join(" ") || "EvoSci config set failed"
+          }`,
+        ],
+      });
+    return false;
+  }
+
+  /** Runs an action from the error screen's buttons. */
+  async function act(id: ActionId, arg: unknown): Promise<void> {
+    const s = screen as ErrorScreen;
+    switch (id) {
+      case "retry":
+        return launch();
+      case "restart_ui":
+        return exclusive(async () => (ready ? showUiLocked() : launchLocked()));
+      case "set_port": {
+        const port = Number(arg);
+        if (!Number.isInteger(port) || port < 1 || port > 65535) return;
+        return exclusive(async () => {
+          if (await setConfig("langgraph_dev_port", String(port)))
+            await launchLocked();
+        });
+      }
+      case "choose_folder": {
+        const folder = await deps.chooseFolder("Choose a folder for your work");
+        if (!folder) return;
+        return exclusive(async () => {
+          if (await setConfig("default_workdir", folder)) await launchLocked();
+        });
+      }
+      case "copy_command":
+        if (s.command) deps.copyText(s.command);
+        return;
+      case "open_logs":
+        deps.openPath(log.folder);
+        return;
+      case "open_config":
+        deps.openPath(folders.configDir);
+        return;
+      case "open_crash":
+        if (s.crashReport) deps.showItemInFolder(s.crashReport);
+        return;
+      case "quit":
+        return requestQuit();
+      case "mirror_cn":
+      case "mirror_default": {
+        const answer = answerMirror;
+        answerMirror = null;
+        answer?.(id === "mirror_cn");
+        return;
+      }
+      case "retry_cn":
+        // Remembered: kept as the mirror answer, and setup saves `mirror: cn`.
+        deps.keepMirror(true);
+        preferCn = true;
+        return launch();
+      case "continue":
+        skipSetup = true;
+        return launch();
+    }
+  }
+
+  return {
+    attachWindow: (w) => void (win = w),
+    start: () => {
+      showScreen(screen);
+      void launch();
+    },
+    launch,
+    restartBackend,
+    requestQuit,
+    act,
+    nativeError,
+    crashReport,
+    secondInstance,
+    querySessionEnd: (reasons) => {
+      sessionEnd.queried();
+      log.info(`query-session-end (${reasons.join(",")})`);
+    },
+    endOfSession,
+    get screen() {
+      return screen;
+    },
+    uiOrigin,
+    backendUrlFor: (senderOrigin) => {
+      const origin = uiOrigin();
+      return origin !== null && senderOrigin === origin && ready
+        ? ready.url
+        : null;
+    },
+    get exiting() {
+      return exiting;
+    },
+    get quitState() {
+      return quitState;
+    },
+  };
+}

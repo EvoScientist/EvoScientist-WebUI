@@ -78,5 +78,10 @@ jobs:
       - name: Lint and typecheck
         run: npm run lint
 
+      # The build bundles the core's install scripts from the tag of the
+      # version it installs; a missing tag or file fails here, not at release.
+      - name: Download the core's install scripts
+        run: npm run fetch-core-scripts
+
       - name: Unit tests
         run: npm test

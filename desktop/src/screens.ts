@@ -1,9 +1,12 @@
-// What the status page shows: progress while the app starts, or an error with
-// its code, its own text and the actions that can fix it. Most `deploy` codes
+// What the status page shows: progress while the app starts (with the install
+// script's last lines, or setup's stages), the mirror question on a first
+// install, or an error with its code, its own text and the actions that can
+// fix it. Most `deploy` codes
 // come from the configuration or the machine, so Retry alone does not fix
 // them, and the settings page that could needs a running backend.
 import type { BootError, BootState } from "./boot";
 import { DEFAULT_BACKEND_PORT } from "./paths";
+import type { Stage } from "./setup";
 
 export type ActionId =
   | "retry"
@@ -14,12 +17,39 @@ export type ActionId =
   | "open_logs"
   | "open_config"
   | "open_crash"
-  | "quit";
+  | "quit"
+  | "mirror_cn"
+  | "mirror_default"
+  | "retry_cn"
+  | "continue";
 
 export interface ProgressScreen {
   kind: "progress";
   title: string;
   message: string;
+}
+
+/** A question with one button per answer (the mirror question). */
+export interface QuestionScreen {
+  kind: "question";
+  title: string;
+  lines: string[];
+  actions: ActionId[];
+}
+
+/** The install script runs: its last lines as they come. */
+export interface InstallScreen {
+  kind: "install";
+  title: string;
+  message: string;
+  output: string[];
+}
+
+/** `EvoSci setup` runs: each stage with its state. */
+export interface SetupScreen {
+  kind: "setup";
+  title: string;
+  stages: Stage[];
 }
 
 export interface ErrorScreen {
@@ -35,9 +65,55 @@ export interface ErrorScreen {
   port?: number;
   logFolder: string;
   crashReport?: string;
+  /** The install script's output from its last `Error:` line. */
+  output?: string[];
+  /** Setup's failed stages. */
+  stages?: Stage[];
 }
 
-export type Screen = ProgressScreen | ErrorScreen;
+export type Screen =
+  | ProgressScreen
+  | QuestionScreen
+  | InstallScreen
+  | SetupScreen
+  | ErrorScreen;
+
+/** Shown next to "Retry with mainland China mirrors": the choice stays. */
+const MIRROR_RETRY_LINE =
+  "Retry with mainland China mirrors keeps using them while the app runs, and setup saves them for later launches; the settings page can change it.";
+
+/** The first-launch question, before the install script runs (D15). */
+export function mirrorQuestion(): QuestionScreen {
+  return {
+    kind: "question",
+    title: "Install EvoScientist",
+    lines: [
+      "EvoScientist is not installed yet. The app installs it now, with Python and the packages it needs.",
+      "Are you in mainland China? Then the downloads use mirrors there (Tsinghua PyPI, npmmirror), which are faster and reachable behind the firewall. The app remembers the answer; the settings page can change it later.",
+    ],
+    actions: ["mirror_default", "mirror_cn"],
+  };
+}
+
+/** The install script's progress: the last lines of its output. */
+export function installScreen(state: {
+  repair: boolean;
+  lines: string[];
+}): InstallScreen {
+  return {
+    kind: "install",
+    title: state.repair ? "Repairing EvoScientist" : "Installing EvoScientist",
+    message: state.repair
+      ? "The installed EvoScientist does not run. Installing it again; your settings are kept."
+      : "Downloading and installing EvoScientist. This takes a few minutes.",
+    output: state.lines,
+  };
+}
+
+/** Setup's progress: every stage with its state. */
+export function setupScreen(stages: Stage[]): SetupScreen {
+  return { kind: "setup", title: "Setting up EvoScientist", stages };
+}
 
 /** The progress screen for a launch phase, the UI start or a stop. */
 export function progressScreen(
@@ -57,6 +133,11 @@ export function progressScreen(
     ready: ["Starting EvoScientist", "Starting the WebUI..."],
     starting_ui: ["Starting EvoScientist", "Starting the WebUI..."],
     stopping: ["Restarting the backend", "Stopping the backend..."],
+    update_finishing: [
+      "An update of EvoScientist is finishing",
+      "The app waits until it is done, then goes on.",
+    ],
+    setting_up: ["Setting up EvoScientist", "Preparing the setup steps..."],
   };
   const [title, message] = text[s] ?? ["Starting EvoScientist", ""];
   if (typeof state !== "string" && state.phase === "starting_backend")
@@ -102,17 +183,62 @@ export function errorScreen(error: BootError, ctx: ScreenContext): ErrorScreen {
   let screen: Omit<ErrorScreen, "kind" | "code" | "logFolder">;
 
   switch (error.code) {
-    case "core_missing":
+    case "install_failed": {
+      const output = Array.isArray(d.output) ? (d.output as string[]) : [];
       screen = {
-        title: "EvoScientist is not installed",
+        title: d.repair
+          ? "EvoScientist could not be repaired"
+          : "EvoScientist could not be installed",
         lines: [
           error.message,
-          `Install it with this command in ${terminal}, then press Retry.`,
+          d.running
+            ? "EvoScientist is running. Close the programs listed below, then press Retry."
+            : "Press Retry to run the install again.",
+          ...(d.cn ? [] : [MIRROR_RETRY_LINE]),
         ],
-        command: str(d.install_command) ?? undefined,
-        actions: ["retry", "copy_command", "open_logs"],
+        ...(output.length > 0 ? { output } : {}),
+        actions: d.cn
+          ? ["retry", "open_logs"]
+          : ["retry", "retry_cn", "open_logs"],
       };
       break;
+    }
+    case "unsupported_platform":
+      screen = {
+        title: "This computer is not supported yet",
+        lines: [error.message, "Nothing was installed."],
+        actions: ["open_logs"],
+      };
+      break;
+    case "setup_failed": {
+      const failed = Array.isArray(d.failed)
+        ? (d.failed as {
+            id: string;
+            title: string;
+            code: string | null;
+            message: string | null;
+          }[])
+        : [];
+      screen = {
+        title: "Some setup steps failed",
+        lines: [
+          error.message,
+          "Retry runs setup again. Continue starts EvoScientist without these steps (only the Node step runs); the next launch runs setup again.",
+          ...(d.cn ? [] : [MIRROR_RETRY_LINE]),
+        ],
+        stages: failed.map((f) => ({
+          id: f.id,
+          title: f.title,
+          state: "error" as const,
+          ...(f.code ? { code: f.code } : {}),
+          ...(f.message ? { message: f.message } : {}),
+        })),
+        actions: d.cn
+          ? ["retry", "continue", "open_logs"]
+          : ["retry", "retry_cn", "continue", "open_logs"],
+      };
+      break;
+    }
     case "core_too_old":
       screen = {
         title: "EvoScientist needs an update",
