@@ -34,7 +34,7 @@ npm ci
 npm run pack
 ```
 
-`npm run pack` downloads the core's install scripts first (`npm run fetch-core-scripts`); it needs Node 24.5 or newer (`node --use-env-proxy`); behind a proxy, set `HTTPS_PROXY`. The app is in `release/win-unpacked/EvoScientist.exe` (`linux-unpacked`, `mac` on other platforms). The bundled WebUI is in `resources/ui/`.
+`npm run pack` downloads the core's install scripts first (`npm run fetch-core-scripts`, which `npm start` needs too before it can install or repair the core); it needs Node 24.5 or newer (`node --use-env-proxy`); behind a proxy, set `HTTPS_PROXY`. The app is in `release/win-unpacked/EvoScientist.exe` (`linux-unpacked`, `mac` on other platforms). The bundled WebUI is in `resources/ui/`.
 
 Logs: `desktop.log` and `desktop-ui.log` next to the backend's `langgraph_dev.log` (`~/.config/evoscientist` until the core moves its runtime files), with crash reports `desktop-crash-*.txt` beside them.
 

@@ -69,25 +69,34 @@ function stageList(stages) {
   });
 }
 
+/** The title, code and lines last drawn: install and setup screens come up
+ *  to ten times a second, and rewriting the same text in the polite live
+ *  region would have a screen reader announce it again each time. */
+let shownHead = null;
+
 /** Draws a screen: title, lines, the install output or the stage list,
  *  command, port field and buttons. */
 function render(s) {
   if (!s) return;
   const error = s.kind === "error";
-  const title = $("title");
-  title.textContent = s.title;
-  title.className = error ? "error" : "";
-  if (error) {
-    const code = document.createElement("span");
-    code.className = "code";
-    code.textContent = s.code;
-    title.appendChild(code);
+  const text = error || s.kind === "question" ? s.lines : [s.message];
+  const lines = text.filter(Boolean);
+  const head = JSON.stringify([s.title, error ? s.code : null, lines]);
+  if (head !== shownHead) {
+    shownHead = head;
+    const title = $("title");
+    title.textContent = s.title;
+    title.className = error ? "error" : "";
+    if (error) {
+      const code = document.createElement("span");
+      code.className = "code";
+      code.textContent = s.code;
+      title.appendChild(code);
+    }
+    $("lines").replaceChildren(...lines.map((l) => paragraph(l)));
   }
   const busy = s.kind === "progress" || s.kind === "install";
   $("spinner").hidden = !busy;
-  const lines =
-    s.kind === "error" || s.kind === "question" ? s.lines : [s.message];
-  $("lines").replaceChildren(...lines.filter(Boolean).map((l) => paragraph(l)));
   const output = s.output ?? [];
   $("output").hidden = output.length === 0;
   $("output").textContent = output.join("\n");

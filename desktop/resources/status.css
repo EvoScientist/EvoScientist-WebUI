@@ -36,7 +36,8 @@ body {
   color: var(--foreground);
   font: 15px/1.5 system-ui, "Segoe UI", sans-serif;
   display: flex;
-  align-items: center;
+  /* A screen taller than the window starts at the top and scrolls. */
+  align-items: safe center;
   justify-content: center;
   padding: 24px 16px;
 }
