@@ -15,6 +15,7 @@ import {
 } from "./boot";
 import {
   confirmation,
+  workStartedSince,
   type MemoryWaitResult,
   type StopPurpose,
   type WorkCheck,
@@ -182,8 +183,11 @@ export type QuitState = "none" | "checking" | "waiting" | "stopping";
 
 /** What the bridge's `restartBackend()` answers the page (W01's
  *  `src/lib/desktop.ts`): `not_owned` for a reused backend, `cancelled` when
- *  the user cancelled the busy check, `busy` while a launch, restart, screen
- *  action or quit runs, else the code of the error the launch showed. */
+ *  the user cancelled a busy check, `busy` while a launch, restart, screen
+ *  action or quit runs or when a quit or the end of the session starts during
+ *  the restart, else the code of the error screen the restart showed
+ *  (`internal_error` for an exception, `ui_server_exited` when only the UI
+ *  server failed). */
 export type RestartResult = { ok: true } | { ok: false; code: string };
 
 /** Launch phases that a restart from the page keeps off the window: the page
@@ -277,6 +281,9 @@ export function createApp(deps: AppDeps): App {
   let skipSetup = false;
   /** A restart from the page runs: its quiet phases leave the page shown. */
   let pageRestart = false;
+  /** The code of the error screen shown last; a restart from the page
+   *  clears it first and answers with it. */
+  let shownError: string | null = null;
   let pendingScreen: Screen | null = null;
   let pendingTimer: ReturnType<typeof setTimeout> | null = null;
   let lastSent = 0;
@@ -396,6 +403,7 @@ export function createApp(deps: AppDeps): App {
       return;
     }
     log.warn(`error screen ${error.code}: ${error.message}`);
+    shownError = error.code;
     const report = FATAL_CODES.has(error.code)
       ? crashReport(error.code, error.message, error.detail)
       : null;
@@ -699,8 +707,24 @@ export function createApp(deps: AppDeps): App {
   /** The busy check before stopping an owned backend; true to go on. */
   async function confirmStop(purpose: StopPurpose): Promise<boolean> {
     if (!ready) return true;
-    const check = await deps.checkWork(ready.url);
+    return askStop(purpose, await checkWorkLogged(ready.url, purpose));
+  }
+
+  /** The work check, logged with what it is for. */
+  async function checkWorkLogged(
+    url: string,
+    purpose: string
+  ): Promise<WorkCheck> {
+    const check = await deps.checkWork(url);
     log.info(`work check before ${purpose}: ${JSON.stringify(check)}`);
+    return check;
+  }
+
+  /** The question for a work check, when it needs one; true to go on. */
+  async function askStop(
+    purpose: StopPurpose,
+    check: WorkCheck
+  ): Promise<boolean> {
     const c = confirmation(check, purpose);
     if (!c) return true;
     const r = await deps.messageBox({
@@ -752,8 +776,9 @@ export function createApp(deps: AppDeps): App {
       log.info("restart from the page: busy");
       return { ok: false, code: "busy" };
     }
-    let result: RestartResult = { ok: false, code: "failed" };
+    let result: RestartResult | null = null;
     pageRestart = true;
+    shownError = null;
     try {
       await exclusive(async () => {
         result = await restartLocked(true);
@@ -761,6 +786,8 @@ export function createApp(deps: AppDeps): App {
     } finally {
       pageRestart = false;
     }
+    // An exception ended it: `exclusive` showed `internal_error`.
+    result ??= { ok: false, code: shownError ?? "failed" };
     log.info(`restart from the page: ${JSON.stringify(result)}`);
     return result;
   }
@@ -784,7 +811,8 @@ export function createApp(deps: AppDeps): App {
       });
       return { ok: false, code: "not_owned" };
     }
-    if (!(await confirmStop("restart")))
+    const before = await checkWorkLogged(ready.url, "restart");
+    if (!(await askStop("restart", before)))
       return { ok: false, code: "cancelled" };
     // The backend may have gone while the question was open: start a new one.
     const current = ready;
@@ -799,6 +827,18 @@ export function createApp(deps: AppDeps): App {
     log.info(`memory workers: ${memory}`);
     if (quitState !== "none" || sessionEnd.ending || !session)
       return { ok: false, code: "busy" };
+    // The page stayed usable through the wait: work started meanwhile gets
+    // its own question (the user answered only for what ran before).
+    if (fromPage) {
+      const started = workStartedSince(
+        before,
+        await checkWorkLogged(current.url, "restart, after the wait")
+      );
+      if (started && !(await askStop("restart", started)))
+        return { ok: false, code: "cancelled" };
+      if (quitState !== "none" || sessionEnd.ending || !session)
+        return { ok: false, code: "busy" };
+    }
     const old = session;
     session = null;
     ready = null;
@@ -806,9 +846,12 @@ export function createApp(deps: AppDeps): App {
     return relaunched();
   }
 
-  /** Launches again; the result is the new backend or the error on screen. */
+  /** Launches again; the result is the error the launch showed (also after
+   *  `ready`, when the UI server did not start), else the new backend. */
   async function relaunched(): Promise<RestartResult> {
+    shownError = null;
     await launchLocked();
+    if (shownError) return { ok: false, code: shownError };
     if (ready) return { ok: true };
     return {
       ok: false,

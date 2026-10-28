@@ -541,7 +541,7 @@ describe("the Setup form", () => {
     });
     renderView();
     fireEvent.click(await screen.findByRole("button", { name: "Restart now" }));
-    await screen.findByText("EvoScientist is restarting.");
+    await screen.findByText("EvoScientist restarted.");
     expect(restartBackend).toHaveBeenCalledOnce();
   });
 
@@ -771,7 +771,7 @@ describe("the Setup form", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Restart now" }));
     expect(await screen.findByText("Restarting EvoScientist...")).toBeTruthy();
     answer({ ok: true });
-    await screen.findByText("EvoScientist is restarting.");
+    await screen.findByText("EvoScientist restarted.");
     expect(screen.queryByText("Restarting EvoScientist...")).toBeNull();
   });
 
@@ -795,9 +795,11 @@ describe("the Setup form", () => {
   });
 
   it("says the app is busy, and keeps Restart now", async () => {
-    window.evoscientistDesktop = {
-      restartBackend: async () => ({ ok: false, code: "busy" }),
-    };
+    const restartBackend = vi
+      .fn<() => Promise<{ ok: boolean; code?: string }>>()
+      .mockResolvedValueOnce({ ok: false, code: "busy" })
+      .mockResolvedValueOnce({ ok: false, code: "cancelled" });
+    window.evoscientistDesktop = { restartBackend };
     server.settings = settings({
       restart_required: true,
       restart_fields: ["model"],
@@ -809,6 +811,14 @@ describe("the Setup form", () => {
     ).toBeTruthy();
     const again = screen.getByRole("button", { name: "Restart now" });
     expect((again as HTMLButtonElement).disabled).toBe(false);
+    // The next press replaces the line.
+    fireEvent.click(again);
+    await waitFor(() => expect(restartBackend).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(
+        screen.queryByText("The app is busy. Try again in a moment.")
+      ).toBeNull()
+    );
   });
 
   it("explains a failed restart from the desktop app", async () => {

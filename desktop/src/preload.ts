@@ -11,6 +11,7 @@
 // - On the status page (file:): expose what it needs to show the current
 //   screen and run its actions.
 import { contextBridge, ipcRenderer } from "electron";
+import type { RestartResult } from "./app";
 import type { ActionId, Screen } from "./screens";
 
 const CONFIG_KEY = "evoscientist-config";
@@ -59,7 +60,7 @@ function exposeBridge(): void {
     | string
     | null;
   contextBridge.exposeInMainWorld("evoscientistDesktop", {
-    restartBackend: (): Promise<{ ok: boolean; code?: string }> =>
+    restartBackend: (): Promise<RestartResult> =>
       ipcRenderer.invoke("desktop:restart-backend"),
     ...(folder ? { defaultFolder: folder } : {}),
   });

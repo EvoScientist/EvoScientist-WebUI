@@ -21,13 +21,14 @@ const READY: DeployReady = {
   logFile: "/runtime/logs/langgraph_dev.log",
   warnings: [],
 };
-const NO_WORK: WorkCheck = {
-  kind: "known",
+const NO_WORK = {
+  kind: "known" as const,
   busyThreads: 0,
+  threadIds: [] as string[],
   jobs: [],
   scheduledTasks: 0,
 };
-const BUSY: WorkCheck = { ...NO_WORK, busyThreads: 2 };
+const BUSY: WorkCheck = { ...NO_WORK, busyThreads: 2, threadIds: ["t1", "t2"] };
 
 const ok = (stdout: string[], code = 0): Collected => ({
   timedOut: false,
@@ -762,6 +763,117 @@ describe("restart from the page (bridge)", () => {
     documents = false;
     expect(h.app.defaultFolderFor("http://127.0.0.1:4718")).toBeNull();
     expect(h.log.lines.at(-1)).toMatch(/^WARN no default folder/);
+  });
+
+  it("asks again for work started during the wait, and Cancel stops nothing", async () => {
+    const gate = deferred<void>();
+    let work: WorkCheck = NO_WORK;
+    const checks = vi.fn(async () => work);
+    const h = await launched({
+      checkWork: checks,
+      waitForMemoryWorkers: async () => (await gate.promise, "quiet"),
+    });
+    h.messageBox.mockResolvedValueOnce({ response: 1 });
+    const result = h.app.restartFromPage();
+    await settle();
+    // The page stays usable: the user starts a chat during the wait.
+    work = BUSY;
+    gate.resolve();
+    await expect(result).resolves.toEqual({ ok: false, code: "cancelled" });
+    expect(checks).toHaveBeenCalledTimes(2);
+    expect(h.messageBox).toHaveBeenCalledTimes(1);
+    expect(h.messageBox.mock.calls[0][0].detail).toContain(
+      "2 chats are still running."
+    );
+    expect(h.sessions[0].stopped.count).toBe(0);
+  });
+
+  it("does not ask twice about the work the user already answered for", async () => {
+    const checks = vi.fn(async () => BUSY);
+    const h = await launched({ checkWork: checks });
+    await expect(h.app.restartFromPage()).resolves.toEqual({ ok: true });
+    expect(checks).toHaveBeenCalledTimes(2);
+    expect(h.messageBox).toHaveBeenCalledTimes(1);
+    expect(h.sessions[0].stopped.count).toBe(1);
+  });
+
+  it("answers ui_server_exited when only the UI server fails after a new port", async () => {
+    const h = await launchedWith(() => ({
+      kind: "ready",
+      ready: { ...READY, url: "http://127.0.0.1:6200" },
+    }));
+    h.deps.startUiServer = () => {
+      throw new Error("no UI server");
+    };
+    await expect(h.app.restartFromPage()).resolves.toEqual({
+      ok: false,
+      code: "ui_server_exited",
+    });
+    expect(h.app.screen).toMatchObject({
+      kind: "error",
+      code: "ui_server_exited",
+    });
+  });
+
+  it("answers internal_error when the restart throws", async () => {
+    const h = await launched({
+      waitForMemoryWorkers: async () => {
+        throw new Error("boom");
+      },
+    });
+    await expect(h.app.restartFromPage()).resolves.toEqual({
+      ok: false,
+      code: "internal_error",
+    });
+    expect(h.app.screen).toMatchObject({
+      kind: "error",
+      code: "internal_error",
+    });
+  });
+
+  it("answers busy once a quit has begun", async () => {
+    const gate = deferred<void>();
+    const h = await launched({
+      waitForMemoryWorkers: async () => (await gate.promise, "quiet"),
+    });
+    const quit = h.app.requestQuit();
+    await vi.waitFor(() => expect(h.app.quitState).not.toBe("none"));
+    await expect(h.app.restartFromPage()).resolves.toEqual({
+      ok: false,
+      code: "busy",
+    });
+    gate.resolve();
+    await quit;
+    expect(h.sessions).toHaveLength(1);
+  });
+
+  it("a step that needs the status page shows it, then the page comes back", async () => {
+    let record: string | null = "0.3.8";
+    const h = await launched({
+      readSetupRecord: () => record,
+      runCollect: async (_f, args) =>
+        args[0] === "--version"
+          ? ok([VERSION_LINE])
+          : args[1] === "--manifest"
+          ? ok(['{"protocol":1,"stages":[{"id":"node","title":"Node.js"}]}'])
+          : ok([]),
+    });
+    h.win.navigate("http://127.0.0.1:4718/?view=settings");
+    // The core changed since the last setup: the restart runs setup.
+    record = null;
+    const before = h.win.calls.length;
+    await expect(h.app.restartFromPage()).resolves.toEqual({ ok: true });
+    const after = h.win.calls.slice(before);
+    expect(after[0]).toBe("status page");
+    expect(after.at(-1)).toBe("load http://127.0.0.1:4718/?view=settings");
+  });
+
+  it("a menu restart after a page restart shows the status page again", async () => {
+    const h = await launched();
+    await h.app.restartFromPage();
+    const before = h.win.calls.length;
+    await h.app.restartBackend();
+    expect(h.win.calls.slice(before)[0]).toBe("status page");
   });
 
   it("the menu's restart still shows the status page", async () => {

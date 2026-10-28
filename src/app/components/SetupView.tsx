@@ -591,7 +591,7 @@ export function RestartNotice({
       code: "failed",
     }));
     if (result.ok) {
-      setState({ kind: "done", text: "EvoScientist is restarting." });
+      setState({ kind: "done", text: "EvoScientist restarted." });
       await onRestarted();
     } else if (result.code === "cancelled") {
       // The user answered Cancel to the app's question: nothing to say.

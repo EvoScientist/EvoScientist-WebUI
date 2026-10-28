@@ -44,12 +44,41 @@ export type WorkCheck =
       kind: "known";
       /** Busy threads that are not memory workers or the proactive check. */
       busyThreads: number;
+      /** Their ids, to tell work that started later from work seen before. */
+      threadIds: string[];
       /** Names of running background jobs. */
       jobs: string[];
       /** Enabled crons whose run_kind is scheduled_task. */
       scheduledTasks: number;
     }
   | { kind: "unknown"; reason: string };
+
+/**
+ * The work in `after` that `before` did not show: chats and jobs that started
+ * since, as a check of their own (no scheduled tasks), or null when there is
+ * none. The user already answered for `before`, so only new work needs a
+ * question; after an `unknown` check they answered for anything. A failed
+ * `after` check counts as new work unless `before` failed too.
+ */
+export function workStartedSince(
+  before: WorkCheck,
+  after: WorkCheck
+): WorkCheck | null {
+  if (before.kind === "unknown") return null;
+  if (after.kind === "unknown") return after;
+  const threadIds = after.threadIds.filter(
+    (id) => !before.threadIds.includes(id)
+  );
+  const jobs = after.jobs.filter((j) => !before.jobs.includes(j));
+  if (threadIds.length === 0 && jobs.length === 0) return null;
+  return {
+    kind: "known",
+    busyThreads: threadIds.length,
+    threadIds,
+    jobs,
+    scheduledTasks: 0,
+  };
+}
 
 /** Whether stopping now needs a question: work runs, a task is scheduled, or the check failed. */
 export const hasWork = (c: WorkCheck): boolean =>
@@ -142,11 +171,15 @@ export async function checkWork(req: Request): Promise<WorkCheck> {
       runningJobs(req),
       scheduledTasks(req),
     ]);
+    const chats = threads.filter(
+      (t) => isBackgroundThread(runKindOf(t)) === null
+    );
     return {
       kind: "known",
-      busyThreads: threads.filter(
-        (t) => isBackgroundThread(runKindOf(t)) === null
-      ).length,
+      busyThreads: chats.length,
+      threadIds: chats.map((t) =>
+        String((t as { thread_id?: unknown })?.thread_id ?? "")
+      ),
       jobs,
       scheduledTasks: tasks,
     };

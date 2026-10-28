@@ -6,11 +6,13 @@ import {
   hasWork,
   isBackgroundThread,
   waitForMemoryWorkers,
+  workStartedSince,
   type Request,
+  type WorkCheck,
 } from "./closeCheck";
 
-const thread = (run_kind?: string) => ({
-  thread_id: "t",
+const thread = (run_kind?: string, thread_id = "t") => ({
+  thread_id,
   metadata: run_kind ? { run_kind } : {},
 });
 const cron = (run_kind: string, enabled = true) => ({
@@ -63,6 +65,7 @@ describe("checkWork", () => {
     expect(r).toEqual({
       kind: "known",
       busyThreads: 0,
+      threadIds: [],
       jobs: [],
       scheduledTasks: 0,
     });
@@ -72,9 +75,9 @@ describe("checkWork", () => {
   it("names running jobs and counts busy chats and enabled scheduled tasks", async () => {
     const req = backend({
       threads: [
-        thread(),
-        thread("evomemory_subagent_worker"),
-        thread("something_else"),
+        thread(undefined, "chat-1"),
+        thread("evomemory_subagent_worker", "memory-1"),
+        thread("something_else", "other-1"),
       ],
       jobs: {
         running: [{ process_id: "p1", name: "train.py" }, { process_id: "p2" }],
@@ -85,6 +88,7 @@ describe("checkWork", () => {
     expect(r).toEqual({
       kind: "known",
       busyThreads: 2,
+      threadIds: ["chat-1", "other-1"],
       jobs: ["train.py", "p2"],
       scheduledTasks: 1,
     });
@@ -160,10 +164,47 @@ describe("waitForMemoryWorkers", () => {
   });
 });
 
+describe("workStartedSince", () => {
+  const known = (threadIds: string[], jobs: string[] = []): WorkCheck => ({
+    kind: "known",
+    busyThreads: threadIds.length,
+    threadIds,
+    jobs,
+    scheduledTasks: 3,
+  });
+  const unknown: WorkCheck = { kind: "unknown", reason: "timeout" };
+
+  it("is null when nothing new runs, also when work ended", () => {
+    expect(
+      workStartedSince(known(["a"], ["j"]), known(["a"], ["j"]))
+    ).toBeNull();
+    expect(workStartedSince(known(["a", "b"]), known(["b"]))).toBeNull();
+  });
+
+  it("returns only the chats and jobs that started since, without scheduled tasks", () => {
+    expect(
+      workStartedSince(known(["a"], ["j"]), known(["a", "b"], ["j", "k"]))
+    ).toEqual({
+      kind: "known",
+      busyThreads: 1,
+      threadIds: ["b"],
+      jobs: ["k"],
+      scheduledTasks: 0,
+    });
+  });
+
+  it("asks again when the second check fails, unless the first one did", () => {
+    expect(workStartedSince(known([]), unknown)).toBe(unknown);
+    expect(workStartedSince(unknown, unknown)).toBeNull();
+    expect(workStartedSince(unknown, known(["a"]))).toBeNull();
+  });
+});
+
 describe("confirmation", () => {
   const idle = {
     kind: "known" as const,
     busyThreads: 0,
+    threadIds: [],
     jobs: [],
     scheduledTasks: 0,
   };
