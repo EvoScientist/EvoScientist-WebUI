@@ -453,7 +453,9 @@ describe("the Setup form", () => {
     });
     renderView();
     fireEvent.click(await screen.findByRole("button", { name: "Restart now" }));
-    await screen.findByText(/did not start this EvoScientist/);
+    await screen.findByText(
+      /did not start this EvoScientist.*EvoSci server stop/
+    );
     expect(screen.queryByRole("button", { name: "Restart now" })).toBeNull();
     server.settings = settings({
       restart_required: true,
@@ -518,7 +520,7 @@ describe("the Setup form", () => {
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
   });
 
-  it("shows which changes wait for a restart, and says to restart EvoSci", async () => {
+  it("shows which changes wait for a restart, and says to stop the server", async () => {
     server.settings = settings({
       restart_required: true,
       restart_fields: ["mcp.yaml", "tavily_api_key"],
@@ -526,7 +528,7 @@ describe("the Setup form", () => {
     renderView();
     expect(
       await screen.findByText(
-        /after EvoScientist restarts: MCP servers \(mcp\.yaml\), Tavily API key\. Restart EvoSci/
+        /after EvoScientist restarts: MCP servers \(mcp\.yaml\), Tavily API key\..*EvoSci server stop/
       )
     ).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Restart now" })).toBeNull();

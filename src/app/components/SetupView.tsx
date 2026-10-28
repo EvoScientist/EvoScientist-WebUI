@@ -563,6 +563,11 @@ function ConfigErrorNotice({ payload }: { payload: SettingsPayload }) {
   );
 }
 
+/** How to restart a backend the desktop app doesn't own: EvoSci reuses a
+ *  running backend, which lasts across sessions until it is stopped. */
+const APPLY_BY_SERVER_STOP =
+  "Apply them with EvoSci server stop, then start EvoSci again. Stopping it ends running work in every project that uses this backend.";
+
 /** Which saved changes wait for a restart of EvoSci, and the way to do it. */
 export function RestartNotice({
   payload,
@@ -594,7 +599,7 @@ export function RestartNotice({
     } else if (result.code === "not_owned") {
       setState({
         kind: "done",
-        text: "The app did not start this EvoScientist. Restart EvoSci where it runs.",
+        text: `The app did not start this EvoScientist. ${APPLY_BY_SERVER_STOP}`,
       });
     } else {
       setState({
@@ -615,7 +620,7 @@ export function RestartNotice({
       <div className="min-w-0 flex-1 space-y-2">
         <p>
           These changes take effect after EvoScientist restarts: {names}.
-          {!bridge?.restartBackend && " Restart EvoSci to apply them."}
+          {!bridge?.restartBackend && ` ${APPLY_BY_SERVER_STOP}`}
         </p>
         {bridge?.restartBackend && state.kind !== "done" && (
           <Button
