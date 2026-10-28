@@ -12,25 +12,37 @@ import type { ScheduledTask } from "@/app/hooks/useScheduledTasks";
 const hook = vi.hoisted(() => ({
   tasks: [] as ScheduledTask[],
   updateScheduledTask: vi.fn(),
+  setScheduledTaskEnabled: vi.fn(),
 }));
 
-vi.mock("@/app/hooks/useScheduledTasks", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/app/hooks/useScheduledTasks")>()),
-  useScheduledTasks: () => ({
-    tasks: hook.tasks,
-    loading: false,
-    error: null,
-    refresh: vi.fn(),
-  }),
-  updateScheduledTask: hook.updateScheduledTask,
-  useServedFolder: () => "/home/you/projA",
-  useAssistantRecovery: () => () => {},
-  useSchedulerGate: () => () => true,
-  useSchedulerTarget: () => ({
-    assistantId: "scheduler-assistant",
-    workspaceDir: "/home/you/projA",
-  }),
-}));
+vi.mock("@/app/hooks/useScheduledTasks", async (importOriginal) => {
+  const { useState } = await import("react");
+  return {
+    ...(await importOriginal<typeof import("@/app/hooks/useScheduledTasks")>()),
+    useScheduledTasks: () => {
+      const [tasks, setTasks] = useState(hook.tasks);
+      return {
+        tasks,
+        loading: false,
+        error: null,
+        refresh: vi.fn(),
+        replaceTask: (task: ScheduledTask) =>
+          setTasks((current) =>
+            current.map((t) => (t.cron_id === task.cron_id ? task : t))
+          ),
+      };
+    },
+    updateScheduledTask: hook.updateScheduledTask,
+    setScheduledTaskEnabled: hook.setScheduledTaskEnabled,
+    useServedFolder: () => "/home/you/projA",
+    useAssistantRecovery: () => () => {},
+    useSchedulerGate: () => () => true,
+    useSchedulerTarget: () => ({
+      assistantId: "scheduler-assistant",
+      workspaceDir: "/home/you/projA",
+    }),
+  };
+});
 
 vi.mock("@/app/components/ScheduledTaskActivity", () => ({
   ScheduledTaskActivity: () => null,
@@ -62,6 +74,7 @@ function task(overrides: Partial<ScheduledTask>): ScheduledTask {
     created_at: "2026-10-09T08:00:00+00:00",
     updated_at: "2026-10-09T08:00:00+00:00",
     workspaceDir: null,
+    enabled: true,
     ...overrides,
   };
 }
@@ -95,6 +108,7 @@ beforeEach(() => {
   stubBrowserTimeZone("Asia/Shanghai");
   hook.tasks = [];
   hook.updateScheduledTask.mockReset();
+  hook.setScheduledTaskEnabled.mockReset();
 });
 
 afterEach(() => vi.restoreAllMocks());
@@ -122,8 +136,9 @@ describe("ScheduledTasksPanel time zones", () => {
     const legacy = task({ cron_id: "legacy", name: "Legacy", timezone: null });
     hook.tasks = [legacy];
     hook.updateScheduledTask.mockResolvedValue({
-      task: { ...legacy, cron_id: "new", timezone: "Asia/Shanghai" },
-      oldTaskDeleted: true,
+      ...legacy,
+      cron_id: "new",
+      timezone: "Asia/Shanghai",
     });
     render(<ScheduledTasksPanel />);
     openEdit("Legacy");
@@ -143,10 +158,6 @@ describe("ScheduledTasksPanel time zones", () => {
         prompt: "Brief me",
         schedule: "0 9 * * *",
         timezone: null,
-        target: {
-          assistantId: "scheduler-assistant",
-          workspaceDir: "/home/you/projA",
-        },
       })
     );
   });
@@ -154,10 +165,7 @@ describe("ScheduledTasksPanel time zones", () => {
   it("keeps the time zone of a task made in another one", async () => {
     const london = task({ name: "London", timezone: "Europe/London" });
     hook.tasks = [london];
-    hook.updateScheduledTask.mockResolvedValue({
-      task: london,
-      oldTaskDeleted: true,
-    });
+    hook.updateScheduledTask.mockResolvedValue(london);
     render(<ScheduledTasksPanel />);
     openEdit("London");
 
@@ -190,7 +198,7 @@ describe("ScheduledTasksPanel time zones", () => {
     expect(saveButton().hasAttribute("disabled")).toBe(true);
   });
 
-  it("keeps a task of another folder from being edited or run here", () => {
+  it("lets a task of another folder be edited in place but not run here", () => {
     hook.tasks = [task({ name: "Elsewhere", workspaceDir: "/home/you/projB" })];
     render(<ScheduledTasksPanel />);
     fireEvent.click(screen.getByRole("button", { name: /Elsewhere/ }));
@@ -199,10 +207,103 @@ describe("ScheduledTasksPanel time zones", () => {
       screen
         .getByRole("button", { name: 'Edit scheduled task "Elsewhere"' })
         .hasAttribute("disabled")
-    ).toBe(true);
+    ).toBe(false);
     expect(
       screen.getByRole("button", { name: /Run now/ }).hasAttribute("disabled")
     ).toBe(true);
+  });
+});
+
+describe("ScheduledTasksPanel pause and resume", () => {
+  it("pauses a task and shows it as paused", async () => {
+    const daily = task({
+      name: "Briefing",
+      next_run_date: "2026-10-10T01:00:00+00:00",
+    });
+    hook.tasks = [daily];
+    hook.setScheduledTaskEnabled.mockResolvedValue({
+      ...daily,
+      enabled: false,
+    });
+    render(<ScheduledTasksPanel />);
+    fireEvent.click(screen.getByRole("button", { name: /Briefing/ }));
+    fireEvent.click(
+      screen.getByRole("button", { name: 'Pause scheduled task "Briefing"' })
+    );
+
+    await waitFor(() =>
+      expect(hook.setScheduledTaskEnabled).toHaveBeenCalledWith(
+        expect.objectContaining({ cron_id: "cron-1" }),
+        false
+      )
+    );
+    expect(
+      await screen.findByRole("button", {
+        name: 'Resume scheduled task "Briefing"',
+      })
+    ).toBeTruthy();
+  });
+
+  it("resumes a paused task", async () => {
+    const paused = task({ name: "Briefing", enabled: false });
+    hook.tasks = [paused];
+    hook.setScheduledTaskEnabled.mockResolvedValue({
+      ...paused,
+      enabled: true,
+    });
+    render(<ScheduledTasksPanel />);
+    fireEvent.click(screen.getByRole("button", { name: /Briefing/ }));
+    fireEvent.click(
+      screen.getByRole("button", { name: 'Resume scheduled task "Briefing"' })
+    );
+
+    await waitFor(() =>
+      expect(hook.setScheduledTaskEnabled).toHaveBeenCalledWith(
+        expect.objectContaining({ cron_id: "cron-1" }),
+        true
+      )
+    );
+  });
+
+  it("keeps the pane on the task the user moved to when a pause returns late", async () => {
+    hook.tasks = [
+      task({ cron_id: "a", name: "Alpha" }),
+      task({ cron_id: "b", name: "Beta" }),
+    ];
+    let finish: (value: ScheduledTask) => void = () => {};
+    hook.setScheduledTaskEnabled.mockReturnValue(
+      new Promise<ScheduledTask>((resolve) => (finish = resolve))
+    );
+    render(<ScheduledTasksPanel />);
+    fireEvent.click(screen.getByRole("button", { name: /Alpha/ }));
+    fireEvent.click(
+      screen.getByRole("button", { name: 'Pause scheduled task "Alpha"' })
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Beta/ }));
+
+    finish(task({ cron_id: "a", name: "Alpha", enabled: false }));
+
+    expect(await screen.findByText("Paused")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Beta" })).toBeTruthy();
+    expect(
+      screen
+        .getByRole("button", { name: 'Pause scheduled task "Beta"' })
+        .hasAttribute("disabled")
+    ).toBe(false);
+  });
+
+  it("lists a paused task as paused, not by its next run", () => {
+    hook.tasks = [
+      task({
+        name: "Briefing",
+        enabled: false,
+        next_run_date: "2026-10-10T01:00:00+00:00",
+      }),
+    ];
+    render(<ScheduledTasksPanel />);
+
+    expect(screen.getByText("Paused")).toBeTruthy();
+    expect(screen.queryByText(/^Next:/)).toBeNull();
   });
 });
 
@@ -211,8 +312,8 @@ describe("ScheduledTasksPanel custom cron", () => {
     const weekdays = task({ name: "Weekdays", schedule: "0 9 * * 1-5" });
     hook.tasks = [weekdays];
     hook.updateScheduledTask.mockResolvedValue({
-      task: { ...weekdays, name: "Weekday briefing" },
-      oldTaskDeleted: true,
+      ...weekdays,
+      name: "Weekday briefing",
     });
     render(<ScheduledTasksPanel />);
     // The list shows the expression, not "Every Mon at 09:00".
@@ -269,8 +370,8 @@ describe("ScheduledTasksPanel custom cron", () => {
     const zeros = task({ name: "Zeros", schedule: "09 07 * * *" });
     hook.tasks = [zeros];
     hook.updateScheduledTask.mockResolvedValue({
-      task: { ...zeros, name: "Zeros renamed" },
-      oldTaskDeleted: true,
+      ...zeros,
+      name: "Zeros renamed",
     });
     render(<ScheduledTasksPanel />);
     openEdit("Zeros");
@@ -309,8 +410,8 @@ describe("ScheduledTasksPanel custom cron", () => {
     const zeros = task({ name: "Zeros", schedule: "09 07 * * *" });
     hook.tasks = [zeros];
     hook.updateScheduledTask.mockResolvedValue({
-      task: { ...zeros, name: "Zeros renamed" },
-      oldTaskDeleted: true,
+      ...zeros,
+      name: "Zeros renamed",
     });
     render(<ScheduledTasksPanel />);
     openEdit("Zeros");
@@ -333,8 +434,8 @@ describe("ScheduledTasksPanel custom cron", () => {
     const zeros = task({ name: "Zeros", schedule: "09 07 * * *" });
     hook.tasks = [zeros];
     hook.updateScheduledTask.mockResolvedValue({
-      task: { ...zeros, name: "Zeros renamed" },
-      oldTaskDeleted: true,
+      ...zeros,
+      name: "Zeros renamed",
     });
     render(<ScheduledTasksPanel />);
     openEdit("Zeros");
@@ -358,10 +459,7 @@ describe("ScheduledTasksPanel custom cron", () => {
       timezone: null,
     });
     hook.tasks = [legacy];
-    hook.updateScheduledTask.mockResolvedValue({
-      task: legacy,
-      oldTaskDeleted: true,
-    });
+    hook.updateScheduledTask.mockResolvedValue(legacy);
     render(<ScheduledTasksPanel />);
     openEdit("Legacy");
 
@@ -377,10 +475,7 @@ describe("ScheduledTasksPanel custom cron", () => {
   it("starts Custom cron from a schedule changed in the builder", async () => {
     const zeros = task({ name: "Zeros", schedule: "09 07 * * *" });
     hook.tasks = [zeros];
-    hook.updateScheduledTask.mockResolvedValue({
-      task: zeros,
-      oldTaskDeleted: true,
-    });
+    hook.updateScheduledTask.mockResolvedValue(zeros);
     render(<ScheduledTasksPanel />);
     openEdit("Zeros");
 
@@ -523,8 +618,8 @@ describe("ScheduledTasksPanel custom cron", () => {
     const daily = task({ name: "Nightly", schedule: "@daily" });
     hook.tasks = [daily];
     hook.updateScheduledTask.mockResolvedValue({
-      task: { ...daily, name: "Nightly renamed" },
-      oldTaskDeleted: true,
+      ...daily,
+      name: "Nightly renamed",
     });
     render(<ScheduledTasksPanel />);
     openEdit("Nightly");
@@ -547,8 +642,8 @@ describe("ScheduledTasksPanel custom cron", () => {
     const secs = task({ name: "Seconds", schedule: "0 9 * * * 30" });
     hook.tasks = [secs];
     hook.updateScheduledTask.mockResolvedValue({
-      task: { ...secs, name: "Seconds renamed" },
-      oldTaskDeleted: true,
+      ...secs,
+      name: "Seconds renamed",
     });
     render(<ScheduledTasksPanel />);
     openEdit("Seconds");
@@ -595,10 +690,7 @@ describe("ScheduledTasksPanel custom cron", () => {
   it("keeps the hour and minute whole numbers", async () => {
     const eight = task({ name: "Eight", schedule: "0 8 * * *" });
     hook.tasks = [eight];
-    hook.updateScheduledTask.mockResolvedValue({
-      task: eight,
-      oldTaskDeleted: true,
-    });
+    hook.updateScheduledTask.mockResolvedValue(eight);
     render(<ScheduledTasksPanel />);
     openEdit("Eight");
 
@@ -619,8 +711,8 @@ describe("ScheduledTasksPanel custom cron", () => {
     const zeros = task({ name: "Zeros", schedule: "09 07 * * *" });
     hook.tasks = [zeros];
     hook.updateScheduledTask.mockResolvedValue({
-      task: { ...zeros, schedule: "9 7 * * *" },
-      oldTaskDeleted: true,
+      ...zeros,
+      schedule: "9 7 * * *",
     });
     render(<ScheduledTasksPanel />);
     openEdit("Zeros");
@@ -642,10 +734,7 @@ describe("ScheduledTasksPanel custom cron", () => {
   it("writes the builder's spelling once the schedule changes", async () => {
     const zeros = task({ name: "Zeros", schedule: "09 07 * * *" });
     hook.tasks = [zeros];
-    hook.updateScheduledTask.mockResolvedValue({
-      task: zeros,
-      oldTaskDeleted: true,
-    });
+    hook.updateScheduledTask.mockResolvedValue(zeros);
     render(<ScheduledTasksPanel />);
     openEdit("Zeros");
 

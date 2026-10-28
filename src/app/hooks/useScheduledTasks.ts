@@ -50,13 +50,19 @@ export interface ScheduledTask {
   updated_at: string;
   /** The folder the task runs in; null for a task made before tags. */
   workspaceDir: string | null;
+  /** False while the task is paused: it keeps its schedule but doesn't run. */
+  enabled: boolean;
+}
+
+/** When `task` runs next; null while it is paused or has no next run. */
+export function upcomingRun(task: ScheduledTask): string | null {
+  return task.enabled ? task.next_run_date : null;
 }
 
 /**
- * Why `task` can't be edited or run from here: it runs in another folder
- * than the backend's, and editing or running it would move it to this one.
- * Null when it can. An untagged task counts as this folder's, as the core's
- * scheduling does.
+ * Why `task` can't be run from here: it runs in another folder than the
+ * backend's, and a manual run would run it in this one. Null when it can. An
+ * untagged task counts as this folder's, as the core's scheduling does.
  */
 export function otherFolderReason(
   task: ScheduledTask,
@@ -83,6 +89,7 @@ function parseCron(cron: Cron): ScheduledTask {
       typeof meta.workspace_dir === "string" && meta.workspace_dir
         ? meta.workspace_dir
         : null,
+    enabled: cron.enabled !== false,
   };
 }
 
@@ -140,6 +147,11 @@ export async function deleteScheduledTask(cronId: string): Promise<void> {
   await client.crons.delete(cronId);
 }
 
+/**
+ * Edit a task in place: it keeps its ID, its folder's assistant, its run
+ * history and whether it is paused. The server merges `metadata` into the
+ * stored one and replaces `input`.
+ */
 export async function updateScheduledTask(params: {
   cronId: string;
   name: string;
@@ -150,22 +162,35 @@ export async function updateScheduledTask(params: {
    * one (made before #61, meant as local time) moves to the browser's.
    */
   timezone: string | null;
-  target: SchedulerTarget;
-}): Promise<{ task: ScheduledTask; oldTaskDeleted: boolean }> {
-  const task = await createScheduledTask({
-    name: params.name,
-    prompt: params.prompt,
+}): Promise<ScheduledTask> {
+  const client = makeClient();
+  if (!client) throw new Error("No EvoScientist deployment configured.");
+  const cron = await client.crons.update(params.cronId, {
+    input: { messages: [{ role: "user", content: params.prompt }] },
     schedule: params.schedule,
-    timezone: params.timezone,
-    target: params.target,
+    timezone: params.timezone || browserTimeZone(),
+    metadata: { name: params.name, prompt: params.prompt },
   });
+  return parseCron(cron);
+}
 
-  try {
-    await deleteScheduledTask(params.cronId);
-    return { task, oldTaskDeleted: true };
-  } catch {
-    return { task, oldTaskDeleted: false };
-  }
+/**
+ * Pause a task (it keeps its schedule but doesn't run) or resume it. A pause
+ * leaves the next run date where it was, so the server would fire a resumed
+ * task at once for a time missed while paused; resuming sends the schedule
+ * again, which makes the server count the next run from now.
+ */
+export async function setScheduledTaskEnabled(
+  task: Pick<ScheduledTask, "cron_id" | "schedule">,
+  enabled: boolean
+): Promise<ScheduledTask> {
+  const client = makeClient();
+  if (!client) throw new Error("No EvoScientist deployment configured.");
+  const cron = await client.crons.update(
+    task.cron_id,
+    enabled ? { enabled, schedule: task.schedule } : { enabled }
+  );
+  return parseCron(cron);
 }
 
 export async function runScheduledTaskNow(
@@ -251,6 +276,9 @@ export function useScheduledTasks(): {
   loading: boolean;
   error: string | null;
   refresh: () => void;
+  /** Put a task the server just returned (edited, paused, resumed) in the
+   *  list in place of its old copy. */
+  replaceTask: (task: ScheduledTask) => void;
 } {
   const [tasks, setTasks] = useState<ScheduledTask[]>([]);
   const [loading, setLoading] = useState(true);
@@ -258,6 +286,13 @@ export function useScheduledTasks(): {
   const [rev, setRev] = useState(0);
 
   const refresh = useCallback(() => setRev((r) => r + 1), []);
+  const replaceTask = useCallback(
+    (task: ScheduledTask) =>
+      setTasks((current) =>
+        current.map((t) => (t.cron_id === task.cron_id ? task : t))
+      ),
+    []
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -287,5 +322,5 @@ export function useScheduledTasks(): {
     };
   }, [rev]);
 
-  return { tasks, loading, error, refresh };
+  return { tasks, loading, error, refresh, replaceTask };
 }

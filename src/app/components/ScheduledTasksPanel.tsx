@@ -11,6 +11,7 @@ import {
   Clock,
   FlaskConical,
   Loader2,
+  Pause,
   Pencil,
   Play,
   Plus,
@@ -48,7 +49,9 @@ import {
   createScheduledTask,
   deleteScheduledTask,
   runScheduledTaskNow,
+  setScheduledTaskEnabled,
   updateScheduledTask,
+  upcomingRun,
   otherFolderReason,
   useScheduledTasks,
   useSchedulerTarget,
@@ -159,7 +162,8 @@ function taskSearchText(task: ScheduledTask): string {
     task.prompt,
     task.schedule,
     scheduleLabel(task.schedule, task.timezone),
-    task.next_run_date ? formatAbsoluteDate(task.next_run_date) : "",
+    task.enabled ? "" : "paused",
+    upcomingRun(task) ? formatAbsoluteDate(upcomingRun(task)) : "",
   ]
     .join(" ")
     .toLowerCase();
@@ -167,8 +171,10 @@ function taskSearchText(task: ScheduledTask): string {
 
 function sortTasks(tasks: ScheduledTask[]): ScheduledTask[] {
   return [...tasks].sort((a, b) => {
-    const aNext = a.next_run_date ? new Date(a.next_run_date).getTime() : 0;
-    const bNext = b.next_run_date ? new Date(b.next_run_date).getTime() : 0;
+    const aRun = upcomingRun(a);
+    const bRun = upcomingRun(b);
+    const aNext = aRun ? new Date(aRun).getTime() : 0;
+    const bNext = bRun ? new Date(bRun).getTime() : 0;
     if (aNext && bNext && aNext !== bNext) return aNext - bNext;
     if (aNext && !bNext) return -1;
     if (!aNext && bNext) return 1;
@@ -481,18 +487,12 @@ function TaskForm({
     name.trim() !== initialTask.name.trim() ||
     prompt.trim() !== initialTask.prompt.trim() ||
     cron !== initialTask.schedule.trim();
+  // A new task goes to this folder's scheduler; an edit keeps the task's own.
   const target = useSchedulerTarget();
-  // Saving re-creates the task on this folder's scheduler: never for a task
-  // of another folder.
-  const servedFolder = useServedFolder();
   const recoverAssistant = useAssistantRecovery();
   const gateOpen = useSchedulerGate();
-  const elsewhere = initialTask
-    ? otherFolderReason(initialTask, servedFolder)
-    : null;
   const canSave = Boolean(
-    !elsewhere &&
-      target &&
+    (initialTask || target) &&
       name.trim() &&
       prompt.trim() &&
       !cronError &&
@@ -517,39 +517,36 @@ function TaskForm({
       toast.error(cronError);
       return;
     }
-    if (!hasChanges || !target || elsewhere || !gateOpen()) return;
+    if (!hasChanges) return;
+    const createOn = initialTask ? null : target;
+    if (!initialTask && (!createOn || !gateOpen())) return;
 
     setSaving(true);
     try {
       if (initialTask) {
-        const result = await updateScheduledTask({
+        const task = await updateScheduledTask({
           cronId: initialTask.cron_id,
           name: name.trim(),
           prompt: prompt.trim(),
           schedule: cron,
           timezone: initialTask.timezone,
-          target,
         });
-        if (result.oldTaskDeleted) {
-          toast.success(`"${name.trim()}" updated.`);
-        } else {
-          toast.warning(
-            `"${name.trim()}" was saved, but the old scheduled task could not be removed.`
-          );
-        }
-        onSaved(result.task);
-      } else {
+        toast.success(`"${name.trim()}" updated.`);
+        onSaved(task);
+      } else if (createOn) {
         await createScheduledTask({
           name: name.trim(),
           prompt: prompt.trim(),
           schedule: cron,
-          target,
+          target: createOn,
         });
         toast.success(`"${name.trim()}" scheduled.`);
         onSaved();
       }
     } catch (err) {
-      recoverAssistant(err);
+      // An edit changes the task in place, so only a create can find the
+      // folder's assistant gone.
+      if (!initialTask) recoverAssistant(err);
       toast.error(
         err instanceof Error
           ? err.message
@@ -669,6 +666,8 @@ interface TaskDetailProps {
   task: ScheduledTask;
   onBack: () => void;
   onEdit: () => void;
+  /** The task changed in place (paused or resumed). */
+  onChanged: (task: ScheduledTask) => void;
   onDeleted: () => void;
   onOpenThread?: (id: string) => void | Promise<void>;
 }
@@ -677,13 +676,16 @@ function TaskDetail({
   task,
   onBack,
   onEdit,
+  onChanged,
   onDeleted,
   onOpenThread,
 }: TaskDetailProps) {
   const [running, setRunning] = useState(false);
+  const [toggling, setToggling] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const nextRunTitle = formatLongDate(task.next_run_date);
+  const nextRun = upcomingRun(task);
+  const nextRunTitle = formatLongDate(nextRun);
   const target = useSchedulerTarget();
   const elsewhere = otherFolderReason(task, useServedFolder());
   const recoverAssistant = useAssistantRecovery();
@@ -704,6 +706,27 @@ function TaskDetail({
       setRunning(false);
     }
   }, [task, target, elsewhere, recoverAssistant, gateOpen]);
+
+  const handleToggle = useCallback(async () => {
+    setToggling(true);
+    try {
+      const changed = await setScheduledTaskEnabled(task, !task.enabled);
+      toast.success(
+        changed.enabled ? `"${task.name}" resumed.` : `"${task.name}" paused.`
+      );
+      onChanged(changed);
+    } catch (err) {
+      toast.error(
+        err instanceof Error
+          ? err.message
+          : task.enabled
+          ? "Failed to pause the task."
+          : "Failed to resume the task."
+      );
+    } finally {
+      setToggling(false);
+    }
+  }, [task, onChanged]);
 
   const handleDelete = useCallback(async () => {
     setDeleting(true);
@@ -770,10 +793,12 @@ function TaskDetail({
                   className="mt-1 truncate text-sm font-medium tabular-nums"
                   title={nextRunTitle}
                 >
-                  {task.next_run_date
-                    ? `${nextRunLabel(
-                        task.next_run_date
-                      )} · ${formatAbsoluteDate(task.next_run_date)}`
+                  {!task.enabled
+                    ? "Paused"
+                    : nextRun
+                    ? `${nextRunLabel(nextRun)} · ${formatAbsoluteDate(
+                        nextRun
+                      )}`
                     : "Not scheduled"}
                 </p>
               </div>
@@ -827,9 +852,25 @@ function TaskDetail({
             <Button
               variant="outline"
               size="sm"
+              onClick={() => void handleToggle()}
+              disabled={toggling}
+              aria-label={`${
+                task.enabled ? "Pause" : "Resume"
+              } scheduled task "${task.name}"`}
+            >
+              {toggling ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : task.enabled ? (
+                <Pause className="size-3.5" />
+              ) : (
+                <Play className="size-3.5" />
+              )}
+              {task.enabled ? "Pause" : "Resume"}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
               onClick={onEdit}
-              disabled={Boolean(elsewhere)}
-              title={elsewhere ?? undefined}
               aria-label={`Edit scheduled task "${task.name}"`}
             >
               <Pencil className="size-3.5" />
@@ -898,7 +939,7 @@ function TaskRow({
   active: boolean;
   onSelect: () => void;
 }) {
-  const nextRun = task.next_run_date;
+  const nextRun = upcomingRun(task);
 
   return (
     <button
@@ -910,7 +951,14 @@ function TaskRow({
         active ? "bg-accent" : "hover:bg-accent/60"
       )}
     >
-      <span className="mt-1 flex size-2 shrink-0 rounded-full bg-[var(--brand)]" />
+      <span
+        className={cn(
+          "mt-1 flex size-2 shrink-0 rounded-full",
+          task.enabled
+            ? "bg-[var(--brand)]"
+            : "bg-[var(--color-text-tertiary,var(--muted-foreground))] opacity-40"
+        )}
+      />
       <span className="min-w-0 flex-1">
         <span className="block truncate text-sm font-medium">{task.name}</span>
         <span className="mt-0.5 block truncate text-xs text-muted-foreground">
@@ -925,7 +973,11 @@ function TaskRow({
             className="truncate tabular-nums"
             title={formatLongDate(nextRun)}
           >
-            {nextRun ? nextRunLabel(nextRun) : "No next run"}
+            {!task.enabled
+              ? "Paused"
+              : nextRun
+              ? nextRunLabel(nextRun)
+              : "No next run"}
           </span>
         </span>
       </span>
@@ -948,14 +1000,11 @@ export function ScheduledTasksPanel({
 }: {
   onOpenThread?: (id: string) => void | Promise<void>;
 }) {
-  const { tasks, loading, error, refresh } = useScheduledTasks();
+  const { tasks, loading, error, refresh, replaceTask } = useScheduledTasks();
   const [right, setRight] = useState<RightPane>({ kind: "empty" });
   const [query, setQuery] = useState("");
   const createIdRef = useRef(0);
   const editIdRef = useRef(0);
-  // Holds the cron_id of a just-saved task while the list refresh is in flight.
-  // The sync effect below won't navigate away while this id is pending.
-  const pendingTaskIdRef = useRef<string | null>(null);
 
   const sortedTasks = useMemo(() => sortTasks(tasks), [tasks]);
   const filteredTasks = useMemo(() => {
@@ -965,30 +1014,19 @@ export function ScheduledTasksPanel({
       taskSearchText(task).includes(normalized)
     );
   }, [query, sortedTasks]);
-  const nextTask = sortedTasks.find((task) => task.next_run_date);
+  const nextTask = sortedTasks.find((task) => upcomingRun(task));
+  const nextTaskRun = nextTask ? upcomingRun(nextTask) : null;
   const selectedTaskId = right.kind === "detail" ? right.task.cron_id : null;
 
-  // Keep detail pane in sync with the task list.
-  // While a refresh is in flight, hold position so a just-saved task's new
-  // cron_id (not yet in the list) doesn't trigger premature navigation to empty.
-  // Once loading finishes we clear the pending guard and evaluate normally.
+  // Keep the detail pane in sync with the task list: an edit, a pause or a
+  // resume keeps the task's ID and replaces it in the list, so the list always
+  // holds the task the pane shows.
   useEffect(() => {
     if (!selectedTaskId) return;
     if (loading) return;
     const updated = tasks.find((task) => task.cron_id === selectedTaskId);
-    if (updated) {
-      if (pendingTaskIdRef.current === selectedTaskId) {
-        pendingTaskIdRef.current = null;
-      }
-      setRight({ kind: "detail", task: updated });
-      return;
-    }
-    if (pendingTaskIdRef.current === selectedTaskId && !error) {
-      return;
-    }
-    pendingTaskIdRef.current = null;
-    setRight({ kind: "empty" });
-  }, [error, loading, selectedTaskId, tasks]);
+    setRight(updated ? { kind: "detail", task: updated } : { kind: "empty" });
+  }, [loading, selectedTaskId, tasks]);
 
   const openCreate = useCallback((template?: Template) => {
     createIdRef.current += 1;
@@ -1002,11 +1040,29 @@ export function ScheduledTasksPanel({
 
   const handleSaved = useCallback(
     (task?: ScheduledTask) => {
-      pendingTaskIdRef.current = task?.cron_id ?? null;
-      refresh();
-      setRight(task ? { kind: "detail", task } : { kind: "empty" });
+      if (task) {
+        replaceTask(task);
+        setRight({ kind: "detail", task });
+      } else {
+        refresh();
+        setRight({ kind: "empty" });
+      }
     },
-    [refresh]
+    [refresh, replaceTask]
+  );
+
+  // A pause or resume that returns after the user moved on updates the list
+  // only: it doesn't take the pane back to its task.
+  const handleChanged = useCallback(
+    (task: ScheduledTask) => {
+      replaceTask(task);
+      setRight((current) =>
+        current.kind === "detail" && current.task.cron_id === task.cron_id
+          ? { kind: "detail", task }
+          : current
+      );
+    },
+    [replaceTask]
   );
 
   const handleDeleted = useCallback(() => {
@@ -1034,8 +1090,8 @@ export function ScheduledTasksPanel({
               )}
             </div>
             <p className="truncate text-xs text-muted-foreground">
-              {nextTask?.next_run_date
-                ? `Next: ${nextRunLabel(nextTask.next_run_date)}`
+              {nextTaskRun
+                ? `Next: ${nextRunLabel(nextTaskRun)}`
                 : "Recurring EvoScientist tasks"}
             </p>
           </div>
@@ -1269,9 +1325,11 @@ export function ScheduledTasksPanel({
 
           {right.kind === "detail" && (
             <TaskDetail
+              key={right.task.cron_id}
               task={right.task}
               onBack={() => setRight({ kind: "empty" })}
               onEdit={() => openEdit(right.task)}
+              onChanged={handleChanged}
               onDeleted={handleDeleted}
               onOpenThread={onOpenThread}
             />

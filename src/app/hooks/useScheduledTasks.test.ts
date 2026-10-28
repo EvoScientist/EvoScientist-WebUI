@@ -18,6 +18,7 @@ import {
   createScheduledTask,
   listScheduledTasks,
   runScheduledTaskNow,
+  setScheduledTaskEnabled,
   updateScheduledTask,
 } from "./useScheduledTasks";
 
@@ -174,35 +175,40 @@ describe("scheduled tasks run in the backend's folder", () => {
 });
 
 describe("updateScheduledTask", () => {
-  it("keeps the edited task's time zone", async () => {
-    const calls = mockServer((call) =>
-      call.method === "DELETE"
-        ? undefined
-        : cron({ cron_id: "cron-2", timezone: "Europe/London" })
+  const patchCalls = (calls: Call[]) =>
+    calls.filter(
+      (c) => c.method === "PATCH" && c.path === "/runs/crons/cron-1"
     );
 
-    const { task, oldTaskDeleted } = await updateScheduledTask({
+  it("edits the task in place and keeps its time zone", async () => {
+    const calls = mockServer(() =>
+      cron({ timezone: "Europe/London", enabled: false })
+    );
+
+    const task = await updateScheduledTask({
       cronId: "cron-1",
       name: "Daily",
       prompt: "Brief me",
       schedule: "0 8 * * *",
       timezone: "Europe/London",
-      target,
     });
 
-    expect(createCall(calls)?.body).toMatchObject({
+    expect(patchCalls(calls)).toHaveLength(1);
+    expect(patchCalls(calls)[0].body).toMatchObject({
       schedule: "0 8 * * *",
       timezone: "Europe/London",
+      input: { messages: [{ role: "user", content: "Brief me" }] },
+      metadata: { name: "Daily", prompt: "Brief me" },
     });
-    expect(calls.some((c) => c.method === "DELETE")).toBe(true);
-    expect(oldTaskDeleted).toBe(true);
-    expect(task.timezone).toBe("Europe/London");
+    expect(patchCalls(calls)[0].body).not.toHaveProperty("enabled");
+    expect(
+      calls.some((c) => c.method === "POST" || c.method === "DELETE")
+    ).toBe(false);
+    expect(task).toMatchObject({ cron_id: "cron-1", enabled: false });
   });
 
   it("moves a task stored without a time zone to the browser's", async () => {
-    const calls = mockServer((call) =>
-      call.method === "DELETE" ? undefined : cron({ cron_id: "cron-2" })
-    );
+    const calls = mockServer(() => cron());
 
     await updateScheduledTask({
       cronId: "cron-1",
@@ -210,12 +216,38 @@ describe("updateScheduledTask", () => {
       prompt: "Brief me",
       schedule: "0 9 * * *",
       timezone: null,
-      target,
     });
 
-    expect(createCall(calls)?.body).toMatchObject({
+    expect(patchCalls(calls)[0].body).toMatchObject({
       timezone: "Asia/Shanghai",
     });
+  });
+});
+
+describe("setScheduledTaskEnabled", () => {
+  const daily = { cron_id: "cron-1", schedule: "0 9 * * *" };
+
+  it("pauses a task without touching its schedule", async () => {
+    const calls = mockServer(() => cron({ enabled: false }));
+
+    const task = await setScheduledTaskEnabled(daily, false);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      method: "PATCH",
+      path: "/runs/crons/cron-1",
+    });
+    expect(calls[0].body).toEqual({ enabled: false });
+    expect(task.enabled).toBe(false);
+  });
+
+  it("resumes a task with its schedule, so the next run counts from now", async () => {
+    const calls = mockServer(() => cron({ enabled: true }));
+
+    const task = await setScheduledTaskEnabled(daily, true);
+
+    expect(calls[0].body).toEqual({ enabled: true, schedule: "0 9 * * *" });
+    expect(task.enabled).toBe(true);
   });
 });
 
@@ -235,6 +267,24 @@ describe("listScheduledTasks", () => {
     expect(tasks.map((t) => [t.cron_id, t.timezone])).toEqual([
       ["local", "Europe/London"],
       ["legacy", null],
+    ]);
+  });
+
+  it("reads whether each task is paused", async () => {
+    mockServer((call) =>
+      call.path === "/runs/crons/search"
+        ? [
+            cron({ cron_id: "on", enabled: true }),
+            cron({ cron_id: "off", enabled: false }),
+          ]
+        : cron()
+    );
+
+    const tasks = await listScheduledTasks();
+
+    expect(tasks.map((t) => [t.cron_id, t.enabled])).toEqual([
+      ["on", true],
+      ["off", false],
     ]);
   });
 });
