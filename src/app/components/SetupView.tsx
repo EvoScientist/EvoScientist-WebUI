@@ -572,7 +572,9 @@ export function RestartNotice({
   onRestarted: () => Promise<unknown>;
 }) {
   const [state, setState] = useState<
-    { kind: "idle" } | { kind: "busy" } | { kind: "done"; text: string }
+    | { kind: "idle"; text?: string }
+    | { kind: "busy" }
+    | { kind: "done"; text: string }
   >({ kind: "idle" });
   if (!payload.restart_required || payload.restart_fields.length === 0) {
     return null;
@@ -591,6 +593,14 @@ export function RestartNotice({
     if (result.ok) {
       setState({ kind: "done", text: "EvoScientist is restarting." });
       await onRestarted();
+    } else if (result.code === "cancelled") {
+      // The user answered Cancel to the app's question: nothing to say.
+      setState({ kind: "idle" });
+    } else if (result.code === "busy") {
+      setState({
+        kind: "idle",
+        text: "The app is busy. Try again in a moment.",
+      });
     } else if (result.code === "not_owned") {
       setState({
         kind: "done",
@@ -627,7 +637,8 @@ export function RestartNotice({
             Restart now
           </Button>
         )}
-        {state.kind === "done" && <p>{state.text}</p>}
+        {state.kind === "busy" && <p>Restarting EvoScientist...</p>}
+        {state.kind !== "busy" && state.text && <p>{state.text}</p>}
       </div>
     </div>
   );

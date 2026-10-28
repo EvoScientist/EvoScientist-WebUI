@@ -758,6 +758,59 @@ describe("the Setup form", () => {
       revision: "rev-9",
     });
   });
+  it("says the restart runs until the desktop app answers", async () => {
+    let answer!: (r: { ok: true }) => void;
+    window.evoscientistDesktop = {
+      restartBackend: () => new Promise((r) => (answer = r)),
+    };
+    server.settings = settings({
+      restart_required: true,
+      restart_fields: ["model"],
+    });
+    renderView();
+    fireEvent.click(await screen.findByRole("button", { name: "Restart now" }));
+    expect(await screen.findByText("Restarting EvoScientist...")).toBeTruthy();
+    answer({ ok: true });
+    await screen.findByText("EvoScientist is restarting.");
+    expect(screen.queryByText("Restarting EvoScientist...")).toBeNull();
+  });
+
+  it("offers Restart now again after the restart was cancelled in the app", async () => {
+    const restartBackend = vi.fn(async () => ({
+      ok: false as const,
+      code: "cancelled",
+    }));
+    window.evoscientistDesktop = { restartBackend };
+    server.settings = settings({
+      restart_required: true,
+      restart_fields: ["model"],
+    });
+    renderView();
+    fireEvent.click(await screen.findByRole("button", { name: "Restart now" }));
+    await waitFor(() => expect(restartBackend).toHaveBeenCalledOnce());
+    const again = await screen.findByRole("button", { name: "Restart now" });
+    expect((again as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByText(/The restart failed/)).toBeNull();
+    expect(screen.queryByText("Restarting EvoScientist...")).toBeNull();
+  });
+
+  it("says the app is busy, and keeps Restart now", async () => {
+    window.evoscientistDesktop = {
+      restartBackend: async () => ({ ok: false, code: "busy" }),
+    };
+    server.settings = settings({
+      restart_required: true,
+      restart_fields: ["model"],
+    });
+    renderView();
+    fireEvent.click(await screen.findByRole("button", { name: "Restart now" }));
+    expect(
+      await screen.findByText("The app is busy. Try again in a moment.")
+    ).toBeTruthy();
+    const again = screen.getByRole("button", { name: "Restart now" });
+    expect((again as HTMLButtonElement).disabled).toBe(false);
+  });
+
   it("explains a failed restart from the desktop app", async () => {
     window.evoscientistDesktop = {
       restartBackend: () => {
