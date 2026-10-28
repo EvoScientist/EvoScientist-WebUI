@@ -580,6 +580,12 @@ describe("restart backend", () => {
     expect(h.messageBox.mock.calls[0][0]).toMatchObject({
       message: "This backend was started outside the app.",
     });
+    expect(h.messageBox.mock.calls[0][0].detail).toMatch(
+      /run EvoSci server stop in a terminal, then press Retry/
+    );
+    expect(h.messageBox.mock.calls[0][0].detail).toMatch(
+      /ends running work in every project/
+    );
     expect(h.sessions).toHaveLength(1);
     expect(h.sessions[0].stopped.count).toBe(0);
   });

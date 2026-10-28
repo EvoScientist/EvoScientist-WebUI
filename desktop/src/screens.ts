@@ -330,7 +330,7 @@ export function errorScreen(error: BootError, ctx: ScreenContext): ErrorScreen {
         title: "A backend for another folder is running",
         lines: [
           other ? `It serves ${other}.` : error.message,
-          "The app never starts a second backend. Stop the other one, then press Retry.",
+          "The app never starts a second backend. Stop the other one with EvoSci server stop in a terminal, then press Retry. Stopping it ends running work in every project that uses that backend.",
         ],
         actions: ["retry", "open_logs"],
       };

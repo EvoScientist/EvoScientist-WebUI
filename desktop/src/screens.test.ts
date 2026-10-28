@@ -161,6 +161,10 @@ describe("errorScreen", () => {
       ctx
     );
     expect(s.lines[0]).toBe("It serves D:\\other.");
+    // The backend keeps running across sessions (core #691): name the stop
+    // command and what it ends.
+    expect(s.lines[1]).toMatch(/Stop the other one with EvoSci server stop/);
+    expect(s.lines[1]).toMatch(/ends running work in every project/);
     expect(s.actions).toEqual(["retry", "open_logs"]);
   });
 

@@ -778,7 +778,7 @@ export function createApp(deps: AppDeps): App {
         title: "EvoScientist",
         message: "This backend was started outside the app.",
         detail:
-          "Restart EvoScientist where it was started, for example in its terminal. The app changed nothing.",
+          "To restart it, run EvoSci server stop in a terminal, then press Retry in the app, which starts its own. Stopping it ends running work in every project that uses this backend. The app changed nothing.",
         buttons: ["OK"],
         noLink: true,
       });
