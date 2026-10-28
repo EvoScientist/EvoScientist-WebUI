@@ -58,12 +58,15 @@ describe("errorScreen", () => {
       err("install_failed", {
         output: ["Error: EvoScientist is running"],
         running: true,
+        cn: false,
       }),
       ctx
     );
     expect(s.lines[1]).toMatch(
       /Close the programs listed below, then press Retry/
     );
+    expect(s.lines.join(" ")).not.toMatch(/mainland China/);
+    expect(s.actions).toEqual(["retry", "open_logs"]);
   });
 
   it("lists the failed setup steps with Retry and Continue", () => {

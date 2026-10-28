@@ -281,12 +281,14 @@ export function errorScreen(error: BootError, ctx: ScreenContext): ErrorScreen {
           d.running
             ? "EvoScientist is running. Close the programs listed below, then press Retry."
             : "Press Retry to run the install again.",
-          ...(d.cn ? [] : [MIRROR_RETRY_LINE]),
+          // Mirrors cannot help when the script refused a running core.
+          ...(d.cn || d.running ? [] : [MIRROR_RETRY_LINE]),
         ],
         ...(output.length > 0 ? { output } : {}),
-        actions: d.cn
-          ? ["retry", "open_logs"]
-          : ["retry", "retry_cn", "open_logs"],
+        actions:
+          d.cn || d.running
+            ? ["retry", "open_logs"]
+            : ["retry", "retry_cn", "open_logs"],
       };
       break;
     }
