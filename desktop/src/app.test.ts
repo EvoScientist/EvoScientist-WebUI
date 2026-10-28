@@ -595,6 +595,137 @@ describe("restart backend", () => {
   });
 });
 
+describe("restart from the page (bridge)", () => {
+  /** A harness whose next `deploy` answers `next()` instead of READY. */
+  async function launchedWith(next: () => DeployOutcome) {
+    let first = true;
+    const h = harness({
+      startDeploy: () => {
+        const s = fakeSession();
+        if (!first) s.outcome = Promise.resolve(next());
+        first = false;
+        h.sessions.push(s);
+        return s;
+      },
+    });
+    await h.app.launch();
+    expect(h.app.screen.kind).not.toBe("error");
+    return h;
+  }
+
+  it("same backend URL and folder: the page stays and the result is ok at the new ready", async () => {
+    const h = await launched();
+    h.win.navigate("http://127.0.0.1:4718/?view=setup");
+    const before = h.win.calls.length;
+    await expect(h.app.restartFromPage()).resolves.toEqual({ ok: true });
+    expect(h.sessions).toHaveLength(2);
+    expect(h.sessions[0].stopped.count).toBe(1);
+    // No status page, no reload, the same UI server.
+    expect(h.win.calls.slice(before)).toEqual([]);
+    expect(h.uis).toHaveLength(1);
+    expect(h.uis[0].ui.stops).toBe(0);
+    expect(h.app.backendUrlFor("http://127.0.0.1:4718")).toBe(READY.url);
+  });
+
+  it("a new port: the UI server restarts and the page loads again", async () => {
+    const h = await launchedWith(() => ({
+      kind: "ready",
+      ready: { ...READY, url: "http://127.0.0.1:6200" },
+    }));
+    h.win.navigate("http://127.0.0.1:4718/?view=settings");
+    await expect(h.app.restartFromPage()).resolves.toEqual({ ok: true });
+    expect(h.uis).toHaveLength(2);
+    expect(h.uis[0].ui.stops).toBe(1);
+    expect(h.win.calls.at(-1)).toBe(
+      "load http://127.0.0.1:4718/?view=settings"
+    );
+    expect(h.app.backendUrlFor("http://127.0.0.1:4718")).toBe(
+      "http://127.0.0.1:6200"
+    );
+  });
+
+  it("a new folder: the page loads at the UI's root", async () => {
+    const h = await launchedWith(() => ({
+      kind: "ready",
+      ready: { ...READY, workspace: "/elsewhere" },
+    }));
+    h.win.navigate("http://127.0.0.1:4718/?view=settings");
+    const before = h.win.calls.length;
+    await expect(h.app.restartFromPage()).resolves.toEqual({ ok: true });
+    expect(h.win.calls.slice(before)).toEqual(["load http://127.0.0.1:4718/"]);
+  });
+
+  it("a start that fails shows the error screen and answers its code", async () => {
+    const h = await launchedWith(() => ({
+      kind: "error",
+      error: {
+        event: "error",
+        code: "port_conflict",
+        message: "Port 6200 is taken.",
+        detail: {},
+      },
+    }));
+    await expect(h.app.restartFromPage()).resolves.toEqual({
+      ok: false,
+      code: "port_conflict",
+    });
+    expect(h.app.screen).toMatchObject({
+      kind: "error",
+      code: "port_conflict",
+    });
+  });
+
+  it("Cancel on the busy check answers cancelled and changes nothing", async () => {
+    const h = await launched({ checkWork: async () => BUSY });
+    h.messageBox.mockResolvedValueOnce({ response: 1 });
+    await expect(h.app.restartFromPage()).resolves.toEqual({
+      ok: false,
+      code: "cancelled",
+    });
+    expect(h.sessions).toHaveLength(1);
+    expect(h.sessions[0].stopped.count).toBe(0);
+  });
+
+  it("a reused backend answers not_owned without a dialog", async () => {
+    const h = harness({
+      startDeploy: () => {
+        const s = fakeSession({ ...READY, owned: false });
+        h.sessions.push(s);
+        return s;
+      },
+    });
+    await h.app.launch();
+    await expect(h.app.restartFromPage()).resolves.toEqual({
+      ok: false,
+      code: "not_owned",
+    });
+    expect(h.messageBox).not.toHaveBeenCalled();
+    expect(h.sessions[0].stopped.count).toBe(0);
+  });
+
+  it("answers busy while another restart runs, and restarts nothing more", async () => {
+    const gate = deferred<void>();
+    const h = await launched();
+    h.sessions[0].stopped.gate = gate.promise;
+    const menu = h.app.restartBackend();
+    await vi.waitFor(() => expect(h.sessions[0].stopped.count).toBe(1));
+    await expect(h.app.restartFromPage()).resolves.toEqual({
+      ok: false,
+      code: "busy",
+    });
+    gate.resolve();
+    await menu;
+    expect(h.sessions).toHaveLength(2);
+  });
+
+  it("the menu's restart still shows the status page", async () => {
+    const h = await launched();
+    const before = h.win.calls.length;
+    await h.app.restartBackend();
+    expect(h.win.calls.slice(before)[0]).toBe("status page");
+  });
+});
+
 describe("end of the session", () => {
   it("closes both stdin pipes once, and a quit after it skips the question and the wait", async () => {
     const wait = vi.fn(async () => "quiet" as MemoryWaitResult);

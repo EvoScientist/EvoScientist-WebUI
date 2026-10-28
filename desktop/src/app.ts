@@ -179,12 +179,28 @@ export interface AppDeps {
 
 export type QuitState = "none" | "checking" | "waiting" | "stopping";
 
+/** What the bridge's `restartBackend()` answers the page (W01's
+ *  `src/lib/desktop.ts`): `not_owned` for a reused backend, `cancelled` when
+ *  the user cancelled the busy check, `busy` while a launch, restart, screen
+ *  action or quit runs, else the code of the error the launch showed. */
+export type RestartResult = { ok: true } | { ok: false; code: string };
+
+/** Launch phases that a restart from the page keeps off the window: the page
+ *  stays until the backend is back or something needs the status page. */
+const QUIET_PHASES: ReadonlySet<BootState["phase"]> = new Set([
+  "checking_core",
+  "preparing_node",
+  "starting_backend",
+]);
+
 export interface App {
   attachWindow(w: AppWindow): void;
   /** Shows the first screen and starts the launch. */
   start(): void;
   launch(): Promise<void>;
   restartBackend(): Promise<void>;
+  /** The bridge's restart (W03d), for the WebUI's settings page. */
+  restartFromPage(): Promise<RestartResult>;
   requestQuit(): Promise<void>;
   act(id: ActionId, arg: unknown): Promise<void>;
   /** The renderer or the preload is broken: a native dialog instead. */
@@ -252,6 +268,8 @@ export function createApp(deps: AppDeps): App {
   /** "Continue" after a failed setup holds for the rest of this session too
    *  (Restart backend, Retry), except after a fresh install. */
   let skipSetup = false;
+  /** A restart from the page runs: its quiet phases leave the page shown. */
+  let pageRestart = false;
   let pendingScreen: Screen | null = null;
   let pendingTimer: ReturnType<typeof setTimeout> | null = null;
   let lastSent = 0;
@@ -317,6 +335,7 @@ export function createApp(deps: AppDeps): App {
           ? showSoon(setupScreen(state.stages))
           : showScreen(progressScreen(state));
       default:
+        if (pageRestart && showingUi && QUIET_PHASES.has(state.phase)) return;
         return showScreen(progressScreen(state));
     }
   }
@@ -593,25 +612,32 @@ export function createApp(deps: AppDeps): App {
       });
     }
     if (ready !== r || !win || !ui) return;
-    // The same folder gets back the page the user was on, on the current UI
-    // server (its port can change); a new folder starts at `/`, since the
-    // WebUI would show the old folder's thread read-only.
-    const page = new URL(ui.url);
-    if (lastUiUrl && lastUiWorkspace === r.workspace) {
-      const saved = new URL(lastUiUrl);
-      page.pathname = saved.pathname;
-      page.search = saved.search;
-      page.hash = saved.hash;
-    }
-    onStatusPage = false;
-    showingUi = true;
-    lastUiUrl = page.href;
-    lastUiWorkspace = r.workspace;
-    try {
-      await win.loadUrl(page.href);
-    } catch (e) {
-      log.warn(`loading the UI: ${e}`);
-      return; // did-fail-load shows the native dialog
+    // A restart from the page keeps the page when it still fits: the same UI
+    // server (so the same backend URL) and the same folder. Otherwise a status
+    // screen has replaced it already, or its saved URL or threads are stale.
+    if (pageRestart && showingUi && lastUiWorkspace === r.workspace) {
+      log.info("restart from the page: the page stays");
+    } else {
+      // The same folder gets back the page the user was on, on the current UI
+      // server (its port can change); a new folder starts at `/`, since the
+      // WebUI would show the old folder's thread read-only.
+      const page = new URL(ui.url);
+      if (lastUiUrl && lastUiWorkspace === r.workspace) {
+        const saved = new URL(lastUiUrl);
+        page.pathname = saved.pathname;
+        page.search = saved.search;
+        page.hash = saved.hash;
+      }
+      onStatusPage = false;
+      showingUi = true;
+      lastUiUrl = page.href;
+      lastUiWorkspace = r.workspace;
+      try {
+        await win.loadUrl(page.href);
+      } catch (e) {
+        log.warn(`loading the UI: ${e}`);
+        return; // did-fail-load shows the native dialog
+      }
     }
     if (r.warnings.length > 0) {
       void deps.messageBox({
@@ -703,40 +729,79 @@ export function createApp(deps: AppDeps): App {
 
   /** File > Restart backend: asks, waits for the memory workers, stops the owned backend and launches again. A reused backend is left alone. */
   function restartBackend(): Promise<void> {
-    return exclusive(async () => {
-      if (!ready || !session) return launchLocked();
-      if (!ready.owned) {
-        log.info("restart backend: reused backend, nothing changed");
-        await deps.messageBox({
-          type: "info",
-          title: "EvoScientist",
-          message: "This backend was started outside the app.",
-          detail:
-            "Restart EvoScientist where it was started, for example in its terminal. The app changed nothing.",
-          buttons: ["OK"],
-          noLink: true,
-        });
-        return;
-      }
-      if (!(await confirmStop("restart"))) return;
-      // The backend may have gone while the question was open: start a new one.
-      const current = ready;
-      if (!current || !session) return launchLocked();
-      showScreen(progressScreen("stopping"));
-      // The same wait as at quit, so the last turn's observation linker runs.
-      log.info("waiting for the memory workers before restarting the backend");
-      const memory = await deps.waitForMemoryWorkers(
-        current.url,
-        () => quitState !== "none" || sessionEnd.ending
-      );
-      log.info(`memory workers: ${memory}`);
-      if (quitState !== "none" || sessionEnd.ending || !session) return;
-      const old = session;
-      session = null;
-      ready = null;
-      log.info(`restart backend: stopping deploy (${await stopDeploy(old)})`);
-      await launchLocked();
-    });
+    return exclusive(async () => void (await restartLocked(false)));
+  }
+
+  /** The bridge's restart (W03d): the menu's steps, while the page stays
+   *  shown when it still fits (`showUiLocked`); resolves once the new backend
+   *  is ready, or with the reason it did not restart. */
+  async function restartFromPage(): Promise<RestartResult> {
+    if (working || quitState !== "none") {
+      log.info("restart from the page: busy");
+      return { ok: false, code: "busy" };
+    }
+    let result: RestartResult = { ok: false, code: "failed" };
+    pageRestart = true;
+    try {
+      await exclusive(async () => {
+        result = await restartLocked(true);
+      });
+    } finally {
+      pageRestart = false;
+    }
+    log.info(`restart from the page: ${JSON.stringify(result)}`);
+    return result;
+  }
+
+  /** The restart itself. From the page, a reused backend and a Cancel are
+   *  answered to the page instead of a dialog or silence, and the window keeps
+   *  the page while the backend stops. Callers hold `working`. */
+  async function restartLocked(fromPage: boolean): Promise<RestartResult> {
+    if (!ready || !session) return relaunched();
+    if (!ready.owned) {
+      log.info("restart backend: reused backend, nothing changed");
+      if (fromPage) return { ok: false, code: "not_owned" };
+      await deps.messageBox({
+        type: "info",
+        title: "EvoScientist",
+        message: "This backend was started outside the app.",
+        detail:
+          "Restart EvoScientist where it was started, for example in its terminal. The app changed nothing.",
+        buttons: ["OK"],
+        noLink: true,
+      });
+      return { ok: false, code: "not_owned" };
+    }
+    if (!(await confirmStop("restart")))
+      return { ok: false, code: "cancelled" };
+    // The backend may have gone while the question was open: start a new one.
+    const current = ready;
+    if (!current || !session) return relaunched();
+    if (!fromPage || !showingUi) showScreen(progressScreen("stopping"));
+    // The same wait as at quit, so the last turn's observation linker runs.
+    log.info("waiting for the memory workers before restarting the backend");
+    const memory = await deps.waitForMemoryWorkers(
+      current.url,
+      () => quitState !== "none" || sessionEnd.ending
+    );
+    log.info(`memory workers: ${memory}`);
+    if (quitState !== "none" || sessionEnd.ending || !session)
+      return { ok: false, code: "busy" };
+    const old = session;
+    session = null;
+    ready = null;
+    log.info(`restart backend: stopping deploy (${await stopDeploy(old)})`);
+    return relaunched();
+  }
+
+  /** Launches again; the result is the new backend or the error on screen. */
+  async function relaunched(): Promise<RestartResult> {
+    await launchLocked();
+    if (ready) return { ok: true };
+    return {
+      ok: false,
+      code: screen.kind === "error" ? screen.code : "failed",
+    };
   }
 
   /** Stops a `deploy` the app has let go of, recorded so a quit waits for it. */
@@ -961,6 +1026,7 @@ export function createApp(deps: AppDeps): App {
     },
     launch,
     restartBackend,
+    restartFromPage,
     requestQuit,
     act,
     nativeError,
