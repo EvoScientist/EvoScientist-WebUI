@@ -1,4 +1,5 @@
 import type { MessageBoxOptions } from "electron";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createApp, type AppDeps, type AppLog, type AppWindow } from "./app";
 import type { MemoryWaitResult, WorkCheck } from "./closeCheck";
@@ -716,6 +717,45 @@ describe("restart from the page (bridge)", () => {
     gate.resolve();
     await menu;
     expect(h.sessions).toHaveLength(2);
+  });
+
+  it("serves only the UI's own origin", async () => {
+    const h = await launched();
+    await expect(h.app.restartFor("http://127.0.0.1:9999")).resolves.toEqual({
+      ok: false,
+      code: "not_allowed",
+    });
+    await expect(h.app.restartFor(null)).resolves.toEqual({
+      ok: false,
+      code: "not_allowed",
+    });
+    expect(h.sessions).toHaveLength(1);
+    await expect(h.app.restartFor("http://127.0.0.1:4718")).resolves.toEqual({
+      ok: true,
+    });
+    expect(h.sessions).toHaveLength(2);
+  });
+
+  it("defaultFolder is Documents/EvoScientist, for the UI's origin only", async () => {
+    const h = await launched();
+    expect(h.app.defaultFolderFor("http://127.0.0.1:4718")).toBe(
+      join("/docs", "EvoScientist")
+    );
+    expect(h.app.defaultFolderFor("http://127.0.0.1:9999")).toBeNull();
+    expect(h.app.defaultFolderFor(null)).toBeNull();
+  });
+
+  it("no defaultFolder when the Documents folder cannot be resolved", async () => {
+    let documents = true;
+    const h = await launched({
+      documentsDir: () => {
+        if (documents) return "/docs";
+        throw new Error("Failed to get 'documents' path");
+      },
+    });
+    documents = false;
+    expect(h.app.defaultFolderFor("http://127.0.0.1:4718")).toBeNull();
+    expect(h.log.lines.at(-1)).toMatch(/^WARN no default folder/);
   });
 
   it("the menu's restart still shows the status page", async () => {

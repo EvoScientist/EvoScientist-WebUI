@@ -7,6 +7,7 @@ import type { MessageBoxOptions } from "electron";
 import { dirname, join } from "node:path";
 import {
   boot,
+  defaultFolder,
   type BootError,
   type BootOptions,
   type BootState,
@@ -215,6 +216,12 @@ export interface App {
   uiOrigin(): string | null;
   /** The backend URL for the preload of a page from `senderOrigin` (D6). */
   backendUrlFor(senderOrigin: string | null): string | null;
+  /** The bridge's `defaultFolder` for a page from `senderOrigin`: null for
+   *  another origin, or when the Documents folder cannot be resolved. */
+  defaultFolderFor(senderOrigin: string | null): string | null;
+  /** The bridge's `restartBackend()` for a page from `senderOrigin`; another
+   *  origin gets `not_allowed` and restarts nothing. */
+  restartFor(senderOrigin: string | null): Promise<RestartResult>;
   /** True once the app exits: close and quit events go through. */
   readonly exiting: boolean;
   readonly quitState: QuitState;
@@ -278,6 +285,11 @@ export function createApp(deps: AppDeps): App {
 
   /** The running UI server's origin: links to it stay in the app. */
   const uiOrigin = (): string | null => (ui ? new URL(ui.url).origin : null);
+  /** A page from the running UI server (the only one the bridge serves). */
+  const fromUi = (senderOrigin: string | null): boolean => {
+    const origin = uiOrigin();
+    return origin !== null && senderOrigin === origin;
+  };
 
   // --- Screens ------------------------------------------------------------------
 
@@ -1041,11 +1053,21 @@ export function createApp(deps: AppDeps): App {
       return screen;
     },
     uiOrigin,
-    backendUrlFor: (senderOrigin) => {
-      const origin = uiOrigin();
-      return origin !== null && senderOrigin === origin && ready
-        ? ready.url
-        : null;
+    backendUrlFor: (senderOrigin) =>
+      fromUi(senderOrigin) && ready ? ready.url : null,
+    defaultFolderFor: (senderOrigin) => {
+      if (!fromUi(senderOrigin)) return null;
+      try {
+        return defaultFolder(deps);
+      } catch (e) {
+        log.warn(`no default folder for the page: ${e}`);
+        return null;
+      }
+    },
+    restartFor: async (senderOrigin) => {
+      if (fromUi(senderOrigin)) return restartFromPage();
+      log.warn(`restart refused for the origin ${senderOrigin}`);
+      return { ok: false, code: "not_allowed" };
     },
     get exiting() {
       return exiting;

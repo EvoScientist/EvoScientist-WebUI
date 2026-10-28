@@ -389,7 +389,7 @@ function buildMenu(): void {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
-// --- Status page actions and the URL handover --------------------------------
+// --- Status page actions, the URL handover and the bridge ---------------------
 
 const fromStatusPage = (e: IpcMainEvent | IpcMainInvokeEvent) =>
   e.senderFrame?.url.startsWith("file:") === true;
@@ -406,14 +406,25 @@ function registerIpc(): void {
   // merges the URL into the WebUI's saved config. Only the UI's own origin
   // gets it.
   ipcMain.on("desktop:backend-url", (e) => {
-    let senderOrigin: string | null = null;
-    try {
-      senderOrigin = e.senderFrame ? new URL(e.senderFrame.url).origin : null;
-    } catch {
-      senderOrigin = null;
-    }
-    e.returnValue = desktop.backendUrlFor(senderOrigin);
+    e.returnValue = desktop.backendUrlFor(senderOrigin(e));
   });
+  // W03d: the bridge for the WebUI (`src/lib/desktop.ts`), also only for the
+  // UI's own origin.
+  ipcMain.on("desktop:default-folder", (e) => {
+    e.returnValue = desktop.defaultFolderFor(senderOrigin(e));
+  });
+  ipcMain.handle("desktop:restart-backend", (e) =>
+    desktop.restartFor(senderOrigin(e))
+  );
+}
+
+/** The origin of the frame that sent an IPC message, or null. */
+function senderOrigin(e: IpcMainEvent | IpcMainInvokeEvent): string | null {
+  try {
+    return e.senderFrame ? new URL(e.senderFrame.url).origin : null;
+  } catch {
+    return null;
+  }
 }
 
 // --- Start -------------------------------------------------------------------
