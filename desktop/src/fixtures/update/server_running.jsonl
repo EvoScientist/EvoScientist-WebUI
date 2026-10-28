@@ -1,0 +1,3 @@
+{"protocol": 1, "stage": "update", "status": "running", "progress": 0.0, "message": "Checking for releases"}
+{"protocol": 1, "stage": "update", "status": "running", "progress": 0.1, "message": "Downloading the constraints of EvoScientist 0.3.8"}
+{"protocol": 1, "stage": "update", "status": "error", "message": "A langgraph dev server that EvoSci has no ownership record for answers on port 6691, so it was not touched; it keeps running the old version. If it is yours, stop it: kill $(lsof -ti :6691) Nothing was changed.", "code": "server_running"}

@@ -1,7 +1,8 @@
 // The status page: shows the screen the main process sends (progress, the
-// install script's last lines, setup's stages, the mirror question, or an
-// error with its actions). It never calls the backend: the core's browser
-// boundary refuses requests from a file:// page (Origin: null).
+// install script's last lines, the stages of setup or an update, a question
+// (mirrors, the update offer), or an error with its actions). It never calls
+// the backend: the core's browser boundary refuses requests from a file://
+// page (Origin: null).
 "use strict";
 
 const LABELS = {
@@ -18,6 +19,9 @@ const LABELS = {
   mirror_cn: "Yes, use mainland China mirrors",
   retry_cn: "Retry with mainland China mirrors",
   continue: "Continue without them",
+  update: "Update",
+  install_copy: "Install a separate copy",
+  cancel_update: "Cancel the update",
 };
 
 /** A stage's state as a short word next to its title. */
@@ -79,7 +83,7 @@ let shownHead = null;
 function render(s) {
   if (!s) return;
   const error = s.kind === "error";
-  const text = error || s.kind === "question" ? s.lines : [s.message];
+  const text = s.lines ?? [s.message];
   const lines = text.filter(Boolean);
   const head = JSON.stringify([s.title, error ? s.code : null, lines]);
   if (head !== shownHead) {
