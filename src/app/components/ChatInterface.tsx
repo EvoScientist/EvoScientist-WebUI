@@ -22,6 +22,7 @@ import {
   Circle,
   FileIcon,
   FolderOpen,
+  FolderPlus,
   ShieldCheck,
   Sparkles,
   TriangleAlert,
@@ -131,6 +132,7 @@ import { useAutoApproveInterrupt } from "@/app/hooks/useAutoApproveInterrupt";
 import { useApprovalPolicy } from "@/app/hooks/useApprovalPolicy";
 import { useProjects } from "@/providers/ProjectsProvider";
 import { findProject, projectHandle } from "@/lib/projects";
+import { useProjectDialogs } from "@/providers/projectDialogsContext";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -140,7 +142,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { CHAT_GRAPH_ID } from "@/lib/workspaceAssistant";
+import { CHAT_GRAPH_ID, folderName } from "@/lib/workspaceAssistant";
 import { useDeployment } from "@/providers/ClientProvider";
 import { resolveApprovalDecisions } from "@/lib/hitlPolicy";
 import {
@@ -712,6 +714,10 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         binding.kind === "unbound");
     const switchProjects =
       canSwitchProject && projects.status === "ready" ? projects.projects : [];
+    const { openAddProject } = useProjectDialogs();
+    // A conversation of a folder that isn't a project: it can be added.
+    const addableFolder =
+      binding.kind === "readOnly" ? binding.folder ?? null : null;
     // Read by the hand-back folds, which are registered once.
     const goalSupportedRef = useRef(goalSupported);
     goalSupportedRef.current = goalSupported;
@@ -3240,6 +3246,21 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                 )}
               </div>
             )}
+            {addableFolder && (
+              <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2 text-xs text-muted-foreground">
+                <span className="min-w-0 truncate">
+                  {folderName(addableFolder)} isn't a project on this backend.
+                </span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => openAddProject(addableFolder)}
+                >
+                  Add this folder as a project
+                </Button>
+              </div>
+            )}
             <form
               onSubmit={handleSubmit}
               className="mobile-composer flex flex-col"
@@ -3520,9 +3541,16 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                             </DropdownMenuRadioItem>
                           ))}
                         </DropdownMenuRadioGroup>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem onSelect={() => openAddProject()}>
+                          <FolderPlus
+                            className="size-3.5"
+                            aria-hidden="true"
+                          />
+                          Add project…
+                        </DropdownMenuItem>
                         {onNavigate && (
                           <>
-                            <DropdownMenuSeparator />
                             <DropdownMenuItem
                               onSelect={() => onNavigate({ view: "workspace" })}
                             >

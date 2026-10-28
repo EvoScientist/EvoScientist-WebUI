@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { ClientProvider, useDeployment } from "@/providers/ClientProvider";
 import { ProjectsProvider, useProjects } from "@/providers/ProjectsProvider";
 import { findProject } from "@/lib/projects";
+import { ProjectDialogsProvider } from "@/providers/ProjectDialogsProvider";
 import { SetupNotice } from "@/app/components/SetupNotice";
 import { SetupView } from "@/app/components/SetupView";
 import { useSetupGate } from "@/app/hooks/useSetupGate";
@@ -331,7 +332,7 @@ function HomePageInner({ config, handleSaveConfig }: HomePageInnerProps) {
   );
 
   return (
-    <>
+    <ProjectDialogsProvider>
       <div className="app-shell flex flex-col">
         <header className="mobile-app-header flex h-14 shrink-0 items-center justify-between gap-1 border-b border-border px-2 sm:gap-2 sm:px-4">
           <div className="flex min-w-0 items-center gap-2 sm:gap-3">
@@ -631,7 +632,7 @@ function HomePageInner({ config, handleSaveConfig }: HomePageInnerProps) {
           </div>
         </FilePaneProvider>
       </div>
-    </>
+    </ProjectDialogsProvider>
   );
 }
 

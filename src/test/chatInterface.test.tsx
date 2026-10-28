@@ -13,7 +13,9 @@ import {
   within,
   fireEvent,
   waitFor,
+  render,
 } from "@testing-library/react";
+import { ProjectDialogsContext } from "@/providers/projectDialogsContext";
 import type { ComposerFold } from "@/app/components/ChatInterface";
 import {
   MockStreamStore,
@@ -2733,6 +2735,32 @@ describe("ChatInterface composition", () => {
       expect(
         await screen.findByRole("button", { name: /Change project/ })
       ).toBeTruthy();
+    });
+
+    it("offers to add the folder of a conversation that isn't in a project", async () => {
+      mockThreadId = "t-1";
+      getActiveMockClient().setThreadRecord("t-1", {
+        metadata: {
+          graph_id: "EvoScientist",
+          workspace_dir: "/home/you/projC",
+        },
+      });
+      const dialogs = { openAddProject: vi.fn(), openRemoveProject: vi.fn() };
+      render(
+        <ProjectDialogsContext.Provider value={dialogs}>
+          {chatInterfaceTree({
+            projects: mockProjects(readyProjects(A, B), { current: A }),
+          })}
+        </ProjectDialogsContext.Provider>
+      );
+
+      fireEvent.click(
+        await screen.findByRole("button", {
+          name: "Add this folder as a project",
+        })
+      );
+
+      expect(dialogs.openAddProject).toHaveBeenCalledWith("/home/you/projC");
     });
   });
 });

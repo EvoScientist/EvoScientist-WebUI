@@ -15,6 +15,7 @@ import {
   readyProjects,
 } from "@/test/mockProjects";
 import type { ProjectsContextValue } from "@/providers/ProjectsProvider";
+import { ProjectDialogsContext } from "@/providers/projectDialogsContext";
 
 const OTHER = "/srv/projB";
 
@@ -513,5 +514,33 @@ describe("ThreadList by project", () => {
     expect(
       screen.queryByRole("button", { name: "New chat in projB" })
     ).toBeNull();
+  });
+
+  it("adds a project and removes one from the sidebar through the dialogs", async () => {
+    const dialogs = {
+      openAddProject: vi.fn(),
+      openRemoveProject: vi.fn(),
+    };
+    render(
+      <TestProjectsProvider value={two()}>
+        <ProjectDialogsContext.Provider value={dialogs}>
+          <ThreadList onThreadSelect={vi.fn()} />
+        </ProjectDialogsContext.Provider>
+      </TestProjectsProvider>
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Add project" }));
+    expect(dialogs.openAddProject).toHaveBeenCalled();
+
+    fireEvent.keyDown(
+      screen.getByRole("button", { name: "Actions for project projB" }),
+      { key: "Enter" }
+    );
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "Remove from sidebar" })
+    );
+    expect(dialogs.openRemoveProject).toHaveBeenCalledWith(
+      expect.objectContaining({ key: OTHER })
+    );
   });
 });

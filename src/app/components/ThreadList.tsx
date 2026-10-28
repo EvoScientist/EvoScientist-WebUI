@@ -13,6 +13,8 @@ import {
   ChevronRight,
   Clock,
   Download,
+  FolderMinus,
+  FolderPlus,
   Loader2,
   MessageSquare,
   MoreHorizontal,
@@ -54,8 +56,8 @@ import { ThreadGroups } from "@/app/components/ThreadGroups";
 import { useRevalidateOn } from "@/app/hooks/useRevalidateOn";
 import { dedupeThreads, matchesSearch } from "@/lib/threadLists";
 import { useProjects } from "@/providers/ProjectsProvider";
+import { useProjectDialogs } from "@/providers/projectDialogsContext";
 import type { Project } from "@/lib/projects";
-import { NO_PROJECT_REASON } from "@/lib/threadBinding";
 import { folderName } from "@/lib/workspaceAssistant";
 import { useMemoryActivity } from "@/app/hooks/useMemoryActivity";
 import {
@@ -171,6 +173,7 @@ export function ThreadList({
   );
 
   const { projects, current } = useProjects();
+  const { openAddProject, openRemoveProject } = useProjectDialogs();
   const projectList = useMemo(
     () => (projects.status === "ready" ? projects.projects : []),
     [projects]
@@ -951,9 +954,7 @@ export function ThreadList({
           {ready && projectList.length === 0 && (
             <div className="flex flex-col items-center justify-center p-8 text-center">
               <MessageSquare className="mb-2 h-12 w-12 text-gray-300" />
-              <p className="text-sm text-muted-foreground">
-                {NO_PROJECT_REASON}
-              </p>
+              <p className="text-sm text-muted-foreground">No projects yet.</p>
             </div>
           )}
 
@@ -973,6 +974,7 @@ export function ThreadList({
                     }
                   : undefined
               }
+              onRemove={() => openRemoveProject(project)}
             >
               <ThreadGroups
                 scope={{ project: project.key }}
@@ -986,6 +988,20 @@ export function ThreadList({
               />
             </ProjectSection>
           ))}
+
+          {ready && (
+            <button
+              type="button"
+              onClick={() => openAddProject()}
+              className="mb-1 flex w-full items-center gap-1.5 rounded-md px-1.5 py-1.5 text-left text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <FolderPlus
+                className="size-3.5 flex-shrink-0"
+                aria-hidden="true"
+              />
+              Add project
+            </button>
+          )}
 
           {ready && (
             <ProjectSection
@@ -1131,6 +1147,7 @@ function ProjectSection({
   busy = false,
   waiting = 0,
   onNewChat,
+  onRemove,
   children,
 }: {
   project?: Project;
@@ -1142,6 +1159,8 @@ function ProjectSection({
   waiting?: number;
   /** Start a new chat in this project (absent: no such action). */
   onNewChat?: () => void;
+  /** Remove this project from the sidebar (absent: no such action). */
+  onRemove?: () => void;
   children: React.ReactNode;
 }) {
   const name = project?.name ?? title ?? "";
@@ -1211,6 +1230,31 @@ function ProjectSection({
               aria-hidden="true"
             />
           </button>
+        )}
+        {onRemove && (
+          <DropdownMenu modal={false}>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                aria-label={`Actions for project ${name}`}
+                className="flex-shrink-0 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:text-foreground"
+              >
+                <MoreHorizontal
+                  className="size-3.5"
+                  aria-hidden="true"
+                />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem
+                className="min-h-11 md:min-h-0"
+                onSelect={onRemove}
+              >
+                <FolderMinus aria-hidden="true" />
+                Remove from sidebar
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         )}
       </div>
       <span

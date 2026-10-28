@@ -13,7 +13,8 @@ import {
 } from "@/lib/workspaceAssistant";
 import { useProjects } from "@/providers/ProjectsProvider";
 
-const SCHEDULED_RUN_KIND = "scheduled_task";
+/** The `run_kind` the WebUI and the core give a scheduled task. */
+export const SCHEDULED_RUN_KIND = "scheduled_task";
 
 /** Where scheduled tasks run: the scheduler graph's assistant for a
  *  project, and that project's folder for the task's tag. */
