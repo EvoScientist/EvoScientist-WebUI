@@ -4,7 +4,10 @@ import {
   installScreen,
   mirrorQuestion,
   progressScreen,
+  separateInstallQuestion,
   setupScreen,
+  updateQuestion,
+  updateScreen,
 } from "./screens";
 
 const ctx = {
@@ -20,7 +23,7 @@ const err = (code: string, detail: Record<string, unknown> = {}) => ({
 });
 
 describe("errorScreen", () => {
-  it("shows the install command for an old core (until W03c)", () => {
+  it("shows the install command for a core that is not a release", () => {
     const s = errorScreen(
       err("core_too_old", { install_command: "irm x | iex" }),
       ctx
@@ -55,12 +58,32 @@ describe("errorScreen", () => {
       err("install_failed", {
         output: ["Error: EvoScientist is running"],
         running: true,
+        cn: false,
       }),
       ctx
     );
     expect(s.lines[1]).toMatch(
       /Close the programs listed below, then press Retry/
     );
+    expect(s.lines.join(" ")).not.toMatch(/mainland China/);
+    expect(s.actions).toEqual(["retry", "open_logs"]);
+  });
+
+  it("says to remove the pipx or pip --user install when the script refused it", () => {
+    const s = errorScreen(
+      err("install_failed", {
+        output: [
+          "Error: /home/u/.local/bin/EvoSci exists but was not installed by uv; pipx or pip --user may have put it there. Remove that install (for example pipx uninstall EvoScientist or pip uninstall EvoScientist), then run this script again.",
+        ],
+        repair: true,
+        update: true,
+        cn: false,
+      }),
+      ctx
+    );
+    expect(s.lines[1]).toMatch(/Remove it as the lines below say/);
+    expect(s.lines.join(" ")).not.toMatch(/mainland China/);
+    expect(s.actions).toEqual(["retry", "open_logs"]);
   });
 
   it("lists the failed setup steps with Retry and Continue", () => {
@@ -231,6 +254,196 @@ describe("first-launch screens", () => {
   it("names an update that is finishing", () => {
     expect(progressScreen({ phase: "update_finishing" }).title).toBe(
       "An update of EvoScientist is finishing"
+    );
+  });
+});
+
+describe("core update screens (W03c)", () => {
+  const view = {
+    update: { progress: 0.25, message: "Update pending" },
+    stages: [{ id: "node", title: "Node.js", state: "pending" as const }],
+    waiting: null,
+  };
+  const python = [{ pid: 7, name: "python", path: "C:\\env\\python.exe" }];
+
+  it("the offer names the version and the range, with Update and Quit", () => {
+    expect(updateQuestion("0.3.7", ">=0.3.8,<0.4")).toMatchObject({
+      kind: "question",
+      title: "Update EvoScientist",
+      lines: [
+        "The installed EvoScientist 0.3.7 is older than this app supports (>=0.3.8,<0.4).",
+        expect.stringContaining("needs a network"),
+      ],
+      actions: ["update", "quit"],
+    });
+  });
+
+  it("the separate-install question shows the core's message", () => {
+    const q = separateInstallQuestion("Installed with pip.", "0.3.7");
+    expect(q.lines[0]).toBe("Installed with pip.");
+    expect(q.lines[1]).toContain(
+      "Your EvoScientist 0.3.7 from pip or conda stays as it is"
+    );
+    expect(q.actions).toEqual(["install_copy", "quit"]);
+  });
+
+  it("the update's row comes first, then the setup stages", () => {
+    expect(updateScreen(view)).toEqual({
+      kind: "setup",
+      title: "Updating EvoScientist",
+      stages: [
+        {
+          id: "update",
+          title: "Update EvoScientist",
+          state: "running",
+          progress: 0.25,
+          message: "Update pending",
+        },
+        { id: "node", title: "Node.js", state: "pending" },
+      ],
+    });
+    expect(updateScreen({ ...view, update: {} }).stages[0]).toEqual({
+      id: "update",
+      title: "Update EvoScientist",
+      state: "running",
+    });
+  });
+
+  it("while it waits: the processes and Cancel; while quitting: no Cancel", () => {
+    const w = updateScreen({ ...view, waiting: python });
+    expect(w.lines).toEqual([
+      "The update waits until these programs, which run EvoScientist, are closed:",
+      "python (7): C:\\env\\python.exe",
+      "Close them and the update goes on. Cancel stops the update; nothing is changed.",
+    ]);
+    expect(w.actions).toEqual(["cancel_update"]);
+    const q = updateScreen({ ...view, waiting: python }, true);
+    expect(q.title).toBe("Finishing the update");
+    expect(q.actions).toBeUndefined();
+    expect(q.lines?.at(-1)).toBe(
+      "The app cancels the update and quits; nothing is changed."
+    );
+    expect(updateScreen(view, true)).toMatchObject({
+      title: "Finishing the update",
+      lines: ["The app quits when the update is done."],
+    });
+  });
+
+  it("the wait after a failed install attempt does not promise that nothing changes", () => {
+    const retry = { ...view, waiting: python, afterFailedRun: true };
+    for (const s of [updateScreen(retry), updateScreen(retry, true)]) {
+      expect(s.lines?.at(-1)).toMatch(/may .*repair.* at the next launch/);
+      expect(s.lines?.join(" ")).not.toMatch(/nothing is changed/);
+    }
+    expect(updateScreen(retry).actions).toEqual(["cancel_update"]);
+  });
+
+  it("the script as an update has its own title", () => {
+    expect(
+      installScreen({ repair: true, update: true, lines: [] })
+    ).toMatchObject({
+      title: "Updating EvoScientist",
+    });
+  });
+
+  it("release_lookup_failed asks for a network, with Retry", () => {
+    expect(
+      errorScreen(err("release_lookup_failed", { answered: false }), ctx)
+    ).toMatchObject({
+      title: "Updating EvoScientist needs a network",
+      actions: ["retry", "open_logs"],
+    });
+  });
+
+  it("release_lookup_failed from an index that answered does not blame the network", () => {
+    const s = errorScreen(
+      err("release_lookup_failed", { answered: true }),
+      ctx
+    );
+    expect(s.title).toBe("No EvoScientist release for this app is listed yet");
+    expect(s.lines.join(" ")).not.toMatch(/internet|network/);
+    expect(s.actions).toEqual(["retry", "open_logs"]);
+  });
+
+  it("server_running asks to stop the terminal's backend, with the core's message when there is one", () => {
+    const s = errorScreen(
+      err("server_running", { port: 6174, core_message: "kill it" }),
+      ctx
+    );
+    expect(s.lines).toEqual([
+      "Stop the backend started in the terminal, then press Retry.",
+      "kill it",
+    ]);
+    expect(s.actions).toEqual(["retry", "open_logs"]);
+    expect(errorScreen(err("server_running"), ctx).lines).toHaveLength(1);
+  });
+
+  it("environment_busy names what still runs", () => {
+    const s = errorScreen(
+      err("environment_busy", { waiting_for: python }),
+      ctx
+    );
+    expect(s.title).toBe("The update was cancelled");
+    expect(s.lines).toContain("Still running: python (7).");
+    expect(s.lines).toContain("environment_busy message");
+  });
+
+  it("environment_busy without programs (another update holds the lock) shows the core's message only", () => {
+    const s = errorScreen(
+      err("environment_busy", { waiting_for: [], update: true }),
+      ctx
+    );
+    expect(s.title).toBe("EvoScientist could not be updated");
+    expect(s.lines[0]).toBe("environment_busy message");
+    expect(s.lines.join(" ")).not.toMatch(/cancelled|Close the programs/);
+  });
+
+  it("manual_update and update_failed", () => {
+    expect(errorScreen(err("manual_update"), ctx)).toMatchObject({
+      title: "EvoScientist cannot be updated from the app",
+      lines: ["manual_update message", expect.any(String)],
+    });
+    expect(errorScreen(err("update_failed"), ctx).title).toBe(
+      "The update did not finish"
+    );
+  });
+
+  it.each(["download_failed", "no_constraints", "unknown_version", "new_code"])(
+    "the update's %s: could not be updated, with its message and Retry",
+    (code) => {
+      expect(
+        errorScreen(err(code, { update: true, source: "update" }), ctx)
+      ).toMatchObject({
+        title: "EvoScientist could not be updated",
+        lines: [`${code} message`, "Press Retry to try the update again."],
+        actions: ["retry", "open_logs"],
+      });
+    }
+  );
+
+  it("the update's own install_failed offers no mirrors; the script's does", () => {
+    const own = errorScreen(
+      err("install_failed", { update: true, source: "update", cn: false }),
+      ctx
+    );
+    expect(own.title).toBe("EvoScientist could not be updated");
+    expect(own.lines.join(" ")).not.toMatch(/mainland China/);
+    expect(own.lines).toContain("Press Retry to try the update again.");
+    expect(own.actions).toEqual(["retry", "open_logs"]);
+    const script = errorScreen(
+      err("install_failed", { update: true, repair: true, cn: false }),
+      ctx
+    );
+    expect(script.actions).toEqual(["retry", "retry_cn", "open_logs"]);
+  });
+
+  it("install and setup failures after an update say so", () => {
+    expect(
+      errorScreen(err("install_failed", { repair: true, update: true }), ctx)
+        .title
+    ).toBe("EvoScientist could not be updated");
+    expect(errorScreen(err("setup_failed", { update: true }), ctx).title).toBe(
+      "EvoScientist was updated, but some setup steps failed"
     );
   });
 });

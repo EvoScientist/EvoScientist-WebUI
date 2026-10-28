@@ -7,6 +7,7 @@
 import type { BootError, BootState } from "./boot";
 import { DEFAULT_BACKEND_PORT } from "./paths";
 import type { Stage } from "./setup";
+import type { UpdateView } from "./update";
 
 export type ActionId =
   | "retry"
@@ -21,7 +22,10 @@ export type ActionId =
   | "mirror_cn"
   | "mirror_default"
   | "retry_cn"
-  | "continue";
+  | "continue"
+  | "update"
+  | "install_copy"
+  | "cancel_update";
 
 export interface ProgressScreen {
   kind: "progress";
@@ -45,11 +49,14 @@ export interface InstallScreen {
   output: string[];
 }
 
-/** `EvoSci setup` runs: each stage with its state. */
+/** `EvoSci setup` or `EvoSci update` runs: each stage with its state; the
+ *  update's wait shows the processes in `lines` and a Cancel action. */
 export interface SetupScreen {
   kind: "setup";
   title: string;
   stages: Stage[];
+  lines?: string[];
+  actions?: ActionId[];
 }
 
 export interface ErrorScreen {
@@ -98,15 +105,93 @@ export function mirrorQuestion(): QuestionScreen {
 /** The install script's progress: the last lines of its output. */
 export function installScreen(state: {
   repair: boolean;
+  update?: boolean;
   lines: string[];
 }): InstallScreen {
   return {
     kind: "install",
-    title: state.repair ? "Repairing EvoScientist" : "Installing EvoScientist",
-    message: state.repair
+    title: state.update
+      ? "Updating EvoScientist"
+      : state.repair
+      ? "Repairing EvoScientist"
+      : "Installing EvoScientist",
+    message: state.update
+      ? "Installing the EvoScientist release this app needs; your settings are kept. This takes a few minutes."
+      : state.repair
       ? "The installed EvoScientist does not run. Installing it again; your settings are kept."
       : "Downloading and installing EvoScientist. This takes a few minutes.",
     output: state.lines,
+  };
+}
+
+/** The offer for a core older than the app's range (W03c). */
+export function updateQuestion(from: string, range: string): QuestionScreen {
+  return {
+    kind: "question",
+    title: "Update EvoScientist",
+    lines: [
+      `The installed EvoScientist ${from} is older than this app supports (${range}).`,
+      "The app updates it now to a release it supports. This needs a network and can take a few minutes; your settings, chats and memory are kept.",
+    ],
+    actions: ["update", "quit"],
+  };
+}
+
+/** After `manual_update` for a pip or conda install: a separate copy. */
+export function separateInstallQuestion(
+  message: string,
+  from: string
+): QuestionScreen {
+  return {
+    kind: "question",
+    title: "Install a separate copy for the app?",
+    lines: [
+      message,
+      `The app can install its own copy of EvoScientist next to this one and use it from now on. Your EvoScientist ${from} from pip or conda stays as it is; config.yaml is copied first.`,
+    ],
+    actions: ["install_copy", "quit"],
+  };
+}
+
+/** `EvoSci update` runs: its own row above the new version's setup stages;
+ *  while it waits, the processes it waits for and Cancel. While the app
+ *  waits for it to quit, it says so (D21). */
+export function updateScreen(view: UpdateView, quitting = false): SetupScreen {
+  const row: Stage = {
+    id: "update",
+    title: "Update EvoScientist",
+    state: "running",
+    ...(view.update.progress !== undefined
+      ? { progress: view.update.progress }
+      : {}),
+    ...(view.update.message ? { message: view.update.message } : {}),
+  };
+  const title = quitting ? "Finishing the update" : "Updating EvoScientist";
+  if (view.waiting)
+    return {
+      kind: "setup",
+      title,
+      lines: [
+        "The update waits until these programs, which run EvoScientist, are closed:",
+        ...view.waiting.map(
+          (b) => `${b.name} (${b.pid})${b.path ? `: ${b.path}` : ""}`
+        ),
+        view.afterFailedRun
+          ? quitting
+            ? "The app cancels the update and quits. The first install attempt failed, so EvoScientist may need a repair at the next launch."
+            : "Close them and the update tries once more. The first install attempt failed, so Cancel may leave EvoScientist to be repaired at the next launch."
+          : quitting
+          ? "The app cancels the update and quits; nothing is changed."
+          : "Close them and the update goes on. Cancel stops the update; nothing is changed.",
+      ],
+      stages: [row, ...view.stages],
+      ...(quitting ? {} : { actions: ["cancel_update" as const] }),
+    };
+  return {
+    kind: "setup",
+    title,
+    ...(quitting ? { lines: ["The app quits when the update is done."] } : {}),
+    stages: [row, ...view.stages],
   };
 }
 
@@ -138,6 +223,10 @@ export function progressScreen(
       "The app waits until it is done, then goes on.",
     ],
     setting_up: ["Setting up EvoScientist", "Preparing the setup steps..."],
+    looking_up_release: [
+      "Updating EvoScientist",
+      "Looking for the newest release this app supports...",
+    ],
   };
   const [title, message] = text[s] ?? ["Starting EvoScientist", ""];
   if (typeof state !== "string" && state.phase === "starting_backend")
@@ -185,19 +274,33 @@ export function errorScreen(error: BootError, ctx: ScreenContext): ErrorScreen {
   switch (error.code) {
     case "install_failed": {
       const output = Array.isArray(d.output) ? (d.output as string[]) : [];
+      const inTheWay = output.some(
+        (l) =>
+          l.startsWith("Error: ") &&
+          l.includes("exists but was not installed by uv")
+      );
+      const noMirror = d.cn || d.running || inTheWay || d.source === "update";
       screen = {
-        title: d.repair
+        title: d.update
+          ? "EvoScientist could not be updated"
+          : d.repair
           ? "EvoScientist could not be repaired"
           : "EvoScientist could not be installed",
         lines: [
           error.message,
           d.running
             ? "EvoScientist is running. Close the programs listed below, then press Retry."
+            : inTheWay
+            ? "Another install of EvoScientist is in the way. Remove it as the lines below say, then press Retry."
+            : d.source === "update"
+            ? "Press Retry to try the update again."
             : "Press Retry to run the install again.",
-          ...(d.cn ? [] : [MIRROR_RETRY_LINE]),
+          // Mirrors cannot help when the script refused a running core, nor
+          // `EvoSci update`, which reads `mirror` from config.yaml only.
+          ...(noMirror ? [] : [MIRROR_RETRY_LINE]),
         ],
         ...(output.length > 0 ? { output } : {}),
-        actions: d.cn
+        actions: noMirror
           ? ["retry", "open_logs"]
           : ["retry", "retry_cn", "open_logs"],
       };
@@ -220,7 +323,9 @@ export function errorScreen(error: BootError, ctx: ScreenContext): ErrorScreen {
           }[])
         : [];
       screen = {
-        title: "Some setup steps failed",
+        title: d.update
+          ? "EvoScientist was updated, but some setup steps failed"
+          : "Some setup steps failed",
         lines: [
           error.message,
           "Retry runs setup again. Continue starts EvoScientist without these steps (only the Node step runs); the next launch runs setup again.",
@@ -239,6 +344,85 @@ export function errorScreen(error: BootError, ctx: ScreenContext): ErrorScreen {
       };
       break;
     }
+    case "release_lookup_failed":
+      // The index answered without a release to use (for example a mirror
+      // that has not synced a new release yet): the network works.
+      screen = d.answered
+        ? {
+            title: "No EvoScientist release for this app is listed yet",
+            lines: [
+              error.message,
+              "The package index does not list a release this app supports. Press Retry later.",
+            ],
+            actions: ["retry", "open_logs"],
+          }
+        : {
+            title: "Updating EvoScientist needs a network",
+            lines: [
+              error.message,
+              "Connect to the internet (check the proxy or VPN), then press Retry.",
+            ],
+            actions: ["retry", "open_logs"],
+          };
+      break;
+    case "server_running":
+      screen = {
+        title: "A backend started in a terminal is running",
+        lines: [
+          "Stop the backend started in the terminal, then press Retry.",
+          ...(str(d.core_message) ? [str(d.core_message) as string] : []),
+        ],
+        actions: ["retry", "open_logs"],
+      };
+      break;
+    case "environment_busy": {
+      // A cancelled wait names the programs; without them the core refused
+      // for another reason (another update holds its lock), which its
+      // message says.
+      const busy = Array.isArray(d.waiting_for)
+        ? (d.waiting_for as { name?: unknown; pid?: unknown }[])
+        : [];
+      screen =
+        busy.length > 0
+          ? {
+              title: "The update was cancelled",
+              lines: [
+                "Nothing was changed.",
+                `Still running: ${busy
+                  .map((b) => `${b.name} (${b.pid})`)
+                  .join(", ")}.`,
+                "Close the programs that run EvoScientist, then press Retry.",
+                error.message,
+              ],
+              actions: ["retry", "open_logs"],
+            }
+          : {
+              title: "EvoScientist could not be updated",
+              lines: [
+                error.message,
+                "Nothing was changed. Press Retry to try the update again.",
+              ],
+              actions: ["retry", "open_logs"],
+            };
+      break;
+    }
+    case "manual_update":
+      screen = {
+        title: "EvoScientist cannot be updated from the app",
+        lines: [
+          error.message,
+          "Update it the way it was installed, then press Retry.",
+        ],
+        actions: ["retry", "open_logs"],
+      };
+      break;
+    case "update_failed":
+      screen = {
+        title: "The update did not finish",
+        lines: [error.message, "Press Retry to check EvoScientist again."],
+        actions: ["retry", "open_logs"],
+      };
+      break;
     case "core_too_old":
       screen = {
         title: "EvoScientist needs an update",
@@ -365,6 +549,16 @@ export function errorScreen(error: BootError, ctx: ScreenContext): ErrorScreen {
       };
       break;
     default:
+      // The update's other codes (download_failed, no_constraints,
+      // unknown_version and anything new): the update, not the start, failed.
+      if (d.update) {
+        screen = {
+          title: "EvoScientist could not be updated",
+          lines: [error.message, "Press Retry to try the update again."],
+          actions: ["retry", "open_logs"],
+        };
+        break;
+      }
       // ccproxy_failed, backend_start_failed, internal_error and anything new.
       screen = {
         title: "EvoScientist could not start",

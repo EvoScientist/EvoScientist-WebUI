@@ -17,6 +17,7 @@ import {
   dialog,
   ipcMain,
   nativeTheme,
+  net,
   powerMonitor,
   session as electronSession,
   shell,
@@ -40,7 +41,12 @@ import {
   writeUiRecord,
 } from "./leftover";
 import { classifyLink } from "./links";
-import { locateEvoSci, uvToolBinDir } from "./locate";
+import {
+  locateEvoSci,
+  uvToolBinDir,
+  uvToolDir,
+  uvToolEnvExists,
+} from "./locate";
 import {
   backupConfig,
   installCommand,
@@ -49,6 +55,7 @@ import {
   updateLockHeld,
 } from "./install";
 import { DESKTOP_LOG, DESKTOP_UI_LOG, FileLog } from "./logs";
+import { answers } from "./loopback";
 import {
   folderEnv,
   readStartConfig,
@@ -58,7 +65,9 @@ import {
 import { killTree, runCollect } from "./proc";
 import type { ActionId } from "./screens";
 import { readSetupRecord, runSetup, writeSetupRecord } from "./setup";
+import { lookupNewest } from "./release";
 import { pickUiPort, startUiServer, uiServerEnv } from "./uiServer";
+import { runUpdate } from "./update";
 import { bundledUiVersion, installVersion } from "./versions";
 
 const STATUS_HTML = join(__dirname, "..", "resources", "status.html");
@@ -259,6 +268,32 @@ const desktop = createApp({
       log.warn(`cannot record the setup: ${e}`);
     }
   },
+
+  // Electron's net follows the system proxy, PAC files and the Windows
+  // certificate store; Node's own fetch follows none of them.
+  lookupRelease: (cn) =>
+    lookupNewest({
+      fetch: (url, init) => net.fetch(url, init),
+      cn,
+      range: manifest.coreRange,
+    }),
+  runUpdate: (file, version, stages, onUpdate) =>
+    runUpdate(file, {
+      version,
+      stages,
+      cwd: folders.dataDir,
+      env: childEnv,
+      log,
+      onUpdate,
+    }),
+  backendAnswers: async (port) =>
+    (await answers(`http://127.0.0.1:${port}/ok`, 2_000)) === 200,
+  uvToolEnvExists: () =>
+    uvToolEnvExists({
+      dataDir: folders.dataDir,
+      env: childEnv,
+      toolDir: uvToolDir(childEnv, folders.dataDir),
+    }),
 
   checkWork: (url) => checkWork(backendRequest(url)),
   waitForMemoryWorkers: (url, cancelled) =>

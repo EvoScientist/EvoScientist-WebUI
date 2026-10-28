@@ -1,6 +1,9 @@
 // The launch sequence, as a state machine that tests drive without Electron:
 // find `EvoSci` and check it with `--version --json` (C08); when it is missing
 // or broken, install or repair it with the bundled install script (W03b);
+// when it is older than the app's range, offer to update it (W03c): with
+// `EvoSci update` (C11) from 0.3.7 on, else, and for a pip or conda install,
+// with the bundled script;
 // run `EvoSci setup` when this core version has not been set up, else the
 // `node` stage; resolve the workspace folder, then `EvoSci deploy --json`
 // (C13) until `ready` or an error. The window, the UI server and the screens
@@ -16,6 +19,7 @@ import {
 } from "./lines";
 import { expandWorkdir, type StartConfig } from "./paths";
 import type { Collected, Logger } from "./proc";
+import type { Lookup } from "./release";
 import {
   failedStages,
   parseManifest,
@@ -23,7 +27,13 @@ import {
   type SetupRun,
   type Stage,
 } from "./setup";
-import { inRange, placeInRange } from "./versions";
+import type { UpdateRun, UpdateView } from "./update";
+import {
+  compareReleases,
+  inRange,
+  parseRelease,
+  placeInRange,
+} from "./versions";
 
 /** `--version --json` can be slow on a first run under Defender; a timeout is
  *  its own error with Retry, never a missing core (measurement 5 may tune it). */
@@ -36,8 +46,13 @@ export const UPDATE_LOCK_POLL_MS = 3_000;
 /** The install script's last lines on the progress screen. */
 export const INSTALL_TAIL_LINES = 12;
 
+/** The first core release with `EvoSci update` (C11 merged after 0.3.6);
+ *  an older core is updated with the bundled install script. */
+export const FIRST_UPDATABLE = "0.3.7";
+
 /** The one-line install commands from the core's install guide, for a core
- *  older than the range (until W03c updates it from the app). */
+ *  whose version is not a release, or still outside the range after an
+ *  update. */
 export const INSTALL_COMMANDS = {
   win32:
     "irm https://raw.githubusercontent.com/EvoScientist/EvoScientist/main/scripts/install.ps1 | iex",
@@ -66,6 +81,10 @@ export type AppErrorCode =
   | "install_failed"
   | "unsupported_platform"
   | "setup_failed"
+  | "release_lookup_failed"
+  /** `EvoSci update` ended without its terminal line, or the core does not
+   *  run after it. */
+  | "update_failed"
   /** A quit stopped the launch; never shown. */
   | "quitting";
 
@@ -78,8 +97,12 @@ export interface BootError {
 export type BootState =
   | { phase: "checking_core" }
   | { phase: "asking_mirror" }
+  | { phase: "asking_update" }
   | { phase: "update_finishing" }
-  | { phase: "installing"; repair: boolean; lines: string[] }
+  | { phase: "looking_up_release" }
+  | { phase: "updating"; view: UpdateView }
+  /** `update`: the install script brings an older core to the app's version. */
+  | { phase: "installing"; repair: boolean; update?: boolean; lines: string[] }
   | { phase: "setting_up"; stages: Stage[] }
   | { phase: "preparing_node" }
   | { phase: "starting_backend"; workspace: string }
@@ -94,6 +117,8 @@ export type BootResult =
       workspace: string;
       ready: DeployReady;
       session: DeploySession;
+      /** Shown once the app is ready (a pip or conda copy left as it was). */
+      notice?: string;
     }
   | { ok: false; error: BootError };
 
@@ -141,6 +166,30 @@ export interface BootDeps {
   setupRecord(): string | null;
   /** Records a setup that exited 0; null forgets the record. */
   recordSetup(coreVersion: string | null): void;
+
+  // Core updates (W03c)
+  /** Shows the update offer; resolves when the user chooses Update (Quit
+   *  quits the app). */
+  askUpdate(from: string): Promise<void>;
+  /** After `manual_update` without a uv tool install: offers a separate
+   *  copy; resolves when the user chooses to install it. */
+  askSeparateInstall(message: string, from: string): Promise<void>;
+  /** The busy check, then a stop of the backend the app started, if one
+   *  runs; false when the user keeps it running. */
+  stopOwnBackend(): Promise<boolean>;
+  /** The newest release inside the range on the update's index. */
+  lookupRelease(cn: boolean): Promise<Lookup>;
+  runUpdate(
+    evosci: string,
+    version: string,
+    stages: Stage[],
+    onUpdate: (view: UpdateView) => void
+  ): UpdateRun;
+  /** Whether a backend answers `/ok` with 200 on this loopback port. */
+  backendAnswers(port: number): Promise<boolean>;
+  /** Whether uv's tool directory holds an EvoScientist environment; null
+   *  when uv does not answer. */
+  uvToolEnvExists(): Promise<boolean | null>;
 }
 
 /** One launch's choices from the error screen. */
@@ -200,7 +249,8 @@ export function checkCore(
   }
   if (placement !== "inside") {
     // Below the range, or not a release number (a pre-release or a local
-    // version never matches): until W03c, reinstall with the install command.
+    // version never matches): `boot` offers the update for a release below
+    // the range; the rest keep the install command.
     return {
       code: "core_too_old",
       message:
@@ -308,7 +358,8 @@ async function installCore(
   deps: BootDeps,
   onState: (s: BootState) => void,
   repair: boolean,
-  options: BootOptions
+  options: BootOptions,
+  update = false
 ): Promise<{ cn: boolean; lines: string[] } | BootError | "update"> {
   // Before the question: on Windows on Arm the answer would change nothing.
   if (deps.platform === "win32" && (await deps.windowsArm64()))
@@ -344,22 +395,24 @@ async function installCore(
     } catch (e) {
       return {
         code: "install_failed",
-        message: `config.yaml could not be copied before the repair: ${e}`,
-        detail: { repair, cn, output: [] },
+        message: `config.yaml could not be copied before the ${
+          update ? "update" : "repair"
+        }: ${e}`,
+        detail: { repair, update, cn, output: [] },
       };
     }
   }
   deps.log.info(
-    `${repair ? "repairing" : "installing"} the core${
+    `${update ? "updating" : repair ? "repairing" : "installing"} the core${
       cn ? " with mainland China mirrors" : ""
     }`
   );
   const shown: string[] = [];
-  onState({ phase: "installing", repair, lines: [] });
+  onState({ phase: "installing", repair, update, lines: [] });
   const run = deps.runInstall(cn, (line) => {
     shown.push(line);
     if (shown.length > INSTALL_TAIL_LINES) shown.shift();
-    onState({ phase: "installing", repair, lines: [...shown] });
+    onState({ phase: "installing", repair, update, lines: [...shown] });
   });
   const { exit, lines } = await run.done;
   if (deps.stopping()) return QUITTING;
@@ -367,11 +420,14 @@ async function installCore(
   const output = failureOutput(lines);
   return {
     code: "install_failed",
-    message: repair
+    message: update
+      ? "EvoScientist could not be updated."
+      : repair
       ? "EvoScientist could not be repaired."
       : "EvoScientist could not be installed.",
     detail: {
       repair,
+      update,
       cn,
       exit_code: exit.code,
       output,
@@ -461,6 +517,223 @@ async function setUp(
   };
 }
 
+/**
+ * The install script (installCore), then the core it installed: located and
+ * checked with `--version --json`. Errors keep the script's last lines.
+ */
+async function installAndCheck(
+  deps: BootDeps,
+  onState: (s: BootState) => void,
+  repair: boolean,
+  options: BootOptions,
+  update = false
+): Promise<
+  { evosci: string; info: VersionInfo; cn: boolean } | BootError | "update"
+> {
+  const installed = await installCore(deps, onState, repair, options, update);
+  if (installed === "update" || "code" in installed) return installed;
+  // The script exited 0, so its last lines, not an `Error:` line.
+  const after = {
+    repair,
+    update,
+    cn: installed.cn,
+    output: failureOutput(installed.lines),
+  };
+  onState({ phase: "checking_core" });
+  const evosci = await deps.locate();
+  if (!evosci)
+    return {
+      code: "install_failed",
+      message: "The install script finished, but EvoSci was not found.",
+      detail: after,
+    };
+  deps.log.info(`EvoSci after the install: ${evosci}`);
+  const check = await checkVersion(deps, evosci);
+  if (check.kind === "timeout") return versionTimeout(evosci);
+  if (check.kind === "broken")
+    return {
+      code: "install_failed",
+      message: `EvoScientist still does not run after the install (${check.why}).`,
+      detail: { ...after, evosci },
+    };
+  return { evosci, info: check.info, cn: installed.cn };
+}
+
+/** "Stop the backend started in the terminal, then retry": a backend the
+ *  app did not start answers on the port. */
+const terminalBackend = (port: number, coreMessage?: string): BootError => ({
+  code: "server_running",
+  message: "A backend started in a terminal is running.",
+  detail: { port, ...(coreMessage ? { core_message: coreMessage } : {}) },
+});
+
+/** How updateCore ended: updated in place (its setup recorded when the
+ *  version is inside the range), or the bundled script is to run. */
+type Updated =
+  | { kind: "updated"; info: VersionInfo }
+  | { kind: "script"; notice?: string };
+
+/**
+ * A core older than the range (W03c): the offer, the busy check and stop of
+ * the app's own backend, then `EvoSci update` to the newest release in the
+ * range (from 0.3.7 on) with a new version check, or, for 0.3.6 and for a
+ * pip or conda install (`manual_update` without a uv tool install), the
+ * bundled script. The update runs the new version's setup itself: after
+ * `done` that version counts as set up, so setup does not run twice.
+ */
+async function updateCore(
+  deps: BootDeps,
+  onState: (s: BootState) => void,
+  evosci: string,
+  info: VersionInfo,
+  options: BootOptions
+): Promise<Updated | BootError | "update"> {
+  for (;;) {
+    onState({ phase: "asking_update" });
+    await deps.askUpdate(info.version);
+    if (deps.stopping()) return QUITTING;
+    if (await deps.stopOwnBackend()) break;
+    deps.log.info("update: the backend keeps running; asking again");
+  }
+  const record = deps.setupRecord();
+  if (record !== null && inRange(record, deps.manifest.coreRange))
+    deps.recordSetup(null);
+  // Below the range, so a release number.
+  const release = parseRelease(info.version) ?? [];
+  if (compareReleases(release, parseRelease(FIRST_UPDATABLE) ?? []) < 0) {
+    const port = deps.startConfig().port;
+    if (await deps.backendAnswers(port)) return terminalBackend(port);
+    deps.log.info(
+      `core ${info.version} has no EvoSci update: the bundled script installs this app's version`
+    );
+    return { kind: "script" };
+  }
+
+  onState({ phase: "looking_up_release" });
+  const cn = deps.startConfig().mirror === "cn";
+  const found = await deps.lookupRelease(cn);
+  if (!found.ok) {
+    if (found.listed)
+      deps.log.info(`listed on ${found.url}: ${found.listed.join(", ")}`);
+    return {
+      code: "release_lookup_failed",
+      message: `The newest EvoScientist release could not be found on ${found.url} (${found.reason}).`,
+      detail: {
+        url: found.url,
+        reason: found.reason,
+        answered: found.answered,
+        cn,
+      },
+    };
+  }
+  if (deps.stopping()) return QUITTING;
+  // A terminal update took its lock meanwhile: wait for it and start over.
+  if (deps.updateLockHeld()) return "update";
+
+  // The installed core's stages: the update forwards the new version's
+  // setup lines, which fill them in.
+  const m = await deps.runCollect(
+    evosci,
+    ["setup", "--manifest"],
+    deps.dataDir,
+    VERSION_TIMEOUT_MS
+  );
+  const stages = parseManifest(m.stdout) ?? [];
+  if (deps.stopping()) return QUITTING;
+  deps.log.info(`updating the core ${info.version} -> ${found.version}`);
+  onState({
+    phase: "updating",
+    view: { update: {}, stages, waiting: null },
+  });
+  const run = deps.runUpdate(evosci, found.version, stages, (view) =>
+    onState({ phase: "updating", view })
+  );
+  const { outcome, view } = await run.done;
+  // Closing waits for the update (D21); after it nothing new starts.
+  if (deps.stopping()) {
+    if (
+      outcome.kind === "done" &&
+      outcome.version !== null &&
+      inRange(outcome.version, deps.manifest.coreRange)
+    )
+      deps.recordSetup(outcome.version);
+    return QUITTING;
+  }
+
+  if (outcome.kind === "no_terminal_line")
+    return {
+      code: "update_failed",
+      message: `EvoSci update ended without its result (exit ${outcome.exit.code}).`,
+      detail: { version: found.version, exit_code: outcome.exit.code },
+    };
+  if (outcome.kind === "done") {
+    onState({ phase: "checking_core" });
+    const check = await checkVersion(deps, evosci);
+    if (check.kind === "timeout") return versionTimeout(evosci);
+    if (check.kind === "broken")
+      return {
+        code: "update_failed",
+        message: `EvoScientist does not run after the update (${check.why}).`,
+        detail: { version: found.version },
+      };
+    if (!checkCore(check.info, deps.manifest, deps.platform))
+      deps.recordSetup(check.info.version);
+    return { kind: "updated", info: check.info };
+  }
+
+  // `source`: the update's own failure, which the mirror retry cannot help
+  // (the update reads `mirror` from config.yaml only).
+  const detail = { ...outcome.detail, update: true, source: "update" };
+  switch (outcome.code) {
+    case "manual_update": {
+      const env = await deps.uvToolEnvExists();
+      deps.log.info(`manual_update; uv tool install of EvoScientist: ${env}`);
+      // A uv tool install from a checkout or a URL: the script would put
+      // the PyPI release over it.
+      if (env !== false)
+        return { code: "manual_update", message: outcome.message, detail };
+      onState({ phase: "asking_update" });
+      await deps.askSeparateInstall(outcome.message, info.version);
+      if (deps.stopping()) return QUITTING;
+      return {
+        kind: "script",
+        notice: `The EvoSci of your pip or conda install is still ${info.version}. A terminal may still run it: upgrade it, or use only the desktop app.`,
+      };
+    }
+    case "server_running":
+      return terminalBackend(deps.startConfig().port, outcome.message);
+    case "setup_failed": {
+      // The core is updated, its setup is not: Retry runs setup again.
+      const failed = failedStages(view.stages);
+      return {
+        code: "setup_failed",
+        message:
+          failed.length > 0
+            ? `${
+                failed.length === 1
+                  ? "One setup step"
+                  : `${failed.length} setup steps`
+              } failed after the update.`
+            : "EvoScientist was updated, but its setup failed.",
+        detail: {
+          update: true,
+          cn:
+            options.cn ||
+            (mirrorChoice(deps.startConfig(), deps.keptMirror()) ?? false),
+          failed: failed.map((f) => ({
+            id: f.id,
+            title: f.title,
+            code: f.code ?? null,
+            message: f.message ?? null,
+          })),
+        },
+      };
+    }
+    default:
+      return { code: outcome.code, message: outcome.message, detail };
+  }
+}
+
 /** The launch sequence up to `ready`: find and check the core (installing
  *  or repairing it when needed), set it up or run the node stage, resolve the
  *  workspace and start `deploy`. Reports each phase through `onState`. */
@@ -491,44 +764,47 @@ export async function boot(
 
   let installedCn: boolean | null = null;
   let freshInstall = false;
+  let notice: string | undefined;
   if (!evosci || check?.kind !== "ok") {
     const repair = Boolean(evosci);
-    const installed = await installCore(deps, onState, repair, options);
+    const installed = await installAndCheck(deps, onState, repair, options);
     // An update took its lock: wait for it and check the core again; the
     // mirror answer is kept, so nothing is asked twice.
     if (installed === "update") return boot(deps, onState, options);
     if ("code" in installed) return fail(installed);
-    installedCn = installed.cn;
+    ({ evosci, cn: installedCn } = installed);
+    check = { kind: "ok", info: installed.info };
     freshInstall = !repair;
-    // The script exited 0, so its last lines, not an `Error:` line.
-    const after = {
-      repair,
-      cn: installed.cn,
-      output: failureOutput(installed.lines),
-    };
-    onState({ phase: "checking_core" });
-    evosci = await deps.locate();
-    if (!evosci)
-      return fail({
-        code: "install_failed",
-        message: "The install script finished, but EvoSci was not found.",
-        detail: after,
-      });
-    deps.log.info(`EvoSci after the install: ${evosci}`);
-    check = await checkVersion(deps, evosci);
-    if (check.kind === "timeout") return fail(versionTimeout(evosci));
-    if (check.kind === "broken")
-      return fail({
-        code: "install_failed",
-        message: `EvoScientist still does not run after the install (${check.why}).`,
-        detail: { ...after, evosci },
-      });
   }
-  const info = check.info;
+  let info = check.info;
   deps.log.info(
     `core ${info.version}, protocol ${info.protocol}, webui_compat ${info.webuiCompat}`
   );
-  const incompatible = checkCore(info, deps.manifest, deps.platform);
+  let incompatible = checkCore(info, deps.manifest, deps.platform);
+  // Older than the range: the update offer (W03c). A version that is not a
+  // release cannot be placed, and updating `0.4.0a1` would be a downgrade.
+  if (
+    incompatible?.code === "core_too_old" &&
+    !incompatible.detail.not_a_release
+  ) {
+    const updated = await updateCore(deps, onState, evosci, info, options);
+    if (updated === "update") return boot(deps, onState, options);
+    if ("code" in updated) return fail(updated);
+    if (updated.kind === "script") {
+      const installed = await installAndCheck(
+        deps,
+        onState,
+        true,
+        options,
+        true
+      );
+      if (installed === "update") return boot(deps, onState, options);
+      if ("code" in installed) return fail(installed);
+      ({ evosci, cn: installedCn, info } = installed);
+      notice = updated.notice;
+    } else info = updated.info;
+    incompatible = checkCore(info, deps.manifest, deps.platform);
+  }
   if (incompatible) return fail(incompatible);
 
   // Setup after a fresh install (the script ran with -NoSetup, and the
@@ -601,5 +877,6 @@ export async function boot(
     workspace: ws.folder,
     ready: outcome.ready,
     session,
+    ...(notice ? { notice } : {}),
   };
 }
