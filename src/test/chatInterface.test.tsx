@@ -2620,4 +2620,119 @@ describe("ChatInterface composition", () => {
       expect(jumpButton()).toBeNull();
     });
   });
+
+  describe("project switch", () => {
+    const A = "/home/you/projA";
+    const B = "/srv/projB";
+
+    beforeEach(() => {
+      // Radix Popper measures its anchor; jsdom has no ResizeObserver.
+      vi.stubGlobal(
+        "ResizeObserver",
+        class {
+          observe() {}
+          unobserve() {}
+          disconnect() {}
+        }
+      );
+    });
+
+    afterEach(() => {
+      mockThreadId = null;
+      vi.unstubAllGlobals();
+    });
+
+    it("moves a new chat to another project before its first message", async () => {
+      const projects = mockProjects(readyProjects(A, B), { current: A });
+      renderChatInterface({ projects });
+
+      fireEvent.keyDown(
+        screen.getByRole("button", { name: /Change project/ }),
+        { key: "Enter" }
+      );
+      expect(
+        (
+          await screen.findByRole("menuitemradio", { name: /projA/ })
+        ).getAttribute("aria-checked")
+      ).toBe("true");
+      fireEvent.click(screen.getByRole("menuitemradio", { name: /projB/ }));
+
+      expect(projects.selectProject).toHaveBeenCalledWith(B, {
+        remember: true,
+      });
+    });
+
+    it("offers no switch while the first run goes", () => {
+      renderChatInterface({
+        projects: mockProjects(readyProjects(A, B), { current: A }),
+      });
+      act(() => {
+        stream.setLoading(true);
+      });
+
+      expect(
+        screen.queryByRole("button", { name: /Change project/ })
+      ).toBeNull();
+    });
+
+    it("can't move a new chat to a project whose folder is missing", async () => {
+      renderChatInterface({
+        projects: mockProjects(
+          readyProjects(A, { key: B, name: "projB", missing: true }),
+          { current: A }
+        ),
+      });
+
+      fireEvent.keyDown(
+        screen.getByRole("button", { name: /Change project/ }),
+        { key: "Enter" }
+      );
+
+      expect(
+        (
+          await screen.findByRole("menuitemradio", { name: /projB/ })
+        ).getAttribute("aria-disabled")
+      ).toBe("true");
+    });
+
+    it("offers no switch with one project", () => {
+      renderChatInterface({ projects: mockProjects(readyProjects(A)) });
+
+      expect(
+        screen.queryByRole("button", { name: /Change project/ })
+      ).toBeNull();
+    });
+
+    it("keeps a conversation in its project", async () => {
+      mockThreadId = "t-1";
+      getActiveMockClient().setThreadRecord("t-1", {
+        metadata: { graph_id: "EvoScientist", workspace_dir: B },
+      });
+      renderChatInterface({
+        projects: mockProjects(readyProjects(A, B), { current: A }),
+        onNavigate: vi.fn(),
+      });
+
+      expect(
+        await screen.findByRole("button", { name: /workspace: \/srv\/projB/ })
+      ).toBeTruthy();
+      expect(
+        screen.queryByRole("button", { name: /Change project/ })
+      ).toBeNull();
+    });
+
+    it("lets a conversation with no folder pick its project", async () => {
+      mockThreadId = "t-1";
+      getActiveMockClient().setThreadRecord("t-1", {
+        metadata: { graph_id: "EvoScientist" },
+      });
+      renderChatInterface({
+        projects: mockProjects(readyProjects(A, B), { current: A }),
+      });
+
+      expect(
+        await screen.findByRole("button", { name: /Change project/ })
+      ).toBeTruthy();
+    });
+  });
 });

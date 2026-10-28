@@ -17,6 +17,7 @@ import {
   ArrowUp,
   ArrowDown,
   CheckCircle,
+  ChevronDown,
   Clock,
   Circle,
   FileIcon,
@@ -130,6 +131,15 @@ import { useAutoApproveInterrupt } from "@/app/hooks/useAutoApproveInterrupt";
 import { useApprovalPolicy } from "@/app/hooks/useApprovalPolicy";
 import { useProjects } from "@/providers/ProjectsProvider";
 import { findProject, projectHandle } from "@/lib/projects";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { CHAT_GRAPH_ID } from "@/lib/workspaceAssistant";
 import { useDeployment } from "@/providers/ClientProvider";
 import { resolveApprovalDecisions } from "@/lib/hitlPolicy";
@@ -557,6 +567,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       refreshing: projectsRefreshing,
       error: projectsError,
       files: filesAccess,
+      selectProject,
     } = useProjects();
     const [isUploadingFiles, setIsUploadingFiles] = useState(false);
     // Messages typed while the agent is busy are queued. They
@@ -692,6 +703,15 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     const folderLabel = chatProject
       ? { full: chatProject.key, name: chatProject.name }
       : null;
+    // Before its first message a chat can move to another project; so can a
+    // conversation that records no folder, which its first send binds. Never
+    // while a run goes: it runs on its project's assistant.
+    const canSwitchProject =
+      !isLoading &&
+      ((threadId === null && binding.kind === "open") ||
+        binding.kind === "unbound");
+    const switchProjects =
+      canSwitchProject && projects.status === "ready" ? projects.projects : [];
     // Read by the hand-back folds, which are registered once.
     const goalSupportedRef = useRef(goalSupported);
     goalSupportedRef.current = goalSupported;
@@ -3452,7 +3472,71 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                       {autoApprove ? "Auto-approve On" : "Auto-approve"}
                     </span>
                   </button>
-                  {onNavigate && folderLabel && (
+                  {folderLabel && switchProjects.length > 1 ? (
+                    <DropdownMenu modal={false}>
+                      <DropdownMenuTrigger asChild>
+                        <button
+                          type="button"
+                          aria-label={`Project: ${folderLabel.name}. Change project`}
+                          title={`Project: ${folderLabel.full}`}
+                          className="inline-flex min-w-0 items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:bg-accent"
+                        >
+                          <FolderOpen
+                            className="size-3.5 flex-shrink-0"
+                            aria-hidden="true"
+                          />
+                          <span className="hidden max-w-[140px] truncate font-mono sm:inline lg:max-w-[220px]">
+                            {folderLabel.name}
+                          </span>
+                          <ChevronDown
+                            className="size-3 flex-shrink-0"
+                            aria-hidden="true"
+                          />
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent
+                        align="start"
+                        className="max-w-[min(20rem,90vw)]"
+                      >
+                        <DropdownMenuRadioGroup
+                          value={projectKey ?? ""}
+                          onValueChange={(key) =>
+                            selectProject(key, { remember: true })
+                          }
+                        >
+                          {switchProjects.map((project) => (
+                            <DropdownMenuRadioItem
+                              key={project.key}
+                              value={project.key}
+                              disabled={project.missing}
+                              title={project.key}
+                            >
+                              <span className="truncate">{project.name}</span>
+                              {project.missing && (
+                                <span className="ml-auto text-[11px] text-muted-foreground">
+                                  folder missing
+                                </span>
+                              )}
+                            </DropdownMenuRadioItem>
+                          ))}
+                        </DropdownMenuRadioGroup>
+                        {onNavigate && (
+                          <>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem
+                              onSelect={() => onNavigate({ view: "workspace" })}
+                            >
+                              <FolderOpen
+                                className="size-3.5"
+                                aria-hidden="true"
+                              />
+                              {workspaceOpen ? "Hide files" : "Show files"}
+                            </DropdownMenuItem>
+                          </>
+                        )}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  ) : onNavigate && folderLabel ? (
                     <button
                       type="button"
                       onClick={() => onNavigate({ view: "workspace" })}
@@ -3473,7 +3557,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                         {folderLabel.name}
                       </span>
                     </button>
-                  )}
+                  ) : null}
                 </div>
                 <div className="flex justify-end gap-2">
                   <Button

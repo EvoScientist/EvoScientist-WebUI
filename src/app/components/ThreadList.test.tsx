@@ -484,4 +484,34 @@ describe("ThreadList by project", () => {
       vi.useRealTimers();
     }
   });
+
+  it("starts a new chat in a project from its section", () => {
+    const onNewChat = vi.fn();
+    const onClose = vi.fn();
+    renderList(
+      <ThreadList
+        onThreadSelect={vi.fn()}
+        onNewChat={onNewChat}
+        onClose={onClose}
+      />,
+      mockProjects(
+        readyProjects(TEST_PROJECT, {
+          key: OTHER,
+          name: "projB",
+          missing: true,
+        }),
+        { current: TEST_PROJECT }
+      )
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "New chat in projA" }));
+
+    expect(onNewChat).toHaveBeenCalledWith(TEST_PROJECT);
+    // The mobile drawer closes over the new chat.
+    expect(onClose).toHaveBeenCalled();
+    // A project whose folder is missing can't take a new chat.
+    expect(
+      screen.queryByRole("button", { name: "New chat in projB" })
+    ).toBeNull();
+  });
 });

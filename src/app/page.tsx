@@ -15,6 +15,7 @@ import { ConfigDialog } from "@/app/components/ConfigDialog";
 import { Button } from "@/components/ui/button";
 import { ClientProvider, useDeployment } from "@/providers/ClientProvider";
 import { ProjectsProvider, useProjects } from "@/providers/ProjectsProvider";
+import { findProject } from "@/lib/projects";
 import { SetupNotice } from "@/app/components/SetupNotice";
 import { SetupView } from "@/app/components/SetupView";
 import { useSetupGate } from "@/app/hooks/useSetupGate";
@@ -116,8 +117,12 @@ function HomePageInner({ config, handleSaveConfig }: HomePageInnerProps) {
     null
   );
 
-  const { refresh: refreshProjects, refreshing: projectsRefreshing } =
-    useProjects();
+  const {
+    projects,
+    refresh: refreshProjects,
+    refreshing: projectsRefreshing,
+    selectProject,
+  } = useProjects();
 
   useEffect(() => {
     const mediaQuery = window.matchMedia("(min-width: 768px)");
@@ -223,14 +228,24 @@ function HomePageInner({ config, handleSaveConfig }: HomePageInnerProps) {
   useEffect(() => {
     threadIdRef.current = threadId;
   }, [threadId]);
-  const startNewChat = useCallback(() => {
-    setThreadAutoApprove(null, false);
-    threadIdRef.current = null;
-    setThreadId(null);
-    setView(null);
-    setComposerSeed(null);
-    setChatSessionRevision((revision) => revision + 1);
-  }, [setThreadId, setView]);
+  // A new chat, in `project` when given (a registered project with its
+  // folder), else in the current project.
+  const startNewChat = useCallback(
+    (project?: string) => {
+      const chosen =
+        typeof project === "string" ? findProject(projects, project) : null;
+      if (chosen && !chosen.missing) {
+        selectProject(chosen.key, { remember: true });
+      }
+      setThreadAutoApprove(null, false);
+      threadIdRef.current = null;
+      setThreadId(null);
+      setView(null);
+      setComposerSeed(null);
+      setChatSessionRevision((revision) => revision + 1);
+    },
+    [setThreadId, setView, selectProject, projects]
+  );
   // The backend reported the open thread (or its assistant) gone. Take the
   // same reset path as New Chat, carrying the unsent message plus whatever
   // was still in the composer/queue — but only if the report is about the
@@ -367,7 +382,7 @@ function HomePageInner({ config, handleSaveConfig }: HomePageInnerProps) {
                 <Button
                   variant="ghost"
                   size="icon"
-                  onClick={startNewChat}
+                  onClick={() => startNewChat()}
                   aria-label="New chat"
                   className="size-8"
                 >

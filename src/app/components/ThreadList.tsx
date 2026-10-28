@@ -19,6 +19,7 @@ import {
   Pencil,
   Pin,
   PinOff,
+  Plus,
   Puzzle,
   Users,
   Search,
@@ -139,7 +140,8 @@ function StatusFilterItem({
 interface ThreadListProps {
   onThreadSelect: (id: string) => void;
   onClose?: () => void;
-  onNewChat?: () => void;
+  /** A new chat, in `project` when given, else in the current one. */
+  onNewChat?: (project?: string) => void;
   onMutateReady?: (mutate: () => void) => void;
   onInterruptCountChange?: (count: number) => void;
 }
@@ -963,6 +965,14 @@ export function ThreadList({
               onToggle={() => toggleSection(project.key)}
               busy={busyProjects.has(project.key)}
               waiting={waitingByProject.get(project.key) ?? 0}
+              onNewChat={
+                onNewChat && !project.missing
+                  ? () => {
+                      onNewChat(project.key);
+                      onClose?.();
+                    }
+                  : undefined
+              }
             >
               <ThreadGroups
                 scope={{ project: project.key }}
@@ -1120,6 +1130,7 @@ function ProjectSection({
   onToggle,
   busy = false,
   waiting = 0,
+  onNewChat,
   children,
 }: {
   project?: Project;
@@ -1129,6 +1140,8 @@ function ProjectSection({
   onToggle: () => void;
   busy?: boolean;
   waiting?: number;
+  /** Start a new chat in this project (absent: no such action). */
+  onNewChat?: () => void;
   children: React.ReactNode;
 }) {
   const name = project?.name ?? title ?? "";
@@ -1138,52 +1151,68 @@ function ProjectSection({
       aria-label={name}
       className="mb-1"
     >
-      <h4 className="m-0">
-        <button
-          type="button"
-          onClick={onToggle}
-          aria-expanded={open}
-          aria-controls={`${id}-threads`}
-          aria-describedby={`${id}-detail`}
-          title={project?.key ?? detail}
-          className="flex w-full items-center gap-1.5 rounded-md px-1.5 py-1.5 text-left text-sm font-semibold transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          <ChevronRight
-            className={cn(
-              "size-3.5 flex-shrink-0 text-muted-foreground transition-transform",
-              open && "rotate-90"
+      <div className="flex items-center">
+        <h4 className="m-0 min-w-0 flex-1">
+          <button
+            type="button"
+            onClick={onToggle}
+            aria-expanded={open}
+            aria-controls={`${id}-threads`}
+            aria-describedby={`${id}-detail`}
+            title={project?.key ?? detail}
+            className="flex w-full items-center gap-1.5 rounded-md px-1.5 py-1.5 text-left text-sm font-semibold transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <ChevronRight
+              className={cn(
+                "size-3.5 flex-shrink-0 text-muted-foreground transition-transform",
+                open && "rotate-90"
+              )}
+              aria-hidden="true"
+            />
+            <span className="min-w-0 truncate">{name}</span>
+            {project?.missing && (
+              <span className="flex-shrink-0 rounded bg-destructive/10 px-1 py-px text-[11px] font-medium text-destructive">
+                folder missing
+              </span>
             )}
-            aria-hidden="true"
-          />
-          <span className="min-w-0 truncate">{name}</span>
-          {project?.missing && (
-            <span className="flex-shrink-0 rounded bg-destructive/10 px-1 py-px text-[11px] font-medium text-destructive">
-              folder missing
-            </span>
-          )}
-          <span className="ml-auto flex flex-shrink-0 items-center gap-1.5">
-            {!open && waiting > 0 && (
-              <>
+            <span className="ml-auto flex flex-shrink-0 items-center gap-1.5">
+              {!open && waiting > 0 && (
+                <>
+                  <span
+                    aria-hidden="true"
+                    className="inline-flex min-w-4 items-center justify-center rounded-full bg-orange-500 px-1 text-[10px] font-bold leading-4 text-white"
+                  >
+                    {waiting}
+                  </span>
+                  <span className="sr-only">{`, ${waiting} waiting for you`}</span>
+                </>
+              )}
+              {busy && (
                 <span
-                  aria-hidden="true"
-                  className="inline-flex min-w-4 items-center justify-center rounded-full bg-orange-500 px-1 text-[10px] font-bold leading-4 text-white"
-                >
-                  {waiting}
-                </span>
-                <span className="sr-only">{`, ${waiting} waiting for you`}</span>
-              </>
-            )}
-            {busy && (
-              <span
-                role="img"
-                aria-label="A conversation is running"
-                title="A conversation is running"
-                className="size-2 rounded-full bg-blue-500"
-              />
-            )}
-          </span>
-        </button>
-      </h4>
+                  role="img"
+                  aria-label="A conversation is running"
+                  title="A conversation is running"
+                  className="size-2 rounded-full bg-blue-500"
+                />
+              )}
+            </span>
+          </button>
+        </h4>
+        {onNewChat && (
+          <button
+            type="button"
+            onClick={onNewChat}
+            aria-label={`New chat in ${name}`}
+            title={`New chat in ${name}`}
+            className="ml-0.5 flex-shrink-0 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <Plus
+              className="size-3.5"
+              aria-hidden="true"
+            />
+          </button>
+        )}
+      </div>
       <span
         id={`${id}-detail`}
         className="sr-only"
