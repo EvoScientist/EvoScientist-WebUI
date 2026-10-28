@@ -60,14 +60,10 @@ vi.mock("sonner", () => ({
 }));
 
 import { renderChat } from "@/test/renderChat";
-import {
-  TestProjectsProvider,
-  mockProjects,
-  readyProjects,
-} from "@/test/mockProjects";
+import { mockProjects, readyProjects } from "@/test/mockProjects";
 import { workspaceAssistantId } from "@/lib/workspaceAssistant";
 import { useThreads } from "@/app/hooks/useThreads";
-import type { ProjectsContextValue } from "@/providers/ProjectsProvider";
+import type { ThreadScope } from "@/app/hooks/useThreads";
 
 const KEY = "/home/you/projA";
 const OTHER = "/srv/projB";
@@ -483,45 +479,112 @@ describe("thread list", () => {
     vi.unstubAllGlobals();
   });
 
-  async function searchedMetadata(projects: ProjectsContextValue) {
-    const bodies: Array<{ metadata?: unknown }> = [];
+  /** The first search a list makes, and the pages it shows. */
+  async function search(
+    scope: ThreadScope | null,
+    threads: unknown[] = [],
+    limit?: number
+  ) {
+    const bodies: Array<{ metadata?: unknown; status?: unknown }> = [];
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         if (String(input).endsWith("/threads/search")) {
           bodies.push(JSON.parse(String(init?.body)));
         }
-        return new Response("[]", {
+        return new Response(JSON.stringify(threads), {
           status: 200,
           headers: { "Content-Type": "application/json" },
         });
       })
     );
-    renderHook(() => useThreads({}), {
-      wrapper: ({ children }: { children: ReactNode }) => (
-        <SWRConfig value={{ provider: () => new Map() }}>
-          <TestProjectsProvider value={projects}>
+    const { result } = renderHook(
+      () => useThreads({ scope, status: "busy", limit }),
+      {
+        wrapper: ({ children }: { children: ReactNode }) => (
+          <SWRConfig value={{ provider: () => new Map() }}>
             {children}
-          </TestProjectsProvider>
-        </SWRConfig>
-      ),
-    });
-    await waitFor(() => expect(bodies.length).toBeGreaterThan(0));
-    return bodies[0].metadata;
+          </SWRConfig>
+        ),
+      }
+    );
+    return { bodies, result };
   }
 
-  it("lists the chat threads of the current project", async () => {
-    expect(await searchedMetadata(ready())).toEqual({
-      graph_id: "EvoScientist",
-      workspace_dir: KEY,
+  it("lists a project's chat threads", async () => {
+    const { bodies } = await search({ project: KEY });
+    await waitFor(() => expect(bodies.length).toBeGreaterThan(0));
+    expect(bodies[0]).toMatchObject({
+      metadata: { graph_id: "EvoScientist", workspace_dir: KEY },
+      status: "busy",
     });
   });
 
-  it("lists another project's threads once it is current", async () => {
-    expect(
-      await searchedMetadata(
-        mockProjects(readyProjects(KEY, OTHER), { current: OTHER })
-      )
-    ).toEqual({ graph_id: "EvoScientist", workspace_dir: OTHER });
+  const raw = (id: string, metadata: Record<string, unknown>) => ({
+    thread_id: id,
+    status: "busy",
+    updated_at: "2026-10-28T10:00:00Z",
+    metadata: {
+      auto_title: "x",
+      preview: "y",
+      labels_state_at: "2026-10-28T10:00:00Z",
+      ...metadata,
+    },
+  });
+
+  it("keeps the named projects' threads from a search across folders", async () => {
+    const { bodies, result } = await search({ projects: [KEY] }, [
+      raw("in", { workspace_dir: KEY }),
+      raw("other", { workspace_dir: "/home/you/projC" }),
+      raw("none", {}),
+    ]);
+
+    await waitFor(() => expect(result.current.data).toBeDefined());
+    expect(bodies[0].metadata).toEqual({ graph_id: "EvoScientist" });
+    expect(result.current.data?.[0].items.map((t) => t.id)).toEqual(["in"]);
+  });
+
+  it("keeps only threads with no folder for No project", async () => {
+    const { result } = await search("noProject", [
+      raw("in", { workspace_dir: KEY }),
+      raw("none", {}),
+    ]);
+
+    await waitFor(() => expect(result.current.data).toBeDefined());
+    expect(result.current.data?.[0].items.map((t) => t.id)).toEqual(["none"]);
+  });
+
+  it("reads each thread's folders, and whether the page was full", async () => {
+    const { result } = await search(
+      { projects: [KEY] },
+      [
+        {
+          thread_id: "t-1",
+          status: "busy",
+          updated_at: "2026-10-28T10:00:00Z",
+          metadata: {
+            workspace_dir: KEY,
+            run_dir: `${KEY}/runs/r1`,
+            title: "x",
+            auto_title: "x",
+            preview: "y",
+            labels_state_at: "2026-10-28T10:00:00Z",
+          },
+        },
+      ],
+      1
+    );
+
+    await waitFor(() => expect(result.current.data).toBeDefined());
+    expect(result.current.data?.[0]).toMatchObject({
+      full: true,
+      items: [{ workspaceDir: KEY, runDir: `${KEY}/runs/r1` }],
+    });
+  });
+
+  it("searches nothing without a scope", async () => {
+    const { bodies } = await search(null);
+    await act(async () => {});
+    expect(bodies).toHaveLength(0);
   });
 });

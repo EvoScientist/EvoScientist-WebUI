@@ -15,6 +15,7 @@ import { nodeColor, type ObsGraphData } from "@/lib/observationGraph";
 import { listScheduledTasks } from "@/app/hooks/useScheduledTasks";
 import { useThreads } from "@/app/hooks/useThreads";
 import { useProjectFiles } from "@/app/hooks/useProjectFiles";
+import { useProjects } from "@/providers/ProjectsProvider";
 import type { NavTarget } from "@/lib/navTarget";
 import { formatTime } from "@/lib/time";
 
@@ -72,11 +73,16 @@ export function ResearchDashboard({
   onNavigate,
   onOpenThread,
 }: ResearchDashboardProps) {
-  const { data: threadPages } = useThreads({ limit: 100 });
+  // The current project's pinned threads: a new chat starts in it.
+  const { current } = useProjects();
+  const { data: threadPages } = useThreads({
+    scope: current ? { project: current.key } : null,
+    limit: 100,
+  });
   const pinned = useMemo(
     () =>
       (threadPages ?? [])
-        .flat()
+        .flatMap((page) => page.items)
         .filter((t) => t.pinned)
         .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())
         .slice(0, 5),
