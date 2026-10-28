@@ -1010,10 +1010,14 @@ describe("core update (W03c)", () => {
       cancelNow,
       waiting: () => waiting,
     };
-    const view = (w: UpdateView["waiting"]): UpdateView => ({
+    const view = (
+      w: UpdateView["waiting"],
+      afterFailedRun?: boolean
+    ): UpdateView => ({
       update: { progress: 0.25, message: "Update pending" },
       stages: [{ id: "node", title: "Node.js", state: "pending" }],
       waiting: w,
+      ...(afterFailedRun ? { afterFailedRun } : {}),
     });
     const h = harness({
       readSetupRecord: () => "0.3.7",
@@ -1035,9 +1039,9 @@ describe("core update (W03c)", () => {
       cancelWhenWaiting,
       cancelNow,
       /** The update reports a line. */
-      report: (w: UpdateView["waiting"]) => {
+      report: (w: UpdateView["waiting"], afterFailedRun?: boolean) => {
         waiting = w !== null;
-        onUpdate?.(view(w));
+        onUpdate?.(view(w, afterFailedRun));
       },
       finish: (outcome: UpdateOutcome = { kind: "done", version: "0.3.8" }) => {
         if (outcome.kind === "done") state.version = "0.3.8";
@@ -1126,7 +1130,9 @@ describe("core update (W03c)", () => {
     );
     expect(c.messageBox.mock.calls[0][0]).toMatchObject({
       message: "EvoScientist is being updated.",
-      detail: expect.stringContaining("The update finishes first"),
+      detail: expect.stringMatching(
+        /^The update finishes first.*: closing then cancels it\./
+      ),
       buttons: ["Quit after the update", "Cancel"],
       defaultId: 1,
     });
@@ -1139,9 +1145,11 @@ describe("core update (W03c)", () => {
     await quit;
     await launch;
     expect(c.exit).toHaveBeenCalledWith(false);
-    // Nothing new started after the update: no UI, no record.
     expect(c.uis).toHaveLength(0);
-    expect(c.deps.writeSetupRecord).not.toHaveBeenCalled();
+    expect(c.deps.writeSetupRecord).toHaveBeenLastCalledWith("0.3.8");
+    expect(
+      vi.mocked(c.deps.writeSetupRecord).mock.invocationCallOrder.at(-1)
+    ).toBeLessThan(c.exit.mock.invocationCallOrder[0]);
   });
 
   it("closing while it waits says that closing cancels it", async () => {
@@ -1160,6 +1168,29 @@ describe("core update (W03c)", () => {
       kind: "error",
       code: "environment_busy",
       message: "m",
+      detail: {},
+    });
+    await quit;
+    await launch;
+    expect(c.exit).toHaveBeenCalled();
+  });
+
+  it("closing during the wait after a failed install attempt says a repair may follow", async () => {
+    const c = oldCore();
+    const launch = c.app.launch();
+    await vi.waitFor(() => expect(c.app.screen.kind).toBe("question"));
+    await c.app.act("update", undefined);
+    await vi.waitFor(() => expect(c.app.screen.kind).toBe("setup"));
+    c.report(PYTHON, true);
+    const quit = c.app.requestQuit();
+    await vi.waitFor(() => expect(c.cancelWhenWaiting).toHaveBeenCalled());
+    const detail = c.messageBox.mock.calls[0][0].detail as string;
+    expect(detail).toMatch(/may need a repair at the next launch/);
+    expect(detail).not.toMatch(/nothing is changed/);
+    c.finish({
+      kind: "error",
+      code: "install_failed",
+      message: "Update cancelled after a failed install",
       detail: {},
     });
     await quit;

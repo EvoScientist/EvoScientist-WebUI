@@ -38,6 +38,10 @@ export interface UpdateView {
   stages: Stage[];
   /** The processes it waits for; null while it does not wait. */
   waiting: Blocker[] | null;
+  /** A uv run failed and the update waits to try once more (the Windows
+   *  helper's retry): cancelling that wait ends with `install_failed`, since
+   *  the failed run may have changed the environment. */
+  afterFailedRun?: boolean;
 }
 
 export type UpdateOutcome =
@@ -104,6 +108,7 @@ export class UpdateReader {
       ...this.view,
       update: { progress: e.progress, message: e.message },
       waiting,
+      ...(e.message?.startsWith("uv failed") ? { afterFailedRun: true } : {}),
     };
     return true;
   }

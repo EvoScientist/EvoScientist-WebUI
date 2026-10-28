@@ -837,13 +837,13 @@ describe("core update (W03c)", () => {
     const runUpdate = vi.fn(
       (
         _f: string,
-        _v: string,
+        version: string,
         _s: Stage[],
         onUpdate: (v: UpdateView) => void
       ) => {
         onUpdate({ update: { progress: 0.3 }, stages: [], waiting: null });
-        state.version = "0.3.8";
-        return updateRun({ kind: "done", version: "0.3.8" });
+        state.version = version;
+        return updateRun({ kind: "done", version });
       }
     );
     const runInstall = vi.fn(() => {
@@ -884,17 +884,17 @@ describe("core update (W03c)", () => {
   it("0.3.7: offer, lookup, update with the manifest's stages, record, node stage, ready", async () => {
     const lookupRelease = vi.fn(async () => ({
       ok: true as const,
-      version: "0.3.8",
+      version: "0.3.9",
       url: INDEX,
     }));
     const c = oldCore("0.3.7", { lookupRelease });
     const { result, states } = await runBoot(c.d);
-    expect(result).toMatchObject({ ok: true, core: { version: "0.3.8" } });
+    expect(result).toMatchObject({ ok: true, core: { version: "0.3.9" } });
     expect(c.askUpdate).toHaveBeenCalledWith("0.3.7");
     expect(lookupRelease).toHaveBeenCalledWith(false);
     expect(c.runUpdate).toHaveBeenCalledWith(
       "C:\\bin\\EvoSci.exe",
-      "0.3.8",
+      "0.3.9",
       [
         { id: "node", title: "Node.js", state: "pending" },
         {
@@ -906,7 +906,7 @@ describe("core update (W03c)", () => {
       expect.any(Function)
     );
     // The update ran setup: recorded, and only the node stage runs after it.
-    expect(c.recordSetup).toHaveBeenCalledWith("0.3.8");
+    expect(c.recordSetup).toHaveBeenCalledWith("0.3.9");
     expect(c.runSetup).not.toHaveBeenCalled();
     expect(c.runInstall).not.toHaveBeenCalled();
     expect(states).toEqual([
@@ -1315,6 +1315,58 @@ describe("core update (W03c)", () => {
       },
     });
     expect(result).toMatchObject({ ok: false, error: { code: "quitting" } });
-    expect(late.recordSetup).not.toHaveBeenCalled();
+    expect(late.recordSetup).toHaveBeenCalledWith("0.3.8");
+  });
+
+  it("an update that ends done while the app quits counts as set up at the next launch", async () => {
+    let quitting = false;
+    const c = oldCore("0.3.7", {
+      stopping: () => quitting,
+      runUpdate: () => {
+        quitting = true;
+        c.state.version = "0.3.8";
+        return updateRun({ kind: "done", version: "0.3.8" });
+      },
+    });
+    expect((await runBoot(c.d)).result).toMatchObject({
+      ok: false,
+      error: { code: "quitting" },
+    });
+    quitting = false;
+    expect((await runBoot(c.d)).result.ok).toBe(true);
+    expect(c.runSetup).not.toHaveBeenCalled();
+  });
+
+  it("Retry after the update's setup_failed runs setup, also over an older record of the target", async () => {
+    let record: string | null = "0.3.8";
+    const c = oldCore("0.3.7", {
+      setupRecord: () => record,
+      recordSetup: (v) => void (record = v),
+      runUpdate: () => {
+        c.state.version = "0.3.8";
+        return updateRun({
+          kind: "error",
+          code: "setup_failed",
+          message: "m",
+          detail: {},
+        });
+      },
+    });
+    expect((await runBoot(c.d)).result).toMatchObject({
+      ok: false,
+      error: { code: "setup_failed" },
+    });
+    expect((await runBoot(c.d)).result.ok).toBe(true);
+    expect(c.runSetup).toHaveBeenCalledTimes(1);
+  });
+
+  it("0.3.6: setup runs after the script, also over an older record of the target", async () => {
+    let record: string | null = "0.3.8";
+    const c = oldCore("0.3.6", {
+      setupRecord: () => record,
+      recordSetup: (v) => void (record = v),
+    });
+    expect((await runBoot(c.d)).result.ok).toBe(true);
+    expect(c.runSetup).toHaveBeenCalledTimes(1);
   });
 });

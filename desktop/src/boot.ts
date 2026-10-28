@@ -595,6 +595,9 @@ async function updateCore(
     if (await deps.stopOwnBackend()) break;
     deps.log.info("update: the backend keeps running; asking again");
   }
+  const record = deps.setupRecord();
+  if (record !== null && inRange(record, deps.manifest.coreRange))
+    deps.recordSetup(null);
   // Below the range, so a release number.
   const release = parseRelease(info.version) ?? [];
   if (compareReleases(release, parseRelease(FIRST_UPDATABLE) ?? []) < 0) {
@@ -647,7 +650,15 @@ async function updateCore(
   );
   const { outcome, view } = await run.done;
   // Closing waits for the update (D21); after it nothing new starts.
-  if (deps.stopping()) return QUITTING;
+  if (deps.stopping()) {
+    if (
+      outcome.kind === "done" &&
+      outcome.version !== null &&
+      inRange(outcome.version, deps.manifest.coreRange)
+    )
+      deps.recordSetup(outcome.version);
+    return QUITTING;
+  }
 
   if (outcome.kind === "no_terminal_line")
     return {

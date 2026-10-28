@@ -112,10 +112,11 @@ export async function locateEvoSci(opts: {
 }
 
 /**
- * Whether uv's tool directory holds an EvoScientist environment, the install
- * scripts' test (`<uv tool dir>/evoscientist`). False without uv; null when
- * uv does not answer, which the caller treats as "holds one": the script
- * would then reinstall over an environment it cannot see.
+ * Whether uv's tool directory holds an EvoScientist install, which the core
+ * tells by its receipt (`<uv tool dir>/evoscientist/uv-receipt.toml`). False
+ * without uv; null when uv does not answer, which the caller treats as
+ * "holds one": the script would then reinstall over an environment it
+ * cannot see.
  */
 export async function uvToolEnvExists(opts: {
   dataDir: string;
@@ -128,5 +129,7 @@ export async function uvToolEnvExists(opts: {
   const uv = findUv(opts.dataDir, opts.env, opts.platform, exists);
   if (!uv) return false;
   const dir = await opts.toolDir(uv);
-  return dir === null ? null : exists(join(dir, "evoscientist"));
+  return dir === null
+    ? null
+    : exists(join(dir, "evoscientist", "uv-receipt.toml"));
 }

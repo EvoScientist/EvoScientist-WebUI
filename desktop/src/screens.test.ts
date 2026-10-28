@@ -69,6 +69,23 @@ describe("errorScreen", () => {
     expect(s.actions).toEqual(["retry", "open_logs"]);
   });
 
+  it("says to remove the pipx or pip --user install when the script refused it", () => {
+    const s = errorScreen(
+      err("install_failed", {
+        output: [
+          "Error: /home/u/.local/bin/EvoSci exists but was not installed by uv; pipx or pip --user may have put it there. Remove that install (for example pipx uninstall EvoScientist or pip uninstall EvoScientist), then run this script again.",
+        ],
+        repair: true,
+        update: true,
+        cn: false,
+      }),
+      ctx
+    );
+    expect(s.lines[1]).toMatch(/Remove it as the lines below say/);
+    expect(s.lines.join(" ")).not.toMatch(/mainland China/);
+    expect(s.actions).toEqual(["retry", "open_logs"]);
+  });
+
   it("lists the failed setup steps with Retry and Continue", () => {
     const s = errorScreen(
       err("setup_failed", {
@@ -310,6 +327,15 @@ describe("core update screens (W03c)", () => {
       title: "Finishing the update",
       lines: ["The app quits when the update is done."],
     });
+  });
+
+  it("the wait after a failed install attempt does not promise that nothing changes", () => {
+    const retry = { ...view, waiting: python, afterFailedRun: true };
+    for (const s of [updateScreen(retry), updateScreen(retry, true)]) {
+      expect(s.lines?.at(-1)).toMatch(/may .*repair.* at the next launch/);
+      expect(s.lines?.join(" ")).not.toMatch(/nothing is changed/);
+    }
+    expect(updateScreen(retry).actions).toEqual(["cancel_update"]);
   });
 
   it("the script as an update has its own title", () => {

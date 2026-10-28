@@ -44,6 +44,34 @@ export type Lookup =
       listed?: string[];
     };
 
+/** The version in a distribution's file name: `evoscientist-0.3.8.tar.gz`,
+ *  `evoscientist-0.3.8-py3-none-any.whl` (the project name has no hyphen). */
+function fileVersion(filename: string): string | null {
+  const rest = filename.slice(filename.indexOf("-") + 1);
+  if (!filename.includes("-") || !rest) return null;
+  if (rest.endsWith(".whl")) return rest.split("-")[0] || null;
+  const m = /^(.+?)\.(?:tar\.gz|tar\.bz2|zip)$/.exec(rest);
+  return m ? m[1] : null;
+}
+
+/**
+ * The versions whose every file is yanked. The JSON simple API still lists
+ * them in `versions` (the yank shows only on `files[].yanked`, true or a
+ * reason), and `--version` installs a yanked release when it is pinned.
+ */
+export function yankedVersions(files: unknown): Set<string> {
+  const state = new Map<string, boolean>();
+  if (!Array.isArray(files)) return new Set();
+  for (const f of files as { filename?: unknown; yanked?: unknown }[]) {
+    if (typeof f?.filename !== "string") continue;
+    const version = fileVersion(f.filename);
+    if (!version) continue;
+    const yanked = f.yanked === true || typeof f.yanked === "string";
+    state.set(version, (state.get(version) ?? true) && yanked);
+  }
+  return new Set([...state].filter(([, y]) => y).map(([v]) => v));
+}
+
 /** The highest plain release inside the range, or null when none is. */
 export function newestInRange(
   versions: string[],
@@ -115,12 +143,18 @@ export async function lookupNewest(opts: {
       answered: true,
     };
   const listed = versions.filter((v): v is string => typeof v === "string");
-  const version = newestInRange(listed, opts.range);
+  const yanked = yankedVersions((body as { files?: unknown }).files);
+  const version = newestInRange(
+    listed.filter((v) => !yanked.has(v)),
+    opts.range
+  );
   return version
     ? { ok: true, version, url }
     : {
         ok: false,
-        reason: `no release inside ${opts.range} is listed`,
+        reason: `no release inside ${opts.range} is listed${
+          yanked.size > 0 ? ` (yanked: ${[...yanked].join(", ")})` : ""
+        }`,
         url,
         answered: true,
         listed,

@@ -120,7 +120,7 @@ describe("uvToolEnvExists", () => {
     expect(toolDir).not.toHaveBeenCalled();
   });
 
-  it("looks for <uv tool dir>/evoscientist", async () => {
+  it("looks for <uv tool dir>/evoscientist with its uv receipt", async () => {
     const env = withUv();
     const tools = join(root, "uv tools ąę");
     const opts = {
@@ -130,7 +130,9 @@ describe("uvToolEnvExists", () => {
       toolDir: async () => tools,
     };
     expect(await uvToolEnvExists(opts)).toBe(false);
-    mkdirSync(join(tools, "evoscientist"), { recursive: true });
+    mkdirSync(join(tools, "evoscientist", "bin"), { recursive: true });
+    expect(await uvToolEnvExists(opts)).toBe(false);
+    writeFileSync(join(tools, "evoscientist", "uv-receipt.toml"), "");
     expect(await uvToolEnvExists(opts)).toBe(true);
   });
 

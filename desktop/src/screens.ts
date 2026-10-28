@@ -131,7 +131,7 @@ export function updateQuestion(from: string, range: string): QuestionScreen {
     title: "Update EvoScientist",
     lines: [
       `The installed EvoScientist ${from} is older than this app supports (${range}).`,
-      "The app updates it now to the newest release it supports. This needs a network and can take a few minutes; your settings, chats and memory are kept.",
+      "The app updates it now to a release it supports. This needs a network and can take a few minutes; your settings, chats and memory are kept.",
     ],
     actions: ["update", "quit"],
   };
@@ -176,7 +176,11 @@ export function updateScreen(view: UpdateView, quitting = false): SetupScreen {
         ...view.waiting.map(
           (b) => `${b.name} (${b.pid})${b.path ? `: ${b.path}` : ""}`
         ),
-        quitting
+        view.afterFailedRun
+          ? quitting
+            ? "The app cancels the update and quits. The first install attempt failed, so EvoScientist may need a repair at the next launch."
+            : "Close them and the update tries once more. The first install attempt failed, so Cancel may leave EvoScientist to be repaired at the next launch."
+          : quitting
           ? "The app cancels the update and quits; nothing is changed."
           : "Close them and the update goes on. Cancel stops the update; nothing is changed.",
       ],
@@ -270,7 +274,12 @@ export function errorScreen(error: BootError, ctx: ScreenContext): ErrorScreen {
   switch (error.code) {
     case "install_failed": {
       const output = Array.isArray(d.output) ? (d.output as string[]) : [];
-      const noMirror = d.cn || d.running || d.source === "update";
+      const inTheWay = output.some(
+        (l) =>
+          l.startsWith("Error: ") &&
+          l.includes("exists but was not installed by uv")
+      );
+      const noMirror = d.cn || d.running || inTheWay || d.source === "update";
       screen = {
         title: d.update
           ? "EvoScientist could not be updated"
@@ -281,6 +290,8 @@ export function errorScreen(error: BootError, ctx: ScreenContext): ErrorScreen {
           error.message,
           d.running
             ? "EvoScientist is running. Close the programs listed below, then press Retry."
+            : inTheWay
+            ? "Another install of EvoScientist is in the way. Remove it as the lines below say, then press Retry."
             : d.source === "update"
             ? "Press Retry to try the update again."
             : "Press Retry to run the install again.",

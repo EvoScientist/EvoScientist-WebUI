@@ -5,6 +5,7 @@ import {
   SIMPLE_JSON,
   lookupNewest,
   newestInRange,
+  yankedVersions,
   type Fetch,
 } from "./release";
 
@@ -41,6 +42,23 @@ describe("newestInRange", () => {
       null
     );
     expect(newestInRange([], ">=0.3.8,<0.4")).toBe(null);
+  });
+});
+
+describe("yankedVersions", () => {
+  it("is the versions whose every file is yanked", () => {
+    expect(
+      yankedVersions([
+        { filename: "evoscientist-0.3.9-py3-none-any.whl", yanked: true },
+        { filename: "evoscientist-0.3.9.tar.gz", yanked: "broken setup" },
+        { filename: "evoscientist-0.3.8-py3-none-any.whl", yanked: true },
+        { filename: "evoscientist-0.3.8.tar.gz", yanked: false },
+        { filename: "evoscientist-0.3.7.tar.gz" },
+        { filename: "junk" },
+        null,
+      ])
+    ).toEqual(new Set(["0.3.9"]));
+    expect(yankedVersions(undefined)).toEqual(new Set());
   });
 });
 
@@ -138,6 +156,34 @@ describe("lookupNewest", () => {
       url: `${PYPI_SIMPLE}/evoscientist/`,
       answered: true,
       listed: ["0.3.7", "0.4.0"],
+    });
+  });
+
+  it("skips a yanked release, and says so when nothing else is left", async () => {
+    const files = [
+      { filename: "evoscientist-0.3.9-py3-none-any.whl", yanked: true },
+      { filename: "evoscientist-0.3.9.tar.gz", yanked: true },
+      { filename: "evoscientist-0.3.8.tar.gz", yanked: false },
+    ];
+    const both = answering({ body: { versions: ["0.3.8", "0.3.9"], files } });
+    expect(
+      await lookupNewest({
+        fetch: both.fetch,
+        cn: false,
+        range: ">=0.3.8,<0.4",
+      })
+    ).toMatchObject({ ok: true, version: "0.3.8" });
+    const only = answering({ body: { versions: ["0.3.9"], files } });
+    expect(
+      await lookupNewest({
+        fetch: only.fetch,
+        cn: false,
+        range: ">=0.3.9,<0.4",
+      })
+    ).toMatchObject({
+      ok: false,
+      answered: true,
+      reason: "no release inside >=0.3.9,<0.4 is listed (yanked: 0.3.9)",
     });
   });
 

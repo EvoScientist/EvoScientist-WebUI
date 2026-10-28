@@ -78,6 +78,16 @@ describe("UpdateReader on the core's real output", () => {
     });
   });
 
+  it("rollback: the config backup's line is progress, not a wait", () => {
+    const r = new UpdateReader(STAGES);
+    for (const l of fixture("rollback")) {
+      r.push(l);
+      expect(r.view.waiting).toBeNull();
+    }
+    expect(r.cancelFile).toBeNull();
+    expect(r.outcome(exit0)).toMatchObject({ kind: "done", version: "0.3.7" });
+  });
+
   it("wait_release: the wait ends on the next update line without waiting_for", () => {
     const r = new UpdateReader(STAGES);
     const lines = fixture("wait_release");
@@ -170,6 +180,42 @@ describe("UpdateReader", () => {
       line({ stage: "update", status: "running", detail: { waiting_for: [] } })
     );
     expect(r.view.waiting).toBeNull();
+  });
+
+  it("a wait after a failed uv run is marked (the Windows helper's retry)", () => {
+    const r = new UpdateReader(STAGES);
+    r.push(
+      line({
+        stage: "update",
+        status: "running",
+        progress: 0.4,
+        message: "Installing EvoScientist 0.3.8",
+      })
+    );
+    expect(r.view.afterFailedRun).toBeUndefined();
+    r.push(
+      line({
+        stage: "update",
+        status: "running",
+        progress: 0.5,
+        message:
+          "uv failed (exit 2); trying once more when nothing runs from the environment",
+      })
+    );
+    r.push(
+      line({
+        stage: "update",
+        status: "running",
+        progress: 0.5,
+        message: "Update pending until you close: python (7)",
+        detail: {
+          waiting_for: [{ pid: 7, name: "python", path: "/p" }],
+          cancel_file: "/t/cancel",
+        },
+      })
+    );
+    expect(r.view.waiting).toHaveLength(1);
+    expect(r.view.afterFailedRun).toBe(true);
   });
 
   it("an error line without a code or message still has both", () => {

@@ -799,18 +799,23 @@ export function createApp(deps: AppDeps): App {
   /** The question before closing while `EvoSci update` runs (D21): it is
    *  never killed, so the app quits after its terminal line; while it waits
    *  for processes, closing cancels it. True to quit. */
-  async function confirmStopUpdate(waiting: boolean): Promise<boolean> {
+  async function confirmStopUpdate(
+    waiting: boolean,
+    afterFailedRun: boolean
+  ): Promise<boolean> {
     const r = await deps.messageBox({
       type: "warning",
       title: "EvoScientist",
       message: "EvoScientist is being updated.",
       detail: waiting
-        ? "Closing cancels the update; nothing is changed. The app quits once it has stopped."
+        ? afterFailedRun
+          ? "Closing cancels the update. Its first install attempt failed, so EvoScientist may need a repair at the next launch. The app quits once it has stopped."
+          : "Closing cancels the update; nothing is changed. The app quits once it has stopped."
         : `The update finishes first${
             deps.platform === "win32"
               ? " (on Windows it would go on without the app)"
               : ""
-          }. The app quits when it is done.`,
+          }, unless it still has to wait for programs that run EvoScientist: closing then cancels it. The app quits when it is done.`,
       buttons: ["Quit after the update", "Cancel"],
       defaultId: 1,
       cancelId: 1,
@@ -936,7 +941,10 @@ export function createApp(deps: AppDeps): App {
         step &&
         !sessionEnd.ending &&
         !(await (step.kind === "update"
-          ? confirmStopUpdate(step.waiting?.() ?? false)
+          ? confirmStopUpdate(
+              step.waiting?.() ?? false,
+              updateView?.afterFailedRun === true
+            )
           : confirmStopStep(step.kind)))
       ) {
         quitState = "none";
