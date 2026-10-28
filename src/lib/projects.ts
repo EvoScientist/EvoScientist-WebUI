@@ -97,6 +97,48 @@ export function pickProject(
   return state.projects.find((project) => !project.missing) ?? null;
 }
 
+/** The core's graphs (its langgraph.json): each has an assistant per
+ *  project, and what runs on any of them is the project's. */
+export const PROJECT_GRAPHS = [
+  "EvoScientist",
+  "scheduler",
+  "writing-agent",
+  "data-analysis-agent",
+  "expert-container-async",
+  "evomemory-subagent-worker",
+  "evomemory-turn-worker",
+  "evomemory-observation-linker",
+  "evomemory-autoskills",
+  "proactive",
+];
+
+/** The IDs of the project at `key`'s assistants, one per graph. */
+export function projectAssistantIds(key: string): string[] {
+  return PROJECT_GRAPHS.map((graph) => workspaceAssistantId(graph, key));
+}
+
+/** Each of `projects`' assistants, mapped to its project: what runs on an
+ *  assistant is its project's, as the backend decides. */
+export function projectsByAssistant(
+  projects: readonly Project[]
+): Map<string, Project> {
+  const map = new Map<string, Project>();
+  for (const project of projects) {
+    for (const id of projectAssistantIds(project.key)) map.set(id, project);
+  }
+  return map;
+}
+
+/** The tasks that run on one of `projects`' assistants. A task of a folder
+ *  that isn't a project is left out: it comes back with the project. */
+export function registeredTasks<T extends { assistantId: string }>(
+  tasks: readonly T[],
+  projects: readonly Project[]
+): T[] {
+  const byAssistant = projectsByAssistant(projects);
+  return tasks.filter((task) => byAssistant.has(task.assistantId));
+}
+
 /** The handle the WebUI's file routes take for a project: its chat
  *  assistant's ID. The server finds the project whose ID it is. */
 export function projectHandle(key: string): string {

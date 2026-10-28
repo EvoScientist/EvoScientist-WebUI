@@ -5,23 +5,8 @@
 import type { Client } from "@langchain/langgraph-sdk";
 import { removeProject, type RemoveProjectResult } from "@/lib/projectActions";
 import { cancelActiveRuns, type RunCancelClient } from "@/lib/threadLifecycle";
-import { workspaceAssistantId } from "@/lib/workspaceAssistant";
+import { projectAssistantIds } from "@/lib/projects";
 import { SCHEDULED_RUN_KIND } from "@/app/hooks/useScheduledTasks";
-
-/** The core's graphs (its langgraph.json): each has an assistant per
- *  project, and a scheduled task on any of them is the project's. */
-const PROJECT_GRAPHS = [
-  "EvoScientist",
-  "scheduler",
-  "writing-agent",
-  "data-analysis-agent",
-  "expert-container-async",
-  "evomemory-subagent-worker",
-  "evomemory-turn-worker",
-  "evomemory-observation-linker",
-  "evomemory-autoskills",
-  "proactive",
-];
 
 /** Pages the running threads are read in, and how many at most. */
 const PAGE = 100;
@@ -72,9 +57,7 @@ export async function projectWork(
   client: Client,
   key: string
 ): Promise<ProjectWork> {
-  const assistants = new Set(
-    PROJECT_GRAPHS.map((graph) => workspaceAssistantId(graph, key))
-  );
+  const assistants = new Set(projectAssistantIds(key));
   const [running, crons] = await Promise.all([
     runningThreads(client, key),
     client.crons.search({

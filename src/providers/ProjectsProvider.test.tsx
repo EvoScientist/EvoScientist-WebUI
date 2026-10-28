@@ -10,8 +10,6 @@ import type { ReactNode } from "react";
 
 import { ProjectsProvider, useProjects } from "./ProjectsProvider";
 import { readLastUsedProject, writeLastUsedProject } from "@/lib/projects";
-import { workspaceAssistantId } from "@/lib/workspaceAssistant";
-import { useSchedulerTarget } from "@/app/hooks/useScheduledTasks";
 
 const A = "http://127.0.0.1:6174";
 const B = "http://127.0.0.1:7000";
@@ -308,30 +306,6 @@ describe("ProjectsProvider", () => {
 
     await waitFor(() => expect(result.current.isReady()).toBe(true));
     expect(reads.filter((base) => base === B)).toHaveLength(2);
-  });
-
-  it("gives scheduled tasks the current project's scheduler, and none while the projects are read again", async () => {
-    stubBackends({ [A]: { projects: () => listing("/home/you/projA") } });
-    const { result } = renderHook(
-      () => ({ ...useProjects(), target: useSchedulerTarget() }),
-      { wrapper: wrapperFor(() => A) }
-    );
-    await waitFor(() =>
-      expect(result.current.target).toEqual({
-        assistantId: workspaceAssistantId("scheduler", "/home/you/projA"),
-        workspaceDir: "/home/you/projA",
-      })
-    );
-
-    let read!: Promise<unknown>;
-    act(() => {
-      read = result.current.refresh();
-    });
-    expect(result.current.target).toBeNull();
-    await act(async () => {
-      await read;
-    });
-    expect(result.current.target).not.toBeNull();
   });
 });
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Cron } from "@langchain/langgraph-sdk";
 import { Client } from "@langchain/langgraph-sdk";
 import { getConfig } from "@/lib/config";
@@ -50,30 +50,16 @@ export interface ScheduledTask {
   next_run_date: string | null;
   created_at: string;
   updated_at: string;
-  /** The folder the task runs in; null for a task made before tags. */
-  workspaceDir: string | null;
   /** False while the task is paused: it keeps its schedule but doesn't run. */
   enabled: boolean;
   input: Record<string, unknown>;
+  /** The assistant it runs on, which decides its project. */
+  assistantId: string;
 }
 
 /** When `task` runs next; null while it is paused or has no next run. */
 export function upcomingRun(task: ScheduledTask): string | null {
   return task.enabled ? task.next_run_date : null;
-}
-
-/**
- * Why `task` can't be run from here: it runs in another project than the
- * current one, and a manual run would run it in this one. Null when it can.
- * An untagged task counts as the current project's.
- */
-export function otherFolderReason(
-  task: ScheduledTask,
-  currentFolder: string | null
-): string | null {
-  if (!task.workspaceDir || !currentFolder) return null;
-  if (task.workspaceDir === currentFolder) return null;
-  return `This task runs in ${task.workspaceDir}, not the current project.`;
 }
 
 function parseCron(cron: Cron): ScheduledTask {
@@ -88,12 +74,9 @@ function parseCron(cron: Cron): ScheduledTask {
     next_run_date: cron.next_run_date ?? null,
     created_at: cron.created_at,
     updated_at: cron.updated_at,
-    workspaceDir:
-      typeof meta.workspace_dir === "string" && meta.workspace_dir
-        ? meta.workspace_dir
-        : null,
     enabled: cron.enabled !== false,
     input: storedInput(cron),
+    assistantId: cron.assistant_id,
   };
 }
 
@@ -107,8 +90,8 @@ function storedInput(cron: Cron): Record<string, unknown> {
 export async function listScheduledTasks(): Promise<ScheduledTask[]> {
   const client = makeClient();
   if (!client) return [];
-  // Only EvoScientist crons carry run_kind in metadata. Scoping the list to
-  // the backend's folder comes with the project sidebar.
+  // Only EvoScientist crons carry run_kind in metadata. Every folder's
+  // tasks: the views keep the registered projects' (`registeredTasks`).
   const crons = await client.crons.search({ limit: 200 });
   const scheduledCrons = crons.filter(
     (c) =>
@@ -246,9 +229,12 @@ export async function runScheduledTaskNow(
   });
 }
 
-/** The current project's folder; null when there is none. */
-export function useCurrentFolder(): string | null {
-  return useProjects().current?.key ?? null;
+/** Where the scheduled tasks of the project at `key` run. */
+export function schedulerTarget(key: string): SchedulerTarget {
+  return {
+    assistantId: workspaceAssistantId(SCHEDULER_GRAPH_ID, key),
+    workspaceDir: key,
+  };
 }
 
 /**
@@ -279,23 +265,6 @@ export function useAssistantRecovery(): (error: unknown) => void {
  *  read again); check it at the moment of acting. */
 export function useSchedulerGate(): () => boolean {
   return useProjects().isReady;
-}
-
-/** The scheduler assistant for the current project; null when there is
- *  none, or while the projects are read again. */
-export function useSchedulerTarget(): SchedulerTarget | null {
-  const { current, refreshing } = useProjects();
-  const workspaceDir = refreshing ? null : current?.key ?? null;
-  return useMemo(
-    () =>
-      workspaceDir
-        ? {
-            assistantId: workspaceAssistantId(SCHEDULER_GRAPH_ID, workspaceDir),
-            workspaceDir,
-          }
-        : null,
-    [workspaceDir]
-  );
 }
 
 export function useScheduledTasks(): {

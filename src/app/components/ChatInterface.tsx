@@ -898,7 +898,8 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       wasLoadingRef.current = isLoading;
     }, [isLoading, notifyFilesMayHaveChanged]);
     // Names only — used to tell expert dispatches apart in the fan-out panel.
-    const { teams: installedExperts } = useTeams();
+    // The chat's project's experts.
+    const { teams: installedExperts } = useTeams(projectKey);
     const expertNames = useMemo(
       () => new Set(installedExperts.map((t) => t.name)),
       [installedExperts]

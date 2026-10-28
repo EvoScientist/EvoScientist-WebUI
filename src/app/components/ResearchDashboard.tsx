@@ -12,10 +12,14 @@ import {
   History,
 } from "lucide-react";
 import { nodeColor, type ObsGraphData } from "@/lib/observationGraph";
-import { listScheduledTasks } from "@/app/hooks/useScheduledTasks";
+import {
+  listScheduledTasks,
+  type ScheduledTask,
+} from "@/app/hooks/useScheduledTasks";
 import { useThreads } from "@/app/hooks/useThreads";
 import { useProjectFiles } from "@/app/hooks/useProjectFiles";
 import { useProjects } from "@/providers/ProjectsProvider";
+import { registeredTasks } from "@/lib/projects";
 import type { NavTarget } from "@/lib/navTarget";
 import { formatTime } from "@/lib/time";
 
@@ -74,7 +78,7 @@ export function ResearchDashboard({
   onOpenThread,
 }: ResearchDashboardProps) {
   // The current project's pinned threads: a new chat starts in it.
-  const { current } = useProjects();
+  const { current, projects } = useProjects();
   const { data: threadPages } = useThreads({
     scope: current ? { project: current.key } : null,
     limit: 100,
@@ -92,7 +96,15 @@ export function ResearchDashboard({
   const [obsCount, setObsCount] = useState(0);
   const [runCount, setRunCount] = useState(0);
   const [wsBytes, setWsBytes] = useState(0);
-  const [scheduledCount, setScheduledCount] = useState(0);
+  const [scheduled, setScheduled] = useState<ScheduledTask[]>([]);
+  // The tasks the Scheduled view lists: the registered projects'.
+  const scheduledCount = useMemo(
+    () =>
+      projects.status === "ready"
+        ? registeredTasks(scheduled, projects.projects).length
+        : 0,
+    [scheduled, projects]
+  );
   const [activity, setActivity] = useState<ActivityItem[]>([]);
   const [ready, setReady] = useState(false);
   const reqRef = useRef(0);
@@ -118,7 +130,7 @@ export function ResearchDashboard({
           ? await readJson<{ entries?: ExecEntry[] }>(execRes)
           : null;
         if (reqRef.current !== reqId) return;
-        setScheduledCount(scheduled.length);
+        setScheduled(scheduled);
 
         const obsNodes = Array.isArray(obs?.nodes) ? obs.nodes : [];
         const execEntries = Array.isArray(exec?.entries) ? exec.entries : [];

@@ -4,9 +4,11 @@ import {
   parseProjects,
   pickProject,
   readLastUsedProject,
+  registeredTasks,
   writeLastUsedProject,
 } from "./projects";
 import { readyProjects } from "@/test/mockProjects";
+import { workspaceAssistantId } from "@/lib/workspaceAssistant";
 
 beforeEach(() => localStorage.clear());
 
@@ -76,5 +78,26 @@ describe("last used project", () => {
     expect(readLastUsedProject("http://127.0.0.1:6174")).toBeNull();
     writeLastUsedProject("http://127.0.0.1:6174", "/a/alpha");
     expect(readLastUsedProject("http://127.0.0.1:6174")).toBe("/a/alpha");
+  });
+});
+
+describe("registeredTasks", () => {
+  it("keeps the tasks that run on a registered project's assistants", () => {
+    const { projects } = readyProjects("/a/alpha", {
+      key: "/b/beta",
+      name: "beta",
+      missing: true,
+    });
+    const task = (id: string, key: string) => ({
+      id,
+      assistantId: workspaceAssistantId("scheduler", key),
+    });
+
+    expect(
+      registeredTasks(
+        [task("1", "/a/alpha"), task("2", "/b/beta"), task("3", "/c/gone")],
+        projects
+      ).map((t) => t.id)
+    ).toEqual(["1", "2"]);
   });
 });

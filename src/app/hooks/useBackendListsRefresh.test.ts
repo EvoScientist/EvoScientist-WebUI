@@ -53,7 +53,7 @@ function countingBackend() {
 function renderLists() {
   return renderHook(() => ({
     models: useAvailableModels(),
-    teams: useTeams(),
+    teams: useTeams("/home/you/projA"),
   }));
 }
 

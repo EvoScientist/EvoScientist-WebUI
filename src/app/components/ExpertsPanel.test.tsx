@@ -9,9 +9,11 @@ import {
 } from "@testing-library/react";
 
 import { ExpertsPanel } from "./ExpertsPanel";
+import { TEST_PROJECT, TestProjectsProvider } from "@/test/mockProjects";
 import type { TeamEntry } from "@/lib/teams";
 
 const teamsMock = vi.hoisted(() => ({
+  project: undefined as string | null | undefined,
   value: {
     teams: [] as TeamEntry[],
     loading: false,
@@ -21,7 +23,10 @@ const teamsMock = vi.hoisted(() => ({
 }));
 
 vi.mock("@/app/hooks/useTeams", () => ({
-  useTeams: () => teamsMock.value,
+  useTeams: (project: string | null) => {
+    teamsMock.project = project;
+    return teamsMock.value;
+  },
 }));
 
 vi.mock("./SkillDetailDialog", () => ({
@@ -100,7 +105,7 @@ describe("ExpertsPanel", () => {
         }),
       ],
     });
-    render(<ExpertsPanel />);
+    render(<ExpertsPanel />, { wrapper: TestProjectsProvider });
 
     expect(await screen.findByText("Paper Review")).toBeTruthy();
     expect(screen.queryByText("Paper Writing")).toBeNull();
@@ -110,7 +115,7 @@ describe("ExpertsPanel", () => {
     mockApi({
       catalog: [catalogRow({ installed: false, installedVersion: undefined })],
     });
-    render(<ExpertsPanel />);
+    render(<ExpertsPanel />, { wrapper: TestProjectsProvider });
 
     expect(
       await screen.findByRole("button", { name: /install/i })
@@ -138,7 +143,7 @@ describe("ExpertsPanel", () => {
         },
       ],
     });
-    render(<ExpertsPanel />);
+    render(<ExpertsPanel />, { wrapper: TestProjectsProvider });
 
     expect(await screen.findByText("My Lab Reviewer")).toBeTruthy();
   });
@@ -153,7 +158,7 @@ describe("ExpertsPanel", () => {
       refresh: vi.fn(),
     };
     mockApi({ catalogFails: true });
-    render(<ExpertsPanel />);
+    render(<ExpertsPanel />, { wrapper: TestProjectsProvider });
 
     expect(await screen.findByText(/rate limit/i)).toBeTruthy();
     expect(screen.getByText("paper-review")).toBeTruthy();
@@ -161,7 +166,7 @@ describe("ExpertsPanel", () => {
 
   it("explains where experts come from when there are none at all", async () => {
     mockApi({ catalog: [] });
-    render(<ExpertsPanel />);
+    render(<ExpertsPanel />, { wrapper: TestProjectsProvider });
 
     await waitFor(() => {
       expect(screen.getByText(/no experts/i)).toBeTruthy();
@@ -180,7 +185,7 @@ describe("ExpertsPanel", () => {
       refresh: vi.fn(),
     };
     mockApi({ catalog: [] });
-    render(<ExpertsPanel />);
+    render(<ExpertsPanel />, { wrapper: TestProjectsProvider });
 
     expect(await screen.findByText("builtin-expert")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /uninstall/i })).toBeNull();
@@ -207,7 +212,7 @@ describe("ExpertsPanel", () => {
         },
       ],
     });
-    render(<ExpertsPanel />);
+    render(<ExpertsPanel />, { wrapper: TestProjectsProvider });
 
     expect(
       await screen.findByRole("button", { name: /uninstall/i })
@@ -228,7 +233,7 @@ describe("ExpertsPanel", () => {
     mockApi({
       catalog: [catalogRow({ installed: false, installedVersion: undefined })],
     });
-    render(<ExpertsPanel />);
+    render(<ExpertsPanel />, { wrapper: TestProjectsProvider });
 
     // Anchor on the catalog section itself: "other" can produce an Invite
     // before the catalog lands, so waiting on the button alone could assert
@@ -250,7 +255,7 @@ describe("ExpertsPanel", () => {
     // server side is an unguarded recursive delete, and a hand-written expert
     // may have no catalog copy to reinstall from.
     mockApi({});
-    render(<ExpertsPanel />);
+    render(<ExpertsPanel />, { wrapper: TestProjectsProvider });
 
     const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
     fireEvent.click(await screen.findByRole("button", { name: /uninstall/i }));
@@ -264,7 +269,7 @@ describe("ExpertsPanel", () => {
 
   it("deletes only after the confirmation is accepted", async () => {
     mockApi({});
-    render(<ExpertsPanel />);
+    render(<ExpertsPanel />, { wrapper: TestProjectsProvider });
 
     const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
     fireEvent.click(await screen.findByRole("button", { name: /uninstall/i }));
@@ -284,7 +289,7 @@ describe("ExpertsPanel", () => {
 
   it("keeps the expert when the confirmation is dismissed", async () => {
     mockApi({});
-    render(<ExpertsPanel />);
+    render(<ExpertsPanel />, { wrapper: TestProjectsProvider });
 
     const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
     fireEvent.click(await screen.findByRole("button", { name: /uninstall/i }));
@@ -307,7 +312,7 @@ describe("ExpertsPanel", () => {
       refresh,
     };
     mockApi({ catalog: [] });
-    render(<ExpertsPanel />);
+    render(<ExpertsPanel />, { wrapper: TestProjectsProvider });
 
     await screen.findByText(/no experts/i);
     refresh.mockClear();
@@ -364,7 +369,7 @@ describe("ExpertsPanel", () => {
       })
     );
 
-    render(<ExpertsPanel />);
+    render(<ExpertsPanel />, { wrapper: TestProjectsProvider });
     await screen.findByText("Going Away");
 
     const uninstallNth = async (n: number) => {
@@ -393,7 +398,7 @@ describe("ExpertsPanel", () => {
     // Research Skills keeps the puzzle piece; this view reads apart at a
     // glance even though both render the same tile component.
     mockApi({});
-    render(<ExpertsPanel />);
+    render(<ExpertsPanel />, { wrapper: TestProjectsProvider });
 
     await screen.findByText("Paper Review");
     expect(document.querySelector("svg.lucide-users")).toBeTruthy();
@@ -404,8 +409,13 @@ describe("ExpertsPanel", () => {
     // Research Skills already does this; the two galleries render the same
     // tile and should not disagree about grammar.
     mockApi({ catalog: [catalogRow({ fileCount: 1 })] });
-    render(<ExpertsPanel />);
+    render(<ExpertsPanel />, { wrapper: TestProjectsProvider });
 
     expect(await screen.findByText(/1 file(?!s)/)).toBeTruthy();
+  });
+
+  it("lists the current project's experts", () => {
+    render(<ExpertsPanel />, { wrapper: TestProjectsProvider });
+    expect(teamsMock.project).toBe(TEST_PROJECT);
   });
 });

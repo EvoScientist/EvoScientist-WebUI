@@ -11,6 +11,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2, RotateCw, TriangleAlert, Users } from "lucide-react";
 
 import { useTeams } from "@/app/hooks/useTeams";
+import { useProjects } from "@/providers/ProjectsProvider";
 import {
   buildExpertSections,
   type CatalogExpert,
@@ -46,7 +47,9 @@ const activeBadge = (
 );
 
 export function ExpertsPanel() {
-  const { teams, refresh: refreshTeams } = useTeams();
+  // The current project's experts: its own skills/ and the shared ones.
+  const project = useProjects().current?.key ?? null;
+  const { teams, refresh: refreshTeams } = useTeams(project);
   const [catalog, setCatalog] = useState<CatalogExpert[]>([]);
   const [installed, setInstalled] = useState<InstalledExpert[]>([]);
   const [catalogError, setCatalogError] = useState<string | null>(null);
