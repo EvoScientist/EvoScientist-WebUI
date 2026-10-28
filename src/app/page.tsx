@@ -14,7 +14,7 @@ import { toast } from "sonner";
 import { ConfigDialog } from "@/app/components/ConfigDialog";
 import { Button } from "@/components/ui/button";
 import { ClientProvider, useDeployment } from "@/providers/ClientProvider";
-import { WorkspaceProvider, useWorkspace } from "@/providers/WorkspaceProvider";
+import { ProjectsProvider, useProjects } from "@/providers/ProjectsProvider";
 import { SetupNotice } from "@/app/components/SetupNotice";
 import { SetupView } from "@/app/components/SetupView";
 import { useSetupGate } from "@/app/hooks/useSetupGate";
@@ -116,8 +116,8 @@ function HomePageInner({ config, handleSaveConfig }: HomePageInnerProps) {
     null
   );
 
-  const { refresh: refreshWorkspace, refreshing: workspaceRefreshing } =
-    useWorkspace();
+  const { refresh: refreshProjects, refreshing: projectsRefreshing } =
+    useProjects();
 
   useEffect(() => {
     const mediaQuery = window.matchMedia("(min-width: 768px)");
@@ -389,12 +389,12 @@ function HomePageInner({ config, handleSaveConfig }: HomePageInnerProps) {
                 handleSaveConfig({ ...config, deploymentUrl: url });
               }}
               // The backend may have restarted with other models or experts,
-              // or not have been up when the page loaded. A folder read
+              // or not have been up when the page loaded. A project read
               // already in progress (the first one, retrying while the
               // backend was down) answers for this return too.
               onOnline={() => {
                 refreshBackendLists(deploymentUrl);
-                if (!workspaceRefreshing) void refreshWorkspace();
+                if (!projectsRefreshing) void refreshProjects();
               }}
             />
             <ThemeToggle />
@@ -694,7 +694,7 @@ function HomePageContent() {
       deploymentUrl={config.deploymentUrl}
       apiKey={langsmithApiKey}
     >
-      <WorkspaceProvider
+      <ProjectsProvider
         deploymentUrl={config.deploymentUrl}
         apiKey={langsmithApiKey}
       >
@@ -702,7 +702,7 @@ function HomePageContent() {
           config={config}
           handleSaveConfig={handleSaveConfig}
         />
-      </WorkspaceProvider>
+      </ProjectsProvider>
     </ClientProvider>
   );
 }

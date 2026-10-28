@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 
-vi.mock("@/lib/server/workspace", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/server/workspace")>()),
-  getWorkspaceDir: vi.fn(),
+vi.mock("@/lib/server/projects", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/server/projects")>()),
+  projectDir: vi.fn(),
 }));
 vi.mock("@/lib/server/skills", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/server/skills")>()),
@@ -11,7 +11,7 @@ vi.mock("@/lib/server/skills", async (importOriginal) => ({
 }));
 
 import { GET } from "./route";
-import { getWorkspaceDir } from "@/lib/server/workspace";
+import { projectDir } from "@/lib/server/projects";
 import { listPinnableSkills, SKILLS_INSTALL_DIR } from "@/lib/server/skills";
 
 const request = (site = "same-origin", query = "") =>
@@ -25,15 +25,15 @@ const skill = {
 };
 
 afterEach(() => {
-  vi.mocked(getWorkspaceDir).mockReset();
+  vi.mocked(projectDir).mockReset();
   vi.mocked(listPinnableSkills).mockReset();
 });
 
 describe("GET /api/skills/pinnable", () => {
-  it("lists the workspace's skills/ and the global tier", async () => {
-    vi.mocked(getWorkspaceDir).mockResolvedValue("/ws");
+  it("lists the project's skills/ and the global tier", async () => {
+    vi.mocked(projectDir).mockResolvedValue("/ws");
     vi.mocked(listPinnableSkills).mockResolvedValue([skill]);
-    const res = await GET(request());
+    const res = await GET(request("same-origin", "?project=p"));
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("no-store");
     expect(await res.json()).toEqual({ skills: [skill] });
@@ -43,21 +43,10 @@ describe("GET /api/skills/pinnable", () => {
     });
   });
 
-  it("lists the global tier alone when no backend owns a workspace", async () => {
-    vi.mocked(getWorkspaceDir).mockRejectedValue(new Error("No workspace"));
+  it("lists the global tier alone for no project this machine serves", async () => {
+    vi.mocked(projectDir).mockRejectedValue(new Error("Not served"));
     vi.mocked(listPinnableSkills).mockResolvedValue([skill]);
     const res = await GET(request());
-    expect(res.status).toBe(200);
-    expect(listPinnableSkills).toHaveBeenCalledWith({
-      workspace: null,
-      global: SKILLS_INSTALL_DIR,
-    });
-  });
-
-  it("lists the global tier alone when the backend's folder is elsewhere", async () => {
-    vi.mocked(getWorkspaceDir).mockResolvedValue("/ws");
-    vi.mocked(listPinnableSkills).mockResolvedValue([skill]);
-    const res = await GET(request("same-origin", "?workspace=0"));
     expect(res.status).toBe(200);
     expect(listPinnableSkills).toHaveBeenCalledWith({
       workspace: null,

@@ -48,7 +48,7 @@ vi.mock("@/app/hooks/useScheduledTasks", async (importOriginal) => {
     setScheduledTaskEnabled: hook.setScheduledTaskEnabled,
     createScheduledTask: hook.createScheduledTask,
     deleteScheduledTask: hook.deleteScheduledTask,
-    useServedFolder: () => "/home/you/projA",
+    useCurrentFolder: () => "/home/you/projA",
     useAssistantRecovery: () => hook.recover,
     useSchedulerGate: () => () => true,
     useSchedulerTarget: () => ({

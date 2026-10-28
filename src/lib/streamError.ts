@@ -99,26 +99,36 @@ export function isMissingThreadOrAssistantError(error: unknown): boolean {
   );
 }
 
-/** The core's `RunFolderMismatchError` and its subclasses: a run for a
- *  project the backend doesn't serve (`ProjectNotServedError`), and a new
- *  conversation on no known project's assistant (`NoProjectError`). */
-const FOLDER_REFUSALS = [
-  "RunFolderMismatchError",
-  "ProjectNotServedError",
-  "NoProjectError",
-];
+/** The core's refusals of a run for a project it doesn't serve: one that
+ *  isn't registered or whose folder is missing (`ProjectNotServedError`), and
+ *  a new conversation on no known project's assistant (`NoProjectError`). */
+const PROJECT_GONE = ["ProjectNotServedError", "NoProjectError"];
+
+export type FolderRefusal =
+  /** The run's project is no longer served: read the projects again. */
+  | "projectGone"
+  /** The thread is bound to another project or run folder than the run
+   *  named (the core's `RunFolderMismatchError` itself). */
+  | "mismatch";
 
 /**
- * The run was refused for its folder: the backend doesn't serve the folder
- * the run is for. A run error carries its exact class name, so each of the
- * core's refusals is matched. It reaches `useStream` as an error with that
- * name, and `runs.wait` as a message starting with it.
+ * Why the core refused a run for its folder, or null for any other error. A
+ * run error carries its exact class name: `useStream` gets an error with
+ * that name, `runs.wait` a message starting with it.
  */
-export function isRunFolderMismatchError(error: unknown): boolean {
+export function folderRefusal(error: unknown): FolderRefusal | null {
   const name = (error as { name?: unknown } | null)?.name;
-  if (typeof name === "string" && FOLDER_REFUSALS.includes(name)) return true;
   const message = formatStreamError(error);
-  return FOLDER_REFUSALS.some((refusal) => message.includes(refusal));
+  const named = (refusal: string) =>
+    name === refusal || message.includes(refusal);
+  if (PROJECT_GONE.some(named)) return "projectGone";
+  if (named("RunFolderMismatchError")) return "mismatch";
+  return null;
+}
+
+/** Any of the core's folder refusals (see `folderRefusal`). */
+export function isRunFolderMismatchError(error: unknown): boolean {
+  return folderRefusal(error) !== null;
 }
 
 /**

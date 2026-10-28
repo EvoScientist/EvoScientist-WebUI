@@ -7,22 +7,23 @@ import { getConfig } from "@/lib/config";
 import { browserTimeZone } from "@/lib/cronUtils";
 import { patchClientStreamModes } from "@/lib/streamMode";
 import { getHttpStatus, isRunFolderMismatchError } from "@/lib/streamError";
-import { SCHEDULER_GRAPH_ID } from "@/lib/workspaceAssistant";
-import { useWorkspace } from "@/providers/WorkspaceProvider";
-import { assistantIdFor } from "@/lib/workspaceSession";
+import {
+  SCHEDULER_GRAPH_ID,
+  workspaceAssistantId,
+} from "@/lib/workspaceAssistant";
+import { useProjects } from "@/providers/ProjectsProvider";
 
 const SCHEDULED_RUN_KIND = "scheduled_task";
 
-/** Where scheduled tasks run: the scheduler graph's assistant for the
- *  backend's folder, and that folder for the task's tag. */
+/** Where scheduled tasks run: the scheduler graph's assistant for a
+ *  project, and that project's folder for the task's tag. */
 export interface SchedulerTarget {
   assistantId: string;
-  /** Null on a backend without the workspace route. */
-  workspaceDir: string | null;
+  workspaceDir: string;
 }
 
 function workspaceTag(target: SchedulerTarget): Record<string, string> {
-  return target.workspaceDir ? { workspace_dir: target.workspaceDir } : {};
+  return { workspace_dir: target.workspaceDir };
 }
 
 export function makeClient(): Client | null {
@@ -61,17 +62,17 @@ export function upcomingRun(task: ScheduledTask): string | null {
 }
 
 /**
- * Why `task` can't be run from here: it runs in another folder than the
- * backend's, and a manual run would run it in this one. Null when it can. An
- * untagged task counts as this folder's, as the core's scheduling does.
+ * Why `task` can't be run from here: it runs in another project than the
+ * current one, and a manual run would run it in this one. Null when it can.
+ * An untagged task counts as the current project's.
  */
 export function otherFolderReason(
   task: ScheduledTask,
-  servedFolder: string | null
+  currentFolder: string | null
 ): string | null {
-  if (!task.workspaceDir || !servedFolder) return null;
-  if (task.workspaceDir === servedFolder) return null;
-  return `This task runs in ${task.workspaceDir}, not the backend's folder.`;
+  if (!task.workspaceDir || !currentFolder) return null;
+  if (task.workspaceDir === currentFolder) return null;
+  return `This task runs in ${task.workspaceDir}, not the current project.`;
 }
 
 function parseCron(cron: Cron): ScheduledTask {
@@ -244,27 +245,27 @@ export async function runScheduledTaskNow(
   });
 }
 
-/** The backend's folder; null until known, or on a backend without the
- *  workspace route. */
-export function useServedFolder(): string | null {
-  const { workspace } = useWorkspace();
-  return workspace.status === "ready" ? workspace.key : null;
+/** The current project's folder; null when there is none. */
+export function useCurrentFolder(): string | null {
+  return useProjects().current?.key ?? null;
 }
 
 /**
- * Whether a failed create or run means the folder must be read again. Save
+ * Whether a failed create or run means the projects must be read again. Save
  * and Run now create the cron or thread they run on, so a 404 can only be
- * the assistant: the backend lost this folder's assistants (a fresh store).
- * `crons.create` says so as `Assistant '<id>' not found`, a run as `Thread or
- * assistant not found.`. A folder mismatch means it serves another folder.
+ * the assistant: the core makes every registered project's assistants, so
+ * the project is gone. `crons.create` says so as `Assistant '<id>' not
+ * found`, a run as `Thread or assistant not found.`. A folder refusal says
+ * the backend doesn't serve the project.
  */
 export function assistantRecoveryNeeded(error: unknown): boolean {
   return getHttpStatus(error) === 404 || isRunFolderMismatchError(error);
 }
 
-/** Handle a failed create or run: read the folder again when it needs to. */
+/** Handle a failed create or run: read the projects again when it needs
+ *  to. */
 export function useAssistantRecovery(): (error: unknown) => void {
-  const { refresh } = useWorkspace();
+  const { refresh } = useProjects();
   return useCallback(
     (error: unknown) => {
       if (assistantRecoveryNeeded(error)) void refresh();
@@ -273,23 +274,26 @@ export function useAssistantRecovery(): (error: unknown) => void {
   );
 }
 
-/** Whether a task may be created or run now (the folder is not being read
- *  again); check it at the moment of acting. */
+/** Whether a task may be created or run now (the projects are not being
+ *  read again); check it at the moment of acting. */
 export function useSchedulerGate(): () => boolean {
-  return useWorkspace().isReady;
+  return useProjects().isReady;
 }
 
-/** The scheduler assistant for the backend's folder; null until known. */
+/** The scheduler assistant for the current project; null when there is
+ *  none, or while the projects are read again. */
 export function useSchedulerTarget(): SchedulerTarget | null {
-  const { workspace, refreshing } = useWorkspace();
-  // None while the folder is read again: tasks wait for its answer.
-  const assistantId = refreshing
-    ? null
-    : assistantIdFor(workspace, SCHEDULER_GRAPH_ID);
-  const workspaceDir = workspace.status === "ready" ? workspace.key : null;
+  const { current, refreshing } = useProjects();
+  const workspaceDir = refreshing ? null : current?.key ?? null;
   return useMemo(
-    () => (assistantId ? { assistantId, workspaceDir } : null),
-    [assistantId, workspaceDir]
+    () =>
+      workspaceDir
+        ? {
+            assistantId: workspaceAssistantId(SCHEDULER_GRAPH_ID, workspaceDir),
+            workspaceDir,
+          }
+        : null,
+    [workspaceDir]
   );
 }
 

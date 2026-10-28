@@ -64,7 +64,7 @@ import {
   missingThreadIdFromError,
 } from "@/lib/streamError";
 import { renderChat } from "@/test/renderChat";
-import { mockWorkspace } from "@/test/mockWorkspace";
+import { mockProjects } from "@/test/mockProjects";
 
 /** The open thread is gone on the server: the run-path 404 is about it. */
 function threadGone() {
@@ -263,10 +263,10 @@ describe("stale thread recovery", () => {
     expect(toast.error).not.toHaveBeenCalled();
   });
 
-  it("resolves the assistant again when a new chat's run 404s", async () => {
+  it("reads the projects again when a new chat's run 404s", async () => {
     queryState.initialThreadId = null;
-    const workspace = mockWorkspace();
-    renderChat({ connected: false, workspace });
+    const projects = mockProjects();
+    renderChat({ connected: false, projects });
 
     act(() => {
       stream.emitError(
@@ -274,7 +274,7 @@ describe("stale thread recovery", () => {
       );
     });
 
-    await waitFor(() => expect(workspace.refresh).toHaveBeenCalled());
+    await waitFor(() => expect(projects.refresh).toHaveBeenCalled());
     expect(queryState.setThreadId).not.toHaveBeenCalled();
   });
 
@@ -282,9 +282,9 @@ describe("stale thread recovery", () => {
     getActiveMockClient().threads.get.mockRejectedValue(
       new TypeError("Failed to fetch")
     );
-    const workspace = mockWorkspace();
+    const projects = mockProjects();
     const onThreadUnavailable = vi.fn();
-    renderChat({ connected: false, onThreadUnavailable, workspace });
+    renderChat({ connected: false, onThreadUnavailable, projects });
 
     act(() => {
       stream.emitError(
@@ -292,14 +292,14 @@ describe("stale thread recovery", () => {
       );
     });
 
-    await waitFor(() => expect(workspace.refresh).toHaveBeenCalled());
+    await waitFor(() => expect(projects.refresh).toHaveBeenCalled());
     expect(onThreadUnavailable).not.toHaveBeenCalled();
   });
 
   it("keeps an open thread that still exists when its run 404s", async () => {
-    const workspace = mockWorkspace();
+    const projects = mockProjects();
     const onThreadUnavailable = vi.fn();
-    renderChat({ connected: false, onThreadUnavailable, workspace });
+    renderChat({ connected: false, onThreadUnavailable, projects });
 
     act(() => {
       stream.emitError(
@@ -307,14 +307,14 @@ describe("stale thread recovery", () => {
       );
     });
 
-    await waitFor(() => expect(workspace.refresh).toHaveBeenCalled());
+    await waitFor(() => expect(projects.refresh).toHaveBeenCalled());
     expect(onThreadUnavailable).not.toHaveBeenCalled();
     expect(queryState.setThreadId).not.toHaveBeenCalled();
   });
 
   it("hands the message to the composer at once when its run 404s for a missing assistant", async () => {
-    const workspace = mockWorkspace();
-    const { result } = renderChat({ workspace });
+    const projects = mockProjects();
+    const { result } = renderChat({ projects });
     await waitFor(() => expect(result.current.canSend).toBe(true));
     const handBack = vi.fn();
     act(() => {
@@ -338,11 +338,11 @@ describe("stale thread recovery", () => {
 
     // Back before the backend is asked about the thread.
     expect(handBack).toHaveBeenCalledWith("hello there");
-    expect(workspace.refresh).toHaveBeenCalled();
+    expect(projects.refresh).toHaveBeenCalled();
     // One toast, once the check has found the assistant missing.
     await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(1));
     expect(toast.error).toHaveBeenCalledWith(
-      expect.stringContaining("lost this folder's assistant")
+      expect.stringContaining("no longer served")
     );
     expect(toast.error).toHaveBeenCalledWith(
       expect.stringContaining("back in the composer")
@@ -350,7 +350,7 @@ describe("stale thread recovery", () => {
   });
 
   it("hands back nothing that already reached the thread", async () => {
-    const { result } = renderChat({ workspace: mockWorkspace() });
+    const { result } = renderChat({ projects: mockProjects() });
     await waitFor(() => expect(result.current.canSend).toBe(true));
     const handBack = vi.fn();
     act(() => {
@@ -402,7 +402,7 @@ describe("stale thread recovery", () => {
 
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith(
-        expect.stringContaining("lost this folder's assistant")
+        expect.stringContaining("no longer served")
       )
     );
   });

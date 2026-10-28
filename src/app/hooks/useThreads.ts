@@ -10,7 +10,7 @@ import {
 import { cancelActiveRuns, type RunCancelClient } from "@/lib/threadLifecycle";
 import { pickThreadMessages } from "@/lib/threadMessages";
 import { CHAT_GRAPH_ID } from "@/lib/workspaceAssistant";
-import { useWorkspace } from "@/providers/WorkspaceProvider";
+import { useProjects } from "@/providers/ProjectsProvider";
 
 export interface ThreadItem {
   id: string;
@@ -72,7 +72,7 @@ export function useThreads(props: {
   limit?: number;
 }) {
   const pageSize = props.limit || DEFAULT_PAGE_SIZE;
-  const { workspace } = useWorkspace();
+  const { projects, current } = useProjects();
 
   return useSWRInfinite(
     (pageIndex: number, previousPageData: ThreadItem[] | null) => {
@@ -82,9 +82,9 @@ export function useThreads(props: {
         process.env.NEXT_PUBLIC_LANGSMITH_API_KEY ||
         "";
 
-      // Until the backend's folder is known the list would mix every
-      // folder's threads.
-      if (!config || workspace.status === "pending") {
+      // Until the current project is known the list would mix every
+      // project's threads; with none there is nothing to list.
+      if (!config || projects.status !== "ready" || !current) {
         return null;
       }
 
@@ -98,7 +98,7 @@ export function useThreads(props: {
         pageIndex,
         pageSize,
         deploymentUrl: config.deploymentUrl,
-        workspaceDir: workspace.status === "ready" ? workspace.key : null,
+        workspaceDir: current.key,
         apiKey,
         status: props?.status,
       };
@@ -115,7 +115,7 @@ export function useThreads(props: {
       pageIndex: number;
       pageSize: number;
       deploymentUrl: string;
-      workspaceDir: string | null;
+      workspaceDir: string;
       apiKey: string;
       status?: Thread["status"];
     }) => {
@@ -126,14 +126,11 @@ export function useThreads(props: {
         })
       );
 
-      // Scope the list to chat threads of the backend's folder. The graph
+      // Scope the list to chat threads of the current project. The graph
       // keeps out threads of async sub-agents and memory workers, which carry
       // the folder too; the folder, not the assistant, matches threads
-      // created under an older assistant. A backend without the workspace
-      // route lists by graph only, as before.
-      const metadata = workspaceDir
-        ? { graph_id: CHAT_GRAPH_ID, workspace_dir: workspaceDir }
-        : { graph_id: CHAT_GRAPH_ID };
+      // created under an older assistant.
+      const metadata = { graph_id: CHAT_GRAPH_ID, workspace_dir: workspaceDir };
 
       // Sort by state_updated_at (last checkpoint write, i.e. last actual
       // chat activity) rather than updated_at. Any metadata patch

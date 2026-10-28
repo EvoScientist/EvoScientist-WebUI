@@ -1,10 +1,10 @@
-// Server-only helpers for talking to the active EvoScientist deployment's
-// on-disk workspace. Shared by the workspace upload/list/read API routes.
+// Server-only helpers for the on-disk folder of a project the local
+// EvoScientist backend serves (lib/server/projects.ts finds it). Shared by
+// the workspace upload/list/read API routes.
 //
-// The "workspace" is the working directory of the currently running langgraph
-// dev (where the agent reads/writes real files via its file tools). It is NOT
-// the agent's in-memory `files` state — that lives in thread state and is
-// managed through the SDK.
+// The "workspace" is a project's folder (where the agent reads/writes real
+// files via its file tools). It is NOT the agent's in-memory `files` state —
+// that lives in thread state and is managed through the SDK.
 
 import {
   type BigIntStats,
@@ -13,7 +13,7 @@ import {
   promises as fs,
 } from "fs";
 import type { FileHandle } from "fs/promises";
-import { homedir, networkInterfaces, tmpdir } from "os";
+import { networkInterfaces, tmpdir } from "os";
 import { basename, dirname, join, relative, resolve, sep } from "path";
 import type { Readable } from "stream";
 import { ZipFile } from "yazl";
@@ -21,21 +21,6 @@ import { randomUUID } from "crypto";
 import type { NextRequest } from "next/server";
 import { isLoopbackHost } from "@/lib/backendBoundary";
 import { readCoreConfig } from "@/lib/server/coreConfig";
-
-// The backend's runtime folder (`DEFAULT_PID_DIR` in langgraph_dev/manager.py)
-// is always ~/.config/evoscientist: unlike config.yaml it does not follow
-// XDG_CONFIG_HOME, so neither does this path.
-export const WORKSPACE_SIDECAR = join(
-  homedir(),
-  ".config",
-  "evoscientist",
-  "langgraph_dev.workspace.json"
-);
-
-interface WorkspaceSidecar {
-  workspace?: unknown;
-  pid?: unknown;
-}
 
 /** True if the name contains any C0/C1 control char, DEL, or a line/paragraph
  *  separator. A newline in a filename would otherwise be spliced into the
@@ -323,61 +308,6 @@ export async function zipWorkspace(
   });
 }
 
-/** True if a process with `pid` is currently running (signal 0 = existence probe). */
-export function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    // EPERM means the process exists but we may not signal it — still alive.
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
-}
-
-/**
- * Resolve the workspace of the *currently running* EvoScientist deployment.
- *
- * The sidecar records `{ workspace, pid }` of the langgraph dev that owns this
- * workspace. We only trust it when that pid is still alive — a stale sidecar
- * from a crashed/previous session must not silently redirect file access to a
- * directory the live deployment no longer uses. Falls back to the launcher env.
- */
-export async function getWorkspaceDir(): Promise<string> {
-  let workspace: string | undefined;
-  try {
-    const sidecar = JSON.parse(
-      await fs.readFile(WORKSPACE_SIDECAR, "utf-8")
-    ) as WorkspaceSidecar;
-    const ws = sidecar.workspace;
-    const pid = sidecar.pid;
-    if (typeof ws === "string" && ws.trim()) {
-      const hasPid = typeof pid === "number" && pid > 0;
-      // With a recorded backend pid, only trust the sidecar while that process
-      // is alive; older sidecars without one fall back to trusting it as before.
-      if (!hasPid || isProcessAlive(pid as number)) workspace = ws;
-    }
-  } catch {
-    // Older/manual setups may not have a sidecar. Fall back to the launcher env.
-  }
-
-  workspace ||= process.env.EVOSCIENTIST_WORKSPACE_DIR;
-  if (!workspace) {
-    throw new Error(
-      "No active EvoScientist workspace found. Start the backend with `EvoSci deploy` first."
-    );
-  }
-
-  const resolved = resolve(workspace);
-  const stat = await fs.stat(resolved);
-  if (!stat.isDirectory()) {
-    throw new Error("The active EvoScientist workspace is not a directory.");
-  }
-  // Canonicalize so every containment check compares against the *real* root —
-  // the workspace (or a parent) may itself live under a symlink (e.g. macOS
-  // /tmp -> /private/tmp), which would otherwise break startsWith() checks.
-  return fs.realpath(resolved);
-}
-
 /** A path the file routes refuse (outside the workspace, hidden, or not
  *  resolvable); `cause` holds the disk error when resolving it failed. */
 export class PathRefusedError extends Error {}
@@ -419,7 +349,7 @@ export function resolveInside(workspaceDir: string, relPath: string): string {
  * lexically "inside") or `link -> .langgraph_api` is rejected here, even though
  * the lexical check in `resolveInside` would pass.
  *
- * `workspaceDir` MUST already be canonical (it is — `getWorkspaceDir` realpaths
+ * `workspaceDir` MUST already be canonical (it is — `projectDir` realpaths
  * it). Throws if the target doesn't exist or escapes. Use this for any access
  * that will then follow the path on disk (stat/read/list).
  */

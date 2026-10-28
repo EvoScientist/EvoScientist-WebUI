@@ -9,6 +9,7 @@ import React, {
   useState,
 } from "react";
 import { useQueryState } from "nuqs";
+import { toast } from "sonner";
 import { FILE_LINK_EVENT, type FileLinkEventDetail } from "@/lib/fileLink";
 import {
   filePaneReducer,
@@ -91,6 +92,8 @@ export function FilePaneProvider({
   const [refreshTick, setRefreshTick] = useState(0);
   const [treeRevision, setTreeRevision] = useState(0);
   const [chat, setChat] = useState<ChatFilesBridge | null>(null);
+  const chatRef = useRef(chat);
+  chatRef.current = chat;
 
   const onRevealRef = useRef(onReveal);
   useEffect(() => {
@@ -150,10 +153,19 @@ export function FilePaneProvider({
       if (detail.opener && !detail.opener.closest("[data-file-pane]")) {
         openerRef.current = detail.opener;
       }
-      open({
-        source: detail.kind === "memory" ? "memory" : "workspace",
-        path: detail.path,
-      });
+      if (detail.kind === "memory") {
+        open({ source: "memory", path: detail.path });
+        return;
+      }
+      // A workspace link names a file of the open conversation's project,
+      // which may not be the current one; when the chat can't show its
+      // project's files here, there is nothing to open.
+      const project = chatRef.current?.project;
+      if (project === null) {
+        toast.error("This conversation's project files can't be shown here.");
+        return;
+      }
+      open({ source: "workspace", path: detail.path, project });
     };
     window.addEventListener(FILE_LINK_EVENT, onOpenFile);
     return () => window.removeEventListener(FILE_LINK_EVENT, onOpenFile);

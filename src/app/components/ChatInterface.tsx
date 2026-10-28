@@ -128,9 +128,9 @@ import {
 } from "@/lib/subAgentStepsStore";
 import { useAutoApproveInterrupt } from "@/app/hooks/useAutoApproveInterrupt";
 import { useApprovalPolicy } from "@/app/hooks/useApprovalPolicy";
-import { useWorkspace } from "@/providers/WorkspaceProvider";
-import { localFilesAvailable } from "@/lib/workspaceSession";
-import { CHAT_GRAPH_ID, folderName } from "@/lib/workspaceAssistant";
+import { useProjects } from "@/providers/ProjectsProvider";
+import { findProject, projectHandle } from "@/lib/projects";
+import { CHAT_GRAPH_ID } from "@/lib/workspaceAssistant";
 import { useDeployment } from "@/providers/ClientProvider";
 import { resolveApprovalDecisions } from "@/lib/hitlPolicy";
 import {
@@ -553,38 +553,12 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       });
     }, [draftSeed]);
     const {
-      workspace,
-      refreshing: workspaceRefreshing,
-      error: workspaceError,
-    } = useWorkspace();
-    const filesHere = localFilesAvailable(workspace);
+      projects,
+      refreshing: projectsRefreshing,
+      error: projectsError,
+      files: filesAccess,
+    } = useProjects();
     const [isUploadingFiles, setIsUploadingFiles] = useState(false);
-    const [workspaceDir, setWorkspaceDir] = useState<string | null>(null);
-
-    // A backend without the workspace route: name the local folder, as before.
-    useEffect(() => {
-      if (workspace.status !== "legacy") return;
-      let cancelled = false;
-      fetch("/api/workspace")
-        .then((r) => (r.ok ? r.json() : null))
-        .then((d: { dir?: string } | null) => {
-          if (!cancelled && d?.dir) setWorkspaceDir(d.dir);
-        })
-        .catch(() => {});
-      return () => {
-        cancelled = true;
-      };
-    }, [workspace.status]);
-    // The chip names the folder the backend runs in.
-    const folderLabel =
-      workspace.status === "ready"
-        ? { full: workspace.key, name: folderName(workspace.key) }
-        : workspace.status === "legacy" && workspaceDir
-        ? {
-            full: workspaceDir,
-            name: folderName(workspaceDir),
-          }
-        : null;
     // Messages typed while the agent is busy are queued. They
     // drain one-per-idle-window into the thread once it's free. A ref mirrors the
     // latest queue so event handlers (key ↑, edit) read current state without
@@ -700,6 +674,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       canRunNow,
       binding,
       canSend,
+      projectKey,
       setRefusalHandler,
       goal,
       goalBusy,
@@ -708,6 +683,15 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       chatGoalSupported,
       sendGoalRequest,
     } = useChatContext();
+    // The chat works in its own project: uploads go to that folder, and the
+    // chip names it.
+    const chatProject = findProject(projects, projectKey);
+    const filesProject =
+      filesAccess === "here" && projectKey ? projectHandle(projectKey) : null;
+    const filesHere = filesProject !== null;
+    const folderLabel = chatProject
+      ? { full: chatProject.key, name: chatProject.name }
+      : null;
     // Read by the hand-back folds, which are registered once.
     const goalSupportedRef = useRef(goalSupported);
     goalSupportedRef.current = goalSupported;
@@ -847,8 +831,16 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         files,
         setFiles,
         editDisabled: fileEditDisabled,
+        project: filesProject,
       });
-    }, [registerChatFiles, threadId, files, setFiles, fileEditDisabled]);
+    }, [
+      registerChatFiles,
+      threadId,
+      files,
+      setFiles,
+      fileEditDisabled,
+      filesProject,
+    ]);
     useEffect(() => () => registerChatFiles?.(null), [registerChatFiles]);
     // A tool result we haven't seen means a tool call just finished. Results
     // already in the thread when it loads don't count.
@@ -1262,14 +1254,17 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         event.target.value = "";
         if (selectedFiles.length === 0) return;
 
+        if (!filesProject) return;
         setIsUploadingFiles(true);
         try {
           const formData = new FormData();
           selectedFiles.forEach((file) => formData.append("files", file));
-          const response = await fetch("/api/workspace/upload", {
-            method: "POST",
-            body: formData,
-          });
+          const response = await fetch(
+            `/api/workspace/upload?${new URLSearchParams({
+              project: filesProject,
+            })}`,
+            { method: "POST", body: formData }
+          );
           const data = (await response.json()) as {
             files?: UploadedWorkspaceFile[];
             error?: string;
@@ -1291,7 +1286,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
           setIsUploadingFiles(false);
         }
       },
-      []
+      [filesProject]
     );
 
     const removePendingFile = useCallback((filePath: string) => {
@@ -1832,7 +1827,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       value: rest,
       setValue: (next) => setInput(lead.lead + next),
       disabled: composerLocked,
-      workspaceSkills: filesHere,
+      project: filesProject,
       onBrowse: () => onNavigate?.({ view: "skills" }),
       pages: goalPage ? [goalPage, modelPage] : [modelPage],
       commandWords,
@@ -3370,9 +3365,9 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                   placeholder={
                     binding.kind === "readOnly"
                       ? binding.reason
-                      : !canSend && workspaceRefreshing
-                      ? workspaceError
-                        ? `Can't read the backend's folder (${workspaceError}). Retrying…`
+                      : !canSend && projectsRefreshing
+                      ? projectsError
+                        ? `Can't read the backend's projects (${projectsError}). Retrying…`
                         : "Connecting to the backend…"
                       : hasPendingInterrupt
                       ? "Respond to the request above to continue…"

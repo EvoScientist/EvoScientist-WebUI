@@ -5,12 +5,13 @@
  */
 
 export async function workspaceFileExists(
+  project: string,
   path: string
 ): Promise<boolean | null> {
   const dir = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
   try {
     const res = await fetch(
-      `/api/workspace?${new URLSearchParams({ path: dir })}`
+      `/api/workspace?${new URLSearchParams({ project, path: dir })}`
     );
     // The folder itself is gone (or no longer reachable).
     if (res.status === 400) return false;

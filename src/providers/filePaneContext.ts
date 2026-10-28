@@ -11,6 +11,9 @@ export interface ChatFilesBridge {
   setFiles: (files: Record<string, string>) => Promise<void>;
   /** A run or an approval is in progress. */
   editDisabled: boolean;
+  /** The handle of the conversation's project, for its file links; null
+   *  when this page can't show that project's files. */
+  project: string | null;
 }
 
 /** Unsaved edits, and the file content they were made against. */

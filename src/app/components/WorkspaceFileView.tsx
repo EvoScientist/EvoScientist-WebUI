@@ -1,7 +1,6 @@
 "use client";
 
-import { useWorkspace } from "@/providers/WorkspaceProvider";
-import { localFilesNotice } from "@/lib/workspaceSession";
+import { useProjectFiles } from "@/app/hooks/useProjectFiles";
 import { LocalFilesNotice } from "@/app/components/WorkspacePanel";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -37,6 +36,8 @@ import type { DraftStore } from "@/providers/filePaneContext";
 
 export interface WorkspaceFileViewProps {
   tabId: string;
+  /** The file's project (its handle); absent: the current project. */
+  project?: string;
   /** Path relative to the workspace root. */
   path: string;
   /** Byte size from the listing, when the opener knew it. */
@@ -61,9 +62,9 @@ type Body =
 
 class TooLarge extends Error {}
 
-async function readText(path: string): Promise<string> {
+async function readText(project: string, path: string): Promise<string> {
   const controller = new AbortController();
-  const res = await fetch(workspaceFileUrl(path), {
+  const res = await fetch(workspaceFileUrl(project, path), {
     signal: controller.signal,
   });
   if (!res.ok) {
@@ -81,14 +82,23 @@ async function readText(path: string): Promise<string> {
 const TOOLBAR =
   "flex shrink-0 flex-wrap items-center justify-end gap-1 max-md:[&>a]:min-h-11 max-md:[&>button]:min-h-11 max-md:[&>button]:min-w-11";
 
-export function WorkspaceFileView(props: WorkspaceFileViewProps) {
-  const { workspace } = useWorkspace();
-  const notice = localFilesNotice(workspace);
-  if (notice) return <LocalFilesNotice message={notice} />;
-  return <LocalWorkspaceFileView {...props} />;
+export function WorkspaceFileView({
+  project: tabProject,
+  ...props
+}: WorkspaceFileViewProps) {
+  const { project: currentProject, notice, here } = useProjectFiles();
+  const project = here ? tabProject ?? currentProject : null;
+  if (!project) return <LocalFilesNotice message={notice ?? ""} />;
+  return (
+    <LocalWorkspaceFileView
+      {...props}
+      project={project}
+    />
+  );
 }
 
 function LocalWorkspaceFileView({
+  project,
   tabId,
   path,
   size,
@@ -98,7 +108,7 @@ function LocalWorkspaceFileView({
   onDirtyChange,
   onClose,
   onTreeChanged,
-}: WorkspaceFileViewProps) {
+}: Omit<WorkspaceFileViewProps, "project"> & { project: string }) {
   const name = fileNameOf(path);
   const ext = extOf(name);
   const kind = fileKindOf(ext);
@@ -176,7 +186,7 @@ function LocalWorkspaceFileView({
       const id = ++readIdRef.current;
       const current = () => mountedRef.current && id === readIdRef.current;
       try {
-        const text = await readText(path);
+        const text = await readText(project, path);
         if (!current()) return;
         setRefreshError(null);
         setBody({ state: "ready" });
@@ -207,7 +217,7 @@ function LocalWorkspaceFileView({
           return;
         }
         const message = e instanceof Error ? e.message : "Failed to load file.";
-        const exists = await workspaceFileExists(path);
+        const exists = await workspaceFileExists(project, path);
         if (!current()) return;
         const {
           content: shown,
@@ -226,7 +236,7 @@ function LocalWorkspaceFileView({
         }
       }
     },
-    [kind, knownTooLarge, path]
+    [kind, knownTooLarge, path, project]
   );
 
   useEffect(() => {
@@ -239,7 +249,7 @@ function LocalWorkspaceFileView({
   // a backend restart): only the folder listing can say it's gone.
   const imageFailed = async () => {
     const failed = version;
-    const exists = await workspaceFileExists(path);
+    const exists = await workspaceFileExists(project, path);
     if (!mountedRef.current || latest.current.version !== failed) return;
     setBody(
       exists === false
@@ -265,7 +275,7 @@ function LocalWorkspaceFileView({
     setSaving(true);
     setActionError(null);
     try {
-      const res = await fetch(workspaceFileUrl(path), {
+      const res = await fetch(workspaceFileUrl(project, path), {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content: draft }),
@@ -290,7 +300,9 @@ function LocalWorkspaceFileView({
     setDeleting(true);
     setActionError(null);
     try {
-      const res = await fetch(workspaceFileUrl(path), { method: "DELETE" });
+      const res = await fetch(workspaceFileUrl(project, path), {
+        method: "DELETE",
+      });
       if (!res.ok) {
         const data = await res.json().catch(() => null);
         throw new Error(data?.error || "Failed to delete.");
@@ -311,7 +323,7 @@ function LocalWorkspaceFileView({
 
   const downloadLink = (label: string) => (
     <a
-      href={workspaceFileUrl(path, { download: true })}
+      href={workspaceFileUrl(project, path, { download: true })}
       download={name}
     >
       <Download
@@ -373,7 +385,7 @@ function LocalWorkspaceFileView({
         <ScrollArea className="h-full rounded-md bg-[var(--color-surface)]">
           <div className="flex items-center justify-center p-4">
             <img
-              src={workspaceFileUrl(path, { version })}
+              src={workspaceFileUrl(project, path, { version })}
               alt={name}
               onError={() => void imageFailed()}
               className="max-h-full max-w-full object-contain"
@@ -385,7 +397,7 @@ function LocalWorkspaceFileView({
     if (kind === "pdf") {
       return (
         <iframe
-          src={workspaceFileUrl(path, { version })}
+          src={workspaceFileUrl(project, path, { version })}
           title={name}
           className="h-full w-full rounded-md border border-border"
         />

@@ -12,6 +12,9 @@ export interface FileRef {
   path: string;
   /** Byte size from the workspace listing, when the opener knows it. */
   size?: number;
+  /** A workspace file's project (its handle, `projectHandle`); absent: the
+   *  current project, as for a `file` link from before projects. */
+  project?: string;
 }
 
 export interface FileTab extends FileRef {
@@ -52,25 +55,41 @@ export const initialFilePaneState: FilePaneState = {
 
 const SOURCES: readonly FileSource[] = ["workspace", "memory", "state"];
 
-/** Tab id, and the value of the `file` URL param: `<source>:<path>`. */
-export function fileTabId(ref: Pick<FileRef, "source" | "path">): string {
-  return `${ref.source}:${ref.path}`;
+const HANDLE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/** Tab id, and the value of the `file` URL param: `<source>:<path>`, with
+ *  `@<project>` after the source for a workspace file of a named project. */
+export function fileTabId(
+  ref: Pick<FileRef, "source" | "path" | "project">
+): string {
+  return ref.project
+    ? `${ref.source}@${ref.project}:${ref.path}`
+    : `${ref.source}:${ref.path}`;
 }
 
-/** Parse a `file` URL param; null for anything that isn't `<source>:<path>`. */
+/** Parse a `file` URL param; null for anything that isn't a tab id. */
 export function parseFileParam(
   value: string | null
-): Pick<FileRef, "source" | "path"> | null {
+): Pick<FileRef, "source" | "path" | "project"> | null {
   if (!value) return null;
   const colon = value.indexOf(":");
   if (colon <= 0) return null;
-  const source = value.slice(0, colon) as FileSource;
+  const [source, project, ...extra] = value.slice(0, colon).split("@") as [
+    FileSource,
+    string | undefined
+  ];
   const path = value.slice(colon + 1);
   if (!SOURCES.includes(source) || !path.trim()) return null;
+  if (
+    extra.length > 0 ||
+    (project !== undefined && (source !== "workspace" || !HANDLE.test(project)))
+  ) {
+    return null;
+  }
   // Same rule the file APIs apply to names: no control characters.
   // eslint-disable-next-line no-control-regex
   if (/[\u0000-\u001f\u007f]/.test(path)) return null;
-  return { source, path };
+  return project ? { source, path, project } : { source, path };
 }
 
 /** Show `id` without changing the mode. */
@@ -123,6 +142,7 @@ export function filePaneReducer(
           source: action.ref.source,
           path: action.ref.path,
           size: action.ref.size,
+          ...(action.ref.project ? { project: action.ref.project } : {}),
           id,
           lastActive: 0,
           dirty: false,

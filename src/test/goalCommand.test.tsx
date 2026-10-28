@@ -131,7 +131,7 @@ vi.mock("@/app/components/GoalPill", async () => {
 });
 
 import { renderChatInterface } from "@/test/renderChatInterface";
-import { mockWorkspace } from "@/test/mockWorkspace";
+import { mockProjects } from "@/test/mockProjects";
 import {
   getLastProps,
   resetComponentSpy,
@@ -576,8 +576,8 @@ describe("/goal in the composer", () => {
     it("says so when a command chosen there can't run now", async () => {
       const { textarea } = await mount(
         {
-          workspace: {
-            ...mockWorkspace(),
+          projects: {
+            ...mockProjects(),
             refreshing: true,
             isReady: () => false,
           },

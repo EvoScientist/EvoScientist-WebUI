@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createRef } from "react";
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { MarkdownContent } from "@/app/components/MarkdownContent";
+import { toast } from "sonner";
 import { dispatchFileLink, FILE_LINK_EVENT } from "@/lib/fileLink";
 import {
   onScreen,
@@ -19,6 +20,7 @@ const bridge = (
   files,
   setFiles: async () => {},
   editDisabled: false,
+  project: null,
 });
 
 const clickLink = (kind: "workspace" | "memory", path: string) =>
@@ -38,6 +40,10 @@ const fileLink = (path: string) => ({
 
 afterEach(resetScreen);
 
+const PROJECT_B = "d36e3f1a-02c5-5639-92a2-d1faaafb1ded";
+
+vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
+
 describe("FilePaneProvider", () => {
   it("opens a chat file link as a tab and reveals the inspector", async () => {
     const onReveal = vi.fn();
@@ -50,6 +56,26 @@ describe("FilePaneProvider", () => {
     expect(onReveal).toHaveBeenCalledTimes(1);
     await waitFor(() =>
       expect(h.lastFileParam()).toBe("workspace:outputs/a.md")
+    );
+  });
+
+  it("opens a chat file link in the conversation's project", () => {
+    const h = renderWithFilePane(null);
+    act(() => h.pane().registerChat({ ...bridge("t1"), project: PROJECT_B }));
+    clickLink("workspace", "outputs/a.md");
+    expect(h.pane().activeTab).toMatchObject({
+      path: "outputs/a.md",
+      project: PROJECT_B,
+    });
+  });
+
+  it("opens nothing for a conversation whose project files can't be shown", () => {
+    const h = renderWithFilePane(null);
+    act(() => h.pane().registerChat(bridge("t1")));
+    clickLink("workspace", "outputs/a.md");
+    expect(h.pane().state.tabs).toEqual([]);
+    expect(toast.error).toHaveBeenCalledWith(
+      expect.stringContaining("can't be shown here")
     );
   });
 
@@ -109,6 +135,7 @@ describe("FilePaneProvider", () => {
         files: { a: "1" },
         setFiles,
         editDisabled: false,
+        project: null,
       })
     );
     const first = h.pane().chat;
@@ -118,6 +145,7 @@ describe("FilePaneProvider", () => {
         files: { a: "1" },
         setFiles,
         editDisabled: false,
+        project: null,
       })
     );
     expect(h.pane().chat).toBe(first);

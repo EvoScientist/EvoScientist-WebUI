@@ -56,7 +56,7 @@ import {
   otherFolderReason,
   useScheduledTasks,
   useSchedulerTarget,
-  useServedFolder,
+  useCurrentFolder,
   useAssistantRecovery,
   useSchedulerGate,
   type ScheduledTask,
@@ -723,7 +723,7 @@ function TaskDetail({
   const nextRun = upcomingRun(task);
   const nextRunTitle = formatLongDate(nextRun);
   const target = useSchedulerTarget();
-  const elsewhere = otherFolderReason(task, useServedFolder());
+  const elsewhere = otherFolderReason(task, useCurrentFolder());
   const recoverAssistant = useAssistantRecovery();
   const gateOpen = useSchedulerGate();
   const handleRunNow = useCallback(async () => {

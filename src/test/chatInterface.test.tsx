@@ -116,7 +116,11 @@ vi.mock("@/app/components/TasksFilesSidebar", async () => {
   const m = await import("@/test/mocks/chatInterfaceStubs");
   return { FilesPopover: m.stubComponent("FilesPopover") };
 });
-import { mockWorkspace, readyWorkspace } from "@/test/mockWorkspace";
+import {
+  TestProjectsProvider,
+  mockProjects,
+  readyProjects,
+} from "@/test/mockProjects";
 import {
   chatInterfaceTree,
   renderChatInterface,
@@ -400,10 +404,10 @@ describe("ChatInterface composition", () => {
     expect(screen.queryAllByTestId("stub-ActionGroup")).toHaveLength(0);
   });
 
-  it("keeps an ask_user form on the page, disabled, while the folder is read again", () => {
+  it("keeps an ask_user form on the page, disabled, while the projects are read again", () => {
     renderChatInterface({
-      workspace: {
-        ...mockWorkspace(),
+      projects: {
+        ...mockProjects(),
         refreshing: true,
         isReady: () => false,
       },
@@ -420,16 +424,13 @@ describe("ChatInterface composition", () => {
     ).toBe(true);
   });
 
-  it("makes the chat read-only while a run-mode session holds the backend", () => {
+  it("makes the chat read-only on a core without the project list", () => {
     const { container } = renderChatInterface({
-      workspace: mockWorkspace({
-        ...readyWorkspace("/home/you/projA"),
-        runDir: "/home/you/projA/runs/r1",
-      }),
+      projects: mockProjects({ status: "unsupported" }),
     });
     const textarea = container.querySelector("textarea")!;
     expect(textarea.disabled).toBe(true);
-    expect(textarea.placeholder).toMatch(/run folder/);
+    expect(textarea.placeholder).toMatch(/too old/);
 
     act(() => {
       stream.setMessages([humanTurn("hi")]);
@@ -441,7 +442,7 @@ describe("ChatInterface composition", () => {
   // "first" refused, with "second" queued behind it while it ran and
   // `draft` typed since.
   async function refuseWithQueued(draft = "") {
-    const { container } = renderChatInterface({ workspace: mockWorkspace() });
+    const { container } = renderChatInterface({ projects: mockProjects() });
     const textarea = container.querySelector("textarea")!;
     fireEvent.change(textarea, { target: { value: "first" } });
     fireEvent.keyDown(textarea, { key: "Enter" });
@@ -495,7 +496,7 @@ describe("ChatInterface composition", () => {
   it("keeps a queued message while the folder is being read again", () => {
     let readyNow = true;
     const { container } = renderChatInterface({
-      workspace: { ...mockWorkspace(), isReady: () => readyNow },
+      projects: { ...mockProjects(), isReady: () => readyNow },
     });
     act(() => {
       stream.setMessages([humanTurn("hi")]);
@@ -1410,10 +1411,12 @@ describe("ChatInterface composition", () => {
       return null;
     }
     const FilePaneWrapper = ({ children }: { children: React.ReactNode }) => (
-      <FilePaneProvider>
-        <Probe />
-        {children}
-      </FilePaneProvider>
+      <TestProjectsProvider>
+        <FilePaneProvider>
+          <Probe />
+          {children}
+        </FilePaneProvider>
+      </TestProjectsProvider>
     );
 
     beforeEach(() => {
@@ -1634,11 +1637,10 @@ describe("ChatInterface composition", () => {
       }
     });
 
-    it("offers only the global skills when the backend's folder is elsewhere", async () => {
+    it("offers only the global skills when the page's backend is another machine's", async () => {
       const { container } = renderChatInterface({
-        workspace: mockWorkspace({
-          ...readyWorkspace("/srv/projB"),
-          local: { dir: "/home/you/projA", sameFolder: false },
+        projects: mockProjects(readyProjects("/srv/projB"), {
+          files: "elsewhere",
         }),
       });
       typeInComposer(container, "/pa");
@@ -1646,7 +1648,7 @@ describe("ChatInterface composition", () => {
         expect(screen.getAllByRole("option")).toHaveLength(1)
       );
       expect(fetch).toHaveBeenCalledWith(
-        "/api/skills/pinnable?workspace=0",
+        "/api/skills/pinnable",
         expect.anything()
       );
     });
@@ -1821,20 +1823,18 @@ describe("ChatInterface composition", () => {
     // Confirm round N6: a thread turning read-only under an open page closes
     // it, as an answer waited for does.
     it("closes a page when the thread turns read-only", async () => {
-      const ready = readyWorkspace("/home/you/projA");
-      const view = renderChatInterface({ workspace: mockWorkspace(ready) });
+      const ready = readyProjects("/home/you/projA");
+      const view = renderChatInterface({ projects: mockProjects(ready) });
       const textarea = typeInComposer(view.container, "/mo");
       await waitFor(() =>
         expect(screen.getAllByRole("option")).toHaveLength(1)
       );
       fireEvent.keyDown(textarea, { key: "Enter" });
       expect(screen.getByRole("listbox", { name: "Model" })).toBeTruthy();
+      // The project is removed: its threads can't run here any more.
       view.rerender(
         chatInterfaceTree({
-          workspace: mockWorkspace({
-            ...ready,
-            runDir: "/home/you/projA/runs/r1",
-          }),
+          projects: mockProjects(readyProjects(), { current: null }),
         })
       );
       expect(screen.queryByRole("listbox")).toBeNull();

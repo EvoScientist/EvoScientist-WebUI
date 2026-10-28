@@ -14,8 +14,7 @@ import {
 import { nodeColor, type ObsGraphData } from "@/lib/observationGraph";
 import { listScheduledTasks } from "@/app/hooks/useScheduledTasks";
 import { useThreads } from "@/app/hooks/useThreads";
-import { useWorkspace } from "@/providers/WorkspaceProvider";
-import { localFilesAvailable } from "@/lib/workspaceSession";
+import { useProjectFiles } from "@/app/hooks/useProjectFiles";
 import type { NavTarget } from "@/lib/navTarget";
 import { formatTime } from "@/lib/time";
 
@@ -91,9 +90,9 @@ export function ResearchDashboard({
   const [activity, setActivity] = useState<ActivityItem[]>([]);
   const [ready, setReady] = useState(false);
   const reqRef = useRef(0);
-  // The workspace size counts this machine's folder, which is only the
-  // backend's when they resolve to the same place.
-  const filesHere = localFilesAvailable(useWorkspace().workspace);
+  // The workspace size counts the current project's folder on this machine,
+  // when the page's backend is this machine's.
+  const { project } = useProjectFiles();
 
   useEffect(() => {
     const reqId = ++reqRef.current;
@@ -150,14 +149,19 @@ export function ResearchDashboard({
     })();
   }, []);
 
-  // The workspace size, from this machine's folder when it is the backend's.
+  // The workspace size, from the current project's folder.
   useEffect(() => {
-    if (!filesHere) {
+    if (!project) {
       setWsBytes(0);
       return;
     }
     let cancelled = false;
-    fetch("/api/workspace?recursive=1", { cache: "no-store" })
+    fetch(
+      `/api/workspace?${new URLSearchParams({ project, recursive: "1" })}`,
+      {
+        cache: "no-store",
+      }
+    )
       .then((res) => readJson<{ entries?: Array<{ size?: number }> }>(res))
       .then((ws) => {
         if (cancelled) return;
@@ -172,7 +176,7 @@ export function ResearchDashboard({
     return () => {
       cancelled = true;
     };
-  }, [filesHere]);
+  }, [project]);
 
   const hasStats =
     ready &&
