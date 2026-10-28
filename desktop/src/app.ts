@@ -268,6 +268,8 @@ export function createApp(deps: AppDeps): App {
     waiting?(): boolean;
     /** Cancels the update while it waits, now or later. */
     cancelWhenWaiting?(): boolean;
+    /** Cancels the update only while it waits now. */
+    cancelNow?(): boolean;
   } | null = null;
   /** Answers the mirror question on the screen. */
   let answerMirror: ((cn: boolean) => void) | null = null;
@@ -380,6 +382,7 @@ export function createApp(deps: AppDeps): App {
       },
       waiting: r.waiting,
       cancelWhenWaiting: r.cancelWhenWaiting,
+      cancelNow: r.cancelNow,
     };
     step = current;
     void r.done.finally(() => {
@@ -401,7 +404,11 @@ export function createApp(deps: AppDeps): App {
   /** Before a core update (W03c): the busy check with its own wording, then
    *  a stop of the backend the app started, as Restart backend does. A
    *  backend the app reused is left alone; the update then ends with
-   *  `server_running`. Callers hold `working`. */
+   *  `server_running`. Callers hold `working`.
+   *  Not reached today: `launchLocked` stops `deploy` before every boot, so
+   *  the version check never runs with the app's own backend up. It is here
+   *  for the issue's order of steps and for a later caller that updates
+   *  with the backend running (W04's "Restart to update"). */
   async function stopOwnBackend(): Promise<boolean> {
     if (!ready || !session || !ready.owned) return true;
     if (!(await confirmStop("update"))) return false;
@@ -1114,7 +1121,7 @@ export function createApp(deps: AppDeps): App {
         return;
       }
       case "cancel_update":
-        if (step?.kind === "update" && step.cancelWhenWaiting?.())
+        if (step?.kind === "update" && step.cancelNow?.())
           log.info("update cancelled from the waiting screen");
         return;
     }

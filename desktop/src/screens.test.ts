@@ -321,10 +321,22 @@ describe("core update screens (W03c)", () => {
   });
 
   it("release_lookup_failed asks for a network, with Retry", () => {
-    expect(errorScreen(err("release_lookup_failed"), ctx)).toMatchObject({
+    expect(
+      errorScreen(err("release_lookup_failed", { answered: false }), ctx)
+    ).toMatchObject({
       title: "Updating EvoScientist needs a network",
       actions: ["retry", "open_logs"],
     });
+  });
+
+  it("release_lookup_failed from an index that answered does not blame the network", () => {
+    const s = errorScreen(
+      err("release_lookup_failed", { answered: true }),
+      ctx
+    );
+    expect(s.title).toBe("No EvoScientist release for this app is listed yet");
+    expect(s.lines.join(" ")).not.toMatch(/internet|network/);
+    expect(s.actions).toEqual(["retry", "open_logs"]);
   });
 
   it("server_running asks to stop the terminal's backend, with the core's message when there is one", () => {
@@ -347,7 +359,17 @@ describe("core update screens (W03c)", () => {
     );
     expect(s.title).toBe("The update was cancelled");
     expect(s.lines).toContain("Still running: python (7).");
-    expect(errorScreen(err("environment_busy"), ctx).lines).toHaveLength(2);
+    expect(s.lines).toContain("environment_busy message");
+  });
+
+  it("environment_busy without programs (another update holds the lock) shows the core's message only", () => {
+    const s = errorScreen(
+      err("environment_busy", { waiting_for: [], update: true }),
+      ctx
+    );
+    expect(s.title).toBe("EvoScientist could not be updated");
+    expect(s.lines[0]).toBe("environment_busy message");
+    expect(s.lines.join(" ")).not.toMatch(/cancelled|Close the programs/);
   });
 
   it("manual_update and update_failed", () => {
@@ -358,6 +380,35 @@ describe("core update screens (W03c)", () => {
     expect(errorScreen(err("update_failed"), ctx).title).toBe(
       "The update did not finish"
     );
+  });
+
+  it.each(["download_failed", "no_constraints", "unknown_version", "new_code"])(
+    "the update's %s: could not be updated, with its message and Retry",
+    (code) => {
+      expect(
+        errorScreen(err(code, { update: true, source: "update" }), ctx)
+      ).toMatchObject({
+        title: "EvoScientist could not be updated",
+        lines: [`${code} message`, "Press Retry to try the update again."],
+        actions: ["retry", "open_logs"],
+      });
+    }
+  );
+
+  it("the update's own install_failed offers no mirrors; the script's does", () => {
+    const own = errorScreen(
+      err("install_failed", { update: true, source: "update", cn: false }),
+      ctx
+    );
+    expect(own.title).toBe("EvoScientist could not be updated");
+    expect(own.lines.join(" ")).not.toMatch(/mainland China/);
+    expect(own.lines).toContain("Press Retry to try the update again.");
+    expect(own.actions).toEqual(["retry", "open_logs"]);
+    const script = errorScreen(
+      err("install_failed", { update: true, repair: true, cn: false }),
+      ctx
+    );
+    expect(script.actions).toEqual(["retry", "retry_cn", "open_logs"]);
   });
 
   it("install and setup failures after an update say so", () => {

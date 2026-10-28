@@ -1003,9 +1003,11 @@ describe("core update (W03c)", () => {
     const done = deferred<{ outcome: UpdateOutcome; view: UpdateView }>();
     let waiting = false;
     const cancelWhenWaiting = vi.fn(() => waiting);
+    const cancelNow = vi.fn(() => waiting);
     const run: UpdateRun = {
       done: done.promise,
       cancelWhenWaiting,
+      cancelNow,
       waiting: () => waiting,
     };
     const view = (w: UpdateView["waiting"]): UpdateView => ({
@@ -1031,6 +1033,7 @@ describe("core update (W03c)", () => {
       ...h,
       state,
       cancelWhenWaiting,
+      cancelNow,
       /** The update reports a line. */
       report: (w: UpdateView["waiting"]) => {
         waiting = w !== null;
@@ -1090,7 +1093,9 @@ describe("core update (W03c)", () => {
       })
     );
     await c.app.act("cancel_update", undefined);
-    expect(c.cancelWhenWaiting).toHaveBeenCalledTimes(1);
+    // The button cancels only a wait that is on now; closing arms it.
+    expect(c.cancelNow).toHaveBeenCalledTimes(1);
+    expect(c.cancelWhenWaiting).not.toHaveBeenCalled();
     c.finish({
       kind: "error",
       code: "environment_busy",

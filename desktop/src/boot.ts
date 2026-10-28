@@ -51,7 +51,8 @@ export const INSTALL_TAIL_LINES = 12;
 export const FIRST_UPDATABLE = "0.3.7";
 
 /** The one-line install commands from the core's install guide, for a core
- *  older than the range (until W03c updates it from the app). */
+ *  whose version is not a release, or still outside the range after an
+ *  update. */
 export const INSTALL_COMMANDS = {
   win32:
     "irm https://raw.githubusercontent.com/EvoScientist/EvoScientist/main/scripts/install.ps1 | iex",
@@ -248,7 +249,8 @@ export function checkCore(
   }
   if (placement !== "inside") {
     // Below the range, or not a release number (a pre-release or a local
-    // version never matches): until W03c, reinstall with the install command.
+    // version never matches): `boot` offers the update for a release below
+    // the range; the rest keep the install command.
     return {
       code: "core_too_old",
       message:
@@ -613,7 +615,12 @@ async function updateCore(
     return {
       code: "release_lookup_failed",
       message: `The newest EvoScientist release could not be found on ${found.url} (${found.reason}).`,
-      detail: { url: found.url, reason: found.reason, cn },
+      detail: {
+        url: found.url,
+        reason: found.reason,
+        answered: found.answered,
+        cn,
+      },
     };
   }
   if (deps.stopping()) return QUITTING;
@@ -663,7 +670,9 @@ async function updateCore(
     return { kind: "updated", info: check.info };
   }
 
-  const detail = { ...outcome.detail, update: true };
+  // `source`: the update's own failure, which the mirror retry cannot help
+  // (the update reads `mirror` from config.yaml only).
+  const detail = { ...outcome.detail, update: true, source: "update" };
   switch (outcome.code) {
     case "manual_update": {
       const env = await deps.uvToolEnvExists();

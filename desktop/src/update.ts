@@ -134,6 +134,9 @@ export interface UpdateRun {
   /** Cancels the update while it waits for processes, and from then on as
    *  soon as it waits (closing the app). True when the file was written now. */
   cancelWhenWaiting(): boolean;
+  /** Cancels the update only if it waits for processes now (the waiting
+   *  screen's button): a click after the wait has ended does nothing. */
+  cancelNow(): boolean;
   /** Whether it waits for processes now. */
   waiting(): boolean;
 }
@@ -177,6 +180,7 @@ export function runUpdate(
     env: opts.env,
     onStdoutLine: (l) => {
       const before = reader.view.waiting;
+      const terminal = reader.terminal;
       if (!reader.push(l)) return opts.log.info(`update: ${l}`);
       const v = reader.view;
       if (v.waiting && !before)
@@ -185,7 +189,7 @@ export function runUpdate(
             .map((b) => `${b.name} (${b.pid})`)
             .join(", ")}`
         );
-      if (reader.terminal)
+      if (reader.terminal && reader.terminal !== terminal)
         opts.log.info(
           `update: ${reader.terminal.status}${
             reader.terminal.code ? ` ${reader.terminal.code}` : ""
@@ -212,6 +216,7 @@ export function runUpdate(
       cancelRequested = true;
       return cancelNow();
     },
+    cancelNow,
     waiting: () => reader.view.waiting !== null,
   };
 }

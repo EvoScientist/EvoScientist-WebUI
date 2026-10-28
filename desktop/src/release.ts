@@ -7,7 +7,10 @@
 // skipped, as the core skips them, and versions compare as release numbers:
 // the mirror lists them sorted as strings. main.ts passes Electron's
 // `net.fetch`, which follows the system proxy, PAC files and the Windows
-// certificate store, as uv and the core's downloads do.
+// certificate store. The core's own downloads use Python's `getproxies()`
+// (environment, else the Windows registry proxy, no PAC) and uv's system
+// certificates, so on a PAC-only network the lookup can work and the update
+// still fail with `download_failed`.
 import { compareReleases, inRange, parseRelease } from "./versions";
 
 /** The core's index URLs (`update_check.py` PYPI_SIMPLE / CN_SIMPLE). */
@@ -30,8 +33,16 @@ export type Fetch = (
 
 export type Lookup =
   | { ok: true; version: string; url: string }
-  /** `listed`: the versions the index answered with, when it answered. */
-  | { ok: false; reason: string; url: string; listed?: string[] };
+  /** `answered`: the index answered, but with no release to use (an HTTP
+   *  error, no version list, none inside the range); else no answer came.
+   *  `listed`: the versions it listed, when it did. */
+  | {
+      ok: false;
+      reason: string;
+      url: string;
+      answered: boolean;
+      listed?: string[];
+    };
 
 /** The highest plain release inside the range, or null when none is. */
 export function newestInRange(
@@ -67,8 +78,20 @@ export async function lookupNewest(opts: {
       headers: { Accept: SIMPLE_JSON },
       signal: controller.signal,
     });
-    if (!res.ok) return { ok: false, reason: `HTTP ${res.status}`, url };
-    body = await res.json();
+    if (!res.ok)
+      return { ok: false, reason: `HTTP ${res.status}`, url, answered: true };
+    try {
+      body = await res.json();
+    } catch (e) {
+      // A body cut off by the timeout is no answer, not a bad one.
+      if (controller.signal.aborted) throw e;
+      return {
+        ok: false,
+        reason: "the answer is not JSON",
+        url,
+        answered: true,
+      };
+    }
   } catch (e) {
     return {
       ok: false,
@@ -78,13 +101,19 @@ export async function lookupNewest(opts: {
         ? e.message
         : String(e),
       url,
+      answered: false,
     };
   } finally {
     clearTimeout(timer);
   }
   const versions = (body as { versions?: unknown } | null)?.versions;
   if (!Array.isArray(versions))
-    return { ok: false, reason: "the answer has no version list", url };
+    return {
+      ok: false,
+      reason: "the answer has no version list",
+      url,
+      answered: true,
+    };
   const listed = versions.filter((v): v is string => typeof v === "string");
   const version = newestInRange(listed, opts.range);
   return version
@@ -93,6 +122,7 @@ export async function lookupNewest(opts: {
         ok: false,
         reason: `no release inside ${opts.range} is listed`,
         url,
+        answered: true,
         listed,
       };
 }

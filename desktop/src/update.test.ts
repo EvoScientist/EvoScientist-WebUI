@@ -288,6 +288,67 @@ describe.skipIf(process.platform === "win32")("runUpdate", () => {
     expect(outcome).toMatchObject({ code: "environment_busy" });
   });
 
+  it("the waiting screen's Cancel does nothing once the wait is over, and arms nothing", async () => {
+    const dir = tempDir();
+    const evosci = join(dir, "EvoSci");
+    const cancel = join(dir, "cancel");
+    const wait = (pid: number) =>
+      line({
+        stage: "update",
+        status: "running",
+        detail: {
+          waiting_for: [{ pid, name: "python", path: "/p" }],
+          cancel_file: cancel,
+        },
+      });
+    const going = line({ stage: "update", status: "running", progress: 0.3 });
+    const done = line({
+      stage: "update",
+      status: "done",
+      detail: { version: "0.3.8" },
+    });
+    // Waits, stops waiting, waits again (another process), then ends.
+    writeFileSync(
+      evosci,
+      [
+        "#!/bin/sh",
+        `echo '${wait(1)}'`,
+        `echo '${going}'`,
+        "sleep 0.3",
+        `echo '${wait(2)}'`,
+        "sleep 0.3",
+        `echo '${done}'`,
+        `echo '${line({ stage: "node", status: "done" })}'`,
+      ].join("\n") + "\n"
+    );
+    chmodSync(evosci, 0o755);
+    const touched: string[] = [];
+    const infos: string[] = [];
+    let clicked = false;
+    const r: ReturnType<typeof runUpdate> = runUpdate(evosci, {
+      version: "0.3.8",
+      stages: STAGES,
+      cwd: dir,
+      env: process.env,
+      log: { info: (m) => infos.push(m), warn: () => {} },
+      touch: (p) => touched.push(p),
+      onUpdate: (v) => {
+        // The click lands just after the first wait ended.
+        if (!clicked && !v.waiting && v.update.progress === 0.3) {
+          clicked = true;
+          expect(r.cancelNow()).toBe(false);
+        }
+      },
+    });
+    const { outcome } = await r.done;
+    expect(clicked).toBe(true);
+    // The second wait was not cancelled by the late click.
+    expect(touched).toEqual([]);
+    expect(outcome).toMatchObject({ kind: "done" });
+    // The terminal line is logged once, not again on the lines after it.
+    expect(infos.filter((m) => m.startsWith("update: done"))).toHaveLength(1);
+  });
+
   it("a cancel file that cannot be created is logged, and the wait goes on", async () => {
     const dir = tempDir();
     const { evosci } = waitingCore(dir);

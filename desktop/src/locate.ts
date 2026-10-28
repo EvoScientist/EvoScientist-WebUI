@@ -50,7 +50,9 @@ export function findUv(
   return onPath(exe("uv", platform), env, exists);
 }
 
-export type ToolBinDir = (uv: string) => Promise<string | null>;
+/** A folder uv reports (`uv tool dir`, with or without `--bin`). */
+export type UvDir = (uv: string) => Promise<string | null>;
+export type ToolBinDir = UvDir;
 
 /** `uv tool dir --bin`, or null when uv fails or takes too long. */
 export const uvToolBinDir = (env: NodeJS.ProcessEnv, cwd: string): ToolBinDir =>
@@ -59,7 +61,7 @@ export const uvToolBinDir = (env: NodeJS.ProcessEnv, cwd: string): ToolBinDir =>
 /** `uv tool dir` (with `--bin`, its bin directory), or null when uv fails or
  *  takes too long. */
 export const uvToolDir =
-  (env: NodeJS.ProcessEnv, cwd: string, bin = false): ToolBinDir =>
+  (env: NodeJS.ProcessEnv, cwd: string, bin = false): UvDir =>
   (uv) =>
     new Promise((resolve) => {
       execFile(
@@ -120,7 +122,7 @@ export async function uvToolEnvExists(opts: {
   env: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
   exists?: (p: string) => boolean;
-  toolDir: ToolBinDir;
+  toolDir: UvDir;
 }): Promise<boolean | null> {
   const exists = opts.exists ?? existsSync;
   const uv = findUv(opts.dataDir, opts.env, opts.platform, exists);

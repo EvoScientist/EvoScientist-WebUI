@@ -270,6 +270,7 @@ export function errorScreen(error: BootError, ctx: ScreenContext): ErrorScreen {
   switch (error.code) {
     case "install_failed": {
       const output = Array.isArray(d.output) ? (d.output as string[]) : [];
+      const noMirror = d.cn || d.running || d.source === "update";
       screen = {
         title: d.update
           ? "EvoScientist could not be updated"
@@ -280,15 +281,17 @@ export function errorScreen(error: BootError, ctx: ScreenContext): ErrorScreen {
           error.message,
           d.running
             ? "EvoScientist is running. Close the programs listed below, then press Retry."
+            : d.source === "update"
+            ? "Press Retry to try the update again."
             : "Press Retry to run the install again.",
-          // Mirrors cannot help when the script refused a running core.
-          ...(d.cn || d.running ? [] : [MIRROR_RETRY_LINE]),
+          // Mirrors cannot help when the script refused a running core, nor
+          // `EvoSci update`, which reads `mirror` from config.yaml only.
+          ...(noMirror ? [] : [MIRROR_RETRY_LINE]),
         ],
         ...(output.length > 0 ? { output } : {}),
-        actions:
-          d.cn || d.running
-            ? ["retry", "open_logs"]
-            : ["retry", "retry_cn", "open_logs"],
+        actions: noMirror
+          ? ["retry", "open_logs"]
+          : ["retry", "retry_cn", "open_logs"],
       };
       break;
     }
@@ -331,14 +334,25 @@ export function errorScreen(error: BootError, ctx: ScreenContext): ErrorScreen {
       break;
     }
     case "release_lookup_failed":
-      screen = {
-        title: "Updating EvoScientist needs a network",
-        lines: [
-          error.message,
-          "Connect to the internet (check the proxy or VPN), then press Retry.",
-        ],
-        actions: ["retry", "open_logs"],
-      };
+      // The index answered without a release to use (for example a mirror
+      // that has not synced a new release yet): the network works.
+      screen = d.answered
+        ? {
+            title: "No EvoScientist release for this app is listed yet",
+            lines: [
+              error.message,
+              "The package index does not list a release this app supports. Press Retry later.",
+            ],
+            actions: ["retry", "open_logs"],
+          }
+        : {
+            title: "Updating EvoScientist needs a network",
+            lines: [
+              error.message,
+              "Connect to the internet (check the proxy or VPN), then press Retry.",
+            ],
+            actions: ["retry", "open_logs"],
+          };
       break;
     case "server_running":
       screen = {
@@ -350,25 +364,37 @@ export function errorScreen(error: BootError, ctx: ScreenContext): ErrorScreen {
         actions: ["retry", "open_logs"],
       };
       break;
-    case "environment_busy":
-      screen = {
-        title: "The update was cancelled",
-        lines: [
-          "Nothing was changed.",
-          ...(Array.isArray(d.waiting_for) && d.waiting_for.length > 0
-            ? [
-                `Still running: ${(
-                  d.waiting_for as { name?: unknown; pid?: unknown }[]
-                )
+    case "environment_busy": {
+      // A cancelled wait names the programs; without them the core refused
+      // for another reason (another update holds its lock), which its
+      // message says.
+      const busy = Array.isArray(d.waiting_for)
+        ? (d.waiting_for as { name?: unknown; pid?: unknown }[])
+        : [];
+      screen =
+        busy.length > 0
+          ? {
+              title: "The update was cancelled",
+              lines: [
+                "Nothing was changed.",
+                `Still running: ${busy
                   .map((b) => `${b.name} (${b.pid})`)
                   .join(", ")}.`,
-              ]
-            : []),
-          "Close the programs that run EvoScientist, then press Retry.",
-        ],
-        actions: ["retry", "open_logs"],
-      };
+                "Close the programs that run EvoScientist, then press Retry.",
+                error.message,
+              ],
+              actions: ["retry", "open_logs"],
+            }
+          : {
+              title: "EvoScientist could not be updated",
+              lines: [
+                error.message,
+                "Nothing was changed. Press Retry to try the update again.",
+              ],
+              actions: ["retry", "open_logs"],
+            };
       break;
+    }
     case "manual_update":
       screen = {
         title: "EvoScientist cannot be updated from the app",
@@ -512,6 +538,16 @@ export function errorScreen(error: BootError, ctx: ScreenContext): ErrorScreen {
       };
       break;
     default:
+      // The update's other codes (download_failed, no_constraints,
+      // unknown_version and anything new): the update, not the start, failed.
+      if (d.update) {
+        screen = {
+          title: "EvoScientist could not be updated",
+          lines: [error.message, "Press Retry to try the update again."],
+          actions: ["retry", "open_logs"],
+        };
+        break;
+      }
       // ccproxy_failed, backend_start_failed, internal_error and anything new.
       screen = {
         title: "EvoScientist could not start",

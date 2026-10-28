@@ -95,25 +95,37 @@ describe("lookupNewest", () => {
     const { fetch } = answering({ ok: false, status: 503 });
     expect(
       await lookupNewest({ fetch, cn: false, range: ">=0.3.8,<0.4" })
-    ).toMatchObject({ ok: false, reason: "HTTP 503" });
+    ).toMatchObject({ ok: false, reason: "HTTP 503", answered: true });
   });
 
   it("fails when the network fails", async () => {
     const { fetch } = answering(new Error("net::ERR_INTERNET_DISCONNECTED"));
     expect(
       await lookupNewest({ fetch, cn: false, range: ">=0.3.8,<0.4" })
-    ).toMatchObject({ ok: false, reason: "net::ERR_INTERNET_DISCONNECTED" });
+    ).toMatchObject({
+      ok: false,
+      reason: "net::ERR_INTERNET_DISCONNECTED",
+      answered: false,
+    });
   });
 
   it("fails on a body that is not JSON or has no version list", async () => {
     const bad = answering({ body: new SyntaxError("Unexpected token <") });
     expect(
       await lookupNewest({ fetch: bad.fetch, cn: false, range: ">=0.3.8" })
-    ).toMatchObject({ ok: false, reason: "Unexpected token <" });
+    ).toMatchObject({
+      ok: false,
+      reason: "the answer is not JSON",
+      answered: true,
+    });
     const html = answering({ body: { files: [] } });
     expect(
       await lookupNewest({ fetch: html.fetch, cn: false, range: ">=0.3.8" })
-    ).toMatchObject({ ok: false, reason: "the answer has no version list" });
+    ).toMatchObject({
+      ok: false,
+      reason: "the answer has no version list",
+      answered: true,
+    });
   });
 
   it("fails when no release inside the range is listed, with the list", async () => {
@@ -124,6 +136,7 @@ describe("lookupNewest", () => {
       ok: false,
       reason: "no release inside >=0.3.8,<0.4 is listed",
       url: `${PYPI_SIMPLE}/evoscientist/`,
+      answered: true,
       listed: ["0.3.7", "0.4.0"],
     });
   });
@@ -144,7 +157,35 @@ describe("lookupNewest", () => {
       range: ">=0.3.8",
       timeoutMs: 20,
     });
-    expect(r).toMatchObject({ ok: false, reason: "no answer within 0.02 s" });
+    expect(r).toMatchObject({
+      ok: false,
+      reason: "no answer within 0.02 s",
+      answered: false,
+    });
     expect(signal!.aborted).toBe(true);
+  });
+
+  it("a body cut off by the timeout is no answer", async () => {
+    const fetch: Fetch = async (_url, init) =>
+      ({
+        ok: true,
+        status: 200,
+        json: () =>
+          new Promise((_resolve, reject) =>
+            init.signal.addEventListener("abort", () =>
+              reject(new Error("net::ERR_ABORTED"))
+            )
+          ),
+      } as unknown as Response);
+    const r = await lookupNewest({
+      fetch,
+      cn: false,
+      range: ">=0.3.8",
+      timeoutMs: 20,
+    });
+    expect(r).toMatchObject({
+      reason: "no answer within 0.02 s",
+      answered: false,
+    });
   });
 });

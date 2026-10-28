@@ -95,6 +95,7 @@ function updateRun(
   return {
     done: Promise.resolve({ outcome, view }),
     cancelWhenWaiting: () => false,
+    cancelNow: () => false,
     waiting: () => false,
   };
 }
@@ -956,6 +957,7 @@ describe("core update (W03c)", () => {
         ok: false,
         reason: "net::ERR_INTERNET_DISCONNECTED",
         url: INDEX,
+        answered: false,
       }),
     });
     const { result } = await runBoot(c.d);
@@ -966,6 +968,7 @@ describe("core update (W03c)", () => {
         detail: {
           url: INDEX,
           reason: "net::ERR_INTERNET_DISCONNECTED",
+          answered: false,
           cn: false,
         },
       },
@@ -1016,7 +1019,10 @@ describe("core update (W03c)", () => {
     const { result } = await runBoot(c.d);
     expect(result).toMatchObject({ ok: false, error: { code } });
     if (code !== "update_failed")
-      expect(!result.ok && result.error.detail.update).toBe(true);
+      expect(!result.ok && result.error.detail).toMatchObject({
+        update: true,
+        source: "update",
+      });
     expect(c.recordSetup).not.toHaveBeenCalled();
   });
 

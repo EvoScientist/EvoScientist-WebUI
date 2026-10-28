@@ -1,7 +1,8 @@
 // The status page: shows the screen the main process sends (progress, the
 // install script's last lines, the stages of setup or an update, a question
-// (mirrors, the update offer), or an error with its actions). It never calls the backend: the core's browser
-// boundary refuses requests from a file:// page (Origin: null).
+// (mirrors, the update offer), or an error with its actions). It never calls
+// the backend: the core's browser boundary refuses requests from a file://
+// page (Origin: null).
 "use strict";
 
 const LABELS = {
