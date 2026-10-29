@@ -281,6 +281,20 @@ describe("confirmation", () => {
     expect(r.buttons[0]).toBe("Restart backend");
   });
 
+  it("before a core update: its own button, and scheduled tasks pause until the backend is back", () => {
+    const u = confirmation(
+      { ...idle, busyThreads: 1, scheduledTasks: 1 },
+      "update"
+    )!;
+    expect(u.buttons).toEqual(["Update", "Cancel"]);
+    expect(u.detail).toContain(
+      "Updating EvoScientist stops the backend and this work with it."
+    );
+    expect(u.detail).toContain(
+      "1 scheduled task pauses only until the backend is back."
+    );
+  });
+
   it("asks with the could-not-tell text and Quit as the default when a probe failed", () => {
     const c = confirmation({ kind: "unknown", reason: "timeout" }, "quit")!;
     expect(c.message).toBe(

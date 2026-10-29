@@ -268,9 +268,9 @@ export async function waitForMemoryWorkers(
 }
 
 /** What the stop is for: quitting the app, or a stop after which the backend
- *  comes back ("Restart backend"; W03c's update and W04's "Restart to update"
- *  use the same check). */
-export type StopPurpose = "quit" | "restart";
+ *  comes back ("Restart backend", a core update; W04's "Restart to update"
+ *  uses the same check). */
+export type StopPurpose = "quit" | "restart" | "update";
 
 export interface Confirmation {
   message: string;
@@ -293,10 +293,16 @@ export function confirmation(
 ): Confirmation | null {
   if (!hasWork(check)) return null;
   const buttons: [string, string] =
-    purpose === "quit" ? ["Quit", "Cancel"] : ["Restart backend", "Cancel"];
+    purpose === "quit"
+      ? ["Quit", "Cancel"]
+      : purpose === "update"
+      ? ["Update", "Cancel"]
+      : ["Restart backend", "Cancel"];
   const stops =
     purpose === "quit"
       ? "Quitting stops the backend"
+      : purpose === "update"
+      ? "Updating EvoScientist stops the backend"
       : "Restarting stops the backend";
   if (check.kind === "unknown") {
     return {

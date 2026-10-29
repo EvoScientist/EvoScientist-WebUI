@@ -1,0 +1,10 @@
+{"protocol": 1, "stage": "update", "status": "running", "progress": 0.0, "message": "Checking for releases"}
+{"protocol": 1, "stage": "update", "status": "running", "progress": 0.1, "message": "Downloading the constraints of EvoScientist 0.3.8"}
+{"protocol": 1, "stage": "update", "status": "running", "progress": 0.3, "message": "Installing EvoScientist 0.3.8"}
+{"protocol": 1, "stage": "update", "status": "running", "progress": 0.8, "message": "Running EvoSci setup"}
+{"protocol": 1, "stage": "node", "status": "running", "progress": 0.0, "message": "Checking for Node.js"}
+{"protocol": 1, "stage": "node", "status": "done", "message": "Using Node 24.21.0 from /home/user/box \u0105\u0119/data dir \u0105\u0119/tools/node-v24.21.0/bin", "detail": {"source": "private", "version": "24.21.0", "path": "/home/user/box \u0105\u0119/data dir \u0105\u0119/tools/node-v24.21.0/bin/node"}}
+{"protocol": 1, "stage": "research-env", "status": "running", "progress": 0.0, "message": "Checking for a usable python"}
+{"protocol": 1, "stage": "research-env", "status": "done", "message": "Using Python 3.12.15 in /home/user/box \u0105\u0119/data dir \u0105\u0119/envs/default", "detail": {"source": "venv", "path": "/home/user/box \u0105\u0119/data dir \u0105\u0119/envs/default", "python": "3.12.15"}}
+{"protocol": 1, "stage": "webui", "status": "skipped", "message": "Skipped (--skip)", "detail": {"reason": "skip_option"}}
+{"protocol": 1, "stage": "update", "status": "done", "message": "Updated EvoScientist 0.3.7 -> 0.3.8", "detail": {"version": "0.3.8"}}

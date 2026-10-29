@@ -26,6 +26,7 @@ import type { InstallRun } from "./install";
 import type { UiRecord } from "./leftover";
 import type { DeployReady, VersionInfo } from "./lines";
 import type { Located } from "./locate";
+import type { Lookup } from "./release";
 import {
   DEFAULT_BACKEND_PORT,
   withReadyFolders,
@@ -41,12 +42,16 @@ import {
   installScreen,
   mirrorQuestion,
   progressScreen,
+  separateInstallQuestion,
   setupScreen,
+  updateQuestion,
+  updateScreen,
   type ActionId,
   type ErrorScreen,
   type Screen,
 } from "./screens";
 import type { UiServer } from "./uiServer";
+import type { UpdateRun, UpdateView } from "./update";
 
 /** How long the UI server gets to answer `/` after it starts. */
 export const UI_START_MS = 60_000;
@@ -176,6 +181,19 @@ export interface AppDeps {
   writeSetupRecord(coreVersion: string | null): void;
   pause?(ms: number): Promise<void>;
 
+  // Core updates (W03c)
+  /** The newest core release inside the range (Electron's `net.fetch`). */
+  lookupRelease(cn: boolean): Promise<Lookup>;
+  runUpdate(
+    evosci: string,
+    version: string,
+    stages: Stage[],
+    onUpdate: (view: UpdateView) => void
+  ): UpdateRun;
+  /** Whether a backend answers `/ok` with 200 on this loopback port. */
+  backendAnswers(port: number): Promise<boolean>;
+  uvToolEnvExists(): Promise<boolean | null>;
+
   sessionEnd?: SessionEnd;
 }
 
@@ -267,11 +285,26 @@ export function createApp(deps: AppDeps): App {
   let stoppingDeploy: Promise<"stopped" | "killed"> | null = null;
   let relaunchAfterExit = false;
   let exiting = false;
-  /** The install script or setup while it runs: closing asks, then stops it (D14). */
-  let step: { kind: "install" | "setup"; cancel(): Promise<void> } | null =
-    null;
+  /** The install script, setup or `EvoSci update` while it runs: closing
+   *  asks, then stops the script or setup (D14) or waits for the update,
+   *  which is never killed (D21). */
+  let step: {
+    kind: "install" | "setup" | "update";
+    cancel(): Promise<void>;
+    /** The update waits for processes. */
+    waiting?(): boolean;
+    /** Cancels the update while it waits, now or later. */
+    cancelWhenWaiting?(): boolean;
+    /** Cancels the update only while it waits now. */
+    cancelNow?(): boolean;
+  } | null = null;
   /** Answers the mirror question on the screen. */
   let answerMirror: ((cn: boolean) => void) | null = null;
+  /** Answers the update offer or the separate-install question. */
+  let answerUpdate: (() => void) | null = null;
+  /** The running update's latest view, and whether a quit waits for it. */
+  let updateView: UpdateView | null = null;
+  let quitAfterUpdate = false;
   /** "Retry with mainland China mirrors" holds for the rest of this session:
    *  a later plain Retry uses them too, also over `mirror: default` in
    *  config.yaml, which only a setup with `--cn` changes. */
@@ -345,9 +378,13 @@ export function createApp(deps: AppDeps): App {
       case "ready":
       case "error":
       case "asking_mirror":
+      case "asking_update":
         return;
       case "installing":
         return showSoon(installScreen(state));
+      case "updating":
+        updateView = state.view;
+        return showSoon(updateScreen(state.view, quitAfterUpdate));
       case "setting_up":
         // Before `setup --manifest` answers there is no stage list yet.
         return state.stages.length > 0
@@ -370,6 +407,65 @@ export function createApp(deps: AppDeps): App {
       if (step === current) step = null;
     });
     return r;
+  }
+
+  /** Keeps `EvoSci update` while it runs: closing waits for its terminal
+   *  line, after cancelling it if it waits for processes (D21). */
+  function trackUpdate(r: UpdateRun): UpdateRun {
+    const current = {
+      kind: "update" as const,
+      cancel: async () => {
+        r.cancelWhenWaiting();
+        await r.done;
+      },
+      waiting: r.waiting,
+      cancelWhenWaiting: r.cancelWhenWaiting,
+      cancelNow: r.cancelNow,
+    };
+    step = current;
+    void r.done.finally(() => {
+      if (step === current) step = null;
+      updateView = null;
+    });
+    return r;
+  }
+
+  /** The update offer and the separate-install question: the screen's
+   *  button resolves; Quit quits the app. */
+  function askOnScreen(question: Screen): Promise<void> {
+    return new Promise<void>((resolve) => {
+      answerUpdate = resolve;
+      showScreen(question);
+    });
+  }
+
+  /** Before a core update (W03c): the busy check with its own wording, then
+   *  a stop of the backend the app started, as Restart backend does. A
+   *  backend the app reused is left alone; the update then ends with
+   *  `server_running`. Callers hold `working`.
+   *  Not reached today: `launchLocked` stops `deploy` before every boot, so
+   *  the version check never runs with the app's own backend up. It is here
+   *  for the issue's order of steps and for a later caller that updates
+   *  with the backend running (W04's "Restart to update"). */
+  async function stopOwnBackend(): Promise<boolean> {
+    if (!ready || !session || !ready.owned) return true;
+    if (!(await confirmStop("update"))) return false;
+    const current = ready;
+    if (!current || !session) return true;
+    showScreen(progressScreen("stopping"));
+    log.info("waiting for the memory workers before the update");
+    log.info(
+      `memory workers: ${await deps.waitForMemoryWorkers(
+        current.url,
+        () => quitState !== "none" || sessionEnd.ending
+      )}`
+    );
+    if (!session) return true;
+    const old = session;
+    session = null;
+    ready = null;
+    log.info(`update: stopping deploy (${await stopDeploy(old)})`);
+    return true;
   }
 
   /** Writes a crash report next to the logs and returns its path. */
@@ -497,6 +593,16 @@ export function createApp(deps: AppDeps): App {
           track("setup", deps.runSetup(file, cn, stages, onUpdate)),
         setupRecord: deps.readSetupRecord,
         recordSetup: deps.writeSetupRecord,
+        askUpdate: (from) =>
+          askOnScreen(updateQuestion(from, deps.manifest.coreRange)),
+        askSeparateInstall: (message, from) =>
+          askOnScreen(separateInstallQuestion(message, from)),
+        stopOwnBackend,
+        lookupRelease: deps.lookupRelease,
+        runUpdate: (file, version, stages, onUpdate) =>
+          trackUpdate(deps.runUpdate(file, version, stages, onUpdate)),
+        backendAnswers: deps.backendAnswers,
+        uvToolEnvExists: deps.uvToolEnvExists,
       },
       onBootState,
       options
@@ -540,6 +646,17 @@ export function createApp(deps: AppDeps): App {
         log.info(`backend lost during the end of the session: ${shown}`);
     });
     await showUiLocked();
+    if (result.notice && showingUi) {
+      log.info(`notice: ${result.notice}`);
+      void deps.messageBox({
+        type: "info",
+        title: "EvoScientist",
+        message: "EvoScientist was installed for the app.",
+        detail: result.notice,
+        buttons: ["OK"],
+        noLink: true,
+      });
+    }
   }
 
   /** Starts the UI server for a backend and waits until it answers. Callers hold `working`. */
@@ -741,6 +858,39 @@ export function createApp(deps: AppDeps): App {
     return r.response === 0;
   }
 
+  /** The question before closing while `EvoSci update` runs (D21): it is
+   *  never killed, so the app quits after its terminal line; while it waits
+   *  for processes, closing cancels it. True to quit. */
+  async function confirmStopUpdate(
+    waiting: boolean,
+    afterFailedRun: boolean
+  ): Promise<boolean> {
+    const r = await deps.messageBox({
+      type: "warning",
+      title: "EvoScientist",
+      message: "EvoScientist is being updated.",
+      detail: waiting
+        ? afterFailedRun
+          ? "Closing cancels the update. Its first install attempt failed, so EvoScientist may need a repair at the next launch. The app quits once it has stopped."
+          : "Closing cancels the update; nothing is changed. The app quits once it has stopped."
+        : `The update finishes first${
+            deps.platform === "win32"
+              ? " (on Windows it would go on without the app)"
+              : ""
+          }, unless it still has to wait for programs that run EvoScientist: closing then cancels it. The app quits when it is done.`,
+      buttons: ["Quit after the update", "Cancel"],
+      defaultId: 1,
+      cancelId: 1,
+      noLink: true,
+    });
+    log.info(
+      `confirmation (update): ${
+        r.response === 0 ? "Quit after the update" : "Cancel"
+      }`
+    );
+    return r.response === 0;
+  }
+
   /** The question before closing while the install script or setup runs;
    *  true to quit. */
   async function confirmStopStep(kind: "install" | "setup"): Promise<boolean> {
@@ -919,11 +1069,28 @@ export function createApp(deps: AppDeps): App {
     heldError = null;
     try {
       // The install script or setup runs (D14): ask, then stop its tree. The
-      // next launch runs that step again.
-      if (step && !sessionEnd.ending && !(await confirmStopStep(step.kind))) {
+      // next launch runs that step again. An update is asked about on its
+      // own and waited for (D21).
+      if (
+        step &&
+        !sessionEnd.ending &&
+        !(await (step.kind === "update"
+          ? confirmStopUpdate(
+              step.waiting?.() ?? false,
+              updateView?.afterFailedRun === true
+            )
+          : confirmStopStep(step.kind)))
+      ) {
         quitState = "none";
         resumeAfterCancelledQuit();
         return;
+      }
+      // The window stays on the update's rows until it ends (D21).
+      const waitForUpdate = step?.kind === "update" && !sessionEnd.ending;
+      if (waitForUpdate) {
+        quitAfterUpdate = true;
+        step?.cancelWhenWaiting?.();
+        if (updateView) showScreen(updateScreen(updateView, true));
       }
       const owned = Boolean(ready?.owned && session);
       if (owned && !sessionEnd.ending && !(await confirmStop("quit"))) {
@@ -933,7 +1100,7 @@ export function createApp(deps: AppDeps): App {
       }
       // Hidden, never destroyed: a destroyed window gets no `session-end` (D5).
       // Windows opened from the UI hide too.
-      const showAgain = win ? win.hideAll() : () => {};
+      const showAgain = win && !waitForUpdate ? win.hideAll() : () => {};
       if (owned && ready && !sessionEnd.ending) {
         quitState = "waiting";
         quitCancelled = false;
@@ -957,7 +1124,11 @@ export function createApp(deps: AppDeps): App {
       quitState = "stopping";
       if (step) {
         const running = step;
-        log.info(`stopping the ${running.kind} step`);
+        log.info(
+          running.kind === "update"
+            ? "waiting for the update to end"
+            : `stopping the ${running.kind} step`
+        );
         await running.cancel();
       }
       await stopUi();
@@ -1084,6 +1255,17 @@ export function createApp(deps: AppDeps): App {
       case "continue":
         skipSetup = true;
         return launch();
+      case "update":
+      case "install_copy": {
+        const answer = answerUpdate;
+        answerUpdate = null;
+        answer?.();
+        return;
+      }
+      case "cancel_update":
+        if (step?.kind === "update" && step.cancelNow?.())
+          log.info("update cancelled from the waiting screen");
+        return;
     }
   }
 
