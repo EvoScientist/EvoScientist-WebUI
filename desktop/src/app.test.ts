@@ -1892,3 +1892,86 @@ describe("app update on the pages (W04)", () => {
     });
   });
 });
+
+describe("the installer asks the app to quit (D12)", () => {
+  it("runs the normal quit, with its busy question", async () => {
+    const installQuitCancelled = vi.fn();
+    const h = await launched({
+      checkWork: async () => BUSY,
+      installQuitCancelled,
+    });
+    h.app.secondInstance(true);
+    await vi.waitFor(() => expect(h.exit).toHaveBeenCalled());
+    expect(h.messageBox).toHaveBeenCalledTimes(1);
+    expect(h.sessions[0].stopped.count).toBe(1);
+    expect(installQuitCancelled).not.toHaveBeenCalled();
+  });
+
+  it("on Cancel keeps running and leaves the marker for the installer, once", async () => {
+    const installQuitCancelled = vi.fn();
+    const h = await launched({
+      checkWork: async () => BUSY,
+      installQuitCancelled,
+    });
+    h.messageBox.mockResolvedValueOnce({ response: 1 });
+    h.app.secondInstance(true);
+    await vi.waitFor(() => expect(installQuitCancelled).toHaveBeenCalledOnce());
+    expect(h.exit).not.toHaveBeenCalled();
+    expect(h.sessions[0].stopped.count).toBe(0);
+    // A later quit the user cancels is not the installer's.
+    h.messageBox.mockResolvedValueOnce({ response: 1 });
+    await h.app.requestQuit();
+    expect(installQuitCancelled).toHaveBeenCalledOnce();
+  });
+
+  it("while a quit waits for the memory workers: neither cancels nor relaunches", async () => {
+    const gate = deferred<void>();
+    const h = await launched({
+      waitForMemoryWorkers: async () => (await gate.promise, "quiet"),
+    });
+    const quit = h.app.requestQuit();
+    await vi.waitFor(() => expect(h.app.quitState).toBe("waiting"));
+    h.app.secondInstance(true);
+    gate.resolve();
+    await quit;
+    expect(h.exit).toHaveBeenCalledWith(false);
+    expect(h.sessions[0].stopped.count).toBe(1);
+  });
+
+  it("an ordinary second launch during that wait still cancels the quit, and the installer is told", async () => {
+    const gate = deferred<void>();
+    const installQuitCancelled = vi.fn();
+    const h = await launched({
+      installQuitCancelled,
+      waitForMemoryWorkers: async () => (await gate.promise, "quiet"),
+    });
+    const quit = h.app.requestQuit();
+    await vi.waitFor(() => expect(h.app.quitState).toBe("waiting"));
+    h.app.secondInstance(true);
+    h.app.secondInstance();
+    gate.resolve();
+    await quit;
+    expect(h.exit).not.toHaveBeenCalled();
+    expect(installQuitCancelled).toHaveBeenCalledOnce();
+  });
+
+  it("is ignored once the app exits for its own update", async () => {
+    const installQuitCancelled = vi.fn();
+    const h = await launched({
+      installQuitCancelled,
+      installWait: () => new Promise<void>(() => {}),
+      appUpdate: {
+        state: { kind: "ready", version: "0.4.3" },
+        start: vi.fn(),
+        check: vi.fn(async () => {}),
+        download: vi.fn(),
+        install: vi.fn(() => true),
+        stop: vi.fn(),
+      },
+    });
+    await h.app.restartToUpdate();
+    h.app.secondInstance(true);
+    expect(h.app.quitState).toBe("stopping");
+    expect(h.messageBox).not.toHaveBeenCalled();
+  });
+});

@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -7,6 +7,7 @@ import {
   tagProblem,
   versionArgs,
 } from "./packaging";
+import { QUIT_FOR_INSTALL, QUIT_FOR_INSTALL_CANCELLED } from "./app";
 
 const pkg = JSON.parse(
   readFileSync(join(__dirname, "..", "package.json"), "utf8")
@@ -99,5 +100,33 @@ describe("the installer's identity", () => {
       owner: "EvoScientist",
       repo: "EvoScientist-WebUI",
     });
+  });
+});
+
+describe("the installer's running-app check (D12)", () => {
+  const nsh = () =>
+    readFileSync(join(__dirname, "..", String(pkg.build.nsis.include)), "utf8");
+
+  it("is the installer's include", () => {
+    expect(pkg.build.nsis.include).toBe("installer/check-app-running.nsh");
+    expect(
+      existsSync(join(__dirname, "..", "installer/check-app-running.nsh"))
+    ).toBe(true);
+    expect(nsh()).toMatch(/^!macro customCheckAppRunning$/m);
+  });
+
+  it("asks the app to quit with the argument and waits for the marker the app writes", () => {
+    expect(nsh()).toContain(
+      `${"${APP_EXECUTABLE_FILENAME}"}" ${QUIT_FOR_INSTALL}\``
+    );
+    expect(nsh()).toContain(
+      `$APPDATA\\${"${PRODUCT_NAME}"}\\${QUIT_FOR_INSTALL_CANCELLED}`
+    );
+  });
+
+  it("matches the install folder with a trailing backslash only", () => {
+    const matches = nsh().match(/StartsWith\('([^']*)'/g) ?? [];
+    expect(matches.length).toBeGreaterThan(0);
+    for (const m of matches) expect(m).toBe("StartsWith('$INSTDIR\\'");
   });
 });

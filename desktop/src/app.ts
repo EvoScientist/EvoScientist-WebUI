@@ -207,7 +207,16 @@ export interface AppDeps {
   appUpdate?: AppUpdate | null;
   /** Resolves when the installer had its time to end the app; default 15 s. */
   installWait?(): Promise<void>;
+  /** The user cancelled a quit the installer asked for (D12): leaves the
+   *  marker the installer waits for (installer/check-app-running.nsh). */
+  installQuitCancelled?(): void;
 }
+
+/** The argument the installer starts the app with to ask a running app to
+ *  quit before it replaces files (installer/check-app-running.nsh). */
+export const QUIT_FOR_INSTALL = "--quit-for-install";
+/** The file in userData that tells the installer the quit was cancelled. */
+export const QUIT_FOR_INSTALL_CANCELLED = "quit-for-install-cancelled";
 
 export type QuitState = "none" | "checking" | "waiting" | "stopping";
 
@@ -258,7 +267,9 @@ export interface App {
   /** The renderer or the preload is broken: a native dialog instead. */
   nativeError(code: string, message: string): Promise<void>;
   crashReport(code: string, message: string, detail?: unknown): string | null;
-  secondInstance(): void;
+  /** A second launch; `forInstall` when the installer asks the app to quit
+   *  (`--quit-for-install`). */
+  secondInstance(forInstall?: boolean): void;
   querySessionEnd(reasons: string[]): void;
   endOfSession(why: string): void;
   /** The current screen, for `status:get`. */
@@ -317,6 +328,8 @@ export function createApp(deps: AppDeps): App {
    *  quit waits for it. */
   let stoppingDeploy: Promise<"stopped" | "killed"> | null = null;
   let relaunchAfterExit = false;
+  /** The running quit was asked for by the installer (D12). */
+  let quitForInstall = false;
   let exiting = false;
   /** The install script, setup or `EvoSci update` while it runs: closing
    *  asks, then stops the script or setup (D14) or waits for the update,
@@ -1166,6 +1179,11 @@ export function createApp(deps: AppDeps): App {
   /** After a cancelled quit: shows an error held during the quit question, or
    *  brings back the UI that a restart or launch left for the quit. */
   function resumeAfterCancelledQuit(): void {
+    if (quitForInstall) {
+      quitForInstall = false;
+      log.info("quit for the installer cancelled: the installer stops");
+      deps.installQuitCancelled?.();
+    }
     const error = heldError;
     heldError = null;
     if (error) return showError(error);
@@ -1292,7 +1310,18 @@ export function createApp(deps: AppDeps): App {
 
   /** A second launch: cancels a quit that waits for the memory workers,
    *  relaunches after one that is stopping, else brings the window back. */
-  function secondInstance(): void {
+  function secondInstance(forInstall = false): void {
+    if (forInstall) {
+      // A quit that runs goes on (no cancel, no relaunch) and the installer
+      // waits for it; else the normal quit starts, with its busy question.
+      // Either way a Cancel tells the installer. Ignored once the app exits
+      // (its own "Restart to update" started that installer).
+      log.info(`the installer asks the app to quit (quit state ${quitState})`);
+      if (exiting) return;
+      quitForInstall = true;
+      if (quitState === "none") void requestQuit();
+      return;
+    }
     log.info(`second launch (quit state ${quitState})`);
     if (quitState === "waiting") {
       quitCancelled = true;

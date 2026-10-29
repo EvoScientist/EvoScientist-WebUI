@@ -29,7 +29,12 @@ import {
 import { autoUpdater, CancellationToken } from "electron-updater";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { createApp, type AppWindow } from "./app";
+import {
+  QUIT_FOR_INSTALL,
+  QUIT_FOR_INSTALL_CANCELLED,
+  createApp,
+  type AppWindow,
+} from "./app";
 import { brief, createAppUpdate } from "./appUpdate";
 import type { Manifest } from "./boot";
 import { backendRequest, checkWork, waitForMemoryWorkers } from "./closeCheck";
@@ -322,6 +327,16 @@ const desktop = createApp({
     }),
 
   appUpdate,
+  installQuitCancelled: () => {
+    try {
+      writeFileSync(
+        userFile(QUIT_FOR_INSTALL_CANCELLED),
+        new Date().toISOString()
+      );
+    } catch (e) {
+      log.warn(`cannot tell the installer the quit was cancelled: ${e}`);
+    }
+  },
 
   checkWork: (url) => checkWork(backendRequest(url)),
   waitForMemoryWorkers: (url, cancelled) =>
@@ -532,7 +547,9 @@ function start(): void {
     log.warn(`unhandled rejection: ${e instanceof Error ? e.stack : e}`)
   );
 
-  app.on("second-instance", () => desktop.secondInstance());
+  app.on("second-instance", (_e, argv) =>
+    desktop.secondInstance(argv.includes(QUIT_FOR_INSTALL))
+  );
   app.on("before-quit", (e) => {
     if (desktop.exiting) return;
     e.preventDefault();
@@ -562,5 +579,8 @@ function start(): void {
   });
 }
 
-if (app.requestSingleInstanceLock()) start();
-else app.exit(0);
+// The installer's `--quit-for-install` reaches a running app through the
+// single-instance lock; with none running there is nothing to quit.
+if (!app.requestSingleInstanceLock()) app.exit(0);
+else if (process.argv.includes(QUIT_FOR_INSTALL)) app.exit(0);
+else start();

@@ -104,7 +104,8 @@
       "perMachine": false,
       "allowToChangeInstallationDirectory": false,
       "deleteAppDataOnUninstall": false,
-      "artifactName": "EvoScientist-Setup.${ext}"
+      "artifactName": "EvoScientist-Setup.${ext}",
+      "include": "installer/check-app-running.nsh"
     },
     "publish": {
       "provider": "github",
