@@ -1647,3 +1647,195 @@ describe("core update (W03c)", () => {
     });
   });
 });
+
+describe("restart to update (W04)", () => {
+  function fakeAppUpdate(kind: "none" | "ready" = "ready", calls?: string[]) {
+    const u = {
+      state:
+        kind === "ready"
+          ? ({ kind: "ready", version: "0.4.3" } as const)
+          : ({ kind: "none" } as const),
+      start: vi.fn(),
+      check: vi.fn(async () => {}),
+      download: vi.fn(),
+      install: vi.fn(() => {
+        calls?.push("install");
+        return u.state.kind === "ready";
+      }),
+      stop: vi.fn(),
+    };
+    return u;
+  }
+  const never = () => new Promise<void>(() => {});
+
+  it("starts the update checks with the app, also before the UI loads", () => {
+    const appUpdate = fakeAppUpdate("none");
+    const h = harness({ appUpdate });
+    h.app.start();
+    expect(appUpdate.start).toHaveBeenCalledTimes(1);
+  });
+
+  it("answers not_ready without a downloaded update", async () => {
+    const appUpdate = fakeAppUpdate("none");
+    const h = await launched({ appUpdate });
+    await expect(h.app.restartToUpdate()).resolves.toEqual({
+      ok: false,
+      code: "not_ready",
+    });
+    expect(appUpdate.install).not.toHaveBeenCalled();
+    expect(h.sessions[0].stopped.count).toBe(0);
+  });
+
+  it("with no work: no question, the UI server and the backend stop before the installer starts", async () => {
+    const calls: string[] = [];
+    const appUpdate = fakeAppUpdate("ready", calls);
+    const h = await launched({ appUpdate, installWait: never });
+    const stop = h.sessions[0].stop;
+    h.sessions[0].stop = async () => (calls.push("deploy stop"), stop());
+    const uiStop = h.uis[0].ui.stop;
+    h.uis[0].ui.stop = async () => (calls.push("ui stop"), uiStop());
+    await expect(h.app.restartToUpdate()).resolves.toEqual({ ok: true });
+    expect(h.messageBox).not.toHaveBeenCalled();
+    expect(calls).toEqual(["ui stop", "deploy stop", "install"]);
+    expect(h.app.exiting).toBe(true);
+    expect(appUpdate.stop).toHaveBeenCalled();
+    expect(h.app.screen).toMatchObject({
+      kind: "progress",
+      title: "Updating the EvoScientist app",
+    });
+    expect(h.exit).not.toHaveBeenCalled();
+  });
+
+  it("asks while work runs; Cancel keeps the backend and installs nothing", async () => {
+    const appUpdate = fakeAppUpdate();
+    const h = await launched({ appUpdate, checkWork: async () => BUSY });
+    h.messageBox.mockResolvedValueOnce({ response: 1 });
+    await expect(h.app.restartToUpdate()).resolves.toEqual({
+      ok: false,
+      code: "cancelled",
+    });
+    expect(h.messageBox.mock.calls[0][0].buttons).toEqual(["Update", "Cancel"]);
+    expect(appUpdate.install).not.toHaveBeenCalled();
+    expect(h.sessions[0].stopped.count).toBe(0);
+    expect(h.app.exiting).toBe(false);
+    expect(h.app.quitState).toBe("none");
+  });
+
+  it("asks again for work that started during the memory wait; Cancel brings the app back", async () => {
+    let work: WorkCheck = NO_WORK;
+    const appUpdate = fakeAppUpdate();
+    const h = await launched({
+      appUpdate,
+      checkWork: async () => work,
+      waitForMemoryWorkers: async () => {
+        // A scheduled task starts while the app waits.
+        work = { ...NO_WORK, busyThreads: 1, threadIds: ["t9"] };
+        return "quiet";
+      },
+    });
+    h.messageBox.mockResolvedValueOnce({ response: 1 });
+    await expect(h.app.restartToUpdate()).resolves.toEqual({
+      ok: false,
+      code: "cancelled",
+    });
+    expect(h.messageBox).toHaveBeenCalledTimes(1);
+    expect(appUpdate.install).not.toHaveBeenCalled();
+    expect(h.sessions[0].stopped.count).toBe(0);
+    await vi.waitFor(() =>
+      expect(h.win.calls.at(-1)).toBe("load http://127.0.0.1:4718/")
+    );
+  });
+
+  it("after a confirmed question and nothing new during the wait, installs without asking again", async () => {
+    const appUpdate = fakeAppUpdate();
+    const h = await launched({
+      appUpdate,
+      checkWork: async () => BUSY,
+      installWait: never,
+    });
+    await expect(h.app.restartToUpdate()).resolves.toEqual({ ok: true });
+    expect(h.messageBox).toHaveBeenCalledTimes(1);
+    expect(h.log.lines).toContain(
+      `INFO work check before the app update, after the wait: ${JSON.stringify(
+        BUSY
+      )}`
+    );
+    expect(appUpdate.install).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a reused backend running and installs", async () => {
+    const appUpdate = fakeAppUpdate();
+    const wait = vi.fn(async () => "quiet" as MemoryWaitResult);
+    const h = await launched({
+      appUpdate,
+      installWait: never,
+      checkWork: async () => BUSY,
+      waitForMemoryWorkers: wait,
+      startDeploy: () => fakeSession({ ...READY, owned: false }),
+    });
+    await expect(h.app.restartToUpdate()).resolves.toEqual({ ok: true });
+    expect(h.messageBox).not.toHaveBeenCalled();
+    expect(wait).not.toHaveBeenCalled();
+    expect(
+      h.log.lines.some((l) => l.includes("stopping deploy (reused)"))
+    ).toBe(true);
+    expect(appUpdate.install).toHaveBeenCalled();
+  });
+
+  it("answers busy while a launch runs", async () => {
+    const appUpdate = fakeAppUpdate();
+    const gate = deferred<void>();
+    const h = harness({
+      appUpdate,
+      locateEvoSci: async () => (
+        await gate.promise, { path: "C:\\bin\\EvoSci.exe", via: "uv-tool-bin" }
+      ),
+    });
+    const launching = h.app.launch();
+    await expect(h.app.restartToUpdate()).resolves.toEqual({
+      ok: false,
+      code: "busy",
+    });
+    gate.resolve();
+    await launching;
+    expect(appUpdate.install).not.toHaveBeenCalled();
+  });
+
+  it("never installs on an ordinary quit or at the end of the session", async () => {
+    const appUpdate = fakeAppUpdate();
+    const h = await launched({ appUpdate });
+    h.app.endOfSession("session-end (logoff)");
+    await h.app.requestQuit();
+    expect(h.exit).toHaveBeenCalled();
+    const q = await launched({ appUpdate });
+    await q.app.requestQuit();
+    expect(q.exit).toHaveBeenCalled();
+    expect(appUpdate.install).not.toHaveBeenCalled();
+    // And Restart to update itself refuses once the session ends.
+    const s = await launched({ appUpdate });
+    s.app.endOfSession("session-end (logoff)");
+    await expect(s.app.restartToUpdate()).resolves.toMatchObject({
+      code: "busy",
+    });
+    expect(appUpdate.install).not.toHaveBeenCalled();
+  });
+
+  it("starts again on the current version when the installer did not end the app", async () => {
+    const appUpdate = fakeAppUpdate();
+    const h = await launched({ appUpdate, installWait: async () => {} });
+    await expect(h.app.restartToUpdate()).resolves.toEqual({ ok: true });
+    await vi.waitFor(() => expect(h.sessions).toHaveLength(2));
+    expect(h.app.exiting).toBe(false);
+    expect(h.app.quitState).toBe("none");
+    await vi.waitFor(() =>
+      expect(h.messageBox).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: "The update could not be installed.",
+        })
+      )
+    );
+    expect(
+      h.log.lines.some((l) => l.includes("the installer did not start"))
+    ).toBe(true);
+  });
+});

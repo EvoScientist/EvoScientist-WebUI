@@ -202,7 +202,7 @@ export function setupScreen(stages: Stage[]): SetupScreen {
 
 /** The progress screen for a launch phase, the UI start or a stop. */
 export function progressScreen(
-  state: BootState | "starting_ui" | "stopping"
+  state: BootState | "starting_ui" | "stopping" | "preparing_update"
 ): ProgressScreen {
   const s = typeof state === "string" ? state : state.phase;
   const text: Record<string, [string, string]> = {
@@ -218,6 +218,10 @@ export function progressScreen(
     ready: ["Starting EvoScientist", "Starting the WebUI..."],
     starting_ui: ["Starting EvoScientist", "Starting the WebUI..."],
     stopping: ["Restarting the backend", "Stopping the backend..."],
+    preparing_update: [
+      "Updating the EvoScientist app",
+      "Getting ready to update... The app starts again once the update is installed.",
+    ],
     update_finishing: [
       "An update of EvoScientist is finishing",
       "The app waits until it is done, then goes on.",

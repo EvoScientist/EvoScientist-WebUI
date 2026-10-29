@@ -51,6 +51,7 @@ import {
   type Screen,
 } from "./screens";
 import type { UiServer } from "./uiServer";
+import type { AppUpdate } from "./appUpdate";
 import type { UpdateRun, UpdateView } from "./update";
 
 /** How long the UI server gets to answer `/` after it starts. */
@@ -195,6 +196,12 @@ export interface AppDeps {
   uvToolEnvExists(): Promise<boolean | null>;
 
   sessionEnd?: SessionEnd;
+
+  // App updates (W04): null where the app does not update itself (not
+  // packaged, or not on Windows).
+  appUpdate?: AppUpdate | null;
+  /** Resolves when the installer had its time to end the app; default 15 s. */
+  installWait?(): Promise<void>;
 }
 
 export type QuitState = "none" | "checking" | "waiting" | "stopping";
@@ -224,6 +231,11 @@ export interface App {
   restartBackend(): Promise<void>;
   /** The bridge's restart (W03d), for the WebUI's settings page. */
   restartFromPage(): Promise<RestartResult>;
+  /** "Restart to update" (W04): busy checks and stops as at quit, then the
+   *  installer of the downloaded update. `not_ready` without one, `busy`
+   *  while a launch, restart, install, setup, core update or quit runs,
+   *  `cancelled` on Cancel. On success the app ends. */
+  restartToUpdate(): Promise<RestartResult>;
   requestQuit(): Promise<void>;
   act(id: ActionId, arg: unknown): Promise<void>;
   /** The renderer or the preload is broken: a native dialog instead. */
@@ -248,6 +260,10 @@ export interface App {
   readonly exiting: boolean;
   readonly quitState: QuitState;
 }
+
+const INSTALL_WAIT_MS = 15_000;
+const defaultInstallWait = () =>
+  new Promise<void>((r) => setTimeout(r, INSTALL_WAIT_MS).unref?.());
 
 /** Builds the controller; main.ts attaches the window and calls `start()`. */
 export function createApp(deps: AppDeps): App {
@@ -1034,6 +1050,102 @@ export function createApp(deps: AppDeps): App {
     }
   }
 
+  /** "Restart to update" (D5): the quit's busy check, then the status page's
+   *  "Getting ready to update..." during the memory wait, a second check for
+   *  work that started meanwhile (a scheduled task; Cancel brings the app
+   *  back with its backend), the stops, and only then the installer, which
+   *  ends every process in the install folder about 1.3 s after it starts.
+   *  A backend the app reused keeps running. Never at the end of the session
+   *  and never on an ordinary quit: nothing else calls `install()`. */
+  async function restartToUpdate(): Promise<RestartResult> {
+    const update = deps.appUpdate;
+    if (!update || update.state.kind !== "ready")
+      return { ok: false, code: "not_ready" };
+    if (working || step || quitState !== "none" || sessionEnd.ending) {
+      log.info("restart to update: busy");
+      return { ok: false, code: "busy" };
+    }
+    quitState = "checking";
+    heldError = null;
+    const cancel = (): RestartResult => {
+      quitState = "none";
+      resumeAfterCancelledQuit();
+      return { ok: false, code: "cancelled" };
+    };
+    const owned = ready?.owned && session ? ready : null;
+    const before = owned
+      ? await checkWorkLogged(owned.url, "the app update")
+      : null;
+    if (before && !(await askStop("update", before))) return cancel();
+    if (sessionEnd.ending) return { ok: false, code: "busy" };
+    showScreen(progressScreen("preparing_update"));
+    if (owned && before && ready === owned) {
+      quitState = "waiting";
+      quitCancelled = false;
+      log.info("waiting for the memory workers before the app update");
+      const r = await deps.waitForMemoryWorkers(
+        owned.url,
+        () => quitCancelled || sessionEnd.ending
+      );
+      log.info(`memory workers: ${r}`);
+      if (sessionEnd.ending) return { ok: false, code: "busy" };
+      if (quitCancelled) {
+        log.info("second launch during the wait: app update cancelled");
+        return cancel();
+      }
+      const started = workStartedSince(
+        before,
+        await checkWorkLogged(owned.url, "the app update, after the wait")
+      );
+      if (started && ready === owned && !(await askStop("update", started)))
+        return cancel();
+      if (sessionEnd.ending) return { ok: false, code: "busy" };
+    }
+    quitState = "stopping";
+    await stopUi();
+    if (session) {
+      const s = session;
+      session = null;
+      ready = null;
+      log.info(
+        `stopping deploy (${owned ? "owned" : "reused"}): ${await s.stop()}`
+      );
+    }
+    if (stoppingDeploy)
+      log.info(`waiting for the deploy being stopped: ${await stoppingDeploy}`);
+    if (sessionEnd.ending) {
+      exitNow();
+      return { ok: false, code: "busy" };
+    }
+    // The installer's `app.quit()` must go through the close handlers.
+    exiting = true;
+    update.stop();
+    if (!update.install()) return updateDidNotStart();
+    void (deps.installWait ?? defaultInstallWait)().then(() => {
+      if (exiting && quitState === "stopping") void updateDidNotStart();
+    });
+    return { ok: true };
+  }
+
+  /** The installer did not start (or did not end the app): the app starts
+   *  again on the current version and says so. */
+  async function updateDidNotStart(): Promise<RestartResult> {
+    log.warn("restart to update: the installer did not start; launching again");
+    exiting = false;
+    quitState = "none";
+    await launch();
+    void deps.messageBox({
+      type: "warning",
+      title: "EvoScientist",
+      message: "The update could not be installed.",
+      detail:
+        "EvoScientist runs the current version. The desktop log has the details; the next check offers the update again.",
+      buttons: ["OK"],
+      noLink: true,
+    });
+    return { ok: false, code: "update_failed" };
+  }
+
   /** After a cancelled quit: shows an error held during the quit question, or
    *  brings back the UI that a restart or launch left for the quit. */
   function resumeAfterCancelledQuit(): void {
@@ -1273,11 +1385,15 @@ export function createApp(deps: AppDeps): App {
     attachWindow: (w) => void (win = w),
     start: () => {
       showScreen(screen);
+      // Also when the launch stops on the status page: `core_too_new` tells
+      // the user to update the app.
+      deps.appUpdate?.start();
       void launch();
     },
     launch,
     restartBackend,
     restartFromPage,
+    restartToUpdate,
     requestQuit,
     act,
     nativeError,
