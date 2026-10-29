@@ -42,3 +42,9 @@ npm run dist   # Windows: release/EvoScientist-Setup.exe, its blockmap and lates
 Logs: `desktop.log` and `desktop-ui.log` next to the backend's `langgraph_dev.log` (`~/.config/evoscientist` until the core moves its runtime files), with crash reports `desktop-crash-*.txt` beside them.
 
 Keep Electron's `RunAsNode` fuse enabled: the UI server runs as the app's own executable with `ELECTRON_RUN_AS_NODE=1`.
+
+## CI and releases
+
+`.github/workflows/desktop.yml` runs on Windows for pull requests (all but docs), weekly and on tags `v*`: lint and unit tests, an unpacked build, then `scripts/smoke.mjs` once per core version (the one the app installs and the newest release inside its range; one run while they are the same). The smoke test installs that core with the bundled install script, runs `EvoSci setup --json --skip webui`, checks `EvoSci --version --json` against the app, starts `EvoSci deploy --json` until `ready`, then the bundled UI server under the packaged `EvoScientist.exe` with `ELECTRON_RUN_AS_NODE=1`, and requests `/` and one static asset.
+
+On a tag, once `evoscientist.release` is true (the pull request that moves the core range to a release from 0.4.0 sets it), the workflow builds the installer with publishing off, uploads `EvoScientist-Setup.exe` and its blockmap, then `latest.yml`, to the tag's draft release, adds the filled `release-notes.md` below the notes there, and publishes the release after every platform job succeeded. While the flag is off, the release is published without desktop files. Releases start by pushing the tag; publishing is the workflow's last step. A fork's tag build gets its own identity (`W04Test`, its own install folder and userData) and publishes to the fork, for update tests.
