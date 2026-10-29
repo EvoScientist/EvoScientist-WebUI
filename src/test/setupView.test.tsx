@@ -5,7 +5,15 @@
 // a fake WebUI relay (/api/settings/access, PATCH /api/settings,
 // POST /api/settings/test-key).
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import type { ReactNode } from "react";
 import {
   act,
@@ -17,6 +25,7 @@ import {
   within,
 } from "@testing-library/react";
 import { SWRConfig } from "swr";
+import { toast } from "sonner";
 import { SetupView } from "@/app/components/SetupView";
 import { SetupNotice } from "@/app/components/SetupNotice";
 import { useSettings } from "@/app/hooks/useSettings";
@@ -836,6 +845,91 @@ describe("the Setup form", () => {
     expect(
       await screen.findByText("The restart failed (failed).")
     ).toBeTruthy();
+  });
+
+  it("names EvoSci server stop for a backend the app did not start", async () => {
+    window.evoscientistDesktop = {
+      restartBackend: async () => ({ ok: false, code: "not_owned" }),
+    };
+    server.settings = settings({
+      restart_required: true,
+      restart_fields: ["model"],
+    });
+    renderView();
+    fireEvent.click(await screen.findByRole("button", { name: "Restart now" }));
+    expect(
+      await screen.findByText(
+        /run EvoSci server stop in a terminal, then press Retry in the app/
+      )
+    ).toBeTruthy();
+  });
+
+  it("says EvoScientist restarted after the re-read clears the notice", async () => {
+    const success = vi.spyOn(toast, "success");
+    onTestFinished(() => success.mockRestore());
+    window.evoscientistDesktop = {
+      restartBackend: async () => {
+        server.settings = settings();
+        return { ok: true };
+      },
+    };
+    server.settings = settings({
+      restart_required: true,
+      restart_fields: ["model"],
+    });
+    renderView();
+    fireEvent.click(await screen.findByRole("button", { name: "Restart now" }));
+    await waitFor(() =>
+      expect(screen.queryByText(/take effect after EvoScientist/)).toBeNull()
+    );
+    expect(success).toHaveBeenCalledWith("EvoScientist restarted.", {
+      id: "evoscientist-restarted",
+    });
+  });
+
+  it.each([
+    ["another core than the app's", { instance: "ffffffff" }, null],
+    [
+      "a core the WebUI server cannot check",
+      {},
+      { writable: false, reason: "backend_unreachable" },
+    ],
+  ])("offers no Restart now for %s", async (_name, extra, access) => {
+    const restartBackend = vi.fn(async () => ({ ok: true as const }));
+    window.evoscientistDesktop = { restartBackend };
+    if (access) server.access = access;
+    server.settings = settings({
+      restart_required: true,
+      restart_fields: ["model"],
+      ...extra,
+    });
+    renderView();
+    expect(await screen.findByText(/read-only here/)).toBeTruthy();
+    expect(screen.getByText(/take effect after EvoScientist/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Restart now" })).toBeNull();
+    expect(restartBackend).not.toHaveBeenCalled();
+  });
+
+  it("keeps Restarting while the backend it restarts is down", async () => {
+    let answer!: (r: { ok: true }) => void;
+    window.evoscientistDesktop = {
+      restartBackend: () => new Promise((r) => (answer = r)),
+    };
+    server.settings = settings({
+      restart_required: true,
+      restart_fields: ["model"],
+    });
+    renderView();
+    fireEvent.click(await screen.findByRole("button", { name: "Restart now" }));
+    await screen.findByText("Restarting EvoScientist...");
+    server.access = { writable: false, reason: "backend_unreachable" };
+    fireEvent.click(screen.getByRole("button", { name: "Reload" }));
+    expect(await screen.findByText(/read-only here/)).toBeTruthy();
+    expect(screen.getByText("Restarting EvoScientist...")).toBeTruthy();
+    expect(screen.queryByText(/Restart EvoSci to apply them/)).toBeNull();
+    answer({ ok: true });
+    await screen.findByText("EvoScientist restarted.");
+    expect(screen.queryByText(/Restart EvoSci to apply them/)).toBeNull();
   });
 
   it("shows a save's warning next to its field", async () => {
