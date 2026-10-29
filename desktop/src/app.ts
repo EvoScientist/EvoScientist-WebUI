@@ -7,6 +7,7 @@ import type { MessageBoxOptions } from "electron";
 import { dirname, join } from "node:path";
 import {
   boot,
+  defaultFolder,
   type BootError,
   type BootOptions,
   type BootState,
@@ -14,6 +15,7 @@ import {
 } from "./boot";
 import {
   confirmation,
+  workStartedSince,
   type MemoryWaitResult,
   type StopPurpose,
   type WorkCheck,
@@ -197,12 +199,31 @@ export interface AppDeps {
 
 export type QuitState = "none" | "checking" | "waiting" | "stopping";
 
+/** What the bridge's `restartBackend()` answers the page (W01's
+ *  `src/lib/desktop.ts`): `not_owned` for a reused backend, `cancelled` when
+ *  the user cancelled a busy check, `busy` while a launch, a restart from the
+ *  menu, a screen action or a quit runs or when a quit or the end of the
+ *  session starts during the restart, else the code of the error screen the
+ *  restart showed (`internal_error` for an exception, `ui_server_exited` when
+ *  only the UI server failed). */
+export type RestartResult = { ok: true } | { ok: false; code: string };
+
+/** Launch phases that a restart from the page keeps off the window: the page
+ *  stays until the backend is back or something needs the status page. */
+const QUIET_PHASES: ReadonlySet<BootState["phase"]> = new Set([
+  "checking_core",
+  "preparing_node",
+  "starting_backend",
+]);
+
 export interface App {
   attachWindow(w: AppWindow): void;
   /** Shows the first screen and starts the launch. */
   start(): void;
   launch(): Promise<void>;
   restartBackend(): Promise<void>;
+  /** The bridge's restart (W03d), for the WebUI's settings page. */
+  restartFromPage(): Promise<RestartResult>;
   requestQuit(): Promise<void>;
   act(id: ActionId, arg: unknown): Promise<void>;
   /** The renderer or the preload is broken: a native dialog instead. */
@@ -217,6 +238,12 @@ export interface App {
   uiOrigin(): string | null;
   /** The backend URL for the preload of a page from `senderOrigin` (D6). */
   backendUrlFor(senderOrigin: string | null): string | null;
+  /** The bridge's `defaultFolder` for a page from `senderOrigin`: null for
+   *  another origin, or when the Documents folder cannot be resolved. */
+  defaultFolderFor(senderOrigin: string | null): string | null;
+  /** The bridge's `restartBackend()` for a page from `senderOrigin`; another
+   *  origin gets `not_allowed` and restarts nothing. */
+  restartFor(senderOrigin: string | null): Promise<RestartResult>;
   /** True once the app exits: close and quit events go through. */
   readonly exiting: boolean;
   readonly quitState: QuitState;
@@ -285,6 +312,11 @@ export function createApp(deps: AppDeps): App {
   /** "Continue" after a failed setup holds for the rest of this session too
    *  (Restart backend, Retry), except after a fresh install. */
   let skipSetup = false;
+  /** A restart from the page runs: its quiet phases leave the page shown. */
+  let pageRestart = false;
+  /** The code of the error screen shown last; a restart from the page
+   *  clears it first and answers with it. */
+  let shownError: string | null = null;
   let pendingScreen: Screen | null = null;
   let pendingTimer: ReturnType<typeof setTimeout> | null = null;
   let lastSent = 0;
@@ -293,6 +325,11 @@ export function createApp(deps: AppDeps): App {
 
   /** The running UI server's origin: links to it stay in the app. */
   const uiOrigin = (): string | null => (ui ? new URL(ui.url).origin : null);
+  /** A page from the running UI server (the only one the bridge serves). */
+  const fromUi = (senderOrigin: string | null): boolean => {
+    const origin = uiOrigin();
+    return origin !== null && senderOrigin === origin;
+  };
 
   // --- Screens ------------------------------------------------------------------
 
@@ -354,6 +391,7 @@ export function createApp(deps: AppDeps): App {
           ? showSoon(setupScreen(state.stages))
           : showScreen(progressScreen(state));
       default:
+        if (pageRestart && showingUi && QUIET_PHASES.has(state.phase)) return;
         return showScreen(progressScreen(state));
     }
   }
@@ -461,6 +499,7 @@ export function createApp(deps: AppDeps): App {
       return;
     }
     log.warn(`error screen ${error.code}: ${error.message}`);
+    shownError = error.code;
     const report = FATAL_CODES.has(error.code)
       ? crashReport(error.code, error.message, error.detail)
       : null;
@@ -710,25 +749,32 @@ export function createApp(deps: AppDeps): App {
       });
     }
     if (ready !== r || !win || !ui) return;
-    // The same folder gets back the page the user was on, on the current UI
-    // server (its port can change); a new folder starts at `/`, since the
-    // WebUI would show the old folder's thread read-only.
-    const page = new URL(ui.url);
-    if (lastUiUrl && lastUiWorkspace === r.workspace) {
-      const saved = new URL(lastUiUrl);
-      page.pathname = saved.pathname;
-      page.search = saved.search;
-      page.hash = saved.hash;
-    }
-    onStatusPage = false;
-    showingUi = true;
-    lastUiUrl = page.href;
-    lastUiWorkspace = r.workspace;
-    try {
-      await win.loadUrl(page.href);
-    } catch (e) {
-      log.warn(`loading the UI: ${e}`);
-      return; // did-fail-load shows the native dialog
+    // A restart from the page keeps the page when it still fits: the same UI
+    // server (so the same backend URL) and the same folder. Otherwise a status
+    // screen has replaced it already, or its saved URL or threads are stale.
+    if (pageRestart && showingUi && lastUiWorkspace === r.workspace) {
+      log.info("restart from the page: the page stays");
+    } else {
+      // The same folder gets back the page the user was on, on the current UI
+      // server (its port can change); a new folder starts at `/`, since the
+      // WebUI would show the old folder's thread read-only.
+      const page = new URL(ui.url);
+      if (lastUiUrl && lastUiWorkspace === r.workspace) {
+        const saved = new URL(lastUiUrl);
+        page.pathname = saved.pathname;
+        page.search = saved.search;
+        page.hash = saved.hash;
+      }
+      onStatusPage = false;
+      showingUi = true;
+      lastUiUrl = page.href;
+      lastUiWorkspace = r.workspace;
+      try {
+        await win.loadUrl(page.href);
+      } catch (e) {
+        log.warn(`loading the UI: ${e}`);
+        return; // did-fail-load shows the native dialog
+      }
     }
     if (r.warnings.length > 0) {
       void deps.messageBox({
@@ -778,8 +824,24 @@ export function createApp(deps: AppDeps): App {
   /** The busy check before stopping an owned backend; true to go on. */
   async function confirmStop(purpose: StopPurpose): Promise<boolean> {
     if (!ready) return true;
-    const check = await deps.checkWork(ready.url);
+    return askStop(purpose, await checkWorkLogged(ready.url, purpose));
+  }
+
+  /** The work check, logged with what it is for. */
+  async function checkWorkLogged(
+    url: string,
+    purpose: string
+  ): Promise<WorkCheck> {
+    const check = await deps.checkWork(url);
     log.info(`work check before ${purpose}: ${JSON.stringify(check)}`);
+    return check;
+  }
+
+  /** The question for a work check, when it needs one; true to go on. */
+  async function askStop(
+    purpose: StopPurpose,
+    check: WorkCheck
+  ): Promise<boolean> {
     const c = confirmation(check, purpose);
     if (!c) return true;
     const r = await deps.messageBox({
@@ -853,40 +915,112 @@ export function createApp(deps: AppDeps): App {
 
   /** File > Restart backend: asks, waits for the memory workers, stops the owned backend and launches again. A reused backend is left alone. */
   function restartBackend(): Promise<void> {
-    return exclusive(async () => {
-      if (!ready || !session) return launchLocked();
-      if (!ready.owned) {
-        log.info("restart backend: reused backend, nothing changed");
-        await deps.messageBox({
-          type: "info",
-          title: "EvoScientist",
-          message: "This backend was started outside the app.",
-          detail:
-            "Restart EvoScientist where it was started, for example in its terminal. The app changed nothing.",
-          buttons: ["OK"],
-          noLink: true,
-        });
-        return;
-      }
-      if (!(await confirmStop("restart"))) return;
-      // The backend may have gone while the question was open: start a new one.
-      const current = ready;
-      if (!current || !session) return launchLocked();
-      showScreen(progressScreen("stopping"));
-      // The same wait as at quit, so the last turn's observation linker runs.
-      log.info("waiting for the memory workers before restarting the backend");
-      const memory = await deps.waitForMemoryWorkers(
-        current.url,
-        () => quitState !== "none" || sessionEnd.ending
+    return exclusive(async () => void (await restartLocked(false)));
+  }
+
+  let pageRun: Promise<RestartResult> | null = null;
+
+  /** The bridge's restart (W03d): the menu's steps, while the page stays
+   *  shown when it still fits (`showUiLocked`); resolves once the new backend
+   *  is ready, or with the reason it did not restart. A call while one runs
+   *  waits for that one. */
+  function restartFromPage(): Promise<RestartResult> {
+    pageRun ??= runPageRestart().finally(() => (pageRun = null));
+    return pageRun;
+  }
+
+  async function runPageRestart(): Promise<RestartResult> {
+    if (working || quitState !== "none") {
+      log.info("restart from the page: busy");
+      return { ok: false, code: "busy" };
+    }
+    let result: RestartResult | null = null;
+    pageRestart = true;
+    shownError = null;
+    try {
+      await exclusive(async () => {
+        result = await restartLocked(true);
+      });
+    } finally {
+      pageRestart = false;
+    }
+    // An exception ended it: `exclusive` showed `internal_error`.
+    result ??= { ok: false, code: shownError ?? "failed" };
+    log.info(`restart from the page: ${JSON.stringify(result)}`);
+    return result;
+  }
+
+  /** The restart itself. From the page, a reused backend and a Cancel are
+   *  answered to the page instead of a dialog or silence, and the window keeps
+   *  the page while the backend stops. Callers hold `working`. */
+  async function restartLocked(fromPage: boolean): Promise<RestartResult> {
+    if (!ready || !session) return relaunched();
+    if (!ready.owned) {
+      log.info("restart backend: reused backend, nothing changed");
+      if (fromPage) return { ok: false, code: "not_owned" };
+      await deps.messageBox({
+        type: "info",
+        title: "EvoScientist",
+        message: "This backend was started outside the app.",
+        detail:
+          "To restart it, run EvoSci server stop in a terminal, then press Retry in the app, which starts its own. Stopping it ends running work in every project that uses this backend. The app changed nothing.",
+        buttons: ["OK"],
+        noLink: true,
+      });
+      return { ok: false, code: "not_owned" };
+    }
+    const before = await checkWorkLogged(ready.url, "restart");
+    if (!(await askStop("restart", before)))
+      return { ok: false, code: "cancelled" };
+    // The backend may have gone while the question was open: start a new one.
+    const current = ready;
+    if (!current || !session) return relaunched();
+    if (!fromPage || !showingUi) showScreen(progressScreen("stopping"));
+    // The same wait as at quit, so the last turn's observation linker runs.
+    log.info("waiting for the memory workers before restarting the backend");
+    const memory = await deps.waitForMemoryWorkers(
+      current.url,
+      () => quitState !== "none" || sessionEnd.ending
+    );
+    log.info(`memory workers: ${memory}`);
+    if (quitState !== "none" || sessionEnd.ending || !session)
+      return { ok: false, code: "busy" };
+    // The page stayed usable through the wait: work started meanwhile gets
+    // its own question (the user answered only for what ran before).
+    if (fromPage) {
+      const started = workStartedSince(
+        before,
+        await checkWorkLogged(current.url, "restart, after the wait")
       );
-      log.info(`memory workers: ${memory}`);
-      if (quitState !== "none" || sessionEnd.ending || !session) return;
-      const old = session;
-      session = null;
-      ready = null;
-      log.info(`restart backend: stopping deploy (${await stopDeploy(old)})`);
-      await launchLocked();
-    });
+      if (
+        started &&
+        ready === current &&
+        !(await askStop("restart", started))
+      ) {
+        if (!showingUi) await showUiLocked();
+        return { ok: false, code: "cancelled" };
+      }
+      if (quitState !== "none" || sessionEnd.ending || !session)
+        return { ok: false, code: "busy" };
+    }
+    const old = session;
+    session = null;
+    ready = null;
+    log.info(`restart backend: stopping deploy (${await stopDeploy(old)})`);
+    return relaunched();
+  }
+
+  /** Launches again; the result is the error the launch showed (also after
+   *  `ready`, when the UI server did not start), else the new backend. */
+  async function relaunched(): Promise<RestartResult> {
+    shownError = null;
+    await launchLocked();
+    if (shownError) return { ok: false, code: shownError };
+    if (ready) return { ok: true };
+    return {
+      ok: false,
+      code: screen.kind === "error" ? screen.code : "failed",
+    };
   }
 
   /** Stops a `deploy` the app has let go of, recorded so a quit waits for it. */
@@ -1143,6 +1277,7 @@ export function createApp(deps: AppDeps): App {
     },
     launch,
     restartBackend,
+    restartFromPage,
     requestQuit,
     act,
     nativeError,
@@ -1157,11 +1292,21 @@ export function createApp(deps: AppDeps): App {
       return screen;
     },
     uiOrigin,
-    backendUrlFor: (senderOrigin) => {
-      const origin = uiOrigin();
-      return origin !== null && senderOrigin === origin && ready
-        ? ready.url
-        : null;
+    backendUrlFor: (senderOrigin) =>
+      fromUi(senderOrigin) && ready ? ready.url : null,
+    defaultFolderFor: (senderOrigin) => {
+      if (!fromUi(senderOrigin)) return null;
+      try {
+        return defaultFolder(deps);
+      } catch (e) {
+        log.warn(`no default folder for the page: ${e}`);
+        return null;
+      }
+    },
+    restartFor: async (senderOrigin) => {
+      if (fromUi(senderOrigin)) return restartFromPage();
+      log.warn(`restart refused for the origin ${senderOrigin}`);
+      return { ok: false, code: "not_allowed" };
     },
     get exiting() {
       return exiting;

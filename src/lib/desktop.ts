@@ -4,7 +4,11 @@
 
 export type RestartResult =
   | { ok: true }
-  /** `not_owned`: the app did not start this backend. */
+  /** `not_owned`: the app did not start this backend. `cancelled`: the user
+   *  answered Cancel to the app's question. `busy`: the app is launching,
+   *  restarting from its menu, running a status-screen action or quitting.
+   *  Any other code (`not_allowed`, `internal_error`, `ui_server_exited`, ...)
+   *  is a failure. */
   | { ok: false; code: string };
 
 export interface DesktopBridge {

@@ -7,7 +7,7 @@ An Electron app that runs the installed EvoScientist core (`EvoSci deploy --json
 - `src/app.ts`: the main process's state and flows (launch, UI server, restart backend, quit, the end of the session, the status page's actions) behind injected dependencies, testable without Electron.
 - `src/main.ts`: builds those dependencies from Electron and wires its events: single instance, window, menu, IPC.
 - `src/boot.ts`: the launch sequence (version check; install or repair with the bundled install script, `src/install.ts`; `EvoSci setup`, `src/setup.ts`, or the node stage; workspace; `deploy`), testable without Electron.
-- `src/preload.ts`: hands the backend URL to the WebUI before its scripts run; the status page's bridge.
+- `src/preload.ts`: hands the backend URL to the WebUI before its scripts run; exposes the WebUI's bridge (`window.evoscientistDesktop`: `restartBackend()`, `defaultFolder`) and the status page's bridge.
 - `resources/status.html`: the static status and error page, shown until the UI server answers. It never calls the backend.
 - `resources/ui-entry.mjs`: starts the bundled WebUI server (`dist/server.js` from the root build) with Electron's own Node.
 - `scripts/fetch-core-scripts.mjs`: downloads the core's `install.ps1` and `install.sh` from the tag of the version the app installs (the lower bound of `evoscientist.coreRange`) into `core-scripts/`; `scripts/before-pack.cjs` refuses to package without them.

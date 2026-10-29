@@ -4,10 +4,14 @@
 //   process for the backend URL and merge it into the WebUI's saved config
 //   (`localStorage['evoscientist-config']`, read by `getConfig()` in
 //   src/lib/config.ts), keeping the other keys, so ConfigDialog never opens.
-//   W03d and W04 add the `contextBridge` bridge for the WebUI here.
+//   Then expose the bridge that W01 reads in src/lib/desktop.ts
+//   (`window.evoscientistDesktop`): `restartBackend()` and `defaultFolder`
+//   (W03d); W04 adds its update members. The main process answers both only
+//   for the UI's own origin.
 // - On the status page (file:): expose what it needs to show the current
 //   screen and run its actions.
 import { contextBridge, ipcRenderer } from "electron";
+import type { RestartResult } from "./app";
 import type { ActionId, Screen } from "./screens";
 
 const CONFIG_KEY = "evoscientist-config";
@@ -46,4 +50,18 @@ if (location.protocol === "file:") {
   } catch {
     // Storage refused: the WebUI then asks for the URL itself.
   }
+  exposeBridge();
+}
+
+/** Exposes `window.evoscientistDesktop`; `defaultFolder` only when the main
+ *  process has one (the Documents folder resolved). */
+function exposeBridge(): void {
+  const folder = ipcRenderer.sendSync("desktop:default-folder") as
+    | string
+    | null;
+  contextBridge.exposeInMainWorld("evoscientistDesktop", {
+    restartBackend: (): Promise<RestartResult> =>
+      ipcRenderer.invoke("desktop:restart-backend"),
+    ...(folder ? { defaultFolder: folder } : {}),
+  });
 }

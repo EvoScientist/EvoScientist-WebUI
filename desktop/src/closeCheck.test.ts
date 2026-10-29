@@ -6,11 +6,13 @@ import {
   hasWork,
   isBackgroundThread,
   waitForMemoryWorkers,
+  workStartedSince,
   type Request,
+  type WorkCheck,
 } from "./closeCheck";
 
-const thread = (run_kind?: string) => ({
-  thread_id: "t",
+const thread = (run_kind?: string, thread_id = "t") => ({
+  thread_id,
   metadata: run_kind ? { run_kind } : {},
 });
 const cron = (run_kind: string, enabled = true) => ({
@@ -63,7 +65,9 @@ describe("checkWork", () => {
     expect(r).toEqual({
       kind: "known",
       busyThreads: 0,
+      threadIds: [],
       jobs: [],
+      jobIds: [],
       scheduledTasks: 0,
     });
     expect(hasWork(r)).toBe(false);
@@ -72,9 +76,9 @@ describe("checkWork", () => {
   it("names running jobs and counts busy chats and enabled scheduled tasks", async () => {
     const req = backend({
       threads: [
-        thread(),
-        thread("evomemory_subagent_worker"),
-        thread("something_else"),
+        thread(undefined, "chat-1"),
+        thread("evomemory_subagent_worker", "memory-1"),
+        thread("something_else", "other-1"),
       ],
       jobs: {
         running: [{ process_id: "p1", name: "train.py" }, { process_id: "p2" }],
@@ -85,7 +89,9 @@ describe("checkWork", () => {
     expect(r).toEqual({
       kind: "known",
       busyThreads: 2,
+      threadIds: ["chat-1@", "other-1@"],
       jobs: ["train.py", "p2"],
+      jobIds: ["p1", "p2"],
       scheduledTasks: 1,
     });
     expect(
@@ -97,7 +103,19 @@ describe("checkWork", () => {
     expect(req.calls.find((c) => c.path === "/threads/search")?.body).toEqual({
       status: "busy",
       limit: 100,
-      select: ["thread_id", "status", "metadata"],
+      select: ["thread_id", "status", "metadata", "updated_at"],
+    });
+  });
+
+  it("tells a new run on a chat from the run seen before", async () => {
+    const at = (updated_at: string) =>
+      backend({
+        threads: [{ ...thread(undefined, "chat-1"), updated_at }],
+      });
+    const before = await checkWork(at("t0"));
+    expect(workStartedSince(before, await checkWork(at("t0")))).toBeNull();
+    expect(workStartedSince(before, await checkWork(at("t1")))).toMatchObject({
+      busyThreads: 1,
     });
   });
 
@@ -160,11 +178,78 @@ describe("waitForMemoryWorkers", () => {
   });
 });
 
+describe("workStartedSince", () => {
+  const known = (threadIds: string[], jobIds: string[] = []): WorkCheck => ({
+    kind: "known",
+    busyThreads: threadIds.length,
+    threadIds,
+    jobs: jobIds.map((id) => `name-${id}`),
+    jobIds,
+    scheduledTasks: 3,
+  });
+  const unknown: WorkCheck = { kind: "unknown", reason: "timeout" };
+
+  it("is null when nothing new runs, also when work ended", () => {
+    expect(
+      workStartedSince(known(["a"], ["j"]), known(["a"], ["j"]))
+    ).toBeNull();
+    expect(workStartedSince(known(["a", "b"]), known(["b"]))).toBeNull();
+  });
+
+  it("returns only the chats and jobs that started since, without scheduled tasks", () => {
+    expect(
+      workStartedSince(known(["a"], ["j"]), known(["a", "b"], ["j", "k"]))
+    ).toEqual({
+      kind: "known",
+      busyThreads: 1,
+      threadIds: ["b"],
+      jobs: ["name-k"],
+      jobIds: ["k"],
+      scheduledTasks: 0,
+    });
+  });
+
+  it("asks again when the second check fails, unless the first one did", () => {
+    expect(workStartedSince(known([]), unknown)).toBe(unknown);
+    expect(workStartedSince(unknown, unknown)).toBeNull();
+  });
+
+  it("after a failed first check, asks about all work running at the second", () => {
+    expect(workStartedSince(unknown, known(["a"], ["j"]))).toEqual({
+      kind: "known",
+      busyThreads: 1,
+      threadIds: ["a"],
+      jobs: ["name-j"],
+      jobIds: ["j"],
+      scheduledTasks: 0,
+    });
+    expect(workStartedSince(unknown, known([]))).toBeNull();
+  });
+
+  it("tells a new job from one of the same name seen before", () => {
+    const job = (id: string): WorkCheck => ({
+      kind: "known",
+      busyThreads: 0,
+      threadIds: [],
+      jobs: ["train.py"],
+      jobIds: [id],
+      scheduledTasks: 0,
+    });
+    expect(workStartedSince(job("p1"), job("p1"))).toBeNull();
+    expect(workStartedSince(job("p1"), job("p2"))).toMatchObject({
+      jobs: ["train.py"],
+      jobIds: ["p2"],
+    });
+  });
+});
+
 describe("confirmation", () => {
   const idle = {
     kind: "known" as const,
     busyThreads: 0,
+    threadIds: [],
     jobs: [],
+    jobIds: [],
     scheduledTasks: 0,
   };
 
