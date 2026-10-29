@@ -7,6 +7,7 @@
 import type { BootError, BootState } from "./boot";
 import { DEFAULT_BACKEND_PORT } from "./paths";
 import type { Stage } from "./setup";
+import type { UpdateState } from "./appUpdate";
 import type { UpdateView } from "./update";
 
 export type ActionId =
@@ -580,4 +581,35 @@ export function errorScreen(error: BootError, ctx: ScreenContext): ErrorScreen {
         }
       : {}),
   };
+}
+
+/** The status page's line for an app update (W04), with its button. The
+ *  WebUI page shows the same texts (src/app/components/DesktopUpdateNotice.tsx). */
+export interface UpdateOffer {
+  text: string;
+  action: "download_update" | "restart_to_update" | null;
+}
+
+export function updateOffer(s: UpdateState): UpdateOffer | null {
+  switch (s.kind) {
+    case "none":
+      return null;
+    case "available":
+      return {
+        text: s.failed
+          ? `The download of EvoScientist ${s.version} did not finish.`
+          : `EvoScientist ${s.version} is available.`,
+        action: "download_update",
+      };
+    case "downloading":
+      return {
+        text: `Downloading EvoScientist ${s.version}... ${s.percent}%`,
+        action: null,
+      };
+    case "ready":
+      return {
+        text: `EvoScientist ${s.version} is ready to install.`,
+        action: "restart_to_update",
+      };
+  }
 }

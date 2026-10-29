@@ -26,9 +26,11 @@ import {
   type MenuItemConstructorOptions,
   type WebContents,
 } from "electron";
+import { autoUpdater, CancellationToken } from "electron-updater";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createApp, type AppWindow } from "./app";
+import { brief, createAppUpdate } from "./appUpdate";
 import type { Manifest } from "./boot";
 import { backendRequest, checkWork, waitForMemoryWorkers } from "./closeCheck";
 import { writeCrashReport } from "./crash";
@@ -132,6 +134,30 @@ function readKeptMirror(): boolean | null {
     return null;
   }
 }
+
+/** App updates from GitHub Releases (W04): only an installed Windows app
+ *  updates itself; macOS packaging is W06. electron-updater's own lines go
+ *  to desktop.log too. */
+const appUpdate =
+  app.isPackaged && process.platform === "win32"
+    ? createAppUpdate({
+        updater: (() => {
+          autoUpdater.autoDownload = false;
+          autoUpdater.autoInstallOnAppQuit = false;
+          autoUpdater.logger = {
+            info: (m: unknown) => log.info(`updater: ${m}`),
+            warn: (m: unknown) => log.warn(`updater: ${m}`),
+            error: (m: unknown) => log.warn(`updater: ${brief(m)}`),
+            debug: () => {},
+          };
+          return autoUpdater;
+        })(),
+        newToken: () => new CancellationToken(),
+        online: () => net.isOnline(),
+        log,
+        onChange: (s) => desktop.updateChanged(s),
+      })
+    : null;
 
 const desktop = createApp({
   appVersion: app.getVersion(),
@@ -295,6 +321,8 @@ const desktop = createApp({
       toolDir: uvToolDir(childEnv, folders.dataDir),
     }),
 
+  appUpdate,
+
   checkWork: (url) => checkWork(backendRequest(url)),
   waitForMemoryWorkers: (url, cancelled) =>
     waitForMemoryWorkers(backendRequest(url), { cancelled }),
@@ -319,6 +347,11 @@ function appWindow(w: BrowserWindow): AppWindow {
       return () => {
         for (const x of shown) if (!x.isDestroyed()) x.show();
       };
+    },
+    // Each page's preload listens on its own channel.
+    sendUpdate: (state, offer) => {
+      w.webContents.send("desktop:update", state);
+      w.webContents.send("status:update", offer);
     },
   };
 }
@@ -450,6 +483,19 @@ function registerIpc(): void {
   });
   ipcMain.handle("desktop:restart-backend", (e) =>
     desktop.restartFor(senderOrigin(e))
+  );
+  // W04: the app update, for the WebUI page and the status page.
+  ipcMain.handle("desktop:update-state", (e) =>
+    desktop.updateFor(senderOrigin(e), fromStatusPage(e))
+  );
+  ipcMain.handle("status:update-offer", (e) =>
+    desktop.updateOfferFor(fromStatusPage(e))
+  );
+  ipcMain.handle("desktop:update-download", (e) =>
+    desktop.downloadUpdateFor(senderOrigin(e), fromStatusPage(e))
+  );
+  ipcMain.handle("desktop:update-restart", (e) =>
+    desktop.restartToUpdateFor(senderOrigin(e), fromStatusPage(e))
   );
 }
 

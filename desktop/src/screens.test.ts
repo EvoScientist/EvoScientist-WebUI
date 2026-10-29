@@ -6,6 +6,7 @@ import {
   progressScreen,
   separateInstallQuestion,
   setupScreen,
+  updateOffer,
   updateQuestion,
   updateScreen,
 } from "./screens";
@@ -449,5 +450,39 @@ describe("core update screens (W03c)", () => {
     expect(errorScreen(err("setup_failed", { update: true }), ctx).title).toBe(
       "EvoScientist was updated, but some setup steps failed"
     );
+  });
+});
+
+describe("updateOffer (W04)", () => {
+  it("offers Download, then progress without a button, then Restart to update", () => {
+    expect(updateOffer({ kind: "none" })).toBeNull();
+    expect(
+      updateOffer({ kind: "available", version: "0.4.3", failed: false })
+    ).toEqual({
+      text: "EvoScientist 0.4.3 is available.",
+      action: "download_update",
+    });
+    expect(
+      updateOffer({ kind: "downloading", version: "0.4.3", percent: 42 })
+    ).toEqual({ text: "Downloading EvoScientist 0.4.3... 42%", action: null });
+    expect(updateOffer({ kind: "ready", version: "0.4.3" })).toEqual({
+      text: "EvoScientist 0.4.3 is ready to install.",
+      action: "restart_to_update",
+    });
+  });
+
+  it("says when a download did not finish and offers it again", () => {
+    expect(
+      updateOffer({ kind: "available", version: "0.4.3", failed: true })
+    ).toEqual({
+      text: "The download of EvoScientist 0.4.3 did not finish.",
+      action: "download_update",
+    });
+  });
+
+  it("has a screen for the wait before the installer", () => {
+    expect(progressScreen("preparing_update")).toMatchObject({
+      title: "Updating the EvoScientist app",
+    });
   });
 });

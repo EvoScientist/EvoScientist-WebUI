@@ -144,6 +144,8 @@ function fakeWindow() {
       calls.push("hide");
       return shownAgain;
     },
+    sendUpdate: (st, offer) =>
+      void calls.push(`update ${st.kind} ${offer?.action ?? "-"}`),
   };
   return w;
 }
@@ -1837,5 +1839,56 @@ describe("restart to update (W04)", () => {
     expect(
       h.log.lines.some((l) => l.includes("the installer did not start"))
     ).toBe(true);
+  });
+});
+
+describe("app update on the pages (W04)", () => {
+  const ready = {
+    state: { kind: "ready", version: "0.4.3" } as const,
+    start: vi.fn(),
+    check: vi.fn(async () => {}),
+    download: vi.fn(),
+    install: vi.fn(() => true),
+    stop: vi.fn(),
+  };
+  const UI = "http://127.0.0.1:4718";
+
+  it("sends each change to the page shown: the state for the WebUI, the offer for the status page", async () => {
+    const h = await launched({ appUpdate: ready });
+    h.app.updateChanged({ kind: "available", version: "0.4.3", failed: false });
+    expect(h.win.calls.at(-1)).toBe("update available download_update");
+    h.app.updateChanged({ kind: "none" });
+    expect(h.win.calls.at(-1)).toBe("update none -");
+  });
+
+  it("answers the UI's origin and the status page, and nothing else", async () => {
+    const h = await launched({ appUpdate: ready });
+    expect(h.app.updateFor(UI, false)).toEqual(ready.state);
+    expect(h.app.updateFor(null, true)).toEqual(ready.state);
+    expect(h.app.updateFor("https://evil.example", false)).toEqual({
+      kind: "none",
+    });
+    expect(h.app.updateOfferFor(true)).toMatchObject({
+      action: "restart_to_update",
+    });
+    expect(h.app.updateOfferFor(false)).toBeNull();
+    h.app.downloadUpdateFor("https://evil.example", false);
+    expect(ready.download).not.toHaveBeenCalled();
+    h.app.downloadUpdateFor(UI, false);
+    expect(ready.download).toHaveBeenCalledTimes(1);
+    await expect(
+      h.app.restartToUpdateFor("https://evil.example", false)
+    ).resolves.toEqual({ ok: false, code: "not_allowed" });
+    expect(ready.install).not.toHaveBeenCalled();
+  });
+
+  it("offers nothing where the app does not update itself", async () => {
+    const h = await launched();
+    expect(h.app.updateFor(UI, false)).toEqual({ kind: "none" });
+    expect(h.app.updateOfferFor(true)).toBeNull();
+    await expect(h.app.restartToUpdateFor(UI, false)).resolves.toEqual({
+      ok: false,
+      code: "not_ready",
+    });
   });
 });

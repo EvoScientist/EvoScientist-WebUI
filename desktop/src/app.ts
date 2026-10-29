@@ -45,13 +45,15 @@ import {
   separateInstallQuestion,
   setupScreen,
   updateQuestion,
+  updateOffer,
   updateScreen,
   type ActionId,
+  type UpdateOffer,
   type ErrorScreen,
   type Screen,
 } from "./screens";
 import type { UiServer } from "./uiServer";
-import type { AppUpdate } from "./appUpdate";
+import type { AppUpdate, UpdateState } from "./appUpdate";
 import type { UpdateRun, UpdateView } from "./update";
 
 /** How long the UI server gets to answer `/` after it starts. */
@@ -83,6 +85,9 @@ export interface AppWindow {
   /** Hides every visible window of the app, the ones the UI opened too, and
    *  returns a function that shows them again. */
   hideAll(): () => void;
+  /** Sends the app update's state to the page shown (W04): the WebUI's
+   *  bridge reads `state`, the status page `offer`. */
+  sendUpdate(state: UpdateState, offer: UpdateOffer | null): void;
 }
 
 export interface AppDeps {
@@ -236,6 +241,18 @@ export interface App {
    *  while a launch, restart, install, setup, core update or quit runs,
    *  `cancelled` on Cancel. On success the app ends. */
   restartToUpdate(): Promise<RestartResult>;
+  /** The app update's state changed: tells the page shown. */
+  updateChanged(state: UpdateState): void;
+  /** The app update for the WebUI page from `senderOrigin` or the status
+   *  page (`statusPage`); any other page gets nothing and starts nothing
+   *  (`not_allowed`). */
+  updateFor(senderOrigin: string | null, statusPage: boolean): UpdateState;
+  updateOfferFor(statusPage: boolean): UpdateOffer | null;
+  downloadUpdateFor(senderOrigin: string | null, statusPage: boolean): void;
+  restartToUpdateFor(
+    senderOrigin: string | null,
+    statusPage: boolean
+  ): Promise<RestartResult>;
   requestQuit(): Promise<void>;
   act(id: ActionId, arg: unknown): Promise<void>;
   /** The renderer or the preload is broken: a native dialog instead. */
@@ -1418,6 +1435,25 @@ export function createApp(deps: AppDeps): App {
         log.warn(`no default folder for the page: ${e}`);
         return null;
       }
+    },
+    updateChanged: (state) => {
+      log.info(`app update: ${JSON.stringify(state)}`);
+      win?.sendUpdate(state, updateOffer(state));
+    },
+    updateFor: (senderOrigin, statusPage) =>
+      (statusPage || fromUi(senderOrigin)) && deps.appUpdate
+        ? deps.appUpdate.state
+        : { kind: "none" },
+    updateOfferFor: (statusPage) =>
+      statusPage && deps.appUpdate ? updateOffer(deps.appUpdate.state) : null,
+    downloadUpdateFor: (senderOrigin, statusPage) => {
+      if (statusPage || fromUi(senderOrigin)) deps.appUpdate?.download();
+      else log.warn(`update download refused for the origin ${senderOrigin}`);
+    },
+    restartToUpdateFor: async (senderOrigin, statusPage) => {
+      if (statusPage || fromUi(senderOrigin)) return restartToUpdate();
+      log.warn(`restart to update refused for the origin ${senderOrigin}`);
+      return { ok: false, code: "not_allowed" };
     },
     restartFor: async (senderOrigin) => {
       if (fromUi(senderOrigin)) return restartFromPage();
