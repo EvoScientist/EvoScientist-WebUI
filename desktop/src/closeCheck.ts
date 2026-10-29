@@ -44,10 +44,14 @@ export type WorkCheck =
       kind: "known";
       /** Busy threads that are not memory workers or the proactive check. */
       busyThreads: number;
-      /** Their ids, to tell work that started later from work seen before. */
+      /** Their ids with `updated_at` (`id@updated_at`), to tell work that
+       *  started later from work seen before: a new run on a chat that was
+       *  idle in between gives a new `updated_at`. */
       threadIds: string[];
-      /** Names of running background jobs. */
+      /** Names of running background jobs (their process id when unnamed). */
       jobs: string[];
+      /** Their process ids, in the same order: two jobs can share a name. */
+      jobIds: string[];
       /** Enabled crons whose run_kind is scheduled_task. */
       scheduledTasks: number;
     }
@@ -57,25 +61,32 @@ export type WorkCheck =
  * The work in `after` that `before` did not show: chats and jobs that started
  * since, as a check of their own (no scheduled tasks), or null when there is
  * none. The user already answered for `before`, so only new work needs a
- * question; after an `unknown` check they answered for anything. A failed
- * `after` check counts as new work unless `before` failed too.
+ * question; an `unknown` check showed nothing, so after one, all running work
+ * counts as new. A failed `after` check counts as new work unless `before`
+ * failed too.
  */
 export function workStartedSince(
   before: WorkCheck,
   after: WorkCheck
 ): WorkCheck | null {
-  if (before.kind === "unknown") return null;
-  if (after.kind === "unknown") return after;
+  if (after.kind === "unknown") return before.kind === "unknown" ? null : after;
+  const seen =
+    before.kind === "known"
+      ? before
+      : { threadIds: [] as string[], jobIds: [] as string[] };
   const threadIds = after.threadIds.filter(
-    (id) => !before.threadIds.includes(id)
+    (id) => !seen.threadIds.includes(id)
   );
-  const jobs = after.jobs.filter((j) => !before.jobs.includes(j));
-  if (threadIds.length === 0 && jobs.length === 0) return null;
+  const newJobs = after.jobIds.flatMap((id, i) =>
+    seen.jobIds.includes(id) ? [] : [i]
+  );
+  if (threadIds.length === 0 && newJobs.length === 0) return null;
   return {
     kind: "known",
     busyThreads: threadIds.length,
     threadIds,
-    jobs,
+    jobs: newJobs.map((i) => after.jobs[i]),
+    jobIds: newJobs.map((i) => after.jobIds[i]),
     scheduledTasks: 0,
   };
 }
@@ -103,7 +114,7 @@ async function busyThreads(req: Request): Promise<unknown[]> {
       body: {
         status: "busy",
         limit: BUSY_LIMIT,
-        select: ["thread_id", "status", "metadata"],
+        select: ["thread_id", "status", "metadata", "updated_at"],
       },
       timeoutMs: PROBE_TIMEOUT_MS,
     }),
@@ -114,8 +125,11 @@ async function busyThreads(req: Request): Promise<unknown[]> {
   return body;
 }
 
-/** The names of the running background jobs (their process id when unnamed). */
-async function runningJobs(req: Request): Promise<string[]> {
+/** The running background jobs: a name to show (their process id when
+ *  unnamed) and the process id to compare. */
+async function runningJobs(
+  req: Request
+): Promise<{ name: string; id: string }[]> {
   const body = ok(
     await req("/api/bg_processes/running", { timeoutMs: PROBE_TIMEOUT_MS }),
     "bg_processes/running"
@@ -124,13 +138,14 @@ async function runningJobs(req: Request): Promise<string[]> {
   };
   if (!body || !Array.isArray(body.running))
     throw new Error("bg_processes/running has no list");
-  return body.running.map((j) =>
-    j &&
-    typeof j === "object" &&
-    typeof (j as { name?: unknown }).name === "string"
-      ? (j as { name: string }).name
-      : String((j as { process_id?: unknown })?.process_id ?? "?")
-  );
+  return body.running.map((j) => {
+    const { name, process_id } = (j ?? {}) as {
+      name?: unknown;
+      process_id?: unknown;
+    };
+    const id = String(process_id ?? "?");
+    return { name: typeof name === "string" ? name : id, id };
+  });
 }
 
 /** Enabled scheduled tasks, all pages. The filter is sent to the server and
@@ -177,10 +192,15 @@ export async function checkWork(req: Request): Promise<WorkCheck> {
     return {
       kind: "known",
       busyThreads: chats.length,
-      threadIds: chats.map((t) =>
-        String((t as { thread_id?: unknown })?.thread_id ?? "")
-      ),
-      jobs,
+      threadIds: chats.map((t) => {
+        const { thread_id, updated_at } = (t ?? {}) as {
+          thread_id?: unknown;
+          updated_at?: unknown;
+        };
+        return `${String(thread_id ?? "")}@${String(updated_at ?? "")}`;
+      }),
+      jobs: jobs.map((j) => j.name),
+      jobIds: jobs.map((j) => j.id),
       scheduledTasks: tasks,
     };
   } catch (e) {

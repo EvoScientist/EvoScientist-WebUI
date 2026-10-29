@@ -26,6 +26,7 @@ const NO_WORK = {
   busyThreads: 0,
   threadIds: [] as string[],
   jobs: [],
+  jobIds: [],
   scheduledTasks: 0,
 };
 const BUSY: WorkCheck = { ...NO_WORK, busyThreads: 2, threadIds: ["t1", "t2"] };
