@@ -183,11 +183,11 @@ export type QuitState = "none" | "checking" | "waiting" | "stopping";
 
 /** What the bridge's `restartBackend()` answers the page (W01's
  *  `src/lib/desktop.ts`): `not_owned` for a reused backend, `cancelled` when
- *  the user cancelled a busy check, `busy` while a launch, restart, screen
- *  action or quit runs or when a quit or the end of the session starts during
- *  the restart, else the code of the error screen the restart showed
- *  (`internal_error` for an exception, `ui_server_exited` when only the UI
- *  server failed). */
+ *  the user cancelled a busy check, `busy` while a launch, a restart from the
+ *  menu, a screen action or a quit runs or when a quit or the end of the
+ *  session starts during the restart, else the code of the error screen the
+ *  restart showed (`internal_error` for an exception, `ui_server_exited` when
+ *  only the UI server failed). */
 export type RestartResult = { ok: true } | { ok: false; code: string };
 
 /** Launch phases that a restart from the page keeps off the window: the page
@@ -768,10 +768,18 @@ export function createApp(deps: AppDeps): App {
     return exclusive(async () => void (await restartLocked(false)));
   }
 
+  let pageRun: Promise<RestartResult> | null = null;
+
   /** The bridge's restart (W03d): the menu's steps, while the page stays
    *  shown when it still fits (`showUiLocked`); resolves once the new backend
-   *  is ready, or with the reason it did not restart. */
-  async function restartFromPage(): Promise<RestartResult> {
+   *  is ready, or with the reason it did not restart. A call while one runs
+   *  waits for that one. */
+  function restartFromPage(): Promise<RestartResult> {
+    pageRun ??= runPageRestart().finally(() => (pageRun = null));
+    return pageRun;
+  }
+
+  async function runPageRestart(): Promise<RestartResult> {
     if (working || quitState !== "none") {
       log.info("restart from the page: busy");
       return { ok: false, code: "busy" };
@@ -834,8 +842,14 @@ export function createApp(deps: AppDeps): App {
         before,
         await checkWorkLogged(current.url, "restart, after the wait")
       );
-      if (started && !(await askStop("restart", started)))
+      if (
+        started &&
+        ready === current &&
+        !(await askStop("restart", started))
+      ) {
+        if (!showingUi) await showUiLocked();
         return { ok: false, code: "cancelled" };
+      }
       if (quitState !== "none" || sessionEnd.ending || !session)
         return { ok: false, code: "busy" };
     }

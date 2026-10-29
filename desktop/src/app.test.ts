@@ -882,6 +882,114 @@ describe("restart from the page (bridge)", () => {
     await h.app.restartBackend();
     expect(h.win.calls.slice(before)[0]).toBe("status page");
   });
+
+  it("a second call while the restart runs waits for it", async () => {
+    const gate = deferred<void>();
+    const h = await launched({
+      waitForMemoryWorkers: async () => (await gate.promise, "quiet"),
+    });
+    const first = h.app.restartFromPage();
+    await settle();
+    const second = h.app.restartFromPage();
+    gate.resolve();
+    await expect(first).resolves.toEqual({ ok: true });
+    await expect(second).resolves.toEqual({ ok: true });
+    expect(h.sessions).toHaveLength(2);
+    await expect(h.app.restartFromPage()).resolves.toEqual({ ok: true });
+    expect(h.sessions).toHaveLength(3);
+  });
+
+  it("a backend lost during the wait starts a new one without a second question", async () => {
+    const gate = deferred<void>();
+    let lost = false;
+    const h = await launched({
+      checkWork: async () =>
+        lost ? { kind: "unknown", reason: "fetch failed" } : BUSY,
+      waitForMemoryWorkers: async () => (await gate.promise, "unreachable"),
+    });
+    const result = h.app.restartFromPage();
+    await settle();
+    lost = true;
+    h.sessions[0].lose();
+    gate.resolve();
+    await expect(result).resolves.toEqual({ ok: true });
+    expect(h.messageBox).toHaveBeenCalledTimes(1);
+    expect(h.sessions).toHaveLength(2);
+  });
+
+  it("a backend lost during the second check is not asked about", async () => {
+    const second = deferred<WorkCheck>();
+    let calls = 0;
+    const h = await launched({
+      checkWork: async () => (++calls === 1 ? BUSY : second.promise),
+    });
+    const result = h.app.restartFromPage();
+    await vi.waitFor(() => expect(calls).toBe(2));
+    h.sessions[0].lose();
+    second.resolve({ kind: "unknown", reason: "fetch failed" });
+    await expect(result).resolves.toEqual({ ok: true });
+    expect(h.messageBox).toHaveBeenCalledTimes(1);
+    expect(h.sessions).toHaveLength(2);
+  });
+
+  it("Cancel at the second question brings back a page the UI server lost", async () => {
+    let work: WorkCheck = BUSY;
+    const h = await launched({ checkWork: async () => work });
+    h.messageBox
+      .mockImplementationOnce(async () => {
+        h.uis[0].exit(1);
+        await settle();
+        work = { ...BUSY, busyThreads: 1, threadIds: ["t3"] };
+        return { response: 0 };
+      })
+      .mockResolvedValueOnce({ response: 1 });
+    await expect(h.app.restartFromPage()).resolves.toEqual({
+      ok: false,
+      code: "cancelled",
+    });
+    expect(h.messageBox).toHaveBeenCalledTimes(2);
+    expect(h.sessions[0].stopped.count).toBe(0);
+    expect(h.uis).toHaveLength(2);
+    expect(h.win.calls.at(-1)).toBe("load http://127.0.0.1:4718/");
+  });
+
+  it("a quit during the wait answers busy and restarts nothing", async () => {
+    const gate = deferred<void>();
+    const h = await launched({
+      waitForMemoryWorkers: async () => (await gate.promise, "quiet"),
+    });
+    const result = h.app.restartFromPage();
+    await settle();
+    const quit = h.app.requestQuit();
+    await vi.waitFor(() => expect(h.app.quitState).not.toBe("none"));
+    gate.resolve();
+    await expect(result).resolves.toEqual({ ok: false, code: "busy" });
+    expect(h.log.lines.some((l) => l.includes("after the wait"))).toBe(false);
+    await quit;
+    expect(h.sessions).toHaveLength(1);
+  });
+
+  it("a quit while the second question is open answers busy", async () => {
+    let work: WorkCheck = NO_WORK;
+    const gate = deferred<void>();
+    const answer = deferred<{ response: number }>();
+    const h = await launched({
+      checkWork: async () => work,
+      waitForMemoryWorkers: async () => (await gate.promise, "quiet"),
+    });
+    h.messageBox.mockImplementationOnce(() => answer.promise);
+    const result = h.app.restartFromPage();
+    await settle();
+    work = BUSY;
+    gate.resolve();
+    await vi.waitFor(() => expect(h.messageBox).toHaveBeenCalledTimes(1));
+    const quit = h.app.requestQuit();
+    await vi.waitFor(() => expect(h.app.quitState).not.toBe("none"));
+    answer.resolve({ response: 0 });
+    await expect(result).resolves.toEqual({ ok: false, code: "busy" });
+    await quit;
+    expect(h.sessions).toHaveLength(1);
+  });
 });
 
 describe("end of the session", () => {
