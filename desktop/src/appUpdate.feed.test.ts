@@ -202,6 +202,8 @@ describe("electron-updater against a loopback feed", () => {
     t.u.download();
     await t.until((s) => s.kind !== "downloading");
     expect(t.u.state).toEqual({ kind: "ready", version: "0.4.3" });
+    // The installer electron-updater saved is the one Restart to update runs.
+    expect(t.u.installable()).toBe(true);
   });
 
   it("asks the feed again after a check that got no answer", async () => {

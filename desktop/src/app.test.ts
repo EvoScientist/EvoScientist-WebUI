@@ -1660,6 +1660,7 @@ describe("restart to update (W04)", () => {
       start: vi.fn(),
       check: vi.fn(async () => {}),
       download: vi.fn(),
+      installable: vi.fn(() => u.state.kind === "ready"),
       install: vi.fn(() => {
         calls?.push("install");
         return u.state.kind === "ready";
@@ -1840,6 +1841,94 @@ describe("restart to update (W04)", () => {
       h.log.lines.some((l) => l.includes("the installer did not start"))
     ).toBe(true);
   });
+
+  it("stops nothing when the downloaded installer cannot be opened", async () => {
+    const appUpdate = fakeAppUpdate();
+    appUpdate.installable.mockReturnValue(false);
+    const h = await launched({ appUpdate, checkWork: async () => BUSY });
+    await expect(h.app.restartToUpdate()).resolves.toEqual({
+      ok: false,
+      code: "not_ready",
+    });
+    expect(h.messageBox).not.toHaveBeenCalled();
+    expect(h.sessions[0].stopped.count).toBe(0);
+    expect(appUpdate.install).not.toHaveBeenCalled();
+    expect(h.app.quitState).toBe("none");
+  });
+
+  it("an error before the stops cancels: the backend keeps running and Quit still works", async () => {
+    const appUpdate = fakeAppUpdate();
+    const h = await launched({ appUpdate, checkWork: async () => BUSY });
+    h.messageBox.mockRejectedValueOnce(new Error("no window"));
+    await expect(h.app.restartToUpdate()).resolves.toEqual({
+      ok: false,
+      code: "cancelled",
+    });
+    expect(h.app.quitState).toBe("none");
+    expect(h.sessions[0].stopped.count).toBe(0);
+    expect(appUpdate.install).not.toHaveBeenCalled();
+    expect(
+      h.log.lines.some((l) => l.includes("restart to update failed: no window"))
+    ).toBe(true);
+    h.messageBox.mockResolvedValue({ response: 0 });
+    await h.app.requestQuit();
+    expect(h.exit).toHaveBeenCalled();
+  });
+
+  it("an error after the stops starts the app again on the current version", async () => {
+    const appUpdate = fakeAppUpdate();
+    const h = await launched({ appUpdate });
+    h.uis[0].ui.stop = async () => {
+      throw new Error("record not written");
+    };
+    await expect(h.app.restartToUpdate()).resolves.toMatchObject({
+      ok: false,
+      code: "update_failed",
+    });
+    expect(appUpdate.install).not.toHaveBeenCalled();
+    expect(h.app.exiting).toBe(false);
+    expect(h.app.quitState).toBe("none");
+    expect(h.sessions).toHaveLength(2);
+  });
+
+  it("a second launch during the memory wait cancels the update", async () => {
+    let cancelledFn: () => boolean = () => false;
+    const waiting = deferred<void>();
+    const appUpdate = fakeAppUpdate();
+    const h = await launched({
+      appUpdate,
+      waitForMemoryWorkers: async (_url, cancelled) => {
+        cancelledFn = cancelled;
+        waiting.resolve();
+        while (!cancelledFn()) await settle();
+        return "cancelled" as MemoryWaitResult;
+      },
+    });
+    const restart = h.app.restartToUpdate();
+    await waiting.promise;
+    expect(h.app.quitState).toBe("waiting");
+    h.app.secondInstance();
+    await expect(restart).resolves.toEqual({ ok: false, code: "cancelled" });
+    expect(h.sessions[0].stopped.count).toBe(0);
+    expect(appUpdate.install).not.toHaveBeenCalled();
+    expect(h.app.quitState).toBe("none");
+  });
+
+  it("exits without the installer when the session ends during the stops", async () => {
+    const appUpdate = fakeAppUpdate();
+    const h = await launched({ appUpdate });
+    const stop = h.sessions[0].stop;
+    h.sessions[0].stop = async () => {
+      h.app.endOfSession("session-end (logoff)");
+      return stop();
+    };
+    await expect(h.app.restartToUpdate()).resolves.toEqual({
+      ok: false,
+      code: "busy",
+    });
+    expect(h.exit).toHaveBeenCalled();
+    expect(appUpdate.install).not.toHaveBeenCalled();
+  });
 });
 
 describe("app update on the pages (W04)", () => {
@@ -1848,6 +1937,7 @@ describe("app update on the pages (W04)", () => {
     start: vi.fn(),
     check: vi.fn(async () => {}),
     download: vi.fn(),
+    installable: vi.fn(() => true),
     install: vi.fn(() => true),
     stop: vi.fn(),
   };
@@ -1965,6 +2055,7 @@ describe("the installer asks the app to quit (D12)", () => {
         start: vi.fn(),
         check: vi.fn(async () => {}),
         download: vi.fn(),
+        installable: vi.fn(() => true),
         install: vi.fn(() => true),
         stop: vi.fn(),
       },

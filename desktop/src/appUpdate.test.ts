@@ -12,6 +12,8 @@ import {
 
 type CheckResult = Awaited<ReturnType<Updater["checkForUpdates"]>>;
 
+const INSTALLER = "C:\\cache\\pending\\EvoScientist-Setup.exe";
+
 function fakeUpdater() {
   let progress: ((p: { percent: number }) => void) | null = null;
   const pending: {
@@ -27,8 +29,8 @@ function fakeUpdater() {
     ),
     downloadUpdate: vi.fn(
       (_token: CancellationToken) =>
-        new Promise<unknown>((resolve, reject) => {
-          pending.download = { resolve: () => resolve([]), reject };
+        new Promise<string[]>((resolve, reject) => {
+          pending.download = { resolve: () => resolve([INSTALLER]), reject };
         })
     ),
     quitAndInstall: vi.fn(),
@@ -54,7 +56,9 @@ const none: CheckResult = {
   updateInfo: { version: "0.4.2" },
 };
 
-function setup(opts: { online?: boolean } = {}) {
+function setup(
+  opts: { online?: boolean; canOpen?: (p: string) => boolean } = {}
+) {
   const f = fakeUpdater();
   const states: UpdateState[] = [];
   const logs: string[] = [];
@@ -73,6 +77,7 @@ function setup(opts: { online?: boolean } = {}) {
       warn: (m) => logs.push(`warn ${m}`),
     },
     onChange: (s) => states.push(s),
+    canOpen: opts.canOpen ?? ((p) => p === INSTALLER),
   });
   return {
     ...f,
@@ -299,6 +304,30 @@ describe("install", () => {
     await settle();
     expect(t.u.install()).toBe(true);
     expect(t.updater.quitAndInstall).toHaveBeenCalledWith(false, true);
+  });
+
+  it("offers the download again when the downloaded installer cannot be opened", async () => {
+    let present = true;
+    const t = setup({ canOpen: (p) => present && p === INSTALLER });
+    const done = t.u.check();
+    t.pending.check?.resolve(available("0.4.3"));
+    await done;
+    t.u.download();
+    t.pending.download?.resolve();
+    await settle();
+    expect(t.u.installable()).toBe(true);
+    present = false; // an antivirus removed it
+    expect(t.u.installable()).toBe(false);
+    expect(t.u.state).toEqual({
+      kind: "available",
+      version: "0.4.3",
+      failed: true,
+    });
+    expect(t.u.install()).toBe(false);
+    expect(t.updater.quitAndInstall).not.toHaveBeenCalled();
+    expect(t.logs.join("\n")).toMatch(
+      /update install: the downloaded installer cannot be opened \(C:.*EvoScientist-Setup\.exe\); offering the download again/
+    );
   });
 });
 

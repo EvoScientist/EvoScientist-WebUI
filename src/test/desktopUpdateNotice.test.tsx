@@ -12,8 +12,9 @@ import type { AppUpdateState } from "@/lib/desktop";
 
 function fakeApp(initial: AppUpdateState) {
   let send: (s: AppUpdateState) => void = () => {};
+  let current = initial;
   const appUpdate = {
-    state: vi.fn(async () => initial),
+    state: vi.fn(async () => current),
     onState: vi.fn((cb: (s: AppUpdateState) => void) => {
       send = cb;
       return () => {};
@@ -22,7 +23,14 @@ function fakeApp(initial: AppUpdateState) {
     restartToUpdate: vi.fn(async () => ({ ok: false, code: "busy" })),
   };
   window.evoscientistDesktop = { appUpdate };
-  return { appUpdate, send: (s: AppUpdateState) => act(() => send(s)) };
+  return {
+    appUpdate,
+    send: (s: AppUpdateState) =>
+      act(() => {
+        current = s;
+        send(s);
+      }),
+  };
 }
 
 function mount() {
@@ -94,6 +102,29 @@ describe("DesktopUpdateNotice", () => {
     expect(
       screen.getByRole("button", { name: "Restart to update" })
     ).toBeTruthy();
+  });
+
+  it("offers the download again when Restart to update finds no installer", async () => {
+    const app = fakeApp({ kind: "ready", version: "0.4.3" });
+    app.appUpdate.restartToUpdate.mockImplementationOnce(async () => {
+      // The app moved the offer back before answering.
+      app.send({ kind: "available", version: "0.4.3", failed: true });
+      return { ok: false, code: "not_ready" };
+    });
+    mount();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Restart to update" })
+    );
+    expect(
+      await screen.findByText(
+        "The download of EvoScientist 0.4.3 did not finish."
+      )
+    ).toBeTruthy();
+    await act(() => new Promise((r) => setTimeout(r, 50)));
+    expect(screen.getByRole("button", { name: "Download" })).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Restart to update" })
+    ).toBeNull();
   });
 
   it("says when a download did not finish", async () => {

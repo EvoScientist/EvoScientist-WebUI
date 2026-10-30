@@ -99,10 +99,11 @@ export function DesktopUpdateNotice() {
                   void update.download();
                   return;
                 }
-                void update.restartToUpdate().then((r) => {
+                void update.restartToUpdate().then(async (r) => {
                   // On success the app ends; otherwise the offer stays and
-                  // says why.
-                  if (!r.ok) show(s, RESTART_NOTES[r.code]);
+                  // says why, from the app's state now (an installer that
+                  // could not be opened is offered for download again).
+                  if (!r.ok) show(await update.state(), RESTART_NOTES[r.code]);
                 });
               },
             }

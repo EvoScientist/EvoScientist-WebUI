@@ -1084,9 +1084,11 @@ export function createApp(deps: AppDeps): App {
    *  "Getting ready to update..." during the memory wait, a second check for
    *  work that started meanwhile (a scheduled task; Cancel brings the app
    *  back with its backend), the stops, and only then the installer, which
-   *  ends every process in the install folder about 1.3 s after it starts.
-   *  A backend the app reused keeps running. Never at the end of the session
-   *  and never on an ordinary quit: nothing else calls `install()`. */
+   *  first waits for the app to end (installer/check-app-running.nsh). A
+   *  backend the app reused keeps running. Never at the end of the session
+   *  and never on an ordinary quit: nothing else calls `install()`. An
+   *  installer file that cannot be opened stops it before anything stops (the
+   *  download is offered again); an error in the steps brings the app back. */
   async function restartToUpdate(): Promise<RestartResult> {
     const update = deps.appUpdate;
     if (!update || update.state.kind !== "ready")
@@ -1095,70 +1097,87 @@ export function createApp(deps: AppDeps): App {
       log.info("restart to update: busy");
       return { ok: false, code: "busy" };
     }
+    if (!update.installable()) return { ok: false, code: "not_ready" };
     quitState = "checking";
     heldError = null;
+    let stopping = false;
     const cancel = (): RestartResult => {
       quitState = "none";
       resumeAfterCancelledQuit();
       return { ok: false, code: "cancelled" };
     };
-    const owned = ready?.owned && session ? ready : null;
-    const before = owned
-      ? await checkWorkLogged(owned.url, "the app update")
-      : null;
-    if (before && !(await askStop("update", before))) return cancel();
-    if (sessionEnd.ending) return { ok: false, code: "busy" };
-    showScreen(progressScreen("preparing_update"));
-    if (owned && before && ready === owned) {
-      quitState = "waiting";
-      quitCancelled = false;
-      log.info("waiting for the memory workers before the app update");
-      const r = await deps.waitForMemoryWorkers(
-        owned.url,
-        () => quitCancelled || sessionEnd.ending
-      );
-      log.info(`memory workers: ${r}`);
+    try {
+      const owned = ready?.owned && session ? ready : null;
+      const before = owned
+        ? await checkWorkLogged(owned.url, "the app update")
+        : null;
+      if (before && !(await askStop("update", before))) return cancel();
+      // The session ends: Windows ends the app right after (endOfSession).
       if (sessionEnd.ending) return { ok: false, code: "busy" };
-      if (quitCancelled) {
-        log.info("second launch during the wait: app update cancelled");
-        return cancel();
+      showScreen(progressScreen("preparing_update"));
+      if (owned && before && ready === owned) {
+        quitState = "waiting";
+        quitCancelled = false;
+        log.info("waiting for the memory workers before the app update");
+        const r = await deps.waitForMemoryWorkers(
+          owned.url,
+          () => quitCancelled || sessionEnd.ending
+        );
+        log.info(`memory workers: ${r}`);
+        if (sessionEnd.ending) return { ok: false, code: "busy" };
+        if (quitCancelled) {
+          log.info("second launch during the wait: app update cancelled");
+          return cancel();
+        }
+        const started = workStartedSince(
+          before,
+          await checkWorkLogged(owned.url, "the app update, after the wait")
+        );
+        if (started && ready === owned && !(await askStop("update", started)))
+          return cancel();
+        if (sessionEnd.ending) return { ok: false, code: "busy" };
       }
-      const started = workStartedSince(
-        before,
-        await checkWorkLogged(owned.url, "the app update, after the wait")
+      quitState = "stopping";
+      stopping = true;
+      await stopUi();
+      if (session) {
+        const s = session;
+        session = null;
+        ready = null;
+        log.info(
+          `stopping deploy (${owned ? "owned" : "reused"}): ${await s.stop()}`
+        );
+      }
+      if (stoppingDeploy)
+        log.info(
+          `waiting for the deploy being stopped: ${await stoppingDeploy}`
+        );
+      if (sessionEnd.ending) {
+        exitNow();
+        return { ok: false, code: "busy" };
+      }
+      // The installer's `app.quit()` must go through the close handlers.
+      exiting = true;
+      update.stop();
+      if (!update.install()) return updateDidNotStart();
+      void (deps.installWait ?? defaultInstallWait)().then(() => {
+        if (exiting && quitState === "stopping") void updateDidNotStart();
+      });
+      return { ok: true };
+    } catch (e) {
+      log.warn(
+        `restart to update failed: ${e instanceof Error ? e.message : e}`
       );
-      if (started && ready === owned && !(await askStop("update", started)))
-        return cancel();
-      if (sessionEnd.ending) return { ok: false, code: "busy" };
+      if (!stopping) return cancel();
+      return updateDidNotStart();
     }
-    quitState = "stopping";
-    await stopUi();
-    if (session) {
-      const s = session;
-      session = null;
-      ready = null;
-      log.info(
-        `stopping deploy (${owned ? "owned" : "reused"}): ${await s.stop()}`
-      );
-    }
-    if (stoppingDeploy)
-      log.info(`waiting for the deploy being stopped: ${await stoppingDeploy}`);
-    if (sessionEnd.ending) {
-      exitNow();
-      return { ok: false, code: "busy" };
-    }
-    // The installer's `app.quit()` must go through the close handlers.
-    exiting = true;
-    update.stop();
-    if (!update.install()) return updateDidNotStart();
-    void (deps.installWait ?? defaultInstallWait)().then(() => {
-      if (exiting && quitState === "stopping") void updateDidNotStart();
-    });
-    return { ok: true };
   }
 
-  /** The installer did not start (or did not end the app): the app starts
-   *  again on the current version and says so. */
+  /** The installer file could not be opened, the steps failed after the
+   *  stops, or the app was still running 15 s after the installer was asked
+   *  for: the app starts again on the current version and says so. (A start
+   *  of the installer that fails after electron-updater has quit the app is
+   *  not seen: the next launch offers the update again.) */
   async function updateDidNotStart(): Promise<RestartResult> {
     log.warn("restart to update: the installer did not start; launching again");
     exiting = false;
@@ -1169,7 +1188,7 @@ export function createApp(deps: AppDeps): App {
       title: "EvoScientist",
       message: "The update could not be installed.",
       detail:
-        "EvoScientist runs the current version. The desktop log has the details; the next check offers the update again.",
+        "EvoScientist runs the current version. The desktop log has the details; the app offers the update again.",
       buttons: ["OK"],
       noLink: true,
     });
