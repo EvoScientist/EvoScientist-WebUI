@@ -144,7 +144,10 @@ function updaterFor(feed: string, name: string) {
   return updater;
 }
 
-function flow(feed: string, name: string) {
+// electron-updater reports progress at most once a second, so a watchdog
+// shorter than that cancels a download that is merely slow; only the stall
+// test uses one.
+function flow(feed: string, name: string, stallMs = 5_000) {
   const logs: string[] = [];
   const waiters: { pred: (s: UpdateState) => boolean; done: () => void }[] = [];
   const u = createAppUpdate({
@@ -161,7 +164,7 @@ function flow(feed: string, name: string) {
         else waiters.push(w);
       }
     },
-    stallMs: 300,
+    stallMs,
     checkLimitMs: 5_000,
   });
   const until = (pred: (s: UpdateState) => boolean) =>
@@ -211,7 +214,7 @@ describe("electron-updater against a loopback feed", () => {
   });
 
   it("cancels a download that stops receiving data", async () => {
-    const t = flow("stall", "stall");
+    const t = flow("stall", "stall", 300);
     await t.u.check();
     t.u.download();
     await t.until((s) => s.kind !== "downloading");
