@@ -8,8 +8,14 @@
 // 5. the bundled UI server under the packaged executable with
 //    ELECTRON_RUN_AS_NODE=1: `/` and one static asset answer 200.
 // Usage: node scripts/smoke.mjs --core pinned|newest|<version> [--app <dir>]
+//                                [--use-my-folders]
 //        node scripts/smoke.mjs --list   (the versions to test, as JSON: one
 //        when the newest release inside the range is the pinned one)
+// The test installs the core and runs setup in this user's own folders, as
+// the app does (and on Windows the install script adds to the user's PATH),
+// so outside CI it runs only with --use-my-folders: on a CI runner, a
+// throwaway account, or with HOME / USERPROFILE / APPDATA / LOCALAPPDATA
+// pointed at a scratch folder.
 // `pinned` is the version the app installs, `newest` the newest release
 // inside its range (PyPI). Ends with `SMOKE OK core <version>` or
 // `SMOKE FAILED: <why>`, followed by the cleanups' lines.
@@ -36,6 +42,7 @@ const { values } = parseArgs({
     core: { type: "string" },
     app: { type: "string" },
     list: { type: "boolean" },
+    "use-my-folders": { type: "boolean" },
   },
 });
 const win = process.platform === "win32";
@@ -80,6 +87,10 @@ if (values.list) {
 async function main() {
   const version = await coreVersion();
   if (!version) fail(`the core range ${range} names no version`);
+  if (!process.env.CI && !values["use-my-folders"])
+    fail(
+      "this installs a core and runs setup in this user's folders; outside CI pass --use-my-folders (see the header)"
+    );
   const folders = paths.resolveFolders(process.env);
   const env = paths.folderEnv(process.env, folders);
   const uiVersion = versions.bundledUiVersion(serverJs);
