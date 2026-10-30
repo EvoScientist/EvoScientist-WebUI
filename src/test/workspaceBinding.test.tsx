@@ -93,6 +93,63 @@ describe("project binding", () => {
     getActiveMockClient().setThreadRecord(THREAD, { metadata });
   }
 
+  it.each(["thread", "checkpoint"])(
+    "keeps a read-only run-folder conversation's project from its %s",
+    async (source) => {
+      const folders = { workspace_dir: OTHER, run_dir: `${OTHER}/runs/r1` };
+      openThread({
+        graph_id: "EvoScientist",
+        ...(source === "thread" ? folders : {}),
+      });
+      if (source === "checkpoint") stream.setHistory([{ metadata: folders }]);
+      const projects = both();
+      const { result } = renderChat({ projects });
+
+      await waitFor(() => expect(result.current.projectKey).toBe(OTHER));
+      expect(projects.selectProject).toHaveBeenCalledWith(OTHER);
+      expect(result.current.binding.kind).toBe("readOnly");
+      expect(result.current.canSend).toBe(false);
+      act(() => {
+        expect(result.current.sendMessage("hi")).toBe(false);
+        expect(result.current.resumeInterrupt({ decisions: [] })).toBe(false);
+      });
+      expect(stream.getSubmitCalls()).toHaveLength(0);
+    }
+  );
+
+  it.each(["unregistered", "missing"])(
+    "keeps a %s folder unavailable when opening a read-only conversation",
+    async (state) => {
+      openThread({ graph_id: "EvoScientist", workspace_dir: OTHER });
+      const projects = mockProjects(
+        readyProjects(
+          KEY,
+          ...(state === "missing"
+            ? [{ key: OTHER, name: "B", missing: true }]
+            : [])
+        ),
+        { current: KEY }
+      );
+      const { result } = renderChat({ projects });
+
+      await waitFor(() => expect(result.current.binding.kind).toBe("readOnly"));
+      expect(result.current.projectKey).toBeNull();
+      expect(projects.selectProject).not.toHaveBeenCalled();
+      expect(result.current.canSend).toBe(false);
+    }
+  );
+
+  it("names a run-folder conversation's files from its run folder", async () => {
+    openThread({
+      graph_id: "EvoScientist",
+      workspace_dir: OTHER,
+      run_dir: `${OTHER}/runs/r1`,
+    });
+    const { result } = renderChat({ projects: both() });
+
+    await waitFor(() => expect(result.current.runFolder).toBe("runs/r1"));
+  });
+
   it("creates a new thread in the current project", () => {
     const { result } = renderChat({
       connected: true,

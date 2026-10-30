@@ -16,6 +16,7 @@ import {
   render,
 } from "@testing-library/react";
 import { ProjectDialogsContext } from "@/providers/projectDialogsContext";
+import { workspaceAssistantId } from "@/lib/workspaceAssistant";
 import type { ComposerFold } from "@/app/components/ChatInterface";
 import {
   MockStreamStore,
@@ -2628,6 +2629,8 @@ describe("ChatInterface composition", () => {
     const B = "/srv/projB";
 
     beforeEach(() => {
+      vi.mocked(toast.warning).mockClear();
+      vi.mocked(toast.success).mockClear();
       // Radix Popper measures its anchor; jsdom has no ResizeObserver.
       vi.stubGlobal(
         "ResizeObserver",
@@ -2662,6 +2665,235 @@ describe("ChatInterface composition", () => {
       expect(projects.selectProject).toHaveBeenCalledWith(B, {
         remember: true,
       });
+    });
+
+    const attach = async (container: HTMLElement) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () =>
+          Response.json({ files: [{ name: "a.csv", path: "a.csv", size: 1 }] })
+        )
+      );
+      const input = container.querySelector(
+        'input[type="file"]'
+      ) as HTMLInputElement;
+      fireEvent.change(input, {
+        target: { files: [new File(["x"], "a.csv")] },
+      });
+      await screen.findByLabelText("Attached files");
+    };
+
+    const fileOf = (key: string, path = "a.csv") => ({
+      name: path,
+      path,
+      size: 1,
+      project: workspaceAssistantId("EvoScientist", key),
+    });
+    const typeAndSend = (container: HTMLElement, text: string) => {
+      const textarea = container.querySelector("textarea")!;
+      fireEvent.change(textarea, { target: { value: text } });
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      return textarea;
+    };
+    // Nothing went out, and the message and its files are still there.
+    const expectRefused = (textarea: HTMLTextAreaElement, text: string) => {
+      expect(stream.getSubmitCalls()).toHaveLength(0);
+      expect(toast.warning).toHaveBeenCalled();
+      expect(textarea.value).toBe(text);
+      expect(screen.getByLabelText("Attached files")).toBeTruthy();
+    };
+
+    it("refuses to send a file whose upload lands after the chat moved", async () => {
+      let answer: (response: Response) => void = () => {};
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(() => new Promise<Response>((resolve) => (answer = resolve)))
+      );
+      const { container, rerender } = renderChatInterface({
+        projects: mockProjects(readyProjects(A, B), { current: A }),
+      });
+      const input = container.querySelector(
+        'input[type="file"]'
+      ) as HTMLInputElement;
+      fireEvent.change(input, {
+        target: { files: [new File(["x"], "a.csv")] },
+      });
+      rerender(
+        chatInterfaceTree({
+          projects: mockProjects(readyProjects(B), { current: B }),
+        })
+      );
+
+      await act(async () => {
+        answer(
+          Response.json({ files: [{ name: "a.csv", path: "a.csv", size: 1 }] })
+        );
+      });
+
+      await screen.findByLabelText("Attached files");
+      const textarea = typeAndSend(container, "Analyse it");
+
+      expectRefused(textarea, "Analyse it");
+    });
+
+    it("refuses to send or queue a file handed back from another project", () => {
+      const { container } = renderChatInterface({
+        projects: mockProjects(readyProjects(A, B), { current: B }),
+        draftSeed: { text: "hi", files: [fileOf(A)] },
+      });
+
+      expect(
+        screen
+          .getByRole("button", { name: "Send message" })
+          .hasAttribute("disabled")
+      ).toBe(true);
+      expect(screen.getByText(/another project/)).toBeTruthy();
+      const textarea = typeAndSend(container, "hi");
+      expectRefused(textarea, "hi");
+
+      // Said at once while a run goes, not when the queue would drain.
+      vi.mocked(toast.warning).mockClear();
+      act(() => stream.setLoading(true));
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(toast.warning).toHaveBeenCalled();
+      expect(screen.queryByLabelText("Queued messages")).toBeNull();
+      // Stop is never held back by the files.
+      expect(
+        screen
+          .getByRole("button", { name: "Stop generating" })
+          .hasAttribute("disabled")
+      ).toBe(false);
+    });
+
+    it("keeps queued messages in order behind one held for its files", async () => {
+      const { container, rerender } = renderChatInterface({
+        projects: mockProjects(readyProjects(A, B), { current: A }),
+      });
+      await attach(container);
+      act(() => stream.setLoading(true));
+      typeAndSend(container, "first");
+      typeAndSend(container, "second");
+      expect(screen.getByLabelText("Queued messages")).toBeTruthy();
+
+      // The chat's project goes away before the run ends.
+      rerender(
+        chatInterfaceTree({
+          projects: mockProjects(readyProjects(B), { current: B }),
+        })
+      );
+      act(() => stream.setLoading(false));
+
+      await waitFor(() =>
+        expect(screen.queryByLabelText("Queued messages")).toBeNull()
+      );
+      expect(stream.getSubmitCalls()).toHaveLength(0);
+      const textarea = container.querySelector("textarea")!;
+      expect(textarea.value).toMatch(/first[\s\S]*second/);
+    });
+
+    it("lets a draft with another project's files move to another project", () => {
+      renderChatInterface({
+        projects: mockProjects(readyProjects(A, B), { current: B }),
+        draftSeed: { text: "hi", files: [fileOf(A)] },
+      });
+
+      expect(
+        screen.getByRole("button", { name: /Change project/ })
+      ).toBeTruthy();
+    });
+
+    it("brings a refused first message back with its files, keeping the project", async () => {
+      const { container } = renderChatInterface({
+        projects: mockProjects(readyProjects(A, B), { current: A }),
+      });
+      await attach(container);
+      typeAndSend(container, "first");
+      const sent = stream.getSubmitCalls()[0].values as {
+        messages: Message[];
+      };
+      expect(screen.queryByLabelText("Attached files")).toBeNull();
+
+      act(() => {
+        stream.setMessages([...sent.messages]);
+        stream.setLoading(true);
+      });
+      act(() => {
+        stream.emitError(
+          new Error('HTTP 404: {"detail":"Thread or assistant not found."}')
+        );
+        stream.setLoading(false);
+      });
+
+      expect(container.querySelector("textarea")!.value).toBe("first");
+      expect(screen.getByText("a.csv")).toBeTruthy();
+      // The file is A's again: the chat stays in A.
+      expect(
+        screen.queryByRole("button", { name: /Change project/ })
+      ).toBeNull();
+    });
+
+    it("keeps same-path files of two projects apart", async () => {
+      const { container } = renderChatInterface({
+        projects: mockProjects(readyProjects(A, B), { current: B }),
+        draftSeed: { text: "hi", files: [fileOf(A, "data.csv")] },
+      });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () =>
+          Response.json({
+            files: [{ name: "data.csv", path: "data.csv", size: 1 }],
+          })
+        )
+      );
+      fireEvent.change(container.querySelector('input[type="file"]')!, {
+        target: { files: [new File(["x"], "data.csv")] },
+      });
+      const removers = () =>
+        screen.queryAllByRole("button", {
+          name: "Remove data.csv from this message",
+        });
+      await waitFor(() => expect(removers()).toHaveLength(2));
+
+      // The first is A's: without it the message goes, with B's file.
+      fireEvent.click(removers()[0]);
+      expect(removers()).toHaveLength(1);
+      typeAndSend(container, "hi");
+
+      expect(stream.getSubmitCalls()).toHaveLength(1);
+      expect(
+        (
+          stream.getSubmitCalls()[0].values as { messages: Message[] }
+        ).messages.at(-1)?.content
+      ).toContain("data.csv");
+    });
+
+    it("keeps a new chat in its project while a file is attached", async () => {
+      const { container } = renderChatInterface({
+        projects: mockProjects(readyProjects(A, B), { current: A }),
+      });
+
+      await attach(container);
+
+      expect(
+        screen.queryByRole("button", { name: /Change project/ })
+      ).toBeNull();
+    });
+
+    it("refuses to send files attached in another project when the chat moves", async () => {
+      const { container, rerender } = renderChatInterface({
+        projects: mockProjects(readyProjects(A, B), { current: A }),
+      });
+      await attach(container);
+
+      // Its project went away (removed in another tab): the chat moves on.
+      rerender(
+        chatInterfaceTree({
+          projects: mockProjects(readyProjects(B), { current: B }),
+        })
+      );
+      const textarea = typeAndSend(container, "Analyse it");
+
+      expectRefused(textarea, "Analyse it");
     });
 
     it("offers no switch while the first run goes", () => {

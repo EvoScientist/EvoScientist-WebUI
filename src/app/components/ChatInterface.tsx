@@ -211,6 +211,14 @@ export interface UploadedWorkspaceFile {
   name: string;
   path: string;
   size: number;
+  /** The handle of the project it was uploaded to: its path is that
+   *  project's. */
+  project: string;
+}
+
+// The same path in two projects is two files.
+function uploadedFileKey(file: UploadedWorkspaceFile): string {
+  return JSON.stringify([file.project, file.path]);
 }
 
 // A message typed while the agent is busy. It waits in the queue and is sent
@@ -253,6 +261,9 @@ function formatMessageWithFiles(
   return `${text}${workspaceFiles}`;
 }
 
+const OTHER_PROJECT_FILES_TEXT =
+  "Files attached in another project can't be sent here. Remove them to send.";
+
 // Everything typed but not sent, in order: the queued messages, then the
 // draft, with their attachments once each.
 type ComposerItem = Pick<QueuedMessage, "text" | "files">;
@@ -268,7 +279,10 @@ function unsentSnapshot(
     .join("\n\n");
   const seen = new Set<string>();
   const files = [...queued.flatMap((m) => m.files), ...attached].filter(
-    (f) => !seen.has(f.path) && seen.add(f.path)
+    (file) => {
+      const key = uploadedFileKey(file);
+      return !seen.has(key) && seen.add(key);
+    }
   );
   return { text, files };
 }
@@ -591,6 +605,19 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         : input;
     const composerStateRef = useRef({ input: foldDraft, pendingFiles });
     composerStateRef.current = { input: foldDraft, pendingFiles };
+    // The last message sent, as typed: a refusal hands back only the text
+    // that went out, and the files it named come back with it from here.
+    const lastSentRef = useRef<{
+      item: ComposerItem;
+      formattedText: string;
+    } | null>(null);
+    const takeRefusedItem = useCallback((text: string): ComposerItem => {
+      const sent = lastSentRef.current;
+      lastSentRef.current = null;
+      return sent && sent.formattedText.trim() === text.trim()
+        ? sent.item
+        : { text, files: [] };
+    }, []);
     const onComposerSnapshotReadyRef = useRef(onComposerSnapshotReady);
     onComposerSnapshotReadyRef.current = onComposerSnapshotReady;
     useEffect(() => {
@@ -600,7 +627,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         const { input: draft, pendingFiles: attached } =
           composerStateRef.current;
         const first: ComposerItem[] = unsent?.trim()
-          ? [{ text: unsent, files: [] }]
+          ? [takeRefusedItem(unsent)]
           : [];
         const back = foldBack(
           [...first, ...queuedMessagesRef.current],
@@ -618,7 +645,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       };
       onComposerSnapshotReadyRef.current?.(getSnapshot);
       return () => onComposerSnapshotReadyRef.current?.(null);
-    }, []);
+    }, [takeRefusedItem]);
     const queueIdRef = useRef(0);
 
     const draggedQueuedMessageIdRef = useRef<number | null>(null);
@@ -688,6 +715,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       binding,
       canSend,
       projectKey,
+      runFolder,
       setRefusalHandler,
       goal,
       goalBusy,
@@ -705,11 +733,24 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     const folderLabel = chatProject
       ? { full: chatProject.key, name: chatProject.name }
       : null;
+    // A file uploaded to another project than the one the chat works in now:
+    // its path names a file in that project's folder, so it can't go out
+    // here. Without a project here, every uploaded file is another's.
+    const isOtherProjectFile = useCallback(
+      (file: UploadedWorkspaceFile) => file.project !== filesProject,
+      [filesProject]
+    );
+    const hasOtherProjectFiles = pendingFiles.some(isOtherProjectFile);
     // Before its first message a chat can move to another project; so can a
     // conversation that records no folder, which its first send binds. Never
-    // while a run goes: it runs on its project's assistant.
+    // while a run goes (it runs on its project's assistant), nor while a file
+    // is uploading or attached here: it is in this project's folder. Files
+    // of another project don't hold it here: they can't be sent from this
+    // project either.
     const canSwitchProject =
       !isLoading &&
+      !isUploadingFiles &&
+      pendingFiles.every(isOtherProjectFile) &&
       ((threadId === null && binding.kind === "open") ||
         binding.kind === "unbound");
     const switchProjects =
@@ -800,6 +841,10 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     // message. A backend without goals gets "/goal …" as a message, as before.
     const sendComposerText = useCallback(
       (text: string, files: UploadedWorkspaceFile[]): ComposerSendResult => {
+        if (files.some(isOtherProjectFile)) {
+          toast.warning(OTHER_PROJECT_FILES_TEXT);
+          return "kept";
+        }
         const command = goalSupported === true ? parseGoalCommand(text) : null;
         // A goal can't carry files: Enter refuses them, and so does a drain
         // (a "/goal …" queued while goal support was unknown).
@@ -808,11 +853,12 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
           return "kept";
         }
         if (command) return runGoalCommand(command, text);
-        return sendMessage(formatMessageWithFiles(text, files))
-          ? "sent"
-          : "kept";
+        const formattedText = formatMessageWithFiles(text, files);
+        if (!sendMessage(formattedText)) return "kept";
+        lastSentRef.current = { item: { text, files }, formattedText };
+        return "sent";
       },
-      [goalSupported, runGoalCommand, sendMessage]
+      [goalSupported, isOtherProjectFile, runGoalCommand, sendMessage]
     );
     // A message the backend refused comes back to the composer at the moment
     // it is refused, followed by everything queued after it and then the
@@ -824,7 +870,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       setRefusalHandler((text) => {
         const { input: draft, pendingFiles: attached } =
           composerStateRef.current;
-        const refused: ComposerItem = { text, files: [] };
+        const refused = takeRefusedItem(text);
         const back = foldBack(
           [refused, ...queuedMessagesRef.current],
           draft,
@@ -841,7 +887,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         return !back.notSent.includes(refused);
       });
       return () => setRefusalHandler(null);
-    }, [setRefusalHandler]);
+    }, [setRefusalHandler, takeRefusedItem]);
     // The docked file pane (inspector) shows this conversation's agent-state
     // files and re-reads open files when the agent may have written them.
     const filePane = useFilePane();
@@ -858,6 +904,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         setFiles,
         editDisabled: fileEditDisabled,
         project: filesProject,
+        runFolder,
       });
     }, [
       registerChatFiles,
@@ -866,6 +913,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       setFiles,
       fileEditDisabled,
       filesProject,
+      runFolder,
     ]);
     useEffect(() => () => registerChatFiles?.(null), [registerChatFiles]);
     // A tool result we haven't seen means a tool call just finished. Results
@@ -1175,7 +1223,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       const kept: QueuedMessage[] = [];
       let taken = 0;
       let sent = false;
-      for (const item of queuedMessages) {
+      for (const [index, item] of queuedMessages.entries()) {
         if (item.threadId !== threadId) break;
         taken += 1;
         const result = sendComposerText(item.text, item.files);
@@ -1183,7 +1231,19 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
           sent = true;
           break;
         }
-        if (result === "kept") kept.push(item);
+        if (result !== "kept") continue;
+        kept.push(item);
+        // Files of another project hold the message back until the user
+        // removes them: the ones after it come back with it, in order,
+        // rather than going out first.
+        if (item.files.some(isOtherProjectFile)) {
+          const after = queuedMessages.slice(index + 1);
+          const other = after.findIndex((later) => later.threadId !== threadId);
+          const rest = other === -1 ? after : after.slice(0, other);
+          kept.push(...rest);
+          taken += rest.length;
+          break;
+        }
       }
       setQueuedMessages(queuedMessages.slice(taken));
       // No run will release the latch when nothing went out.
@@ -1212,6 +1272,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       canRunNow,
       isLoading,
       hasPendingInterrupt,
+      isOtherProjectFile,
       queuedMessages,
       sendComposerText,
       threadId,
@@ -1270,6 +1331,8 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
 
       setAutoApproveState(getThreadAutoApprove(threadId));
       setAutoApproveDialogOpen(false);
+      // A new chat's first message stays its own when its thread is made.
+      if (previousThreadId !== null) lastSentRef.current = null;
       setPendingFiles([]);
       migrateAutoApproveForCreatedThreadRef.current = false;
       previousThreadIdRef.current = threadId;
@@ -1282,6 +1345,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         if (selectedFiles.length === 0) return;
 
         if (!filesProject) return;
+        const uploadedTo = filesProject;
         setIsUploadingFiles(true);
         try {
           const formData = new FormData();
@@ -1299,7 +1363,13 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
           if (!response.ok || !data.files) {
             throw new Error(data.error || "Failed to upload files.");
           }
-          setPendingFiles((currentFiles) => [...currentFiles, ...data.files!]);
+          // Stamped with the project it went to: the chat may move on
+          // before it is sent.
+          const uploaded = data.files.map((file) => ({
+            ...file,
+            project: uploadedTo,
+          }));
+          setPendingFiles((currentFiles) => [...currentFiles, ...uploaded]);
           toast.success(
             `${data.files.length} file${
               data.files.length === 1 ? "" : "s"
@@ -1316,9 +1386,10 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       [filesProject]
     );
 
-    const removePendingFile = useCallback((filePath: string) => {
+    const removePendingFile = useCallback((removed: UploadedWorkspaceFile) => {
+      const key = uploadedFileKey(removed);
       setPendingFiles((currentFiles) =>
-        currentFiles.filter((file) => file.path !== filePath)
+        currentFiles.filter((file) => uploadedFileKey(file) !== key)
       );
     }, []);
 
@@ -1521,6 +1592,11 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         // Can't compose with no assistant, a pending interrupt, or files still
         // uploading. (Unlike before, isLoading is NOT a blocker — see below.)
         if (!canSend || hasPendingInterrupt || isUploadingFiles) return;
+        // Said now, not when the queue would drain.
+        if (hasOtherProjectFiles) {
+          toast.warning(OTHER_PROJECT_FILES_TEXT);
+          return;
+        }
         // Agent busy → queue it. The queue drains and sends
         // automatically once this turn finishes (or is stopped); the message is
         // appended as the next turn — it never replaces what's already running.
@@ -1566,6 +1642,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         autoApprove,
         isLoading,
         isUploadingFiles,
+        hasOtherProjectFiles,
         pendingFiles,
         goalSupported,
         runGoalCommand,
@@ -2540,6 +2617,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         <div
           className="flex-1 overflow-y-auto overflow-x-hidden overscroll-contain"
           ref={scrollRef}
+          data-chat-transcript
         >
           <div
             className="mx-auto w-full max-w-[960px] px-4 pb-4 pt-3 sm:px-5"
@@ -3273,7 +3351,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                 >
                   {pendingFiles.map((file) => (
                     <span
-                      key={file.path}
+                      key={uploadedFileKey(file)}
                       className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-border bg-muted px-2 py-1 text-xs text-foreground"
                     >
                       <FileIcon
@@ -3288,7 +3366,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                       </span>
                       <button
                         type="button"
-                        onClick={() => removePendingFile(file.path)}
+                        onClick={() => removePendingFile(file)}
                         aria-label={`Remove ${file.name} from this message`}
                         title={`Remove ${file.name} from this message`}
                         className="rounded-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
@@ -3300,6 +3378,11 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                       </button>
                     </span>
                   ))}
+                  {hasOtherProjectFiles && (
+                    <p className="w-full text-xs text-muted-foreground">
+                      Attached in another project: remove them to send here.
+                    </p>
+                  )}
                 </div>
               )}
               {/* With a chip the row holds the box's left padding and the chip
@@ -3598,7 +3681,10 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
                     onMouseDown={(e) => e.preventDefault()}
                     disabled={
                       !isLoading &&
-                      (submitDisabled || isUploadingFiles || !input.trim())
+                      (submitDisabled ||
+                        isUploadingFiles ||
+                        hasOtherProjectFiles ||
+                        !input.trim())
                     }
                     aria-label={
                       isLoading

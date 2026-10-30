@@ -10,6 +10,7 @@ import {
   threadBinding,
   threadFolders,
   type ThreadFolders,
+  runFolderIn,
 } from "./threadBinding";
 
 const A = "/home/you/projA";
@@ -176,5 +177,23 @@ describe("bindingAssistantId", () => {
         "EvoScientist"
       )
     ).toBeNull();
+  });
+});
+
+describe("runFolderIn", () => {
+  it("names a run folder by its path inside the project", () => {
+    expect(runFolderIn("/home/you/projA", "/home/you/projA/runs/exp-3")).toBe(
+      "runs/exp-3"
+    );
+    expect(runFolderIn("C:\\work\\projA", "C:\\work\\projA\\runs\\exp-3")).toBe(
+      "runs/exp-3"
+    );
+  });
+
+  it("names nothing for a folder outside the project", () => {
+    expect(
+      runFolderIn("/home/you/projA", "/home/you/projAB/runs/x")
+    ).toBeNull();
+    expect(runFolderIn("/home/you/projA", "/home/you/projA")).toBeNull();
   });
 });

@@ -18,6 +18,10 @@ process.env.XDG_CONFIG_HOME = join(
   tmpdir(),
   "evoscientist-webui-tests-no-config"
 );
+// The running backend's record lives under the home folder
+// (~/.config/evoscientist), whatever XDG_CONFIG_HOME says: move home too.
+process.env.HOME = join(tmpdir(), "evoscientist-webui-tests-no-home");
+process.env.USERPROFILE = process.env.HOME;
 
 function createMemoryStorage(): Storage {
   const store = new Map<string, string>();

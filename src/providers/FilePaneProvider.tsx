@@ -47,7 +47,8 @@ function sameBridge(
     a.threadId !== b.threadId ||
     a.setFiles !== b.setFiles ||
     a.editDisabled !== b.editDisabled ||
-    a.project !== b.project
+    a.project !== b.project ||
+    a.runFolder !== b.runFolder
   ) {
     return false;
   }
@@ -166,7 +167,20 @@ export function FilePaneProvider({
         toast.error("This conversation's project files can't be shown here.");
         return;
       }
-      open({ source: "workspace", path: detail.path, project });
+      // A link in the conversation names a file from its run folder; one
+      // elsewhere (an agent's thread) from the project root. An absolute
+      // `/skills/` path is the agent's skills, which the project's own
+      // `skills/` folder holds (global and built-in ones aren't files here).
+      const runFolder =
+        detail.opener?.closest("[data-chat-transcript]") &&
+        !detail.display.trim().startsWith("/skills/")
+          ? chatRef.current?.runFolder
+          : null;
+      open({
+        source: "workspace",
+        path: runFolder ? `${runFolder}/${detail.path}` : detail.path,
+        project,
+      });
     };
     window.addEventListener(FILE_LINK_EVENT, onOpenFile);
     return () => window.removeEventListener(FILE_LINK_EVENT, onOpenFile);

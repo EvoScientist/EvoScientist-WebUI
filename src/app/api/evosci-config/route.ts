@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { readCoreConfig } from "@/lib/server/coreConfig";
 
-// The EvoScientist backend's port, resolved the way the backend resolves it:
-// env override > config.yaml > default. SECURITY: only the port is returned;
+// The EvoScientist backend's port: env override > the port the running
+// backend recorded > config.yaml > default. SECURITY: only the port is returned;
 // see coreConfig.ts for what is read from config.yaml.
 export async function GET() {
   const { port } = readCoreConfig();

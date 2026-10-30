@@ -144,6 +144,8 @@ export type RemoveProjectResult =
       message: string;
       /** Scheduled tasks that are on, when that is why it refused. */
       cronIds: string[];
+      /** The backend has no such project (removed already). */
+      gone?: boolean;
     };
 
 /** Remove the project at `key` from the backend. Its folder, files and
@@ -153,6 +155,7 @@ export async function removeProject(key: string): Promise<RemoveProjectResult> {
   if (ok) return { ok: true };
   return {
     ok: false,
+    gone: status === 404 && body.error === "not_registered",
     message: errorText(body, status),
     cronIds: Array.isArray(body.cron_ids)
       ? body.cron_ids.filter((id): id is string => typeof id === "string")

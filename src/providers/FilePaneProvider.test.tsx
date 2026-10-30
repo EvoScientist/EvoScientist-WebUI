@@ -21,16 +21,36 @@ const bridge = (
   setFiles: async () => {},
   editDisabled: false,
   project: null,
+  runFolder: null,
 });
 
-const clickLink = (kind: "workspace" | "memory", path: string) =>
+const clickLink = (
+  kind: "workspace" | "memory",
+  path: string,
+  opener?: HTMLElement,
+  display: string = path
+) =>
   act(() => {
     window.dispatchEvent(
       new CustomEvent(FILE_LINK_EVENT, {
-        detail: { kind, display: path, path },
+        detail: { kind, display, path, opener },
       })
     );
   });
+
+/** A link inside the conversation's transcript, or elsewhere on the page
+ *  (an agent's thread); removed after each test. */
+const linkIn = (where: "chat" | "elsewhere") => {
+  const host = document.createElement("div");
+  if (where === "chat") host.setAttribute("data-chat-transcript", "");
+  const link = document.createElement("button");
+  host.appendChild(link);
+  document.body.appendChild(host);
+  return link;
+};
+afterEach(() => {
+  document.body.innerHTML = "";
+});
 
 const fileLink = (path: string) => ({
   kind: "workspace" as const,
@@ -66,6 +86,76 @@ describe("FilePaneProvider", () => {
     expect(h.pane().activeTab).toMatchObject({
       path: "outputs/a.md",
       project: PROJECT_B,
+    });
+  });
+
+  it("opens a run-folder conversation's link inside its run folder", () => {
+    const h = renderWithFilePane(null);
+    act(() =>
+      h.pane().registerChat({
+        ...bridge("t1"),
+        project: PROJECT_B,
+        runFolder: "runs/exp-3",
+      })
+    );
+
+    clickLink("workspace", "report.md", linkIn("chat"));
+
+    expect(h.pane().activeTab).toMatchObject({
+      path: "runs/exp-3/report.md",
+      project: PROJECT_B,
+    });
+  });
+
+  it("opens a link from outside the conversation from the project root", () => {
+    const h = renderWithFilePane(null);
+    act(() =>
+      h.pane().registerChat({
+        ...bridge("t1"),
+        project: PROJECT_B,
+        runFolder: "runs/exp-3",
+      })
+    );
+
+    clickLink("workspace", "report.md", linkIn("elsewhere"));
+
+    expect(h.pane().activeTab).toMatchObject({ path: "report.md" });
+  });
+
+  it("opens a run-folder conversation's skills link from the project root", () => {
+    const h = renderWithFilePane(null);
+    act(() =>
+      h.pane().registerChat({
+        ...bridge("t1"),
+        project: PROJECT_B,
+        runFolder: "runs/exp-3",
+      })
+    );
+
+    clickLink(
+      "workspace",
+      "skills/foo/SKILL.md",
+      linkIn("chat"),
+      "/skills/foo/SKILL.md"
+    );
+
+    expect(h.pane().activeTab).toMatchObject({ path: "skills/foo/SKILL.md" });
+  });
+
+  it("opens a run-folder conversation's relative skills/ link in its run folder", () => {
+    const h = renderWithFilePane(null);
+    act(() =>
+      h.pane().registerChat({
+        ...bridge("t1"),
+        project: PROJECT_B,
+        runFolder: "runs/exp-3",
+      })
+    );
+
+    clickLink("workspace", "skills/notes.md", linkIn("chat"));
+
+    expect(h.pane().activeTab).toMatchObject({
+      path: "runs/exp-3/skills/notes.md",
     });
   });
 
@@ -147,6 +237,7 @@ describe("FilePaneProvider", () => {
         setFiles,
         editDisabled: false,
         project: null,
+        runFolder: null,
       })
     );
     const first = h.pane().chat;
@@ -157,6 +248,7 @@ describe("FilePaneProvider", () => {
         setFiles,
         editDisabled: false,
         project: null,
+        runFolder: null,
       })
     );
     expect(h.pane().chat).toBe(first);

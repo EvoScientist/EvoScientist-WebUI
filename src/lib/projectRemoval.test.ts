@@ -1,15 +1,43 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Client } from "@langchain/langgraph-sdk";
-import { projectWork, removeProjectAndWork } from "./projectRemoval";
+import {
+  projectWork,
+  removeProjectAndWork,
+  stopProjectRuns,
+} from "./projectRemoval";
 import { workspaceAssistantId } from "@/lib/workspaceAssistant";
 
 const KEY = "/home/you/projA";
 
-function fakeClient(busy: unknown[] = []) {
+interface BusyThread {
+  thread_id: string;
+  metadata: Record<string, string>;
+}
+
+/** A backend with these busy threads: a search returns the ones whose
+ *  metadata has every value it asks for, a page at a time. */
+function fakeClient(busy: BusyThread[] = []) {
   const order: string[] = [];
   const client = {
     threads: {
-      search: vi.fn(async () => busy),
+      search: vi.fn(
+        async ({
+          metadata = {},
+          limit = 10,
+          offset = 0,
+        }: {
+          metadata?: Record<string, string>;
+          limit?: number;
+          offset?: number;
+        }) =>
+          busy
+            .filter((thread) =>
+              Object.entries(metadata).every(
+                ([name, value]) => thread.metadata[name] === value
+              )
+            )
+            .slice(offset, offset + limit)
+      ),
     },
     crons: {
       search: vi.fn(async () => [
@@ -69,8 +97,9 @@ afterEach(() => vi.unstubAllGlobals());
 
 describe("projectWork", () => {
   it("lists the project's running threads and its scheduled tasks that are on", async () => {
-    const { client, raw } = fakeClient([
-      { thread_id: "t-1", metadata: { title: "Long run" } },
+    const { client } = fakeClient([
+      { thread_id: "t-1", metadata: { title: "Long run", workspace_dir: KEY } },
+      { thread_id: "t-2", metadata: { workspace_dir: "/srv/projB" } },
     ]);
 
     const work = await projectWork(client, KEY);
@@ -82,25 +111,65 @@ describe("projectWork", () => {
         { id: "task-2", name: "Weekly" },
       ],
     });
-    // Every graph's threads: a scheduled run or an agent counts too.
-    expect(raw.threads.search).toHaveBeenCalledWith(
-      expect.objectContaining({
-        status: "busy",
-        metadata: { workspace_dir: KEY },
-      })
-    );
+  });
+
+  it("counts an async agent's thread by the assistant it runs on", async () => {
+    // Made without metadata: its run adds only the graph and the assistant.
+    const { client } = fakeClient([
+      {
+        thread_id: "agent-1",
+        metadata: {
+          graph_id: "expert-container-async",
+          assistant_id: workspaceAssistantId("expert-container-async", KEY),
+        },
+      },
+      {
+        thread_id: "agent-2",
+        metadata: {
+          assistant_id: workspaceAssistantId(
+            "expert-container-async",
+            "/srv/projB"
+          ),
+        },
+      },
+    ]);
+
+    const work = await projectWork(client, KEY);
+
+    expect(work.running.map((t) => t.id)).toEqual(["agent-1"]);
+  });
+
+  it("lists a thread found by its folder and its assistant once", async () => {
+    const { client } = fakeClient([
+      {
+        thread_id: "both",
+        metadata: {
+          workspace_dir: KEY,
+          assistant_id: workspaceAssistantId("EvoScientist", KEY),
+          title: "Both",
+        },
+      },
+      {
+        thread_id: "folder-only",
+        metadata: { workspace_dir: KEY, title: "Folder only" },
+      },
+    ]);
+
+    const work = await projectWork(client, KEY);
+
+    expect(work.running).toEqual([
+      { id: "both", title: "Both" },
+      { id: "folder-only", title: "Folder only" },
+    ]);
   });
 
   it("reads running threads past the first page", async () => {
-    const page = (n: number, from: number) =>
-      Array.from({ length: n }, (_, i) => ({
-        thread_id: `t-${from + i}`,
-        metadata: {},
-      }));
-    const { client, raw } = fakeClient();
-    raw.threads.search
-      .mockResolvedValueOnce(page(100, 0))
-      .mockResolvedValueOnce(page(3, 100));
+    const { client } = fakeClient(
+      Array.from({ length: 103 }, (_, i) => ({
+        thread_id: `t-${i}`,
+        metadata: { workspace_dir: KEY },
+      }))
+    );
 
     const work = await projectWork(client, KEY);
 
@@ -110,19 +179,23 @@ describe("projectWork", () => {
 
 describe("removeProjectAndWork", () => {
   it("pauses the tasks, removes the project, then stops the runs", async () => {
-    const { client, order } = fakeClient([{ thread_id: "t-1", metadata: {} }]);
+    const { client, order } = fakeClient([
+      { thread_id: "t-1", metadata: { workspace_dir: KEY } },
+    ]);
     stubRemoval(200, { workspace_dir: KEY }, order);
 
     const result = await removeProjectAndWork(client, KEY, WORK, async () =>
       Promise.resolve(false)
     );
 
-    expect(result).toEqual({ ok: true });
+    expect(result).toEqual({ ok: true, unstopped: [], checked: true });
     expect(order).toEqual(["pause task-1", "remove", "cancel t-1"]);
   });
 
   it("turns the tasks on again and stops nothing when the removal fails", async () => {
-    const { client, order } = fakeClient([{ thread_id: "t-1", metadata: {} }]);
+    const { client, order } = fakeClient([
+      { thread_id: "t-1", metadata: { workspace_dir: KEY } },
+    ]);
     stubRemoval(500, { error: "unregister_failed" }, order);
 
     const result = await removeProjectAndWork(client, KEY, WORK, async () =>
@@ -135,14 +208,89 @@ describe("removeProjectAndWork", () => {
 
   it("stops the runs when the project is gone anyway", async () => {
     // The request timed out while the backend finished removing it.
-    const { client, order } = fakeClient([{ thread_id: "t-1", metadata: {} }]);
+    const { client, order } = fakeClient([
+      { thread_id: "t-1", metadata: { workspace_dir: KEY } },
+    ]);
     stubRemoval(504, { error: "backend_timeout" }, order);
 
     const result = await removeProjectAndWork(client, KEY, WORK, async () =>
       Promise.resolve(false)
     );
 
-    expect(result).toEqual({ ok: true });
+    expect(result).toEqual({ ok: true, unstopped: [], checked: true });
     expect(order).toEqual(["pause task-1", "remove", "cancel t-1"]);
+  });
+
+  it("stops the runs when the backend no longer has the project", async () => {
+    // Removed before, and the project list can't be read to tell.
+    const { client, order } = fakeClient([
+      { thread_id: "t-1", metadata: { workspace_dir: KEY } },
+    ]);
+    stubRemoval(404, { error: "not_registered" }, order);
+
+    const result = await removeProjectAndWork(client, KEY, WORK, async () =>
+      Promise.reject(new Error("projects unreadable"))
+    );
+
+    expect(result).toEqual({ ok: true, unstopped: [], checked: true });
+    expect(order).toEqual(["pause task-1", "remove", "cancel t-1"]);
+  });
+
+  it("reports a run it couldn't stop once the project is removed", async () => {
+    const { client, raw, order } = fakeClient([
+      { thread_id: "t-1", metadata: { workspace_dir: KEY, title: "Long" } },
+      { thread_id: "t-2", metadata: { workspace_dir: KEY } },
+    ]);
+    raw.runs.cancel.mockImplementation(async (thread: string) => {
+      if (thread === "t-1") {
+        throw Object.assign(new Error("HTTP 500"), { status: 500 });
+      }
+      order.push(`cancel ${thread}`);
+    });
+    stubRemoval(200, { workspace_dir: KEY }, order);
+
+    const result = await removeProjectAndWork(client, KEY, WORK, async () =>
+      Promise.resolve(false)
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      unstopped: [{ id: "t-1", title: "Long" }],
+      checked: true,
+    });
+    // The removed project's tasks stay paused.
+    expect(order).toEqual(["pause task-1", "remove", "cancel t-2"]);
+  });
+
+  it("says it couldn't check the runs when it can't read them again", async () => {
+    const { client, raw, order } = fakeClient();
+    raw.threads.search.mockRejectedValue(new Error("network"));
+    stubRemoval(200, { workspace_dir: KEY }, order);
+
+    const result = await removeProjectAndWork(client, KEY, WORK, async () =>
+      Promise.resolve(false)
+    );
+
+    // Others may be going too: the ones the dialog listed are still
+    // stopped.
+    expect(result).toEqual({ ok: true, unstopped: [], checked: false });
+    expect(order).toContain("cancel t-1");
+  });
+});
+
+describe("stopProjectRuns", () => {
+  it("stops the runs left on a second try", async () => {
+    const { client, raw } = fakeClient([
+      { thread_id: "t-1", metadata: { workspace_dir: KEY, title: "Long" } },
+    ]);
+    raw.runs.cancel.mockRejectedValueOnce(
+      Object.assign(new Error("HTTP 500"), { status: 500 })
+    );
+
+    const first = await stopProjectRuns(client, KEY, []);
+    const second = await stopProjectRuns(client, KEY, first.unstopped);
+
+    expect(first.unstopped).toEqual([{ id: "t-1", title: "Long" }]);
+    expect(second).toEqual({ unstopped: [], checked: true });
   });
 });

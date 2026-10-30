@@ -131,7 +131,8 @@ vi.mock("@/app/components/GoalPill", async () => {
 });
 
 import { renderChatInterface } from "@/test/renderChatInterface";
-import { mockProjects } from "@/test/mockProjects";
+import { mockProjects, TEST_PROJECT } from "@/test/mockProjects";
+import { projectHandle } from "@/lib/projects";
 import {
   getLastProps,
   resetComponentSpy,
@@ -1104,7 +1105,14 @@ describe("/goal in the composer", () => {
   });
 
   it("keeps /goal and its files when files are attached", async () => {
-    const files = [{ name: "a.txt", path: "/a.txt", size: 1 }];
+    const files = [
+      {
+        name: "a.txt",
+        path: "/a.txt",
+        size: 1,
+        project: projectHandle(TEST_PROJECT),
+      },
+    ];
     const { textarea } = await mount({ draftSeed: { text: "/goal x", files } });
     fireEvent.keyDown(textarea, { key: "Enter" });
     expect(toast.warning).toHaveBeenCalledWith(
@@ -1245,7 +1253,14 @@ describe("/goal in the composer", () => {
           answer = resolve;
         })
     );
-    const files = [{ name: "a.txt", path: "/a.txt", size: 1 }];
+    const files = [
+      {
+        name: "a.txt",
+        path: "/a.txt",
+        size: 1,
+        project: projectHandle(TEST_PROJECT),
+      },
+    ];
     const view = await mount(
       { draftSeed: { text: "/goal write x", files } },
       { goals: false }

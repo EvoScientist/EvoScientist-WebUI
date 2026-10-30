@@ -127,7 +127,7 @@ export function localBackendUrl(): string {
   return `http://127.0.0.1:${localBackendPort()}`;
 }
 
-/** The local backend's port: the environment, else config.yaml, else 6174. */
+/** The local backend's port (see `readCoreConfig`). */
 export function localBackendPort(): number {
   return readCoreConfig().port;
 }

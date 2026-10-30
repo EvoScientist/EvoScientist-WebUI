@@ -26,6 +26,8 @@ import { addProject, projectsReadOnlyReason } from "@/lib/projectActions";
 import {
   projectWork,
   removeProjectAndWork,
+  stopProjectRuns,
+  type StopRunsResult,
   type ProjectWork,
 } from "@/lib/projectRemoval";
 import type { Project } from "@/lib/projects";
@@ -199,6 +201,16 @@ function AddProjectDialog({
   );
 }
 
+/** What the dialog says once the project is removed with work that may
+ *  go on. */
+function removedText({ unstopped, checked }: StopRunsResult): string {
+  if (checked)
+    return "These runs couldn't be cancelled and may still be going:";
+  return unstopped.length > 0
+    ? "Its runs couldn't be checked, and these couldn't be cancelled: some may still be going."
+    : "Its runs couldn't be checked: some may still be going.";
+}
+
 function RemoveProjectDialog({
   project,
   onClose,
@@ -215,6 +227,9 @@ function RemoveProjectDialog({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Once removed with work that may go on: how stopping its runs went.
+  const [removed, setRemoved] = useState<StopRunsResult | null>(null);
+  const [stopping, setStopping] = useState(false);
 
   const load = useCallback(() => {
     setLoadError(null);
@@ -257,8 +272,36 @@ function RemoveProjectDialog({
       return;
     }
     void refresh();
+    if (!result.checked || result.unstopped.length > 0) {
+      // Removed, but work may go on out of sight: say so, and offer to
+      // stop it again.
+      setBusy(false);
+      setRemoved({ unstopped: result.unstopped, checked: result.checked });
+      return;
+    }
     toast.success(`${project.name} removed from the sidebar.`);
     onClose();
+  };
+
+  const stopAgain = async () => {
+    if (!removed || stopping) return;
+    setStopping(true);
+    try {
+      const again = await stopProjectRuns(
+        client,
+        project.key,
+        removed.unstopped
+      );
+      if (again.checked && again.unstopped.length === 0) {
+        toast.success(`${project.name} removed from the sidebar.`);
+        onClose();
+        return;
+      }
+      setRemoved(again);
+      toast.warning(`Some of ${project.name}'s runs may still be going.`);
+    } finally {
+      setStopping(false);
+    }
   };
 
   const runs = work?.running.length ?? 0;
@@ -273,6 +316,57 @@ function RemoveProjectDialog({
     .filter(Boolean)
     .join(", ");
   const action = parts && parts[0].toUpperCase() + parts.slice(1);
+
+  if (removed) {
+    return (
+      <Dialog
+        open
+        onOpenChange={(open) => {
+          if (!open) onClose();
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>{project.name} removed from the sidebar</DialogTitle>
+            <DialogDescription>{removedText(removed)}</DialogDescription>
+          </DialogHeader>
+          {removed.unstopped.length > 0 && (
+            <ul className="ml-4 list-disc text-sm text-muted-foreground">
+              {removed.unstopped.map((t) => (
+                <li key={t.id}>{t.title}</li>
+              ))}
+            </ul>
+          )}
+          <p
+            role="status"
+            className="sr-only"
+          >
+            {stopping ? "Stopping the runs…" : ""}
+          </p>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={onClose}
+            >
+              Close
+            </Button>
+            <Button
+              onClick={() => void stopAgain()}
+              disabled={stopping}
+            >
+              {stopping && (
+                <Loader2
+                  className="size-4 animate-spin"
+                  aria-hidden="true"
+                />
+              )}
+              Stop them
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    );
+  }
 
   return (
     <Dialog

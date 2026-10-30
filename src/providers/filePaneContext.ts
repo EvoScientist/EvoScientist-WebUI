@@ -14,6 +14,9 @@ export interface ChatFilesBridge {
   /** The handle of the conversation's project, for its file links; null
    *  when this page can't show that project's files. */
   project: string | null;
+  /** The conversation's run folder inside its project (`runs/exp-3`): its
+   *  file links name files from there; null for the project root. */
+  runFolder: string | null;
 }
 
 /** Unsaved edits, and the file content they were made against. */

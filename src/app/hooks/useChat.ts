@@ -61,6 +61,7 @@ import {
   stampThreadWorkspace,
 } from "@/app/hooks/useThreads";
 import { useProjects } from "@/providers/ProjectsProvider";
+import { findProject } from "@/lib/projects";
 import { retryWithBackoff } from "@/lib/retry";
 import {
   assistantIsMissing,
@@ -76,6 +77,7 @@ import {
   canRun,
   threadBinding,
   threadFolders,
+  runFolderIn,
   type ThreadFolders,
 } from "@/lib/threadBinding";
 import { extractStringFromMessageContent } from "@/app/utils/utils";
@@ -812,25 +814,39 @@ export function useChat({
     current?.key ?? null
   );
   // A thread whose own metadata names no folder takes its checkpoint's, so
-  // its assistant is that project's too.
+  // its assistant is that project's too; with its run folder, so a thread
+  // working in one stays read-only.
   const checkpointFolder = folders?.workspaceDir ?? null;
+  const checkpointRunDir = folders?.runDir ?? null;
   useEffect(() => {
     if (!checkpointFolder) return;
     setThreadMeta((prev) =>
       prev && prev.threadId === threadId && !prev.metadata["workspace_dir"]
         ? {
             ...prev,
-            metadata: { ...prev.metadata, workspace_dir: checkpointFolder },
+            metadata: {
+              ...prev.metadata,
+              workspace_dir: checkpointFolder,
+              ...(checkpointRunDir ? { run_dir: checkpointRunDir } : {}),
+            },
           }
         : prev
     );
-  }, [checkpointFolder, threadId]);
-  // The open thread's project is the current one, so a new chat from here
-  // starts in it.
-  const openKey = threadId && binding.kind === "open" ? binding.key : null;
+  }, [checkpointFolder, checkpointRunDir, threadId]);
+  // The open thread's own project, registered with its folder in place,
+  // whether or not the thread may run here: it is the current one, so the
+  // files and a new chat follow it.
+  const ownProject =
+    threadId && folders?.workspaceDir
+      ? findProject(projects, folders.workspaceDir)
+      : null;
+  const ownKey = ownProject && !ownProject.missing ? ownProject.key : null;
   useEffect(() => {
-    if (openKey) selectProject(openKey);
-  }, [openKey, selectProject]);
+    if (ownKey) selectProject(ownKey);
+  }, [ownKey, selectProject]);
+  // A thread working in a run folder names files from that folder.
+  const runFolder =
+    ownKey && folders?.runDir ? runFolderIn(ownKey, folders.runDir) : null;
   // One gate for every run: a thread that may run here, its assistant for
   // that project, and no project read in progress.
   const canSend =
@@ -1619,8 +1635,12 @@ export function useChat({
 
     /** Whether the open thread runs here, and why not. */
     binding,
-    /** The project the chat runs in; null when it can't run. */
-    projectKey: assistantKey,
+    /** The chat's project: the one it runs in, else the open thread's own
+     *  registered project (a read-only thread's too); null for none. */
+    projectKey: assistantKey ?? ownKey,
+    /** The open thread's run folder inside its project, which its file
+     *  links name files from; null for none. */
+    runFolder,
     /** Whether a run could start, for rendering and effect dependencies. */
     canSend,
     /** Every run path checks this first, at the moment it acts. */

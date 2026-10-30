@@ -30,25 +30,46 @@ function label(metadata: unknown, fallback: string): string {
 }
 
 /** The project's threads with a run going: every graph, so a scheduled
- *  run or an agent counts as much as a conversation. */
-async function runningThreads(client: Client, key: string) {
-  const found: Array<{ id: string; title: string }> = [];
-  for (let page = 0; page < MAX_PAGES; page += 1) {
-    const threads = await client.threads.search({
-      status: "busy",
-      metadata: { workspace_dir: key },
-      limit: PAGE,
-      offset: page * PAGE,
-    });
-    for (const thread of threads) {
-      found.push({
-        id: thread.thread_id,
-        title: label(thread.metadata, `Thread ${thread.thread_id.slice(0, 8)}`),
-      });
-    }
-    if (threads.length < PAGE) break;
-  }
-  return found;
+ *  run or an agent counts as much as a conversation. A thread is the
+ *  project's by the folder it records or by the assistant it runs on: an
+ *  async agent's thread is made without metadata, and its run adds only
+ *  the graph and the assistant to it. */
+async function runningThreads(
+  client: Client,
+  key: string
+): Promise<ProjectWork["running"]> {
+  const scopes: Record<string, string>[] = [
+    { workspace_dir: key },
+    ...projectAssistantIds(key).map((assistant_id) => ({ assistant_id })),
+  ];
+  const matches = await Promise.all(
+    scopes.map(async (metadata) => {
+      const found: ProjectWork["running"] = [];
+      for (let page = 0; page < MAX_PAGES; page += 1) {
+        const threads = await client.threads.search({
+          status: "busy",
+          metadata,
+          limit: PAGE,
+          offset: page * PAGE,
+        });
+        for (const thread of threads) {
+          found.push({
+            id: thread.thread_id,
+            title: label(
+              thread.metadata,
+              `Thread ${thread.thread_id.slice(0, 8)}`
+            ),
+          });
+        }
+        if (threads.length < PAGE) break;
+      }
+      return found;
+    })
+  );
+  // A conversation records the folder and runs on a project assistant.
+  return [
+    ...new Map(matches.flat().map((thread) => [thread.id, thread])).values(),
+  ];
 }
 
 /** What removing the project at `key` would stop and pause. The backend
@@ -80,20 +101,42 @@ export async function projectWork(
   return { running, tasks };
 }
 
-/** Stop the runs going in the project at `key` (`known`: if they can't be
- *  read again). */
-async function stopRuns(
+/** How stopping a project's runs went. */
+export interface StopRunsResult {
+  /** The threads whose runs couldn't be cancelled. */
+  unstopped: ProjectWork["running"];
+  /** False when its running threads couldn't be read: the `known` ones
+   *  were tried (those that failed are in `unstopped`), and others may be
+   *  going. */
+  checked: boolean;
+}
+
+/** Stop the runs going in the project at `key`, as far as it can. */
+export async function stopProjectRuns(
   client: Client,
   key: string,
   known: ProjectWork["running"]
-) {
-  const running = await runningThreads(client, key).catch(() => known);
-  await Promise.allSettled(
+): Promise<StopRunsResult> {
+  const { running, checked } = await runningThreads(client, key).then(
+    (found) => ({ running: found, checked: true }),
+    () => ({ running: known, checked: false })
+  );
+  const stopped = await Promise.all(
     running.map((thread) =>
       cancelActiveRuns(client as unknown as RunCancelClient, thread.id)
     )
   );
+  return {
+    unstopped: running.filter((_, i) => !stopped[i]),
+    checked,
+  };
 }
+
+/** How removing a project and its work went: once removed, how stopping
+ *  its runs went. */
+export type RemoveProjectAndWorkResult =
+  | ({ ok: true } & StopRunsResult)
+  | Extract<RemoveProjectResult, { ok: false }>;
 
 /**
  * Remove the project at `key`: pause its scheduled tasks, remove it, then
@@ -101,16 +144,17 @@ async function stopRuns(
  * project, so none can start between the stop and the removal.
  *
  * When the removal fails, the tasks it paused are turned on again and no run
- * is stopped, unless the project is gone anyway (`isRegistered` says no:
- * the backend finished after the request timed out, or another tab removed
- * it); then the runs are stopped as after a removal.
+ * is stopped, unless the project is gone anyway (the backend has no such
+ * project, or `isRegistered` says no: the backend finished after the request
+ * timed out, or another tab removed it); then the runs are stopped as after
+ * a removal.
  */
 export async function removeProjectAndWork(
   client: Client,
   key: string,
   work: ProjectWork,
   isRegistered: () => Promise<boolean>
-): Promise<RemoveProjectResult> {
+): Promise<RemoveProjectAndWorkResult> {
   const paused = (
     await Promise.allSettled(
       work.tasks.map((task) =>
@@ -119,9 +163,11 @@ export async function removeProjectAndWork(
     )
   ).flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
   const result = await removeProject(key);
-  if (result.ok || !(await isRegistered().catch(() => true))) {
-    await stopRuns(client, key, work.running);
-    return { ok: true };
+  if (result.ok || result.gone || !(await isRegistered().catch(() => true))) {
+    return {
+      ok: true,
+      ...(await stopProjectRuns(client, key, work.running)),
+    };
   }
   await Promise.allSettled(
     paused.map((id) => client.crons.update(id, { enabled: true }))

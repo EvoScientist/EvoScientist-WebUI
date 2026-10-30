@@ -86,6 +86,8 @@ beforeEach(() => {
   client.threads.search.mockResolvedValue([]);
   client.crons.search.mockResolvedValue([]);
   client.crons.update.mockResolvedValue({});
+  client.runs.list.mockResolvedValue([]);
+  client.runs.cancel.mockReset();
   vi.mocked(toast.success).mockClear();
   vi.mocked(toast.warning).mockClear();
 });
@@ -143,7 +145,7 @@ describe("Add project", () => {
 describe("Remove from sidebar", () => {
   it("lists what it stops and pauses, then removes", async () => {
     client.threads.search.mockResolvedValue([
-      { thread_id: "t-1", metadata: { title: "Long run" } },
+      { thread_id: "t-1", metadata: { title: "Long run", workspace_dir: A } },
     ]);
     client.crons.search.mockResolvedValue([
       {
@@ -216,6 +218,116 @@ describe("Remove from sidebar", () => {
     await removed();
     expect(client.crons.update).toHaveBeenCalledWith("hidden", {
       enabled: false,
+    });
+  });
+
+  describe("when a run can't be stopped after the removal", () => {
+    async function removeWithStuckRun() {
+      client.threads.search.mockResolvedValue([
+        { thread_id: "t-1", metadata: { title: "Long run", workspace_dir: A } },
+      ]);
+      client.runs.list.mockResolvedValue([{ run_id: "run-1" }] as never);
+      client.runs.cancel.mockRejectedValue(
+        Object.assign(new Error("HTTP 500"), { status: 500 })
+      );
+      stubRelay(200, { workspace_dir: A });
+      const { projects } = renderDialogs();
+      act(() =>
+        dialogs!.openRemoveProject({ key: A, name: "projA", missing: false })
+      );
+      fireEvent.click(
+        await screen.findByRole("button", { name: "Stop 1 run and remove" })
+      );
+      await screen.findByRole("button", { name: "Stop them" });
+      return { projects };
+    }
+
+    it("says the project is removed, lists the run and stops it on request", async () => {
+      const { projects } = await removeWithStuckRun();
+
+      expect(screen.getByRole("dialog").textContent).toMatch(/removed/);
+      expect(screen.getByText("Long run")).toBeTruthy();
+      expect(screen.queryByRole("button", { name: /remove/i })).toBeNull();
+      expect(projects.refresh).toHaveBeenCalled();
+
+      client.runs.cancel.mockResolvedValue(undefined);
+      fireEvent.click(screen.getByRole("button", { name: "Stop them" }));
+
+      await removed();
+    });
+
+    it("says when it couldn't check the runs, even with none listed", async () => {
+      // Nothing was running when the dialog opened; reading again fails.
+      stubRelay(200, { workspace_dir: A });
+      renderDialogs();
+      act(() =>
+        dialogs!.openRemoveProject({ key: A, name: "projA", missing: false })
+      );
+      const remove = await screen.findByRole("button", {
+        name: "Remove from sidebar",
+      });
+      await waitFor(() => expect(remove.hasAttribute("disabled")).toBe(false));
+      client.threads.search.mockRejectedValue(new Error("network"));
+      fireEvent.click(remove);
+
+      expect(
+        await screen.findByRole("button", { name: "Stop them" })
+      ).toBeTruthy();
+      expect(screen.getByRole("dialog").textContent).toMatch(
+        /couldn't be checked/
+      );
+
+      client.threads.search.mockResolvedValue([]);
+      fireEvent.click(screen.getByRole("button", { name: "Stop them" }));
+      await removed();
+    });
+
+    it("says when it couldn't check the runs and a known one won't cancel", async () => {
+      client.threads.search.mockResolvedValue([
+        { thread_id: "t-1", metadata: { title: "Long run", workspace_dir: A } },
+      ]);
+      client.runs.list.mockResolvedValue([{ run_id: "run-1" }] as never);
+      client.runs.cancel.mockRejectedValue(
+        Object.assign(new Error("HTTP 500"), { status: 500 })
+      );
+      stubRelay(200, { workspace_dir: A });
+      renderDialogs();
+      act(() =>
+        dialogs!.openRemoveProject({ key: A, name: "projA", missing: false })
+      );
+      const remove = await screen.findByRole("button", {
+        name: "Stop 1 run and remove",
+      });
+      client.threads.search.mockRejectedValue(new Error("network"));
+      fireEvent.click(remove);
+
+      await screen.findByRole("button", { name: "Stop them" });
+      expect(screen.getByRole("dialog").textContent).toMatch(
+        /couldn't be checked, and these couldn't be cancelled/
+      );
+      expect(screen.getByText("Long run")).toBeTruthy();
+    });
+
+    it("keeps listing a run that still won't stop, and closes on request", async () => {
+      await removeWithStuckRun();
+
+      fireEvent.click(screen.getByRole("button", { name: "Stop them" }));
+      await waitFor(() =>
+        expect(
+          screen
+            .getByRole("button", { name: "Stop them" })
+            .hasAttribute("disabled")
+        ).toBe(false)
+      );
+      expect(screen.getByText("Long run")).toBeTruthy();
+      expect(toast.warning).toHaveBeenCalled();
+
+      // The footer's button, not the dialog's corner one.
+      const close = screen
+        .getAllByRole("button", { name: "Close" })
+        .find((button) => button.querySelector(".sr-only") === null)!;
+      fireEvent.click(close);
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     });
   });
 });

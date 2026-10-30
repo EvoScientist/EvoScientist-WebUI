@@ -71,6 +71,19 @@ export function threadFolders(
   };
 }
 
+/** Where a run folder sits inside its project, with `/` separators
+ *  (`runs/exp-3`); null when it isn't inside the project root. */
+export function runFolderIn(
+  workspaceDir: string,
+  runDir: string
+): string | null {
+  const root = workspaceDir.replace(/[\\/]+$/, "");
+  const rest = runDir.startsWith(root) ? runDir.slice(root.length) : "";
+  if (!/^[\\/]/.test(rest)) return null;
+  const inside = rest.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+  return inside || null;
+}
+
 /**
  * Whether a thread can run on this backend, and in which project.
  *
