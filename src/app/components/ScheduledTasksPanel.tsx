@@ -1072,9 +1072,9 @@ export function ScheduledTasksPanel({
   const locked = busy || loading;
   // Only the first read shows the spinner; a re-read keeps what is on
   // screen, an empty list too.
-  const loadedOnce = useRef(false);
-  if (!loading) loadedOnce.current = true;
-  const firstLoad = loading && !loadedOnce.current;
+  const [loadedOnce, setLoadedOnce] = useState(false);
+  if (!loading && !loadedOnce) setLoadedOnce(true);
+  const firstLoad = loading && !loadedOnce;
   const sortedTasks = useMemo(() => sortTasks(tasks), [tasks]);
   const filteredTasks = useMemo(() => {
     const normalized = query.trim().toLowerCase();
