@@ -58,6 +58,16 @@ function renderDialogs() {
   return { projects };
 }
 
+/** The confirm button once the project's work is read: it shows earlier,
+ *  disabled, with the same label. */
+async function removeButton() {
+  const button = await screen.findByRole("button", {
+    name: "Remove from sidebar",
+  });
+  await waitFor(() => expect(button.hasAttribute("disabled")).toBe(false));
+  return button;
+}
+
 async function removed() {
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   expect(toast.success).toHaveBeenCalled();
@@ -172,9 +182,7 @@ describe("Remove from sidebar", () => {
       dialogs!.openRemoveProject({ key: A, name: "projA", missing: false })
     );
 
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Remove from sidebar" })
-    );
+    fireEvent.click(await removeButton());
 
     await removed();
   });
@@ -197,9 +205,7 @@ describe("Remove from sidebar", () => {
       dialogs!.openRemoveProject({ key: A, name: "projA", missing: false })
     );
 
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Remove from sidebar" })
-    );
+    fireEvent.click(await removeButton());
     expect((await screen.findByRole("alert")).textContent).toMatch(
       /Pause them first/
     );

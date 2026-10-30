@@ -69,6 +69,17 @@ describe("FilePaneProvider", () => {
     });
   });
 
+  it("opens a link in the project the conversation moved to", () => {
+    const h = renderWithFilePane(null);
+    const before = bridge("t1");
+    act(() => h.pane().registerChat(before));
+    act(() => h.pane().registerChat({ ...before, project: PROJECT_B }));
+
+    clickLink("workspace", "outputs/a.md");
+
+    expect(h.pane().activeTab).toMatchObject({ project: PROJECT_B });
+  });
+
   it("opens nothing for a conversation whose project files can't be shown", () => {
     const h = renderWithFilePane(null);
     act(() => h.pane().registerChat(bridge("t1")));

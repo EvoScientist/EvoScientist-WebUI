@@ -46,7 +46,8 @@ function sameBridge(
   if (
     a.threadId !== b.threadId ||
     a.setFiles !== b.setFiles ||
-    a.editDisabled !== b.editDisabled
+    a.editDisabled !== b.editDisabled ||
+    a.project !== b.project
   ) {
     return false;
   }
