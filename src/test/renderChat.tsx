@@ -33,19 +33,19 @@ import { renderHook, type RenderHookResult } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { ChatProvider, useChatContext } from "@/providers/ChatProvider";
 import type { ThreadUnavailableInfo } from "@/app/hooks/useChat";
-import type { WorkspaceContextValue } from "@/providers/WorkspaceProvider";
-import { TestWorkspaceProvider, mockWorkspace } from "@/test/mockWorkspace";
+import type { ProjectsContextValue } from "@/providers/ProjectsProvider";
+import { TestProjectsProvider, mockProjects } from "@/test/mockProjects";
 
 export type ChatContextValue = ReturnType<typeof useChatContext>;
 
 interface RenderChatOptions {
-  /** A backend without the workspace route that the chat can run on; false
-   *  (the default) leaves the backend's folder unknown, so nothing runs. */
+  /** A backend with one project the chat can run in; false (the default)
+   *  leaves the projects unknown, so nothing runs. */
   connected?: boolean;
   onHistoryRevalidate?: () => void;
   onThreadUnavailable?: (info: ThreadUnavailableInfo) => void;
-  /** The backend's folder; defaults to a backend without the route. */
-  workspace?: WorkspaceContextValue;
+  /** The backend's projects; see `connected` for the default. */
+  projects?: ProjectsContextValue;
 }
 
 export function renderChat(
@@ -55,14 +55,14 @@ export function renderChat(
     connected = false,
     onHistoryRevalidate,
     onThreadUnavailable,
-    workspace,
+    projects,
   } = opts;
   return renderHook(() => useChatContext(), {
     wrapper: ({ children }: { children: ReactNode }) => (
-      <TestWorkspaceProvider
+      <TestProjectsProvider
         value={
-          workspace ??
-          mockWorkspace(connected ? undefined : { status: "pending" })
+          projects ??
+          mockProjects(connected ? undefined : { status: "pending" })
         }
       >
         <ChatProvider
@@ -71,7 +71,7 @@ export function renderChat(
         >
           {children}
         </ChatProvider>
-      </TestWorkspaceProvider>
+      </TestProjectsProvider>
     ),
   });
 }

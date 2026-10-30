@@ -1,28 +1,30 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Cron } from "@langchain/langgraph-sdk";
 import { Client } from "@langchain/langgraph-sdk";
 import { getConfig } from "@/lib/config";
 import { browserTimeZone } from "@/lib/cronUtils";
 import { patchClientStreamModes } from "@/lib/streamMode";
 import { getHttpStatus, isRunFolderMismatchError } from "@/lib/streamError";
-import { SCHEDULER_GRAPH_ID } from "@/lib/workspaceAssistant";
-import { useWorkspace } from "@/providers/WorkspaceProvider";
-import { assistantIdFor } from "@/lib/workspaceSession";
+import {
+  SCHEDULER_GRAPH_ID,
+  workspaceAssistantId,
+} from "@/lib/workspaceAssistant";
+import { useProjects } from "@/providers/ProjectsProvider";
 
-const SCHEDULED_RUN_KIND = "scheduled_task";
+/** The `run_kind` the WebUI and the core give a scheduled task. */
+export const SCHEDULED_RUN_KIND = "scheduled_task";
 
-/** Where scheduled tasks run: the scheduler graph's assistant for the
- *  backend's folder, and that folder for the task's tag. */
+/** Where scheduled tasks run: the scheduler graph's assistant for a
+ *  project, and that project's folder for the task's tag. */
 export interface SchedulerTarget {
   assistantId: string;
-  /** Null on a backend without the workspace route. */
-  workspaceDir: string | null;
+  workspaceDir: string;
 }
 
 function workspaceTag(target: SchedulerTarget): Record<string, string> {
-  return target.workspaceDir ? { workspace_dir: target.workspaceDir } : {};
+  return { workspace_dir: target.workspaceDir };
 }
 
 export function makeClient(): Client | null {
@@ -48,30 +50,16 @@ export interface ScheduledTask {
   next_run_date: string | null;
   created_at: string;
   updated_at: string;
-  /** The folder the task runs in; null for a task made before tags. */
-  workspaceDir: string | null;
   /** False while the task is paused: it keeps its schedule but doesn't run. */
   enabled: boolean;
   input: Record<string, unknown>;
+  /** The assistant it runs on, which decides its project. */
+  assistantId: string;
 }
 
 /** When `task` runs next; null while it is paused or has no next run. */
 export function upcomingRun(task: ScheduledTask): string | null {
   return task.enabled ? task.next_run_date : null;
-}
-
-/**
- * Why `task` can't be run from here: it runs in another folder than the
- * backend's, and a manual run would run it in this one. Null when it can. An
- * untagged task counts as this folder's, as the core's scheduling does.
- */
-export function otherFolderReason(
-  task: ScheduledTask,
-  servedFolder: string | null
-): string | null {
-  if (!task.workspaceDir || !servedFolder) return null;
-  if (task.workspaceDir === servedFolder) return null;
-  return `This task runs in ${task.workspaceDir}, not the backend's folder.`;
 }
 
 function parseCron(cron: Cron): ScheduledTask {
@@ -86,12 +74,9 @@ function parseCron(cron: Cron): ScheduledTask {
     next_run_date: cron.next_run_date ?? null,
     created_at: cron.created_at,
     updated_at: cron.updated_at,
-    workspaceDir:
-      typeof meta.workspace_dir === "string" && meta.workspace_dir
-        ? meta.workspace_dir
-        : null,
     enabled: cron.enabled !== false,
     input: storedInput(cron),
+    assistantId: cron.assistant_id,
   };
 }
 
@@ -105,8 +90,8 @@ function storedInput(cron: Cron): Record<string, unknown> {
 export async function listScheduledTasks(): Promise<ScheduledTask[]> {
   const client = makeClient();
   if (!client) return [];
-  // Only EvoScientist crons carry run_kind in metadata. Scoping the list to
-  // the backend's folder comes with the project sidebar.
+  // Only EvoScientist crons carry run_kind in metadata. Every folder's
+  // tasks: the views keep the registered projects' (`registeredTasks`).
   const crons = await client.crons.search({ limit: 200 });
   const scheduledCrons = crons.filter(
     (c) =>
@@ -244,27 +229,30 @@ export async function runScheduledTaskNow(
   });
 }
 
-/** The backend's folder; null until known, or on a backend without the
- *  workspace route. */
-export function useServedFolder(): string | null {
-  const { workspace } = useWorkspace();
-  return workspace.status === "ready" ? workspace.key : null;
+/** Where the scheduled tasks of the project at `key` run. */
+export function schedulerTarget(key: string): SchedulerTarget {
+  return {
+    assistantId: workspaceAssistantId(SCHEDULER_GRAPH_ID, key),
+    workspaceDir: key,
+  };
 }
 
 /**
- * Whether a failed create or run means the folder must be read again. Save
+ * Whether a failed create or run means the projects must be read again. Save
  * and Run now create the cron or thread they run on, so a 404 can only be
- * the assistant: the backend lost this folder's assistants (a fresh store).
- * `crons.create` says so as `Assistant '<id>' not found`, a run as `Thread or
- * assistant not found.`. A folder mismatch means it serves another folder.
+ * the assistant: the core makes every registered project's assistants, so
+ * the project is gone. `crons.create` says so as `Assistant '<id>' not
+ * found`, a run as `Thread or assistant not found.`. A folder refusal says
+ * the backend doesn't serve the project.
  */
 export function assistantRecoveryNeeded(error: unknown): boolean {
   return getHttpStatus(error) === 404 || isRunFolderMismatchError(error);
 }
 
-/** Handle a failed create or run: read the folder again when it needs to. */
+/** Handle a failed create or run: read the projects again when it needs
+ *  to. */
 export function useAssistantRecovery(): (error: unknown) => void {
-  const { refresh } = useWorkspace();
+  const { refresh } = useProjects();
   return useCallback(
     (error: unknown) => {
       if (assistantRecoveryNeeded(error)) void refresh();
@@ -273,24 +261,10 @@ export function useAssistantRecovery(): (error: unknown) => void {
   );
 }
 
-/** Whether a task may be created or run now (the folder is not being read
- *  again); check it at the moment of acting. */
+/** Whether a task may be created or run now (the projects are not being
+ *  read again); check it at the moment of acting. */
 export function useSchedulerGate(): () => boolean {
-  return useWorkspace().isReady;
-}
-
-/** The scheduler assistant for the backend's folder; null until known. */
-export function useSchedulerTarget(): SchedulerTarget | null {
-  const { workspace, refreshing } = useWorkspace();
-  // None while the folder is read again: tasks wait for its answer.
-  const assistantId = refreshing
-    ? null
-    : assistantIdFor(workspace, SCHEDULER_GRAPH_ID);
-  const workspaceDir = workspace.status === "ready" ? workspace.key : null;
-  return useMemo(
-    () => (assistantId ? { assistantId, workspaceDir } : null),
-    [assistantId, workspaceDir]
-  );
+  return useProjects().isReady;
 }
 
 export function useScheduledTasks(): {

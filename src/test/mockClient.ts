@@ -47,6 +47,7 @@ export class MockClient {
     }),
     updateState: vi.fn(async () => {}),
     patch: vi.fn(async () => {}),
+    delete: vi.fn(async () => {}),
   };
 
   // useGoalSupport reads the main graph's input schema; {} is a backend

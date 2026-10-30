@@ -13,7 +13,10 @@ import {
   within,
   fireEvent,
   waitFor,
+  render,
 } from "@testing-library/react";
+import { ProjectDialogsContext } from "@/providers/projectDialogsContext";
+import { workspaceAssistantId } from "@/lib/workspaceAssistant";
 import type { ComposerFold } from "@/app/components/ChatInterface";
 import {
   MockStreamStore,
@@ -116,7 +119,11 @@ vi.mock("@/app/components/TasksFilesSidebar", async () => {
   const m = await import("@/test/mocks/chatInterfaceStubs");
   return { FilesPopover: m.stubComponent("FilesPopover") };
 });
-import { mockWorkspace, readyWorkspace } from "@/test/mockWorkspace";
+import {
+  TestProjectsProvider,
+  mockProjects,
+  readyProjects,
+} from "@/test/mockProjects";
 import {
   chatInterfaceTree,
   renderChatInterface,
@@ -400,10 +407,10 @@ describe("ChatInterface composition", () => {
     expect(screen.queryAllByTestId("stub-ActionGroup")).toHaveLength(0);
   });
 
-  it("keeps an ask_user form on the page, disabled, while the folder is read again", () => {
+  it("keeps an ask_user form on the page, disabled, while the projects are read again", () => {
     renderChatInterface({
-      workspace: {
-        ...mockWorkspace(),
+      projects: {
+        ...mockProjects(),
         refreshing: true,
         isReady: () => false,
       },
@@ -420,16 +427,13 @@ describe("ChatInterface composition", () => {
     ).toBe(true);
   });
 
-  it("makes the chat read-only while a run-mode session holds the backend", () => {
+  it("makes the chat read-only on a core without the project list", () => {
     const { container } = renderChatInterface({
-      workspace: mockWorkspace({
-        ...readyWorkspace("/home/you/projA"),
-        runDir: "/home/you/projA/runs/r1",
-      }),
+      projects: mockProjects({ status: "unsupported" }),
     });
     const textarea = container.querySelector("textarea")!;
     expect(textarea.disabled).toBe(true);
-    expect(textarea.placeholder).toMatch(/run folder/);
+    expect(textarea.placeholder).toMatch(/too old/);
 
     act(() => {
       stream.setMessages([humanTurn("hi")]);
@@ -441,7 +445,7 @@ describe("ChatInterface composition", () => {
   // "first" refused, with "second" queued behind it while it ran and
   // `draft` typed since.
   async function refuseWithQueued(draft = "") {
-    const { container } = renderChatInterface({ workspace: mockWorkspace() });
+    const { container } = renderChatInterface({ projects: mockProjects() });
     const textarea = container.querySelector("textarea")!;
     fireEvent.change(textarea, { target: { value: "first" } });
     fireEvent.keyDown(textarea, { key: "Enter" });
@@ -495,7 +499,7 @@ describe("ChatInterface composition", () => {
   it("keeps a queued message while the folder is being read again", () => {
     let readyNow = true;
     const { container } = renderChatInterface({
-      workspace: { ...mockWorkspace(), isReady: () => readyNow },
+      projects: { ...mockProjects(), isReady: () => readyNow },
     });
     act(() => {
       stream.setMessages([humanTurn("hi")]);
@@ -1410,10 +1414,12 @@ describe("ChatInterface composition", () => {
       return null;
     }
     const FilePaneWrapper = ({ children }: { children: React.ReactNode }) => (
-      <FilePaneProvider>
-        <Probe />
-        {children}
-      </FilePaneProvider>
+      <TestProjectsProvider>
+        <FilePaneProvider>
+          <Probe />
+          {children}
+        </FilePaneProvider>
+      </TestProjectsProvider>
     );
 
     beforeEach(() => {
@@ -1634,11 +1640,10 @@ describe("ChatInterface composition", () => {
       }
     });
 
-    it("offers only the global skills when the backend's folder is elsewhere", async () => {
+    it("offers only the global skills when the page's backend is another machine's", async () => {
       const { container } = renderChatInterface({
-        workspace: mockWorkspace({
-          ...readyWorkspace("/srv/projB"),
-          local: { dir: "/home/you/projA", sameFolder: false },
+        projects: mockProjects(readyProjects("/srv/projB"), {
+          files: "elsewhere",
         }),
       });
       typeInComposer(container, "/pa");
@@ -1646,7 +1651,7 @@ describe("ChatInterface composition", () => {
         expect(screen.getAllByRole("option")).toHaveLength(1)
       );
       expect(fetch).toHaveBeenCalledWith(
-        "/api/skills/pinnable?workspace=0",
+        "/api/skills/pinnable",
         expect.anything()
       );
     });
@@ -1821,20 +1826,18 @@ describe("ChatInterface composition", () => {
     // Confirm round N6: a thread turning read-only under an open page closes
     // it, as an answer waited for does.
     it("closes a page when the thread turns read-only", async () => {
-      const ready = readyWorkspace("/home/you/projA");
-      const view = renderChatInterface({ workspace: mockWorkspace(ready) });
+      const ready = readyProjects("/home/you/projA");
+      const view = renderChatInterface({ projects: mockProjects(ready) });
       const textarea = typeInComposer(view.container, "/mo");
       await waitFor(() =>
         expect(screen.getAllByRole("option")).toHaveLength(1)
       );
       fireEvent.keyDown(textarea, { key: "Enter" });
       expect(screen.getByRole("listbox", { name: "Model" })).toBeTruthy();
+      // The project is removed: its threads can't run here any more.
       view.rerender(
         chatInterfaceTree({
-          workspace: mockWorkspace({
-            ...ready,
-            runDir: "/home/you/projA/runs/r1",
-          }),
+          projects: mockProjects(readyProjects(), { current: null }),
         })
       );
       expect(screen.queryByRole("listbox")).toBeNull();
@@ -2618,6 +2621,378 @@ describe("ChatInterface composition", () => {
       renderChatInterface();
 
       expect(jumpButton()).toBeNull();
+    });
+  });
+
+  describe("project switch", () => {
+    const A = "/home/you/projA";
+    const B = "/srv/projB";
+
+    beforeEach(() => {
+      vi.mocked(toast.warning).mockClear();
+      vi.mocked(toast.success).mockClear();
+      // Radix Popper measures its anchor; jsdom has no ResizeObserver.
+      vi.stubGlobal(
+        "ResizeObserver",
+        class {
+          observe() {}
+          unobserve() {}
+          disconnect() {}
+        }
+      );
+    });
+
+    afterEach(() => {
+      mockThreadId = null;
+      vi.unstubAllGlobals();
+    });
+
+    it("moves a new chat to another project before its first message", async () => {
+      const projects = mockProjects(readyProjects(A, B), { current: A });
+      renderChatInterface({ projects });
+
+      fireEvent.keyDown(
+        screen.getByRole("button", { name: /Change project/ }),
+        { key: "Enter" }
+      );
+      expect(
+        (
+          await screen.findByRole("menuitemradio", { name: /projA/ })
+        ).getAttribute("aria-checked")
+      ).toBe("true");
+      fireEvent.click(screen.getByRole("menuitemradio", { name: /projB/ }));
+
+      expect(projects.selectProject).toHaveBeenCalledWith(B, {
+        remember: true,
+      });
+    });
+
+    const attach = async (container: HTMLElement) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () =>
+          Response.json({ files: [{ name: "a.csv", path: "a.csv", size: 1 }] })
+        )
+      );
+      const input = container.querySelector(
+        'input[type="file"]'
+      ) as HTMLInputElement;
+      fireEvent.change(input, {
+        target: { files: [new File(["x"], "a.csv")] },
+      });
+      await screen.findByLabelText("Attached files");
+    };
+
+    const fileOf = (key: string, path = "a.csv") => ({
+      name: path,
+      path,
+      size: 1,
+      project: workspaceAssistantId("EvoScientist", key),
+    });
+    const typeAndSend = (container: HTMLElement, text: string) => {
+      const textarea = container.querySelector("textarea")!;
+      fireEvent.change(textarea, { target: { value: text } });
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      return textarea;
+    };
+    // Nothing went out, and the message and its files are still there.
+    const expectRefused = (textarea: HTMLTextAreaElement, text: string) => {
+      expect(stream.getSubmitCalls()).toHaveLength(0);
+      expect(toast.warning).toHaveBeenCalled();
+      expect(textarea.value).toBe(text);
+      expect(screen.getByLabelText("Attached files")).toBeTruthy();
+    };
+
+    it("refuses to send a file whose upload lands after the chat moved", async () => {
+      let answer: (response: Response) => void = () => {};
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(() => new Promise<Response>((resolve) => (answer = resolve)))
+      );
+      const { container, rerender } = renderChatInterface({
+        projects: mockProjects(readyProjects(A, B), { current: A }),
+      });
+      const input = container.querySelector(
+        'input[type="file"]'
+      ) as HTMLInputElement;
+      fireEvent.change(input, {
+        target: { files: [new File(["x"], "a.csv")] },
+      });
+      rerender(
+        chatInterfaceTree({
+          projects: mockProjects(readyProjects(B), { current: B }),
+        })
+      );
+
+      await act(async () => {
+        answer(
+          Response.json({ files: [{ name: "a.csv", path: "a.csv", size: 1 }] })
+        );
+      });
+
+      await screen.findByLabelText("Attached files");
+      const textarea = typeAndSend(container, "Analyse it");
+
+      expectRefused(textarea, "Analyse it");
+    });
+
+    it("refuses to send or queue a file handed back from another project", () => {
+      const { container } = renderChatInterface({
+        projects: mockProjects(readyProjects(A, B), { current: B }),
+        draftSeed: { text: "hi", files: [fileOf(A)] },
+      });
+
+      expect(
+        screen
+          .getByRole("button", { name: "Send message" })
+          .hasAttribute("disabled")
+      ).toBe(true);
+      expect(screen.getByText(/another project/)).toBeTruthy();
+      const textarea = typeAndSend(container, "hi");
+      expectRefused(textarea, "hi");
+
+      // Said at once while a run goes, not when the queue would drain.
+      vi.mocked(toast.warning).mockClear();
+      act(() => stream.setLoading(true));
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(toast.warning).toHaveBeenCalled();
+      expect(screen.queryByLabelText("Queued messages")).toBeNull();
+      // Stop is never held back by the files.
+      expect(
+        screen
+          .getByRole("button", { name: "Stop generating" })
+          .hasAttribute("disabled")
+      ).toBe(false);
+    });
+
+    it("keeps queued messages in order behind one held for its files", async () => {
+      const { container, rerender } = renderChatInterface({
+        projects: mockProjects(readyProjects(A, B), { current: A }),
+      });
+      await attach(container);
+      act(() => stream.setLoading(true));
+      typeAndSend(container, "first");
+      typeAndSend(container, "second");
+      expect(screen.getByLabelText("Queued messages")).toBeTruthy();
+
+      // The chat's project goes away before the run ends.
+      rerender(
+        chatInterfaceTree({
+          projects: mockProjects(readyProjects(B), { current: B }),
+        })
+      );
+      act(() => stream.setLoading(false));
+
+      await waitFor(() =>
+        expect(screen.queryByLabelText("Queued messages")).toBeNull()
+      );
+      expect(stream.getSubmitCalls()).toHaveLength(0);
+      const textarea = container.querySelector("textarea")!;
+      expect(textarea.value).toMatch(/first[\s\S]*second/);
+    });
+
+    it("lets a draft with another project's files move to another project", () => {
+      renderChatInterface({
+        projects: mockProjects(readyProjects(A, B), { current: B }),
+        draftSeed: { text: "hi", files: [fileOf(A)] },
+      });
+
+      expect(
+        screen.getByRole("button", { name: /Change project/ })
+      ).toBeTruthy();
+    });
+
+    it("brings a refused first message back with its files, keeping the project", async () => {
+      const { container } = renderChatInterface({
+        projects: mockProjects(readyProjects(A, B), { current: A }),
+      });
+      await attach(container);
+      typeAndSend(container, "first");
+      const sent = stream.getSubmitCalls()[0].values as {
+        messages: Message[];
+      };
+      expect(screen.queryByLabelText("Attached files")).toBeNull();
+
+      act(() => {
+        stream.setMessages([...sent.messages]);
+        stream.setLoading(true);
+      });
+      act(() => {
+        stream.emitError(
+          new Error('HTTP 404: {"detail":"Thread or assistant not found."}')
+        );
+        stream.setLoading(false);
+      });
+
+      expect(container.querySelector("textarea")!.value).toBe("first");
+      expect(screen.getByText("a.csv")).toBeTruthy();
+      // The file is A's again: the chat stays in A.
+      expect(
+        screen.queryByRole("button", { name: /Change project/ })
+      ).toBeNull();
+    });
+
+    it("keeps same-path files of two projects apart", async () => {
+      const { container } = renderChatInterface({
+        projects: mockProjects(readyProjects(A, B), { current: B }),
+        draftSeed: { text: "hi", files: [fileOf(A, "data.csv")] },
+      });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () =>
+          Response.json({
+            files: [{ name: "data.csv", path: "data.csv", size: 1 }],
+          })
+        )
+      );
+      fireEvent.change(container.querySelector('input[type="file"]')!, {
+        target: { files: [new File(["x"], "data.csv")] },
+      });
+      const removers = () =>
+        screen.queryAllByRole("button", {
+          name: "Remove data.csv from this message",
+        });
+      await waitFor(() => expect(removers()).toHaveLength(2));
+
+      // The first is A's: without it the message goes, with B's file.
+      fireEvent.click(removers()[0]);
+      expect(removers()).toHaveLength(1);
+      typeAndSend(container, "hi");
+
+      expect(stream.getSubmitCalls()).toHaveLength(1);
+      expect(
+        (
+          stream.getSubmitCalls()[0].values as { messages: Message[] }
+        ).messages.at(-1)?.content
+      ).toContain("data.csv");
+    });
+
+    it("keeps a new chat in its project while a file is attached", async () => {
+      const { container } = renderChatInterface({
+        projects: mockProjects(readyProjects(A, B), { current: A }),
+      });
+
+      await attach(container);
+
+      expect(
+        screen.queryByRole("button", { name: /Change project/ })
+      ).toBeNull();
+    });
+
+    it("refuses to send files attached in another project when the chat moves", async () => {
+      const { container, rerender } = renderChatInterface({
+        projects: mockProjects(readyProjects(A, B), { current: A }),
+      });
+      await attach(container);
+
+      // Its project went away (removed in another tab): the chat moves on.
+      rerender(
+        chatInterfaceTree({
+          projects: mockProjects(readyProjects(B), { current: B }),
+        })
+      );
+      const textarea = typeAndSend(container, "Analyse it");
+
+      expectRefused(textarea, "Analyse it");
+    });
+
+    it("offers no switch while the first run goes", () => {
+      renderChatInterface({
+        projects: mockProjects(readyProjects(A, B), { current: A }),
+      });
+      act(() => {
+        stream.setLoading(true);
+      });
+
+      expect(
+        screen.queryByRole("button", { name: /Change project/ })
+      ).toBeNull();
+    });
+
+    it("can't move a new chat to a project whose folder is missing", async () => {
+      renderChatInterface({
+        projects: mockProjects(
+          readyProjects(A, { key: B, name: "projB", missing: true }),
+          { current: A }
+        ),
+      });
+
+      fireEvent.keyDown(
+        screen.getByRole("button", { name: /Change project/ }),
+        { key: "Enter" }
+      );
+
+      expect(
+        (
+          await screen.findByRole("menuitemradio", { name: /projB/ })
+        ).getAttribute("aria-disabled")
+      ).toBe("true");
+    });
+
+    it("offers no switch with one project", () => {
+      renderChatInterface({ projects: mockProjects(readyProjects(A)) });
+
+      expect(
+        screen.queryByRole("button", { name: /Change project/ })
+      ).toBeNull();
+    });
+
+    it("keeps a conversation in its project", async () => {
+      mockThreadId = "t-1";
+      getActiveMockClient().setThreadRecord("t-1", {
+        metadata: { graph_id: "EvoScientist", workspace_dir: B },
+      });
+      renderChatInterface({
+        projects: mockProjects(readyProjects(A, B), { current: A }),
+        onNavigate: vi.fn(),
+      });
+
+      expect(
+        await screen.findByRole("button", { name: /workspace: \/srv\/projB/ })
+      ).toBeTruthy();
+      expect(
+        screen.queryByRole("button", { name: /Change project/ })
+      ).toBeNull();
+    });
+
+    it("lets a conversation with no folder pick its project", async () => {
+      mockThreadId = "t-1";
+      getActiveMockClient().setThreadRecord("t-1", {
+        metadata: { graph_id: "EvoScientist" },
+      });
+      renderChatInterface({
+        projects: mockProjects(readyProjects(A, B), { current: A }),
+      });
+
+      expect(
+        await screen.findByRole("button", { name: /Change project/ })
+      ).toBeTruthy();
+    });
+
+    it("offers to add the folder of a conversation that isn't in a project", async () => {
+      mockThreadId = "t-1";
+      getActiveMockClient().setThreadRecord("t-1", {
+        metadata: {
+          graph_id: "EvoScientist",
+          workspace_dir: "/home/you/projC",
+        },
+      });
+      const dialogs = { openAddProject: vi.fn(), openRemoveProject: vi.fn() };
+      render(
+        <ProjectDialogsContext.Provider value={dialogs}>
+          {chatInterfaceTree({
+            projects: mockProjects(readyProjects(A, B), { current: A }),
+          })}
+        </ProjectDialogsContext.Provider>
+      );
+
+      fireEvent.click(
+        await screen.findByRole("button", {
+          name: "Add this folder as a project",
+        })
+      );
+
+      expect(dialogs.openAddProject).toHaveBeenCalledWith("/home/you/projC");
     });
   });
 });

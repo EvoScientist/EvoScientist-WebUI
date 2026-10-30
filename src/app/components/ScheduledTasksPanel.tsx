@@ -45,6 +45,12 @@ import {
 import { INPUT_LIKE_TRIGGER, LIST_MAX_HEIGHT } from "@/lib/fieldStyles";
 import { cn } from "@/lib/utils";
 import { ScheduledTaskActivity } from "@/app/components/ScheduledTaskActivity";
+import { useProjects } from "@/providers/ProjectsProvider";
+import {
+  projectsByAssistant,
+  registeredTasks,
+  type Project,
+} from "@/lib/projects";
 import {
   createScheduledTask,
   deleteScheduledTask,
@@ -53,10 +59,8 @@ import {
   setScheduledTaskEnabled,
   updateScheduledTask,
   upcomingRun,
-  otherFolderReason,
   useScheduledTasks,
-  useSchedulerTarget,
-  useServedFolder,
+  schedulerTarget,
   useAssistantRecovery,
   useSchedulerGate,
   type ScheduledTask,
@@ -500,8 +504,23 @@ function TaskForm({
     name.trim() !== initialTask.name.trim() ||
     prompt.trim() !== initialTask.prompt.trim() ||
     cron !== initialTask.schedule.trim();
-  // A new task goes to this folder's scheduler; an edit keeps the task's own.
-  const target = useSchedulerTarget();
+  // A new task runs in the project picked here, the current one at first;
+  // an edit keeps the task's own.
+  const { projects, current, refreshing } = useProjects();
+  const runnable = (
+    projects.status === "ready" ? projects.projects : []
+  ).filter((project) => !project.missing);
+  // The project picked, else the current one (it may arrive after the form
+  // opens), else the first that can run.
+  const [pickedProject, setPickedProject] = useState<string | null>(null);
+  const projectKey =
+    [pickedProject, current?.key].find(
+      (key) => key && runnable.some((p) => p.key === key)
+    ) ??
+    runnable[0]?.key ??
+    null;
+  // None while the projects are read again: Create waits for them.
+  const target = projectKey && !refreshing ? schedulerTarget(projectKey) : null;
   const recoverAssistant = useAssistantRecovery();
   const gateOpen = useSchedulerGate();
   useEffect(() => {
@@ -627,6 +646,36 @@ function TaskForm({
             />
           </div>
 
+          {!isEditing && projectKey && (
+            <div className="space-y-1.5">
+              <FieldLabel>Project</FieldLabel>
+              <Select
+                value={projectKey}
+                onValueChange={(next) => {
+                  if (next) setPickedProject(next);
+                }}
+              >
+                <SelectTrigger
+                  aria-label="Project"
+                  className={cn(INPUT_LIKE_TRIGGER, "sm:min-w-56")}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className={LIST_MAX_HEIGHT}>
+                  {runnable.map((project) => (
+                    <SelectItem
+                      key={project.key}
+                      value={project.key}
+                      title={project.key}
+                    >
+                      {project.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
           <div className="space-y-1.5">
             <FieldLabel htmlFor="scheduled-task-prompt">
               Task description
@@ -700,9 +749,12 @@ interface TaskDetailProps {
    *  leave it. */
   onBusy: (busy: boolean) => void;
   onOpenThread?: (id: string) => void | Promise<void>;
+  /** The task's project; it runs there. */
+  project: Project | null;
 }
 
 function TaskDetail({
+  project,
   task,
   onBack,
   onEdit,
@@ -722,8 +774,18 @@ function TaskDetail({
   const [deleting, setDeleting] = useState(false);
   const nextRun = upcomingRun(task);
   const nextRunTitle = formatLongDate(nextRun);
-  const target = useSchedulerTarget();
-  const elsewhere = otherFolderReason(task, useServedFolder());
+  // A manual run goes where the schedule's runs go: the task's project.
+  const runsIn = project && !project.missing ? project.key : null;
+  const target = useMemo(
+    () =>
+      runsIn ? { assistantId: task.assistantId, workspaceDir: runsIn } : null,
+    [runsIn, task.assistantId]
+  );
+  const elsewhere = !project
+    ? "This task's project isn't on this backend."
+    : project.missing
+    ? `${project.name}'s folder is missing: the task won't run until the folder is back.`
+    : null;
   const recoverAssistant = useAssistantRecovery();
   const gateOpen = useSchedulerGate();
   const handleRunNow = useCallback(async () => {
@@ -811,6 +873,9 @@ function TaskDetail({
             <h2 className="truncate text-sm font-semibold">{task.name}</h2>
             <p className="truncate text-xs text-muted-foreground">
               {scheduleLabel(task.schedule, task.timezone)}
+              {project && (
+                <span title={project.key}>{` · ${project.name}`}</span>
+              )}
             </p>
           </div>
           <Button
@@ -1057,7 +1122,7 @@ export function ScheduledTasksPanel({
 }: {
   onOpenThread?: (id: string) => void | Promise<void>;
 }) {
-  const { tasks, loading, error, refresh } = useScheduledTasks();
+  const { tasks: allTasks, loading, error, refresh } = useScheduledTasks();
   const [right, setRight] = useState<RightPane>({ kind: "empty" });
   // A save, pause or resume in flight. Until it answers, everything that
   // would change the pane is off: Cancel and the back arrow in the form;
@@ -1069,12 +1134,32 @@ export function ScheduledTasksPanel({
   const createIdRef = useRef(0);
   const editIdRef = useRef(0);
 
+  // Each task's project is the one whose assistant it runs on.
+  const { projects } = useProjects();
+  const projectList = useMemo(
+    () => (projects.status === "ready" ? projects.projects : []),
+    [projects]
+  );
+  const byAssistant = useMemo(
+    () => projectsByAssistant(projectList),
+    [projectList]
+  );
+  const projectsPending = projects.status === "pending";
+  const projectOf = useCallback(
+    (task: ScheduledTask) => byAssistant.get(task.assistantId) ?? null,
+    [byAssistant]
+  );
+  const tasks = useMemo(
+    () => registeredTasks(allTasks, projectList),
+    [allTasks, projectList]
+  );
+
   const locked = busy || loading;
-  // Only the first read shows the spinner; a re-read keeps what is on
-  // screen, an empty list too.
+  // Only the first read shows the spinner, and the projects' too; a re-read
+  // keeps what is on screen, an empty list too.
   const [loadedOnce, setLoadedOnce] = useState(false);
   if (!loading && !loadedOnce) setLoadedOnce(true);
-  const firstLoad = loading && !loadedOnce;
+  const firstLoad = (loading && !loadedOnce) || projectsPending;
   const sortedTasks = useMemo(() => sortTasks(tasks), [tasks]);
   const filteredTasks = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -1083,6 +1168,17 @@ export function ScheduledTasksPanel({
       taskSearchText(task).includes(normalized)
     );
   }, [query, sortedTasks]);
+  // The shown tasks under their projects, the projects by name.
+  const groups = useMemo(
+    () =>
+      projectList
+        .map((project) => ({
+          project,
+          tasks: filteredTasks.filter((task) => projectOf(task) === project),
+        }))
+        .filter((group) => group.tasks.length > 0),
+    [projectList, filteredTasks, projectOf]
+  );
   const nextTask = sortedTasks.find((task) => upcomingRun(task));
   const nextTaskRun = nextTask ? upcomingRun(nextTask) : null;
   const selectedTaskId = right.kind === "detail" ? right.task.cron_id : null;
@@ -1094,10 +1190,11 @@ export function ScheduledTasksPanel({
   // read is in). A read that failed leaves the pane as it is.
   useEffect(() => {
     if (!selectedTaskId) return;
-    if (loading || error) return;
+    // The list holds only tasks of known projects: wait for them too.
+    if (loading || error || projectsPending) return;
     const updated = tasks.find((task) => task.cron_id === selectedTaskId);
     setRight(updated ? { kind: "detail", task: updated } : { kind: "empty" });
-  }, [error, loading, selectedTaskId, tasks]);
+  }, [error, loading, projectsPending, selectedTaskId, tasks]);
 
   const openCreate = useCallback((template?: Template) => {
     createIdRef.current += 1;
@@ -1300,22 +1397,41 @@ export function ScheduledTasksPanel({
                     {filteredTasks.length}
                   </p>
                 </div>
-                <div className="flex flex-col gap-0.5">
-                  {filteredTasks.map((task) => {
-                    const active =
-                      right.kind === "detail" &&
-                      right.task.cron_id === task.cron_id;
-                    return (
-                      <TaskRow
-                        key={task.cron_id}
-                        task={task}
-                        active={active}
-                        onSelect={() => setRight({ kind: "detail", task })}
-                        disabled={locked}
-                      />
-                    );
-                  })}
-                </div>
+                {groups.map(({ project, tasks: projectTasks }) => (
+                  <section
+                    key={project.key}
+                    aria-label={`Tasks in ${project.name}`}
+                    className="mb-2"
+                  >
+                    <h3
+                      className="m-0 flex items-center gap-1.5 px-2 py-1 text-xs font-semibold"
+                      title={project.key}
+                    >
+                      <span className="truncate">{project.name}</span>
+                      {project.missing && (
+                        <span className="rounded bg-destructive/10 px-1 py-px text-[11px] font-medium text-destructive">
+                          folder missing
+                        </span>
+                      )}
+                    </h3>
+                    <div className="flex flex-col gap-0.5">
+                      {projectTasks.map((task) => {
+                        const active =
+                          right.kind === "detail" &&
+                          right.task.cron_id === task.cron_id;
+                        return (
+                          <TaskRow
+                            key={task.cron_id}
+                            task={task}
+                            active={active}
+                            onSelect={() => setRight({ kind: "detail", task })}
+                            disabled={locked}
+                          />
+                        );
+                      })}
+                    </div>
+                  </section>
+                ))}
                 <div className="mt-3 space-y-2 border-t border-border px-1 py-3">
                   <p className="px-1 text-[11px] font-semibold uppercase text-muted-foreground">
                     Templates
@@ -1397,6 +1513,7 @@ export function ScheduledTasksPanel({
           {right.kind === "detail" && (
             <TaskDetail
               key={right.task.cron_id}
+              project={projectOf(right.task)}
               task={right.task}
               onBack={() => setRight({ kind: "empty" })}
               onEdit={() => openEdit(right.task)}

@@ -210,6 +210,7 @@ export function FilePreviewPane() {
               {tab.source === "workspace" ? (
                 <WorkspaceFileView
                   tabId={tab.id}
+                  project={tab.project}
                   path={tab.path}
                   size={tab.size}
                   visible={visible}

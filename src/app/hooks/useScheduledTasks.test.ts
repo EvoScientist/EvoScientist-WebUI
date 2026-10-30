@@ -137,8 +137,8 @@ describe("createScheduledTask", () => {
   });
 });
 
-describe("scheduled tasks run in the backend's folder", () => {
-  it("creates the cron on the folder's scheduler assistant, tagged with the folder", async () => {
+describe("scheduled tasks run in their project", () => {
+  it("creates the cron on the project's scheduler assistant, tagged with its folder", async () => {
     const calls = mockServer(() => cron());
 
     await createScheduledTask({
@@ -154,7 +154,7 @@ describe("scheduled tasks run in the backend's folder", () => {
     });
   });
 
-  it("runs a task now on the folder's scheduler assistant", async () => {
+  it("runs a task now on the scheduler assistant it is given", async () => {
     const calls = mockServer((call) =>
       call.path === "/threads"
         ? { thread_id: "t-1", metadata: {} }
@@ -337,6 +337,18 @@ describe("listScheduledTasks", () => {
     ]);
   });
 
+  it("reads the assistant each task runs on, which decides its project", async () => {
+    mockServer((call) =>
+      call.path === "/runs/crons/search"
+        ? [cron({ cron_id: "a", assistant_id: "assistant-of-projA" })]
+        : cron()
+    );
+
+    const [task] = await listScheduledTasks();
+
+    expect(task.assistantId).toBe("assistant-of-projA");
+  });
+
   it("reads whether each task is paused", async () => {
     mockServer((call) =>
       call.path === "/runs/crons/search"
@@ -357,7 +369,7 @@ describe("listScheduledTasks", () => {
 });
 
 describe("assistant recovery", () => {
-  it("reads the folder again when the scheduler assistant is gone", async () => {
+  it("asks for recovery when the scheduler assistant is gone", async () => {
     // The server's answer to a cron for an assistant it doesn't have, through
     // the real SDK client.
     vi.stubGlobal(

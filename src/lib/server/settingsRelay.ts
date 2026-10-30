@@ -127,7 +127,7 @@ export function localBackendUrl(): string {
   return `http://127.0.0.1:${localBackendPort()}`;
 }
 
-/** The local backend's port: the environment, else config.yaml, else 6174. */
+/** The local backend's port (see `readCoreConfig`). */
 export function localBackendPort(): number {
   return readCoreConfig().port;
 }
@@ -140,7 +140,11 @@ export type ForwardResult =
 export async function forwardToBackend(
   method: string,
   path: string,
-  { secret, body }: { secret?: string; body?: string } = {}
+  {
+    secret,
+    body,
+    timeoutMs = FORWARD_TIMEOUT_MS,
+  }: { secret?: string; body?: string; timeoutMs?: number } = {}
 ): Promise<ForwardResult> {
   const headers: Record<string, string> = {};
   if (secret !== undefined) headers[LOCAL_SECRET_HEADER] = secret;
@@ -152,7 +156,7 @@ export async function forwardToBackend(
       body,
       cache: "no-store",
       redirect: "manual",
-      signal: AbortSignal.timeout(FORWARD_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     return { ok: true, response };
   } catch (error) {

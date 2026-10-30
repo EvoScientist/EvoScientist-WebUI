@@ -15,10 +15,22 @@ const hook = vi.hoisted(() => ({
   setScheduledTaskEnabled: vi.fn(),
   createScheduledTask: vi.fn(),
   deleteScheduledTask: vi.fn(),
+  runScheduledTaskNow: vi.fn(),
   refresh: vi.fn(),
   recover: vi.fn(),
   /** The next list read fails. */
   failRead: false,
+}));
+
+const A = "/home/you/projA";
+const B = "/srv/projB";
+const projectsHolder = vi.hoisted(() => ({
+  value: null as unknown,
+}));
+
+vi.mock("@/providers/ProjectsProvider", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/providers/ProjectsProvider")>()),
+  useProjects: () => projectsHolder.value,
 }));
 
 vi.mock("@/app/hooks/useScheduledTasks", async (importOriginal) => {
@@ -48,13 +60,9 @@ vi.mock("@/app/hooks/useScheduledTasks", async (importOriginal) => {
     setScheduledTaskEnabled: hook.setScheduledTaskEnabled,
     createScheduledTask: hook.createScheduledTask,
     deleteScheduledTask: hook.deleteScheduledTask,
-    useServedFolder: () => "/home/you/projA",
+    runScheduledTaskNow: hook.runScheduledTaskNow,
     useAssistantRecovery: () => hook.recover,
     useSchedulerGate: () => () => true,
-    useSchedulerTarget: () => ({
-      assistantId: "scheduler-assistant",
-      workspaceDir: "/home/you/projA",
-    }),
   };
 });
 
@@ -63,6 +71,10 @@ vi.mock("@/app/components/ScheduledTaskActivity", () => ({
 }));
 
 import { ScheduledTasksPanel } from "./ScheduledTasksPanel";
+import { mockProjects, readyProjects } from "@/test/mockProjects";
+import { workspaceAssistantId } from "@/lib/workspaceAssistant";
+
+const schedulerOf = (key: string) => workspaceAssistantId("scheduler", key);
 
 // jsdom has no scrollIntoView; Radix Select calls it on the item it focuses
 // when a list opens.
@@ -87,9 +99,9 @@ function task(overrides: Partial<ScheduledTask>): ScheduledTask {
     next_run_date: null,
     created_at: "2026-10-09T08:00:00+00:00",
     updated_at: "2026-10-09T08:00:00+00:00",
-    workspaceDir: null,
     enabled: true,
     input: {},
+    assistantId: schedulerOf(A),
     ...overrides,
   };
 }
@@ -126,9 +138,11 @@ beforeEach(() => {
   hook.setScheduledTaskEnabled.mockReset();
   hook.createScheduledTask.mockReset();
   hook.deleteScheduledTask.mockReset();
+  hook.runScheduledTaskNow.mockReset();
   hook.refresh.mockReset();
   hook.recover.mockReset();
   hook.failRead = false;
+  projectsHolder.value = mockProjects(readyProjects(A, B), { current: A });
 });
 
 afterEach(() => vi.restoreAllMocks());
@@ -262,11 +276,11 @@ describe("ScheduledTasksPanel time zones", () => {
     expect(screen.queryByText("Zebra")).toBeNull();
   });
 
-  it("saves an edit of a task of another folder", async () => {
+  it("saves an edit of a task of another project", async () => {
     const elsewhere = task({
       cron_id: "elsewhere",
       name: "Elsewhere",
-      workspaceDir: "/home/you/projB",
+      assistantId: schedulerOf(B),
     });
     hook.tasks = [elsewhere];
     hook.updateScheduledTask.mockResolvedValue(elsewhere);
@@ -481,19 +495,166 @@ describe("ScheduledTasksPanel time zones", () => {
     expect(error).toHaveBeenCalledWith("Assistant 'x' not found");
   });
 
-  it("lets a task of another folder be edited in place but not run here", () => {
-    hook.tasks = [task({ name: "Elsewhere", workspaceDir: "/home/you/projB" })];
+  it("waits for the projects before listing, and keeps an open task meanwhile", () => {
+    hook.tasks = [task({ name: "Alpha" })];
+    const { rerender } = render(<ScheduledTasksPanel />);
+    fireEvent.click(screen.getByRole("button", { name: /^Alpha/ }));
+
+    projectsHolder.value = mockProjects({ status: "pending" });
+    rerender(<ScheduledTasksPanel />);
+
+    expect(screen.getByText(/Loading tasks/)).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Alpha" })).toBeTruthy();
+  });
+
+  it("creates nothing while the projects are read again", () => {
+    projectsHolder.value = {
+      ...mockProjects(readyProjects(A, B), { current: A }),
+      refreshing: true,
+    };
     render(<ScheduledTasksPanel />);
-    fireEvent.click(screen.getByRole("button", { name: /Elsewhere/ }));
+    fireEvent.click(screen.getByRole("button", { name: /New task/ }));
+    fireEvent.change(screen.getByLabelText("Task name"), {
+      target: { value: "Daily" },
+    });
+    fireEvent.change(screen.getByLabelText("Task description"), {
+      target: { value: "Brief me" },
+    });
 
     expect(
       screen
-        .getByRole("button", { name: 'Edit scheduled task "Elsewhere"' })
+        .getByRole("button", { name: /Create task/ })
         .hasAttribute("disabled")
-    ).toBe(false);
+    ).toBe(true);
+  });
+
+  it("runs a task of another project in that project, with its stored input", async () => {
+    const input = {
+      messages: [{ role: "user", content: "Brief me" }],
+      rubric: "- at least 3 papers",
+    };
+    hook.tasks = [
+      task({ name: "Elsewhere", assistantId: schedulerOf(B), input }),
+    ];
+    hook.runScheduledTaskNow.mockResolvedValue(undefined);
+    render(<ScheduledTasksPanel />);
+    fireEvent.click(screen.getByRole("button", { name: /Elsewhere/ }));
+
+    fireEvent.click(screen.getByRole("button", { name: /Run now/ }));
+
+    await waitFor(() =>
+      expect(hook.runScheduledTaskNow).toHaveBeenCalledWith(
+        expect.objectContaining({ name: "Elsewhere", input }),
+        { assistantId: schedulerOf(B), workspaceDir: B }
+      )
+    );
+  });
+
+  it("doesn't run a task whose project folder is missing, and says why", () => {
+    projectsHolder.value = mockProjects(
+      readyProjects(A, { key: B, name: "projB", missing: true }),
+      { current: A }
+    );
+    hook.tasks = [task({ name: "Stuck", assistantId: schedulerOf(B) })];
+    render(<ScheduledTasksPanel />);
+    fireEvent.click(screen.getByRole("button", { name: /Stuck/ }));
+
     expect(
       screen.getByRole("button", { name: /Run now/ }).hasAttribute("disabled")
     ).toBe(true);
+    expect(screen.getAllByText(/folder is missing/).length).toBeGreaterThan(0);
+  });
+});
+
+describe("ScheduledTasksPanel by project", () => {
+  it("lists tasks under their projects, and leaves out other folders' tasks", () => {
+    hook.tasks = [
+      task({ cron_id: "a", name: "Alpha task" }),
+      task({ cron_id: "b", name: "Beta task", assistantId: schedulerOf(B) }),
+      task({
+        cron_id: "c",
+        name: "Gone task",
+        assistantId: schedulerOf("/home/you/projC"),
+      }),
+    ];
+    render(<ScheduledTasksPanel />);
+
+    expect(
+      screen.getByRole("region", { name: "Tasks in projA" }).textContent
+    ).toContain("Alpha task");
+    expect(
+      screen.getByRole("region", { name: "Tasks in projB" }).textContent
+    ).toContain("Beta task");
+    expect(screen.queryByText("Gone task")).toBeNull();
+  });
+
+  async function createWithoutPicking() {
+    hook.createScheduledTask.mockResolvedValue(task({}));
+    render(<ScheduledTasksPanel />);
+    fireEvent.click(screen.getByRole("button", { name: /New task/ }));
+    fireEvent.change(screen.getByLabelText("Task name"), {
+      target: { value: "Weekly" },
+    });
+    fireEvent.change(screen.getByLabelText("Task description"), {
+      target: { value: "Summarise" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Create task/ }));
+    await waitFor(() => expect(hook.createScheduledTask).toHaveBeenCalled());
+    return hook.createScheduledTask.mock.calls[0][0] as {
+      target: { assistantId: string; workspaceDir: string };
+    };
+  }
+
+  it("creates a task in the current project unless another is picked", async () => {
+    projectsHolder.value = mockProjects(readyProjects(A, B), { current: B });
+
+    const { target } = await createWithoutPicking();
+
+    expect(target).toEqual({ assistantId: schedulerOf(B), workspaceDir: B });
+  });
+
+  it("offers no project whose folder is missing", () => {
+    projectsHolder.value = mockProjects(
+      readyProjects(A, { key: B, name: "projB", missing: true }),
+      { current: A }
+    );
+    render(<ScheduledTasksPanel />);
+    fireEvent.click(screen.getByRole("button", { name: /New task/ }));
+    fireEvent.click(screen.getByLabelText("Project"));
+
+    expect(screen.queryByRole("option", { name: "projB" })).toBeNull();
+    expect(screen.getByRole("option", { name: "projA" })).toBeTruthy();
+  });
+
+  it("keeps an edited task in its project", () => {
+    hook.tasks = [task({ name: "London" })];
+    render(<ScheduledTasksPanel />);
+    openEdit("London");
+
+    expect(screen.queryByLabelText("Project")).toBeNull();
+  });
+
+  it("creates a task in the project picked for it", async () => {
+    hook.createScheduledTask.mockResolvedValue(task({}));
+    render(<ScheduledTasksPanel />);
+    fireEvent.click(screen.getByRole("button", { name: /New task/ }));
+
+    fireEvent.change(screen.getByLabelText("Task name"), {
+      target: { value: "Weekly" },
+    });
+    fireEvent.change(screen.getByLabelText("Task description"), {
+      target: { value: "Summarise" },
+    });
+    pick("Project", "projB");
+    fireEvent.click(screen.getByRole("button", { name: /Create task/ }));
+
+    await waitFor(() =>
+      expect(hook.createScheduledTask).toHaveBeenCalledWith(
+        expect.objectContaining({
+          target: { assistantId: schedulerOf(B), workspaceDir: B },
+        })
+      )
+    );
   });
 });
 

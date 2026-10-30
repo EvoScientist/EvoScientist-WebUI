@@ -19,12 +19,12 @@ describe("fileKinds", () => {
     expect(fileKindOf("")).toBe("binary");
   });
 
-  it("builds the file API URL", () => {
-    expect(workspaceFileUrl("a b/c.md")).toBe(
-      "/api/workspace/file?path=a+b%2Fc.md"
+  it("builds the file API URL for a project", () => {
+    expect(workspaceFileUrl("P", "a b/c.md")).toBe(
+      "/api/workspace/file?project=P&path=a+b%2Fc.md"
     );
-    expect(workspaceFileUrl("c.pdf", { download: true, version: 2 })).toBe(
-      "/api/workspace/file?path=c.pdf&download=1&v=2"
+    expect(workspaceFileUrl("P", "c.pdf", { download: true, version: 2 })).toBe(
+      "/api/workspace/file?project=P&path=c.pdf&download=1&v=2"
     );
   });
 });

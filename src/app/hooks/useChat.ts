@@ -60,23 +60,24 @@ import {
   setThreadModelOverride,
   stampThreadWorkspace,
 } from "@/app/hooks/useThreads";
-import { useWorkspace } from "@/providers/WorkspaceProvider";
-import { assistantIdFor, type WorkspaceState } from "@/lib/workspaceSession";
+import { useProjects } from "@/providers/ProjectsProvider";
+import { usableProjectKey } from "@/lib/projects";
 import { retryWithBackoff } from "@/lib/retry";
 import {
   assistantIsMissing,
   formatStreamError,
   getHttpStatus,
+  folderRefusal,
   isMissingThreadOrAssistantError,
-  isRunFolderMismatchError,
   missingThreadIdFromError,
 } from "@/lib/streamError";
-import { CHAT_GRAPH_ID } from "@/lib/workspaceAssistant";
+import { CHAT_GRAPH_ID, workspaceAssistantId } from "@/lib/workspaceAssistant";
 import {
   CHAT_GRAPHS,
   canRun,
   threadBinding,
   threadFolders,
+  runFolderIn,
   type ThreadFolders,
 } from "@/lib/threadBinding";
 import { extractStringFromMessageContent } from "@/app/utils/utils";
@@ -233,8 +234,15 @@ export function latestTaskInterrupt(
   return undefined;
 }
 
-function servedKey(workspace: WorkspaceState): string {
-  return workspace.status === "ready" ? workspace.key : workspace.status;
+/** What a run refused for its project's sake says. `back`: the message is
+ *  back in the composer; `newChat`: in a new chat. */
+function projectGoneMessage(back: boolean, newChat: boolean): string {
+  const gone =
+    "This project is no longer served: it was removed from the backend, or its folder is missing.";
+  if (!back) return gone;
+  return newChat
+    ? `${gone} Started a new chat; your message is back in the composer.`
+    : `${gone} Your message is back in the composer.`;
 }
 
 /** Payload handed to `onThreadUnavailable` when the open thread is gone. */
@@ -295,13 +303,13 @@ export function useChat({
   // drafter, rubric grader) would otherwise take over the chat's values.
   const streamClient = useMemo(() => withoutNestedRuns(client), [client]);
   const {
-    workspace,
+    projects,
     refreshing,
     isReady,
-    refresh: refreshWorkspace,
-  } = useWorkspace();
-  const workspaceRef = useRef(workspace);
-  workspaceRef.current = workspace;
+    refresh: refreshProjects,
+    current,
+    selectProject,
+  } = useProjects();
   const goalSupported = useGoalSupport();
   // The mode of the run a resume continues; null after a reload, which
   // resumes as "thread" (a goal review only pauses a thread run).
@@ -343,9 +351,6 @@ export function useChat({
     },
     [client, applyGoalRead]
   );
-  // The folder answer the latest run was sent for.
-  const sentForRef = useRef(servedKey(workspace));
-
   // The open thread's own metadata: its graph and the folders it records.
   // It holds for the backend it was read from (`openMeta`).
   const [threadMeta, setThreadMeta] = useState<{
@@ -412,18 +417,48 @@ export function useChat({
   );
   useEffect(() => () => retryTracker.reset(), [retryTracker]);
 
-  // The chat runs on the chat graph's assistant for the backend's folder; a
+  // The chat runs on the chat graph's assistant for the thread's project; a
   // thread of another chat graph (a scheduled task's thread) runs on that
-  // graph's assistant for the same folder. The graph comes from the thread's
-  // own metadata only: the stream needs the assistant before it loads the
-  // history that carries the checkpoint's copy, and the SDK and the server
-  // both set it on the thread.
+  // graph's assistant for the same project. The graph and the project come
+  // from the thread's own metadata: the stream needs the assistant before it
+  // loads the history that carries the checkpoint's copy, and the SDK, the
+  // server and this WebUI set them on the thread. A new chat runs in the
+  // current project.
   const openGraph = openMeta?.metadata["graph_id"] as string | undefined;
   const threadGraph =
     openGraph && CHAT_GRAPHS.has(openGraph) ? openGraph : CHAT_GRAPH_ID;
-  // Computed from the folder answer this render carries, so it can never
-  // belong to another folder than the one the gate was opened for.
-  const threadAssistantId = assistantIdFor(workspace, threadGraph) ?? "";
+  // The project the latest run here was sent in. A new chat's first run
+  // creates its thread, whose metadata is read only after: until then the
+  // run's own project keeps the assistant, so it doesn't change mid-stream.
+  const [sentIn, setSentIn] = useState<{
+    threadId: string | null;
+    key: string;
+    /** The run made the thread (a new chat's first run). */
+    created?: boolean;
+  } | null>(null);
+  const sentInRef = useRef(sentIn);
+  sentInRef.current = sentIn;
+  const metaBinding = threadBinding(
+    projects,
+    !threadId
+      ? null
+      : openMeta
+      ? threadFolders(openMeta.metadata, undefined)
+      : undefined,
+    CHAT_GRAPHS,
+    current?.key ?? null
+  );
+  const assistantKey =
+    metaBinding.kind === "open" || metaBinding.kind === "unbound"
+      ? metaBinding.key
+      : sentIn && sentIn.threadId === threadId
+      ? sentIn.key
+      : null;
+  // Computed from the project list this render carries, so it can never
+  // belong to another project than the one the gate was opened for.
+  const threadAssistantId = assistantKey
+    ? workspaceAssistantId(threadGraph, assistantKey)
+    : "";
   // Goals only on the chat graph: the scheduler graph has no goal
   // middleware, so a goal request on a scheduled task's thread would be
   // dropped and the agent would answer its last turn again. Unknown while an
@@ -467,6 +502,52 @@ export function useChat({
     return unsentMessage ?? goalText;
   };
 
+  // The thread a refused first message made holds nothing and is bound to a
+  // project the backend no longer serves: delete it, so it doesn't come back
+  // empty if that folder is added again. Best effort.
+  const dropRefusedThread = (id: string) => {
+    void client.threads.delete(id).catch(() => {});
+  };
+
+  // Whether `id` is the thread a new chat's first run made here.
+  const isNewChatThread = (id: string | null): boolean => {
+    const sent = sentInRef.current;
+    return (
+      id !== null &&
+      sent !== null &&
+      sent.created === true &&
+      sent.threadId === id
+    );
+  };
+
+  // A run refused because its project is no longer served (removed, or its
+  // folder missing). The projects are read again, which moves the current
+  // project on. The message goes back to the composer; nothing is sent again
+  // by itself, so a run never starts in a project the user didn't choose. A
+  // new chat's first message made a thread bound to the gone project: start
+  // over in a new chat, with the message.
+  const handProjectGone = () => {
+    const refusedOn = runStateRef.current.threadId;
+    const newThread = isNewChatThread(refusedOn);
+    const unsent = takeUnsentMessage();
+    void refreshProjects();
+    if (newThread && refusedOn && onThreadUnavailable) {
+      dropRefusedThread(refusedOn);
+      const handled = onThreadUnavailable({
+        threadId: refusedOn,
+        unsentMessage: unsent,
+      });
+      if (handled === false) return;
+      const back = typeof handled === "object" && handled.unsentBack;
+      toast.error(projectGoneMessage(back, true));
+      return;
+    }
+    const handBack = refusalHandlerRef.current;
+    const inComposer =
+      unsent !== null && handBack !== null && handBack(unsent) !== false;
+    toast.error(projectGoneMessage(inComposer, false));
+  };
+
   // The open thread is gone: hand back an unsent message and start over.
   // `inComposer`: it is back in the composer already, and goes along with
   // the draft.
@@ -501,7 +582,17 @@ export function useChat({
     client: streamClient,
     reconnectOnMount: true,
     threadId: threadId ?? null,
-    onThreadId: setThreadId,
+    onThreadId: (id) => {
+      // The thread a new chat's first run made: the run's project is that
+      // thread's until its metadata is read.
+      const sent = sentInRef.current;
+      if (sent && sent.threadId === null) {
+        const pinned = { threadId: id, key: sent.key, created: true };
+        sentInRef.current = pinned;
+        setSentIn(pinned);
+      }
+      void setThreadId(id);
+    },
     defaultHeaders: { "x-auth-scheme": "langsmith" },
     // NOTE: do NOT set `throttle: <ms>` here. The SDK's `throttle` option
     // (from 1.1.0) is implemented as a debounce in `dist/ui/manager.js` -
@@ -544,24 +635,19 @@ export function useChat({
         // assistant misconfiguration and still surfaces below.
         if (/thread with id/i.test(formatStreamError(error))) return;
       }
-      if (isRunFolderMismatchError(error)) {
+      const refusal = folderRefusal(error);
+      if (refusal === "mismatch") {
+        // The thread is bound to another project or run folder than its
+        // metadata says: read the projects again (runs wait until they are
+        // in) and say why it refused.
         lastSubmittedHumanIdRef.current = null;
         unsentGoalRef.current = null;
-        // Read the folder again (runs wait until it is in): if the backend
-        // moved, the next send goes to that folder's assistant; otherwise
-        // say why it refused.
-        const before = sentForRef.current;
-        void refreshWorkspace().then((next) => {
-          // A read cut short by a switch to another backend has no answer.
-          if (!mountedRef.current || next.status === "pending") return;
-          if (servedKey(next) !== before) {
-            toast.info(
-              "The backend now serves another folder. This conversation was made for the previous one, so it is read-only here; start a new chat to continue."
-            );
-          } else {
-            toast.error(formatStreamError(error));
-          }
-        });
+        void refreshProjects();
+        toast.error(formatStreamError(error));
+        return;
+      }
+      if (refusal === "projectGone") {
+        handProjectGone();
         return;
       }
       // The run path answers a missing assistant and a missing thread with
@@ -577,9 +663,10 @@ export function useChat({
         // back to the composer, ahead of what was queued after it. The
         // refusal belongs to the thread open now (a new chat's thread was
         // just made).
-        const unsent = takeUnsentMessage();
         const refusedOn = runStateRef.current.threadId;
-        void refreshWorkspace();
+        const newThread = isNewChatThread(refusedOn);
+        const unsent = takeUnsentMessage();
+        void refreshProjects();
         const handBack = refusalHandlerRef.current;
         const inComposer =
           unsent !== null && handBack !== null && handBack(unsent) !== false;
@@ -604,11 +691,24 @@ export function useChat({
             );
             return;
           }
-          toast.error(
-            inComposer
-              ? "The backend lost this folder's assistant; it is being recreated. Your message is back in the composer: send it again."
-              : "The backend lost this folder's assistant; it is being recreated."
-          );
+          // The core makes every registered project's assistants, so a
+          // missing one means the project is gone. A new chat's thread is
+          // bound to it: start over in a new chat, which takes the composer
+          // along.
+          if (newThread && refusedOn && onThreadUnavailable) {
+            dropRefusedThread(refusedOn);
+            const handled = onThreadUnavailable({
+              threadId: refusedOn,
+              // In the composer already, it goes along with the draft.
+              unsentMessage: inComposer ? null : unsent,
+            });
+            if (handled === false) return;
+            const back =
+              inComposer || (typeof handled === "object" && handled.unsentBack);
+            toast.error(projectGoneMessage(back, true));
+            return;
+          }
+          toast.error(projectGoneMessage(inComposer, false));
         });
         return;
       }
@@ -707,10 +807,56 @@ export function useChat({
     : !openMeta || stream.isThreadLoading
     ? undefined
     : threadFolders(openMeta.metadata, latestCheckpointMetadata);
-  const binding = threadBinding(workspace, folders, CHAT_GRAPHS);
-  // One gate for every run: an assistant for the current folder answer, a
-  // thread that may run here, and no folder read in progress.
-  const canSend = threadAssistantId !== "" && canRun(binding) && !refreshing;
+  const binding = threadBinding(
+    projects,
+    folders,
+    CHAT_GRAPHS,
+    current?.key ?? null
+  );
+  // A thread whose own metadata names no folder takes its checkpoint's, so
+  // its assistant is that project's too; with its run folder, so a thread
+  // working in one stays read-only.
+  const checkpointFolder = folders?.workspaceDir ?? null;
+  const checkpointRunDir = folders?.runDir ?? null;
+  useEffect(() => {
+    if (!checkpointFolder) return;
+    setThreadMeta((prev) =>
+      prev && prev.threadId === threadId && !prev.metadata["workspace_dir"]
+        ? {
+            ...prev,
+            metadata: {
+              ...prev.metadata,
+              workspace_dir: checkpointFolder,
+              ...(checkpointRunDir ? { run_dir: checkpointRunDir } : {}),
+            },
+          }
+        : prev
+    );
+  }, [checkpointFolder, checkpointRunDir, threadId]);
+  // The open thread's own project, registered with its folder in place,
+  // whether or not the thread may run here: it is the current one, so the
+  // files and a new chat follow it.
+  const ownKey = threadId
+    ? usableProjectKey(projects, folders?.workspaceDir)
+    : null;
+  // The project the chat runs in, only while it is registered with its
+  // folder: the assistant keeps a project removed after a send, which has
+  // no files here.
+  const runKey = usableProjectKey(projects, assistantKey);
+  useEffect(() => {
+    if (ownKey) selectProject(ownKey);
+  }, [ownKey, selectProject]);
+  // A thread working in a run folder names files from that folder.
+  const runFolder =
+    ownKey && folders?.runDir ? runFolderIn(ownKey, folders.runDir) : null;
+  // One gate for every run: a thread that may run here, its assistant for
+  // that project, and no project read in progress.
+  const canSend =
+    threadAssistantId !== "" &&
+    canRun(binding) &&
+    "key" in binding &&
+    binding.key === assistantKey &&
+    !refreshing;
   const runStateRef = useRef({ canSend, binding, threadId });
   runStateRef.current = { canSend, binding, threadId };
   // For every run path: check this, and only then change local state and
@@ -721,16 +867,23 @@ export function useChat({
     [isReady]
   );
   // Every run on the open thread starts here, once canRunNow() said yes:
-  // it records the folder the run is sent for, and a thread with no folder
-  // joins the backend's (the run binds it; its metadata gets the folder so
-  // it shows in this folder's list). Returns the folder key, if any.
-  // Reads only refs and stable setters, so one instance serves every render.
+  // it records the project the run is sent in (and makes it the last used),
+  // and a thread with no folder joins that project (the run binds it; its
+  // metadata gets the folder so it shows in the project's list). Returns the
+  // project's key. Reads only refs and stable setters, so one instance
+  // serves every render.
   const startRun = useCallback((): string | null => {
     const run = runStateRef.current;
-    const served = workspaceRef.current;
-    sentForRef.current = servedKey(served);
-    const key = served.status === "ready" ? served.key : null;
-    if (key && run.threadId && run.binding.kind === "unbound") {
+    const key =
+      run.binding.kind === "open" || run.binding.kind === "unbound"
+        ? run.binding.key
+        : null;
+    if (!key) return null;
+    const sent = { threadId: run.threadId, key };
+    sentInRef.current = sent;
+    setSentIn(sent);
+    selectProject(key, { remember: true });
+    if (run.threadId && run.binding.kind === "unbound") {
       const stamped = run.threadId;
       void stampThreadWorkspace(stamped, key).catch(() => {
         // The next restore stamps it from the run's checkpoint.
@@ -743,7 +896,7 @@ export function useChat({
       );
     }
     return key;
-  }, []);
+  }, [selectProject]);
 
   // The run is over (finished, failed or stopped). The SDK flips `isLoading`
   // back in every case, unlike `onFinish` (success only) and `onError` (also
@@ -1283,9 +1436,19 @@ export function useChat({
       }
       // TODO: missing a way how to revalidate the internal state
       // I think we do want to have the ability to externally manage the state
-      await client.threads.updateState(threadId, { values: { files } });
+      try {
+        await client.threads.updateState(threadId, { values: { files } });
+      } catch (error) {
+        // The backend refuses a write in a project it no longer serves (one
+        // removed elsewhere): the list here is stale. Reading it again makes
+        // the conversation read-only; the backend's message says why.
+        if (getHttpStatus(error) === 409) {
+          void refreshProjects();
+        }
+        throw error;
+      }
     },
-    [canRunNow, client, threadId]
+    [canRunNow, client, refreshProjects, threadId]
   );
 
   // A /goal request: a thread run with no message (the core drafts the
@@ -1474,6 +1637,13 @@ export function useChat({
 
     /** Whether the open thread runs here, and why not. */
     binding,
+    /** The chat's project: the one it runs in, else the open thread's own
+     *  (a read-only thread's too), each while registered with its folder;
+     *  null for none. */
+    projectKey: runKey ?? ownKey,
+    /** The open thread's run folder inside its project, which its file
+     *  links name files from; null for none. */
+    runFolder,
     /** Whether a run could start, for rendering and effect dependencies. */
     canSend,
     /** Every run path checks this first, at the moment it acts. */

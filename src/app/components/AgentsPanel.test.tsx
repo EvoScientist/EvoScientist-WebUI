@@ -35,11 +35,12 @@ vi.mock("@/app/hooks/useThreads", async (importOriginal) => ({
 
 import { AgentsPanel } from "./AgentsPanel";
 import {
-  TestWorkspaceProvider,
-  mockWorkspace,
-  readyWorkspace,
-} from "@/test/mockWorkspace";
+  TestProjectsProvider,
+  mockProjects,
+  readyProjects,
+} from "@/test/mockProjects";
 import { workspaceAssistantId } from "@/lib/workspaceAssistant";
+import { NO_TASK_PROJECT_REASON } from "@/lib/threadBinding";
 
 const KEY = "/home/you/projA";
 
@@ -66,9 +67,9 @@ function renderPanel(metadata: Record<string, unknown>) {
     ],
   });
   render(
-    <TestWorkspaceProvider value={mockWorkspace(readyWorkspace(KEY))}>
+    <TestProjectsProvider value={mockProjects(readyProjects(KEY))}>
       <AgentsPanel />
-    </TestWorkspaceProvider>
+    </TestProjectsProvider>
   );
   fireEvent.click(screen.getByRole("button", { name: /paper-review/ }));
 }
@@ -93,6 +94,15 @@ describe("Agents panel follow-up", () => {
         { input: { messages: [{ type: "human", content: "one more" }] } }
       )
     );
+  });
+
+  it("offers no follow-up on a task thread that records no project", async () => {
+    renderPanel({ graph_id: "writing-agent" });
+
+    expect(await screen.findByText(NO_TASK_PROJECT_REASON)).toBeTruthy();
+    expect(
+      screen.queryByRole("textbox", { name: "Message this agent" })
+    ).toBeNull();
   });
 
   it("offers no follow-up on a task thread of another folder", async () => {

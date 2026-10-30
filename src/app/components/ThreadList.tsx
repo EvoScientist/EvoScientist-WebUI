@@ -1,16 +1,27 @@
 "use client";
 
-import { useEffect, useMemo, useState, useRef, useCallback } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   BrainCircuit,
+  ChevronRight,
   Clock,
   Download,
+  FolderMinus,
+  FolderPlus,
   Loader2,
   MessageSquare,
   MoreHorizontal,
   Pencil,
   Pin,
   PinOff,
+  Plus,
   Puzzle,
   Users,
   Search,
@@ -21,7 +32,6 @@ import {
 import { useQueryState } from "nuqs";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Skeleton } from "@/components/ui/skeleton";
 import {
   Select,
   SelectContent,
@@ -33,7 +43,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { formatTime, formatFullTime, timeBucketFor } from "@/lib/time";
+import { formatTime, formatFullTime } from "@/lib/time";
 import type { ThreadItem } from "@/app/hooks/useThreads";
 import {
   useThreads,
@@ -42,6 +52,13 @@ import {
   pinThread,
   exportThread,
 } from "@/app/hooks/useThreads";
+import { ThreadGroups } from "@/app/components/ThreadGroups";
+import { useRevalidateOn } from "@/app/hooks/useRevalidateOn";
+import { dedupeThreads, matchesSearch } from "@/lib/threadLists";
+import { useProjects } from "@/providers/ProjectsProvider";
+import { useProjectDialogs } from "@/providers/projectDialogsContext";
+import type { Project } from "@/lib/projects";
+import { folderName } from "@/lib/workspaceAssistant";
 import { useMemoryActivity } from "@/app/hooks/useMemoryActivity";
 import {
   getThreadAutoApprove,
@@ -67,13 +84,15 @@ import { toast } from "sonner";
 
 type StatusFilter = "all" | "idle" | "busy" | "interrupted" | "error";
 
-const GROUP_LABELS = {
-  interrupted: "Requiring Attention",
-  today: "Today",
-  yesterday: "Yesterday",
-  week: "This Week",
-  older: "Older",
-} as const;
+/** A page of the searches across projects (attention, busy). */
+const ACROSS_PROJECTS_LIMIT = 100;
+/** How many such pages Requiring Attention reads at most. */
+const ATTENTION_PAGES = 5;
+/** How often the searches across projects read again: runs in other
+ *  projects, scheduled tasks and the CLI change them too. */
+const ACROSS_PROJECTS_REFRESH_MS = 15_000;
+/** Reloads asked for within this are done once. */
+const RELOAD_BUNDLE_MS = 300;
 
 const STATUS_COLORS: Record<ThreadItem["status"], string> = {
   idle: "bg-green-500",
@@ -120,41 +139,11 @@ function StatusFilterItem({
   );
 }
 
-function ErrorState({ message }: { message: string }) {
-  return (
-    <div className="flex flex-col items-center justify-center p-8 text-center">
-      <p className="text-sm text-red-600">Failed to load research</p>
-      <p className="mt-1 text-xs text-muted-foreground">{message}</p>
-    </div>
-  );
-}
-
-function LoadingState() {
-  return (
-    <div className="space-y-2 p-4">
-      {Array.from({ length: 5 }).map((_, i) => (
-        <Skeleton
-          key={i}
-          className="h-16 w-full"
-        />
-      ))}
-    </div>
-  );
-}
-
-function EmptyState() {
-  return (
-    <div className="flex flex-col items-center justify-center p-8 text-center">
-      <MessageSquare className="mb-2 h-12 w-12 text-gray-300" />
-      <p className="text-sm text-muted-foreground">No research yet</p>
-    </div>
-  );
-}
-
 interface ThreadListProps {
   onThreadSelect: (id: string) => void;
   onClose?: () => void;
-  onNewChat?: () => void;
+  /** A new chat, in `project` when given, else in the current one. */
+  onNewChat?: (project?: string) => void;
   onMutateReady?: (mutate: () => void) => void;
   onInterruptCountChange?: (count: number) => void;
 }
@@ -183,34 +172,40 @@ export function ThreadList({
     () => new Set()
   );
 
-  const threads = useThreads({
-    status: statusFilter === "all" ? undefined : statusFilter,
-    limit: 20,
-  });
+  const { projects, current } = useProjects();
+  const { openAddProject, openRemoveProject } = useProjectDialogs();
+  const projectList = useMemo(
+    () => (projects.status === "ready" ? projects.projects : []),
+    [projects]
+  );
+  const projectByKey = useMemo(
+    () => new Map(projectList.map((project) => [project.key, project])),
+    [projectList]
+  );
+  const ready = projects.status === "ready";
 
-  // Dedupe by id, keeping the first occurrence — page 0 wins, so the freshest
-  // `updated_at` survives. Without this, a thread whose `updated_at` advances
-  // mid-run (every agent step persists) appears in page 0 with the new value
-  // AND in a stale page 1+ with the old value, getting bucketed into both
-  // "Today" and "This Week" simultaneously. `revalidateFirstPage: true` in
-  // useThreads.ts keeps page 0 fresh but leaves later pages cached.
-  const flattened = useMemo(() => {
-    const seen = new Set<string>();
-    const out: ThreadItem[] = [];
-    for (const t of threads.data?.flat() ?? []) {
-      if (seen.has(t.id)) continue;
-      seen.add(t.id);
-      out.push(t);
-    }
-    return out;
-  }, [threads.data]);
-
-  // Client-side filter of the loaded threads by title.
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return flattened;
-    return flattened.filter((t) => t.title.toLowerCase().includes(q));
-  }, [flattened, search]);
+  // Every list reads again when this moves on (a run ended, a thread was
+  // renamed, pinned or deleted). A run asks several times as it goes;
+  // asks close together are done once.
+  const [revision, setRevision] = useState(0);
+  const reloadTimer = useRef<number | null>(null);
+  const mutateFn = useCallback(() => {
+    if (reloadTimer.current !== null) return;
+    reloadTimer.current = window.setTimeout(() => {
+      reloadTimer.current = null;
+      setRevision((r) => r + 1);
+    }, RELOAD_BUNDLE_MS);
+  }, []);
+  useEffect(
+    () => () => {
+      if (reloadTimer.current !== null) clearTimeout(reloadTimer.current);
+    },
+    []
+  );
+  const projectKeys = useMemo(
+    () => projectList.map((project) => project.key),
+    [projectList]
+  );
 
   useEffect(() => {
     const tick = () => setNow(new Date());
@@ -224,18 +219,8 @@ export function ThreadList({
     };
   }, []);
 
-  const isLoadingMore =
-    threads.size > 0 && threads.data?.[threads.size - 1] == null;
-  const isEmpty = threads.data?.at(0)?.length === 0;
-  const isReachingEnd = isEmpty || (threads.data?.at(-1)?.length ?? 0) < 20;
-
-  // Pinned threads float to a dedicated "Research" section at the top, sorted
-  // newest-first (same order as the time groups below). `filtered` already
-  // arrives sorted by updated_at desc from the backend.
-  const pinned = useMemo(() => filtered.filter((t) => t.pinned), [filtered]);
-
   // A thread belongs in "Requiring Attention" when its interrupt actually needs
-  // the user. Single source of truth for both the bucket and the count badge.
+  // the user. Single source of truth for both the section and the count badge.
   //   - `needsUserInput` (an `ask_user` interrupt is active) - auto-approve can
   //     NOT answer these, so the row must surface no matter what.
   //   - A plain tool-approval interrupt that will NOT be auto-resolved: either
@@ -262,54 +247,92 @@ export function ThreadList({
     [currentThreadId, autoApproveRevision]
   );
 
-  // Group threads by time and status
-  const grouped = useMemo(() => {
-    const groups: Record<keyof typeof GROUP_LABELS, ThreadItem[]> = {
-      interrupted: [],
-      today: [],
-      yesterday: [],
-      week: [],
-      older: [],
-    };
-
-    filtered.forEach((thread) => {
-      // Pinned threads live in the "Research" section only, not the time groups.
-      if (thread.pinned) return;
-
-      if (needsAttention(thread)) {
-        groups.interrupted.push(thread);
-        return;
+  // "Requiring Attention" spans every project, from one search: a question
+  // waiting in a collapsed project shows by name, and the badge counts it.
+  // Only registered projects' threads: another folder's can't run here.
+  const interruptedThreads = useThreads({
+    scope: ready ? { projects: projectKeys } : null,
+    status: "interrupted",
+    limit: ACROSS_PROJECTS_LIMIT,
+    refreshInterval: ACROSS_PROJECTS_REFRESH_MS,
+  });
+  useRevalidateOn(revision, interruptedThreads.mutate);
+  // Every page, up to a bound: the badge counts what waits.
+  const attentionMore =
+    interruptedThreads.data?.at(-1)?.full === true &&
+    interruptedThreads.data.length === interruptedThreads.size &&
+    interruptedThreads.size < ATTENTION_PAGES;
+  const { size: attentionSize, setSize: setAttentionSize } = interruptedThreads;
+  useEffect(() => {
+    if (attentionMore) void setAttentionSize(attentionSize + 1);
+  }, [attentionMore, attentionSize, setAttentionSize]);
+  const attention = useMemo(
+    () => dedupeThreads(interruptedThreads.data).filter(needsAttention),
+    [interruptedThreads.data, needsAttention]
+  );
+  const waitingByProject = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const t of attention) {
+      if (t.workspaceDir) {
+        counts.set(t.workspaceDir, (counts.get(t.workspaceDir) ?? 0) + 1);
       }
+    }
+    return counts;
+  }, [attention]);
+  const attentionIds = useMemo(
+    () => new Set(attention.map((t) => t.id)),
+    [attention]
+  );
+  const interruptedCount = attention.length;
+  const showAttention =
+    statusFilter === "all" || statusFilter === "interrupted";
+  const attentionShown = showAttention
+    ? attention.filter((t) => matchesSearch(t, search))
+    : [];
 
-      groups[timeBucketFor(thread.updatedAt, now)].push(thread);
+  // Projects with a running conversation, for the marker on their rows.
+  const busyThreads = useThreads({
+    scope: ready ? { projects: projectKeys } : null,
+    status: "busy",
+    limit: ACROSS_PROJECTS_LIMIT,
+    labels: false,
+    refreshInterval: ACROSS_PROJECTS_REFRESH_MS,
+  });
+  useRevalidateOn(revision, busyThreads.mutate);
+  const busyProjects = useMemo(
+    () =>
+      new Set(
+        dedupeThreads(busyThreads.data).flatMap((t) =>
+          t.workspaceDir ? [t.workspaceDir] : []
+        )
+      ),
+    [busyThreads.data]
+  );
+
+  // Open sections: the current project opens by itself, the others when
+  // the user opens them; a closed section reads nothing.
+  const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set());
+  const currentKey = current?.key ?? null;
+  useEffect(() => {
+    if (!currentKey) return;
+    setOpen((prev) =>
+      prev.has(currentKey) ? prev : new Set(prev).add(currentKey)
+    );
+  }, [currentKey]);
+  const toggleSection = (key: string) =>
+    setOpen((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
     });
+  const statusParam = statusFilter === "all" ? undefined : statusFilter;
 
-    return groups;
-  }, [filtered, now, needsAttention]);
-
-  const interruptedCount = useMemo(() => {
-    // Same predicate as the `grouped` bucket so the badge matches the visible
-    // group exactly.
-    return flattened.filter(needsAttention).length;
-  }, [flattened, needsAttention]);
-
-  // Expose thread list revalidation to parent component
-  // Use refs to create a stable callback that always calls the latest mutate function
+  // Expose thread list revalidation to the parent.
   const onMutateReadyRef = useRef(onMutateReady);
-  const mutateRef = useRef(threads.mutate);
-
   useEffect(() => {
     onMutateReadyRef.current = onMutateReady;
   }, [onMutateReady]);
-
-  useEffect(() => {
-    mutateRef.current = threads.mutate;
-  }, [threads.mutate]);
-
-  const mutateFn = useCallback(() => {
-    mutateRef.current();
-  }, []);
-
   useEffect(() => {
     onMutateReadyRef.current?.(mutateFn);
     // Only run once on mount to avoid infinite loops
@@ -454,10 +477,14 @@ export function ThreadList({
     }
   };
 
-  // A single thread row (select button + per-thread actions). Used by both the
-  // pinned "Research" section and the time-grouped "Recents" sections; the only
-  // difference is the Pin ↔ Unpin action, driven by `thread.pinned`.
-  const renderThreadCard = (thread: ThreadItem) => {
+  // A single thread row (select button + per-thread actions), in a project's
+  // section or in "Requiring Attention", where `withProject` names its
+  // project. The Pin ↔ Unpin action follows `thread.pinned`.
+  const renderThreadCard = (thread: ThreadItem, withProject = false) => {
+    const project =
+      withProject && thread.workspaceDir
+        ? projectByKey.get(thread.workspaceDir)
+        : undefined;
     const pinBusy = pinBusyIds.has(thread.id);
     const exportBusy = exportBusyIds.has(thread.id);
 
@@ -504,6 +531,22 @@ export function ThreadList({
             {/* Description + Status Row */}
             <div className="flex items-center justify-between">
               <p className="flex-1 truncate text-[13px] text-muted-foreground">
+                {project && (
+                  <span
+                    className="mr-1.5 rounded bg-muted px-1 py-px text-[11px] font-medium text-foreground"
+                    title={project.key}
+                  >
+                    {project.name}
+                  </span>
+                )}
+                {thread.runDir && (
+                  <span
+                    className="mr-1.5 rounded bg-muted px-1 py-px font-mono text-[11px]"
+                    title={thread.runDir}
+                  >
+                    runs/{folderName(thread.runDir)}
+                  </span>
+                )}
                 {thread.description}
               </p>
               <div className="ml-2 flex-shrink-0">
@@ -885,83 +928,101 @@ export function ThreadList({
       </div>
 
       <ScrollArea className="h-0 flex-1">
-        {threads.error && <ErrorState message={threads.error.message} />}
+        <div className="box-border w-full max-w-full overflow-hidden p-1.5">
+          {showAttention && interruptedThreads.error && (
+            <p
+              role="alert"
+              className="px-2.5 py-1.5 text-xs text-red-600"
+            >
+              Couldn't check for conversations waiting for you.
+            </p>
+          )}
+          {attentionShown.length > 0 && (
+            <section
+              aria-label="Requiring Attention"
+              className="mb-3"
+            >
+              <h4 className="m-0 px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Requiring Attention
+              </h4>
+              <div className="flex flex-col gap-1">
+                {attentionShown.map((thread) => renderThreadCard(thread, true))}
+              </div>
+            </section>
+          )}
 
-        {!threads.error && !threads.data && threads.isLoading && (
-          <div aria-live="polite">
-            <LoadingState />
-          </div>
-        )}
-
-        {!threads.error && !threads.isLoading && isEmpty && <EmptyState />}
-
-        {!threads.error &&
-          !isEmpty &&
-          search.trim() &&
-          filtered.length === 0 && (
+          {ready && projectList.length === 0 && (
             <div className="flex flex-col items-center justify-center p-8 text-center">
-              <p className="text-sm text-muted-foreground">
-                No research matches your search.
-              </p>
+              <MessageSquare className="mb-2 h-12 w-12 text-gray-300" />
+              <p className="text-sm text-muted-foreground">No projects yet.</p>
             </div>
           )}
 
-        {!threads.error && !isEmpty && filtered.length > 0 && (
-          <div className="box-border w-full max-w-full overflow-hidden p-1.5">
-            {/* Pinned threads — shown only when at least one thread is pinned. */}
-            {pinned.length > 0 && (
-              <div className="mb-3">
-                <h4 className="m-0 px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                  Research
-                </h4>
-                <div className="flex flex-col gap-1">
-                  {pinned.map((thread) => renderThreadCard(thread))}
-                </div>
-              </div>
-            )}
+          {projectList.map((project) => (
+            <ProjectSection
+              key={project.key}
+              project={project}
+              open={open.has(project.key)}
+              onToggle={() => toggleSection(project.key)}
+              busy={busyProjects.has(project.key)}
+              waiting={waitingByProject.get(project.key) ?? 0}
+              onNewChat={
+                onNewChat && !project.missing
+                  ? () => {
+                      onNewChat(project.key);
+                      onClose?.();
+                    }
+                  : undefined
+              }
+              onRemove={() => openRemoveProject(project)}
+            >
+              <ThreadGroups
+                scope={{ project: project.key }}
+                status={statusParam}
+                search={search}
+                exclude={attentionIds}
+                now={now}
+                revision={revision}
+                renderThread={(thread) => renderThreadCard(thread)}
+                emptyText="No research in this project yet."
+              />
+            </ProjectSection>
+          ))}
 
-            {(
-              Object.keys(GROUP_LABELS) as Array<keyof typeof GROUP_LABELS>
-            ).map((group) => {
-              const groupThreads = grouped[group];
-              if (groupThreads.length === 0) return null;
+          {ready && (
+            <button
+              type="button"
+              onClick={() => openAddProject()}
+              className="mb-1 flex w-full items-center gap-1.5 rounded-md px-1.5 py-1.5 text-left text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <FolderPlus
+                className="size-3.5 flex-shrink-0"
+                aria-hidden="true"
+              />
+              Add project
+            </button>
+          )}
 
-              return (
-                <div
-                  key={group}
-                  className="mb-3"
-                >
-                  <h4 className="m-0 px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                    {GROUP_LABELS[group]}
-                  </h4>
-                  <div className="flex flex-col gap-1">
-                    {groupThreads.map((thread) => renderThreadCard(thread))}
-                  </div>
-                </div>
-              );
-            })}
-
-            {!isReachingEnd && (
-              <div className="flex justify-center py-4">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => threads.setSize(threads.size + 1)}
-                  disabled={isLoadingMore}
-                >
-                  {isLoadingMore ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Loading…
-                    </>
-                  ) : (
-                    "Load More"
-                  )}
-                </Button>
-              </div>
-            )}
-          </div>
-        )}
+          {ready && (
+            <ProjectSection
+              title="No project"
+              detail="Conversations that record no folder: pick a project in the composer to continue one."
+              open={open.has(NO_PROJECT_SECTION)}
+              onToggle={() => toggleSection(NO_PROJECT_SECTION)}
+            >
+              <ThreadGroups
+                scope="noProject"
+                status={statusParam}
+                search={search}
+                exclude={attentionIds}
+                now={now}
+                revision={revision}
+                renderThread={(thread) => renderThreadCard(thread)}
+                emptyText="None."
+              />
+            </ProjectSection>
+          )}
+        </div>
       </ScrollArea>
 
       {/* Rename dialog */}
@@ -1066,5 +1127,148 @@ export function ThreadList({
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+/** The key of the "No project" section in the set of open sections. */
+const NO_PROJECT_SECTION = "\u0000no-project";
+
+/**
+ * A collapsible section of the list: a project (its folder's name, the full
+ * path on hover, a marker while one of its conversations runs, how many
+ * wait for the user, and whether its folder is missing), or "No project".
+ */
+function ProjectSection({
+  project,
+  title,
+  detail,
+  open,
+  onToggle,
+  busy = false,
+  waiting = 0,
+  onNewChat,
+  onRemove,
+  children,
+}: {
+  project?: Project;
+  title?: string;
+  detail?: string;
+  open: boolean;
+  onToggle: () => void;
+  busy?: boolean;
+  waiting?: number;
+  /** Start a new chat in this project (absent: no such action). */
+  onNewChat?: () => void;
+  /** Remove this project from the sidebar (absent: no such action). */
+  onRemove?: () => void;
+  children: React.ReactNode;
+}) {
+  const name = project?.name ?? title ?? "";
+  const id = useId();
+  return (
+    <section
+      aria-label={name}
+      className="mb-1"
+    >
+      <div className="flex items-center">
+        <h4 className="m-0 min-w-0 flex-1">
+          <button
+            type="button"
+            onClick={onToggle}
+            aria-expanded={open}
+            aria-controls={`${id}-threads`}
+            aria-describedby={`${id}-detail`}
+            title={project?.key ?? detail}
+            className="flex w-full items-center gap-1.5 rounded-md px-1.5 py-1.5 text-left text-sm font-semibold transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <ChevronRight
+              className={cn(
+                "size-3.5 flex-shrink-0 text-muted-foreground transition-transform",
+                open && "rotate-90"
+              )}
+              aria-hidden="true"
+            />
+            <span className="min-w-0 truncate">{name}</span>
+            {project?.missing && (
+              <span className="flex-shrink-0 rounded bg-destructive/10 px-1 py-px text-[11px] font-medium text-destructive">
+                folder missing
+              </span>
+            )}
+            <span className="ml-auto flex flex-shrink-0 items-center gap-1.5">
+              {!open && waiting > 0 && (
+                <>
+                  <span
+                    aria-hidden="true"
+                    className="inline-flex min-w-4 items-center justify-center rounded-full bg-orange-500 px-1 text-[10px] font-bold leading-4 text-white"
+                  >
+                    {waiting}
+                  </span>
+                  <span className="sr-only">{`, ${waiting} waiting for you`}</span>
+                </>
+              )}
+              {busy && (
+                <span
+                  role="img"
+                  aria-label="A conversation is running"
+                  title="A conversation is running"
+                  className="size-2 rounded-full bg-blue-500"
+                />
+              )}
+            </span>
+          </button>
+        </h4>
+        {onNewChat && (
+          <button
+            type="button"
+            onClick={onNewChat}
+            aria-label={`New chat in ${name}`}
+            title={`New chat in ${name}`}
+            className="ml-0.5 flex-shrink-0 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <Plus
+              className="size-3.5"
+              aria-hidden="true"
+            />
+          </button>
+        )}
+        {onRemove && (
+          <DropdownMenu modal={false}>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                aria-label={`Actions for project ${name}`}
+                className="flex-shrink-0 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:text-foreground"
+              >
+                <MoreHorizontal
+                  className="size-3.5"
+                  aria-hidden="true"
+                />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem
+                className="min-h-11 md:min-h-0"
+                onSelect={onRemove}
+              >
+                <FolderMinus aria-hidden="true" />
+                Remove from sidebar
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+      </div>
+      <span
+        id={`${id}-detail`}
+        className="sr-only"
+      >
+        {project?.key ?? detail}
+      </span>
+      <div
+        id={`${id}-threads`}
+        className="pl-1"
+      >
+        {open && children}
+      </div>
+    </section>
   );
 }

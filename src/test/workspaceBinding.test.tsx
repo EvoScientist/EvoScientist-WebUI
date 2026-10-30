@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 //
-// Runs carry the backend's folder, and a thread that belongs elsewhere is
-// read-only.
+// Each thread runs in its own project, a new chat in the current one; a
+// thread of a folder that isn't a project is read-only.
 
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
@@ -60,19 +60,18 @@ vi.mock("sonner", () => ({
 }));
 
 import { renderChat } from "@/test/renderChat";
-import {
-  TestWorkspaceProvider,
-  mockWorkspace,
-  readyWorkspace,
-} from "@/test/mockWorkspace";
+import { mockProjects, readyProjects } from "@/test/mockProjects";
 import { workspaceAssistantId } from "@/lib/workspaceAssistant";
 import { useThreads } from "@/app/hooks/useThreads";
-import type { WorkspaceContextValue } from "@/providers/WorkspaceProvider";
+import type { ThreadScope } from "@/app/hooks/useThreads";
 
 const KEY = "/home/you/projA";
-const ready = () => mockWorkspace(readyWorkspace(KEY));
+const OTHER = "/srv/projB";
+const ready = () => mockProjects(readyProjects(KEY));
+/** Two projects, the first current. */
+const both = () => mockProjects(readyProjects(KEY, OTHER), { current: KEY });
 
-describe("workspace binding", () => {
+describe("project binding", () => {
   let stream: MockStreamStore;
 
   beforeEach(() => {
@@ -94,10 +93,67 @@ describe("workspace binding", () => {
     getActiveMockClient().setThreadRecord(THREAD, { metadata });
   }
 
-  it("creates a new thread with the backend's folder", () => {
+  it.each(["thread", "checkpoint"])(
+    "keeps a read-only run-folder conversation's project from its %s",
+    async (source) => {
+      const folders = { workspace_dir: OTHER, run_dir: `${OTHER}/runs/r1` };
+      openThread({
+        graph_id: "EvoScientist",
+        ...(source === "thread" ? folders : {}),
+      });
+      if (source === "checkpoint") stream.setHistory([{ metadata: folders }]);
+      const projects = both();
+      const { result } = renderChat({ projects });
+
+      await waitFor(() => expect(result.current.projectKey).toBe(OTHER));
+      expect(projects.selectProject).toHaveBeenCalledWith(OTHER);
+      expect(result.current.binding.kind).toBe("readOnly");
+      expect(result.current.canSend).toBe(false);
+      act(() => {
+        expect(result.current.sendMessage("hi")).toBe(false);
+        expect(result.current.resumeInterrupt({ decisions: [] })).toBe(false);
+      });
+      expect(stream.getSubmitCalls()).toHaveLength(0);
+    }
+  );
+
+  it.each(["unregistered", "missing"])(
+    "keeps a %s folder unavailable when opening a read-only conversation",
+    async (state) => {
+      openThread({ graph_id: "EvoScientist", workspace_dir: OTHER });
+      const projects = mockProjects(
+        readyProjects(
+          KEY,
+          ...(state === "missing"
+            ? [{ key: OTHER, name: "B", missing: true }]
+            : [])
+        ),
+        { current: KEY }
+      );
+      const { result } = renderChat({ projects });
+
+      await waitFor(() => expect(result.current.binding.kind).toBe("readOnly"));
+      expect(result.current.projectKey).toBeNull();
+      expect(projects.selectProject).not.toHaveBeenCalled();
+      expect(result.current.canSend).toBe(false);
+    }
+  );
+
+  it("names a run-folder conversation's files from its run folder", async () => {
+    openThread({
+      graph_id: "EvoScientist",
+      workspace_dir: OTHER,
+      run_dir: `${OTHER}/runs/r1`,
+    });
+    const { result } = renderChat({ projects: both() });
+
+    await waitFor(() => expect(result.current.runFolder).toBe("runs/r1"));
+  });
+
+  it("creates a new thread in the current project", () => {
     const { result } = renderChat({
       connected: true,
-      workspace: ready(),
+      projects: ready(),
     });
 
     act(() => {
@@ -110,11 +166,11 @@ describe("workspace binding", () => {
     expect(options.metadata).toEqual({ workspace_dir: KEY });
   });
 
-  it("makes a thread of another folder read-only", async () => {
+  it("makes a thread of a folder that isn't a project read-only", async () => {
     openThread({ graph_id: "EvoScientist", workspace_dir: "/home/you/projB" });
     const { result } = renderChat({
       connected: true,
-      workspace: ready(),
+      projects: ready(),
     });
 
     await waitFor(() => expect(result.current.binding.kind).toBe("readOnly"));
@@ -131,7 +187,7 @@ describe("workspace binding", () => {
 
   it("keeps a model picked on a thread when its folder is stamped", async () => {
     openThread({ graph_id: "EvoScientist" });
-    const { result } = renderChat({ workspace: ready() });
+    const { result } = renderChat({ projects: ready() });
     await waitFor(() => expect(result.current.binding.kind).toBe("unbound"));
 
     await act(async () => {
@@ -146,7 +202,7 @@ describe("workspace binding", () => {
 
   it("stamps the folder on a thread with none when it resumes", async () => {
     openThread({ graph_id: "EvoScientist" });
-    const { result } = renderChat({ workspace: ready() });
+    const { result } = renderChat({ projects: ready() });
     await waitFor(() => expect(result.current.binding.kind).toBe("unbound"));
 
     act(() => {
@@ -162,7 +218,7 @@ describe("workspace binding", () => {
       workspace_dir: KEY,
       model_override: { model: "old" },
     });
-    const { result } = renderChat({ workspace: ready() });
+    const { result } = renderChat({ projects: ready() });
 
     // Picked in the same tick as opening, before the thread's read lands.
     await act(async () => {
@@ -179,16 +235,16 @@ describe("workspace binding", () => {
       { metadata: {} },
       { metadata: { workspace_dir: "/home/you/projB" } },
     ]);
-    const { result } = renderChat({ workspace: ready() });
+    const { result } = renderChat({ projects: ready() });
 
     await waitFor(() => expect(result.current.binding.kind).toBe("readOnly"));
   });
 
-  it("stamps the backend's folder on a thread that had none", async () => {
+  it("stamps the current project on a thread that had none", async () => {
     openThread({ graph_id: "EvoScientist" });
     const { result } = renderChat({
       connected: true,
-      workspace: ready(),
+      projects: ready(),
     });
     await waitFor(() => expect(result.current.binding.kind).toBe("unbound"));
 
@@ -199,7 +255,7 @@ describe("workspace binding", () => {
     expect(stamp).toHaveBeenCalledWith(THREAD, KEY);
     expect(stream.getSubmitCalls()).toHaveLength(1);
 
-    // Stamped once: the thread now reads as this folder's.
+    // Stamped once: the thread now reads as this project's.
     expect(result.current.binding.kind).toBe("open");
     act(() => {
       result.current.sendMessage("again");
@@ -213,7 +269,7 @@ describe("workspace binding", () => {
       workspace_dir: KEY,
       model_override: { model: "m-1", model_provider: "p-1" },
     });
-    const { result } = renderChat({ workspace: ready() });
+    const { result } = renderChat({ projects: ready() });
 
     await waitFor(() =>
       expect(result.current.modelOverride).toEqual({
@@ -226,8 +282,8 @@ describe("workspace binding", () => {
 
   it("runs a scheduled task's thread on the scheduler assistant", async () => {
     openThread({ graph_id: "scheduler", workspace_dir: KEY });
-    const workspace = ready();
-    renderChat({ connected: true, workspace });
+    const projects = ready();
+    renderChat({ connected: true, projects });
 
     await waitFor(() =>
       expect(stream.getOptions()?.assistantId).toBe(
@@ -236,15 +292,15 @@ describe("workspace binding", () => {
     );
   });
 
-  it("sends nothing while the folder is being read again", () => {
-    const workspace = {
+  it("sends nothing while the projects are read again", () => {
+    const projects = {
       ...ready(),
       refreshing: true,
       isReady: () => false,
     };
     const { result } = renderChat({
       connected: true,
-      workspace,
+      projects,
     });
 
     let sent = true;
@@ -259,10 +315,10 @@ describe("workspace binding", () => {
 
   it("checks the gate at the moment of sending", () => {
     let readyNow = true;
-    const workspace = { ...ready(), isReady: () => readyNow };
+    const projects = { ...ready(), isReady: () => readyNow };
     const { result } = renderChat({
       connected: true,
-      workspace,
+      projects,
     });
 
     // A refresh started after the last render.
@@ -276,63 +332,48 @@ describe("workspace binding", () => {
     expect(stream.getSubmitCalls()).toHaveLength(0);
   });
 
-  it.each([
-    "RunFolderMismatchError",
-    "ProjectNotServedError",
-    "NoProjectError",
-  ])(
-    "asks the backend again after a %s and explains the refusal",
-    async (name) => {
-      const workspace = ready();
-      renderChat({ connected: true, workspace });
-
-      act(() => {
-        stream.emitError(
-          Object.assign(
-            new Error("This EvoScientist server serves workspace /x"),
-            { name }
-          )
-        );
-      });
-
-      await waitFor(() =>
-        expect(toast.error).toHaveBeenCalledWith(
-          expect.stringContaining("serves workspace /x")
-        )
-      );
-      expect(workspace.refresh).toHaveBeenCalledTimes(1);
-    }
-  );
-
-  it("says nothing when the read after a mismatch is cut short by another backend", async () => {
-    vi.mocked(toast.info).mockClear();
-    // The read was aborted by a switch to another backend: it has no answer.
-    const workspace = {
-      ...ready(),
-      refresh: vi.fn(async () => ({ status: "pending" } as const)),
-    };
-    renderChat({ connected: true, workspace });
+  it("reads the projects again after a folder mismatch and explains it", async () => {
+    const projects = ready();
+    renderChat({ connected: true, projects });
 
     act(() => {
       stream.emitError(
         Object.assign(
           new Error("This EvoScientist server serves workspace /x"),
-          {
-            name: "RunFolderMismatchError",
-          }
+          { name: "RunFolderMismatchError" }
         )
       );
     });
 
-    await waitFor(() => expect(workspace.refresh).toHaveBeenCalled());
-    await act(async () => {});
-    expect(toast.error).not.toHaveBeenCalled();
-    expect(toast.info).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        expect.stringContaining("serves workspace /x")
+      )
+    );
+    expect(projects.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads the projects again when a state write is refused", async () => {
+    openThread({ graph_id: "EvoScientist", workspace_dir: KEY });
+    const refused = Object.assign(
+      new Error("This EvoScientist server does not serve workspace /x"),
+      { status: 409 }
+    );
+    getActiveMockClient().threads.updateState.mockRejectedValueOnce(refused);
+    const projects = ready();
+    const { result } = renderChat({ projects });
+    await waitFor(() => expect(result.current.canSend).toBe(true));
+
+    await expect(
+      act(() => result.current.setFiles({ "/notes.md": "x" }))
+    ).rejects.toBe(refused);
+
+    expect(projects.refresh).toHaveBeenCalledTimes(1);
   });
 
   it("forgets the thread's folder on another backend until that one answers", async () => {
     openThread({ graph_id: "EvoScientist", workspace_dir: KEY });
-    const { result, rerender } = renderChat({ workspace: ready() });
+    const { result, rerender } = renderChat({ projects: ready() });
     await waitFor(() => expect(result.current.canSend).toBe(true));
 
     // Another backend, whose answer for the thread hasn't come yet.
@@ -351,7 +392,7 @@ describe("workspace binding", () => {
       workspace_dir: KEY,
       model_override: { model: "m-1", model_provider: "p-1" },
     });
-    const { result } = renderChat({ workspace: ready() });
+    const { result } = renderChat({ projects: ready() });
     await waitFor(() => expect(result.current.canSend).toBe(true));
     await waitFor(() =>
       expect(result.current.modelOverride).toEqual({
@@ -370,16 +411,144 @@ describe("workspace binding", () => {
     });
   });
 
-  it("runs the chat on the folder's assistant", () => {
-    renderChat({ workspace: ready() });
+  it("runs a new chat on the current project's assistant", () => {
+    renderChat({ projects: ready() });
     expect(stream.getOptions()?.assistantId).toBe(
       workspaceAssistantId("EvoScientist", KEY)
     );
   });
 
-  it("addresses the chat graph by name on a core without the route", () => {
-    renderChat({ connected: true });
-    expect(stream.getOptions()?.assistantId).toBe("EvoScientist");
+  it("runs a thread of another project on that project's assistant", async () => {
+    openThread({ graph_id: "EvoScientist", workspace_dir: OTHER });
+    const projects = both();
+    const { result } = renderChat({ projects });
+
+    await waitFor(() =>
+      expect(result.current.binding).toEqual({ kind: "open", key: OTHER })
+    );
+    expect(stream.getOptions()?.assistantId).toBe(
+      workspaceAssistantId("EvoScientist", OTHER)
+    );
+    expect(result.current.canSend).toBe(true);
+    // Its project becomes the current one, not yet the last used.
+    expect(projects.selectProject).toHaveBeenCalledWith(OTHER);
+  });
+
+  it.each(["removed", "missing its folder"])(
+    "drops a project %s after a message was sent in it",
+    async (state) => {
+      openThread({ graph_id: "EvoScientist", workspace_dir: KEY });
+      const projects = both();
+      const { result, rerender } = renderChat({ projects });
+      await waitFor(() => expect(result.current.canSend).toBe(true));
+      act(() => {
+        result.current.sendMessage("hi");
+      });
+      expect(result.current.projectKey).toBe(KEY);
+
+      // While the conversation is open: it turns read-only.
+      Object.assign(
+        projects,
+        mockProjects(
+          state === "removed"
+            ? readyProjects(OTHER)
+            : readyProjects({ key: KEY, name: "projA", missing: true }, OTHER),
+          { current: OTHER }
+        )
+      );
+      rerender();
+
+      await waitFor(() => expect(result.current.binding.kind).toBe("readOnly"));
+      expect(result.current.projectKey).toBeNull();
+    }
+  );
+
+  it("remembers the project a message is sent in", () => {
+    const projects = both();
+    const { result } = renderChat({ projects });
+
+    act(() => {
+      result.current.sendMessage("hi");
+    });
+
+    expect(projects.selectProject).toHaveBeenCalledWith(KEY, {
+      remember: true,
+    });
+  });
+
+  it("runs nothing on a core without the project list", () => {
+    const { result } = renderChat({
+      projects: mockProjects({ status: "unsupported" }),
+    });
+
+    expect(result.current.binding.kind).toBe("readOnly");
+    expect(result.current.canSend).toBe(false);
+    expect(stream.getOptions()?.assistantId).toBe("");
+  });
+
+  it("runs nothing without a project", () => {
+    const { result } = renderChat({
+      projects: mockProjects(readyProjects(), { current: null }),
+    });
+
+    expect(result.current.binding.kind).toBe("readOnly");
+    expect(result.current.canSend).toBe(false);
+  });
+
+  it.each(["ProjectNotServedError", "NoProjectError"])(
+    "reads the projects again after a %s and says the project is gone",
+    async (name) => {
+      openThread({ graph_id: "EvoScientist", workspace_dir: KEY });
+      const projects = ready();
+      const { result } = renderChat({ projects });
+      await waitFor(() => expect(result.current.canSend).toBe(true));
+
+      act(() => {
+        stream.emitError(Object.assign(new Error("refused"), { name }));
+      });
+
+      expect(projects.refresh).toHaveBeenCalledTimes(1);
+      expect(toast.error).toHaveBeenCalledWith(
+        expect.stringContaining("no longer served")
+      );
+      // A conversation that already existed is kept.
+      expect(getActiveMockClient().threads.delete).not.toHaveBeenCalled();
+    }
+  );
+
+  it("starts a new chat with the message when a new chat's project is gone", async () => {
+    const onThreadUnavailable = vi.fn(() => ({ unsentBack: true }));
+    const projects = ready();
+    const { result } = renderChat({ projects, onThreadUnavailable });
+
+    act(() => {
+      result.current.sendMessage("hi");
+    });
+    const sent = (
+      stream.getSubmitCalls()[0].values as { messages: Array<{ id: string }> }
+    ).messages;
+    // The run made the thread, then the core refused it.
+    act(() => {
+      stream.setMessages(sent as never);
+      (stream.getOptions()?.onThreadId as (id: string) => void)(THREAD);
+    });
+    await waitFor(() => expect(result.current.binding.kind).not.toBe("open"));
+    act(() => {
+      stream.emitError(
+        Object.assign(new Error("refused"), { name: "ProjectNotServedError" })
+      );
+    });
+
+    expect(onThreadUnavailable).toHaveBeenCalledWith({
+      threadId: THREAD,
+      unsentMessage: "hi",
+    });
+    // The empty thread the refused run made is deleted.
+    expect(getActiveMockClient().threads.delete).toHaveBeenCalledWith(THREAD);
+    expect(projects.refresh).toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalledWith(
+      expect.stringContaining("no longer served")
+    );
   });
 });
 
@@ -396,43 +565,112 @@ describe("thread list", () => {
     vi.unstubAllGlobals();
   });
 
-  async function searchedMetadata(workspace: WorkspaceContextValue) {
-    const bodies: Array<{ metadata?: unknown }> = [];
+  /** The first search a list makes, and the pages it shows. */
+  async function search(
+    scope: ThreadScope | null,
+    threads: unknown[] = [],
+    limit?: number
+  ) {
+    const bodies: Array<{ metadata?: unknown; status?: unknown }> = [];
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         if (String(input).endsWith("/threads/search")) {
           bodies.push(JSON.parse(String(init?.body)));
         }
-        return new Response("[]", {
+        return new Response(JSON.stringify(threads), {
           status: 200,
           headers: { "Content-Type": "application/json" },
         });
       })
     );
-    renderHook(() => useThreads({}), {
-      wrapper: ({ children }: { children: ReactNode }) => (
-        <SWRConfig value={{ provider: () => new Map() }}>
-          <TestWorkspaceProvider value={workspace}>
+    const { result } = renderHook(
+      () => useThreads({ scope, status: "busy", limit }),
+      {
+        wrapper: ({ children }: { children: ReactNode }) => (
+          <SWRConfig value={{ provider: () => new Map() }}>
             {children}
-          </TestWorkspaceProvider>
-        </SWRConfig>
-      ),
-    });
-    await waitFor(() => expect(bodies.length).toBeGreaterThan(0));
-    return bodies[0].metadata;
+          </SWRConfig>
+        ),
+      }
+    );
+    return { bodies, result };
   }
 
-  it("lists the chat threads of the backend's folder", async () => {
-    expect(await searchedMetadata(ready())).toEqual({
-      graph_id: "EvoScientist",
-      workspace_dir: KEY,
+  it("lists a project's chat threads", async () => {
+    const { bodies } = await search({ project: KEY });
+    await waitFor(() => expect(bodies.length).toBeGreaterThan(0));
+    expect(bodies[0]).toMatchObject({
+      metadata: { graph_id: "EvoScientist", workspace_dir: KEY },
+      status: "busy",
     });
   });
 
-  it("lists the chat graph's threads on a core without the route", async () => {
-    expect(await searchedMetadata(mockWorkspace())).toEqual({
-      graph_id: "EvoScientist",
+  const raw = (id: string, metadata: Record<string, unknown>) => ({
+    thread_id: id,
+    status: "busy",
+    updated_at: "2026-10-28T10:00:00Z",
+    metadata: {
+      auto_title: "x",
+      preview: "y",
+      labels_state_at: "2026-10-28T10:00:00Z",
+      ...metadata,
+    },
+  });
+
+  it("keeps the named projects' threads from a search across folders", async () => {
+    const { bodies, result } = await search({ projects: [KEY] }, [
+      raw("in", { workspace_dir: KEY }),
+      raw("other", { workspace_dir: "/home/you/projC" }),
+      raw("none", {}),
+    ]);
+
+    await waitFor(() => expect(result.current.data).toBeDefined());
+    expect(bodies[0].metadata).toEqual({ graph_id: "EvoScientist" });
+    expect(result.current.data?.[0].items.map((t) => t.id)).toEqual(["in"]);
+  });
+
+  it("keeps only threads with no folder for No project", async () => {
+    const { result } = await search("noProject", [
+      raw("in", { workspace_dir: KEY }),
+      raw("none", {}),
+    ]);
+
+    await waitFor(() => expect(result.current.data).toBeDefined());
+    expect(result.current.data?.[0].items.map((t) => t.id)).toEqual(["none"]);
+  });
+
+  it("reads each thread's folders, and whether the page was full", async () => {
+    const { result } = await search(
+      { projects: [KEY] },
+      [
+        {
+          thread_id: "t-1",
+          status: "busy",
+          updated_at: "2026-10-28T10:00:00Z",
+          metadata: {
+            workspace_dir: KEY,
+            run_dir: `${KEY}/runs/r1`,
+            title: "x",
+            auto_title: "x",
+            preview: "y",
+            labels_state_at: "2026-10-28T10:00:00Z",
+          },
+        },
+      ],
+      1
+    );
+
+    await waitFor(() => expect(result.current.data).toBeDefined());
+    expect(result.current.data?.[0]).toMatchObject({
+      full: true,
+      items: [{ workspaceDir: KEY, runDir: `${KEY}/runs/r1` }],
     });
+  });
+
+  it("searches nothing without a scope", async () => {
+    const { bodies } = await search(null);
+    await act(async () => {});
+    expect(bodies).toHaveLength(0);
   });
 });

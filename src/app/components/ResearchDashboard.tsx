@@ -12,10 +12,14 @@ import {
   History,
 } from "lucide-react";
 import { nodeColor, type ObsGraphData } from "@/lib/observationGraph";
-import { listScheduledTasks } from "@/app/hooks/useScheduledTasks";
+import {
+  listScheduledTasks,
+  type ScheduledTask,
+} from "@/app/hooks/useScheduledTasks";
 import { useThreads } from "@/app/hooks/useThreads";
-import { useWorkspace } from "@/providers/WorkspaceProvider";
-import { localFilesAvailable } from "@/lib/workspaceSession";
+import { useProjectFiles } from "@/app/hooks/useProjectFiles";
+import { useProjects } from "@/providers/ProjectsProvider";
+import { registeredTasks } from "@/lib/projects";
 import type { NavTarget } from "@/lib/navTarget";
 import { formatTime } from "@/lib/time";
 
@@ -73,11 +77,16 @@ export function ResearchDashboard({
   onNavigate,
   onOpenThread,
 }: ResearchDashboardProps) {
-  const { data: threadPages } = useThreads({ limit: 100 });
+  // The current project's pinned threads: a new chat starts in it.
+  const { current, projects } = useProjects();
+  const { data: threadPages } = useThreads({
+    scope: current ? { project: current.key } : null,
+    limit: 100,
+  });
   const pinned = useMemo(
     () =>
       (threadPages ?? [])
-        .flat()
+        .flatMap((page) => page.items)
         .filter((t) => t.pinned)
         .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())
         .slice(0, 5),
@@ -87,13 +96,21 @@ export function ResearchDashboard({
   const [obsCount, setObsCount] = useState(0);
   const [runCount, setRunCount] = useState(0);
   const [wsBytes, setWsBytes] = useState(0);
-  const [scheduledCount, setScheduledCount] = useState(0);
+  const [scheduled, setScheduled] = useState<ScheduledTask[]>([]);
+  // The tasks the Scheduled view lists: the registered projects'.
+  const scheduledCount = useMemo(
+    () =>
+      projects.status === "ready"
+        ? registeredTasks(scheduled, projects.projects).length
+        : 0,
+    [scheduled, projects]
+  );
   const [activity, setActivity] = useState<ActivityItem[]>([]);
   const [ready, setReady] = useState(false);
   const reqRef = useRef(0);
-  // The workspace size counts this machine's folder, which is only the
-  // backend's when they resolve to the same place.
-  const filesHere = localFilesAvailable(useWorkspace().workspace);
+  // The workspace size counts the current project's folder on this machine,
+  // when the page's backend is this machine's.
+  const { project } = useProjectFiles();
 
   useEffect(() => {
     const reqId = ++reqRef.current;
@@ -113,7 +130,7 @@ export function ResearchDashboard({
           ? await readJson<{ entries?: ExecEntry[] }>(execRes)
           : null;
         if (reqRef.current !== reqId) return;
-        setScheduledCount(scheduled.length);
+        setScheduled(scheduled);
 
         const obsNodes = Array.isArray(obs?.nodes) ? obs.nodes : [];
         const execEntries = Array.isArray(exec?.entries) ? exec.entries : [];
@@ -150,14 +167,19 @@ export function ResearchDashboard({
     })();
   }, []);
 
-  // The workspace size, from this machine's folder when it is the backend's.
+  // The workspace size, from the current project's folder.
   useEffect(() => {
-    if (!filesHere) {
+    if (!project) {
       setWsBytes(0);
       return;
     }
     let cancelled = false;
-    fetch("/api/workspace?recursive=1", { cache: "no-store" })
+    fetch(
+      `/api/workspace?${new URLSearchParams({ project, recursive: "1" })}`,
+      {
+        cache: "no-store",
+      }
+    )
       .then((res) => readJson<{ entries?: Array<{ size?: number }> }>(res))
       .then((ws) => {
         if (cancelled) return;
@@ -172,7 +194,7 @@ export function ResearchDashboard({
     return () => {
       cancelled = true;
     };
-  }, [filesHere]);
+  }, [project]);
 
   const hasStats =
     ready &&

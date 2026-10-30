@@ -10,7 +10,6 @@ import {
 import { cancelActiveRuns, type RunCancelClient } from "@/lib/threadLifecycle";
 import { pickThreadMessages } from "@/lib/threadMessages";
 import { CHAT_GRAPH_ID } from "@/lib/workspaceAssistant";
-import { useWorkspace } from "@/providers/WorkspaceProvider";
 
 export interface ThreadItem {
   id: string;
@@ -24,7 +23,26 @@ export interface ThreadItem {
    *  resolve. Used by the sidebar to keep these threads in "Requiring
    *  Attention" even when auto-approve is on. */
   needsUserInput: boolean;
+  /** The project root the thread records; null for a thread with none. */
+  workspaceDir: string | null;
+  /** The run folder of a CLI run-mode session, inside the root. */
+  runDir: string | null;
 }
+
+/** One page of a thread list. `full`: the backend returned a whole page, so
+ *  there may be more (a caller that filters the items still pages on). */
+export interface ThreadPage {
+  items: ThreadItem[];
+  full: boolean;
+}
+
+/** Which chat threads a list holds: one project's; those of any of a set
+ *  of projects (searched across folders, for attention and busy markers);
+ *  or those that record no folder. */
+export type ThreadScope =
+  | { project: string }
+  | { projects: readonly string[] }
+  | "noProject";
 
 const DEFAULT_PAGE_SIZE = 20;
 
@@ -67,29 +85,47 @@ export async function backfillThreadLabels(
   }
 }
 
+/**
+ * Chat threads, newest activity first, a page at a time. `scope` null lists
+ * nothing (the projects aren't known yet).
+ */
 export function useThreads(props: {
+  scope: ThreadScope | null;
   status?: Thread["status"];
   limit?: number;
+  /** Derive missing titles and previews (and write them back). Off for a
+   *  list nobody reads the labels of. */
+  labels?: boolean;
+  /** Read again every this many ms, for state other surfaces change. */
+  refreshInterval?: number;
 }) {
   const pageSize = props.limit || DEFAULT_PAGE_SIZE;
-  const { workspace } = useWorkspace();
+  const scope = props.scope;
+  const workspaceDir =
+    scope && typeof scope === "object" && "project" in scope
+      ? scope.project
+      : null;
+  // Sorted, so the same set makes the same key.
+  const within =
+    scope && typeof scope === "object" && "projects" in scope
+      ? [...scope.projects].sort()
+      : null;
+  const noProject = scope === "noProject";
+  const labels = props.labels ?? true;
+  const enabled = scope !== null;
 
   return useSWRInfinite(
-    (pageIndex: number, previousPageData: ThreadItem[] | null) => {
+    (pageIndex: number, previousPageData: ThreadPage | null) => {
       const config = getConfig();
       const apiKey =
         config?.langsmithApiKey ||
         process.env.NEXT_PUBLIC_LANGSMITH_API_KEY ||
         "";
 
-      // Until the backend's folder is known the list would mix every
-      // folder's threads.
-      if (!config || workspace.status === "pending") {
-        return null;
-      }
+      if (!config || !enabled) return null;
 
-      // If the previous page returned no items, we've reached the end
-      if (previousPageData && previousPageData.length === 0) {
+      // A page short of full was the last one.
+      if (previousPageData && !previousPageData.full) {
         return null;
       }
 
@@ -98,7 +134,10 @@ export function useThreads(props: {
         pageIndex,
         pageSize,
         deploymentUrl: config.deploymentUrl,
-        workspaceDir: workspace.status === "ready" ? workspace.key : null,
+        workspaceDir,
+        within,
+        noProject,
+        labels,
         apiKey,
         status: props?.status,
       };
@@ -106,6 +145,9 @@ export function useThreads(props: {
     async ({
       deploymentUrl,
       workspaceDir,
+      within,
+      noProject,
+      labels,
       apiKey,
       status,
       pageIndex,
@@ -116,9 +158,12 @@ export function useThreads(props: {
       pageSize: number;
       deploymentUrl: string;
       workspaceDir: string | null;
+      within: string[] | null;
+      noProject: boolean;
+      labels: boolean;
       apiKey: string;
       status?: Thread["status"];
-    }) => {
+    }): Promise<ThreadPage> => {
       const client = patchClientStreamModes(
         new Client({
           apiUrl: deploymentUrl,
@@ -126,11 +171,10 @@ export function useThreads(props: {
         })
       );
 
-      // Scope the list to chat threads of the backend's folder. The graph
+      // Chat threads, of one project when the scope names it. The graph
       // keeps out threads of async sub-agents and memory workers, which carry
       // the folder too; the folder, not the assistant, matches threads
-      // created under an older assistant. A backend without the workspace
-      // route lists by graph only, as before.
+      // created under an older assistant.
       const metadata = workspaceDir
         ? { graph_id: CHAT_GRAPH_ID, workspace_dir: workspaceDir }
         : { graph_id: CHAT_GRAPH_ID };
@@ -182,8 +226,20 @@ export function useThreads(props: {
         });
       }
 
+      // A search across folders keeps only the threads the scope names,
+      // before any label work: another folder's threads cost nothing.
+      const inProjects = within ? new Set(within) : null;
+      const kept = threads.filter((thread) => {
+        const dir = (thread.metadata as Record<string, unknown> | undefined)
+          ?.workspace_dir;
+        const folder = typeof dir === "string" && dir ? dir : null;
+        if (noProject) return folder === null;
+        if (inProjects) return folder !== null && inProjects.has(folder);
+        return true;
+      });
+
       const items = await Promise.all(
-        threads.map(async (thread): Promise<ThreadItem> => {
+        kept.map(async (thread): Promise<ThreadItem> => {
           const md = (thread.metadata ?? {}) as Record<string, unknown>;
           // A user rename (stored under `title`) always wins over the derived
           // auto-title so the sidebar reflects what the user typed.
@@ -198,7 +254,7 @@ export function useThreads(props: {
             (thread as { state_updated_at?: string | null }).state_updated_at ||
             thread.updated_at;
 
-          if (needsThreadLabelBackfill(md, activityTs)) {
+          if (labels && needsThreadLabelBackfill(md, activityTs)) {
             if (legacySearch) {
               const derived = deriveThreadMetadata(
                 (thread.values as { messages?: unknown } | undefined)?.messages
@@ -269,14 +325,21 @@ export function useThreads(props: {
             description,
             pinned,
             needsUserInput,
+            workspaceDir:
+              typeof md.workspace_dir === "string" && md.workspace_dir
+                ? md.workspace_dir
+                : null,
+            runDir:
+              typeof md.run_dir === "string" && md.run_dir ? md.run_dir : null,
           };
         })
       );
-      return items;
+      return { items, full: threads.length >= pageSize };
     },
     {
       revalidateFirstPage: true,
       revalidateOnFocus: true,
+      refreshInterval: props.refreshInterval,
     }
   );
 }

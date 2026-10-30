@@ -24,6 +24,8 @@ const chat = (over: Partial<ChatFilesBridge> = {}): ChatFilesBridge => ({
   files: { "plan.md": "step one", "other.md": "x" },
   setFiles: vi.fn(async () => {}),
   editDisabled: false,
+  project: null,
+  runFolder: null,
   ...over,
 });
 

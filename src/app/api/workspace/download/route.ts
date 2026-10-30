@@ -2,11 +2,11 @@ import { createReadStream, promises as fs } from "fs";
 import { Readable } from "stream";
 import { NextRequest, NextResponse } from "next/server";
 import {
-  getWorkspaceDir,
   isCrossOrigin,
   workspaceArchivePath,
   zipWorkspace,
 } from "@/lib/server/workspace";
+import { ProjectRefusedError, projectDir } from "@/lib/server/projects";
 
 export const runtime = "nodejs";
 
@@ -20,7 +20,7 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const workspaceDir = await getWorkspaceDir();
+    const workspaceDir = await projectDir(request);
     tmpFile = workspaceArchivePath();
     await zipWorkspace(workspaceDir, tmpFile, request.signal);
 
@@ -51,7 +51,7 @@ export async function GET(request: NextRequest) {
             ? error.message
             : "Failed to package the workspace.",
       },
-      { status: 400 }
+      { status: error instanceof ProjectRefusedError ? 403 : 400 }
     );
   }
 }

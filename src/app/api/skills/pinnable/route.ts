@@ -1,7 +1,8 @@
 import { join } from "path";
 import { type NextRequest, NextResponse } from "next/server";
 import { listPinnableSkills, SKILLS_INSTALL_DIR } from "@/lib/server/skills";
-import { getWorkspaceDir, isCrossOrigin } from "@/lib/server/workspace";
+import { projectDir } from "@/lib/server/projects";
+import { isCrossOrigin } from "@/lib/server/workspace";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,15 +17,12 @@ export async function GET(request: NextRequest) {
       { status: 403, headers: NO_STORE_HEADERS }
     );
   }
-  // The global tier alone when no backend runs here, or when `?workspace=0`
-  // says the backend's folder isn't this machine's workspace.
-  const workspace =
-    request.nextUrl.searchParams.get("workspace") === "0"
-      ? null
-      : await getWorkspaceDir().then(
-          (dir) => join(dir, "skills"),
-          () => null
-        );
+  // The project's skills too when the request names a project this
+  // machine's backend serves (`?project=`); the global tier alone otherwise.
+  const workspace = await projectDir(request).then(
+    (dir) => join(dir, "skills"),
+    () => null
+  );
   try {
     const skills = await listPinnableSkills({
       workspace,

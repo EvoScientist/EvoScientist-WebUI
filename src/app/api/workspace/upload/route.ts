@@ -1,11 +1,8 @@
 import { promises as fs } from "fs";
 import { basename, dirname, resolve } from "path";
 import { NextRequest, NextResponse } from "next/server";
-import {
-  getWorkspaceDir,
-  hasControlChar,
-  isCrossOrigin,
-} from "@/lib/server/workspace";
+import { hasControlChar, isCrossOrigin } from "@/lib/server/workspace";
+import { ProjectRefusedError, projectDir } from "@/lib/server/projects";
 
 export const runtime = "nodejs";
 
@@ -78,6 +75,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Before the body is read: a request for no project costs nothing.
+    const workspaceDir = await projectDir(request);
     const formData = await request.formData();
     const files = formData
       .getAll("files")
@@ -107,9 +106,6 @@ export async function POST(request: NextRequest) {
       return { file, fileName: sanitizeFileName(file.name) };
     });
 
-    // Lands in the working directory of the currently running deployment, so the
-    // agent can read the files via its workspace file tools.
-    const workspaceDir = await getWorkspaceDir();
     const uploadedFiles: { name: string; path: string; size: number }[] = [];
     const writtenPaths: string[] = [];
     try {
@@ -142,7 +138,7 @@ export async function POST(request: NextRequest) {
         error:
           error instanceof Error ? error.message : "Failed to upload files.",
       },
-      { status: 400 }
+      { status: error instanceof ProjectRefusedError ? 403 : 400 }
     );
   }
 }

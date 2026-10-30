@@ -19,6 +19,9 @@ vi.mock("@/providers/ClientProvider", () => ({
 
 import { useTeams } from "./useTeams";
 
+const PROJECT = "/home/you/projA";
+const QUERY = `?${new URLSearchParams({ workspace_dir: PROJECT })}`;
+
 function mockTeams(...responses: unknown[]) {
   let call = 0;
   const fetchMock = vi.fn((url: string) => {
@@ -45,7 +48,7 @@ describe("useTeams", () => {
     const fetchMock = mockTeams({
       teams: [{ name: "paper-review", description: "Adversarial." }],
     });
-    const { result } = renderHook(() => useTeams());
+    const { result } = renderHook(() => useTeams(PROJECT));
 
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.teams).toEqual([
@@ -59,7 +62,7 @@ describe("useTeams", () => {
       { teams: [] },
       { teams: [{ name: "paper-review", description: "Just installed." }] }
     );
-    const { result } = renderHook(() => useTeams());
+    const { result } = renderHook(() => useTeams(PROJECT));
 
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.teams).toEqual([]);
@@ -87,7 +90,7 @@ describe("useTeams", () => {
         })
       )
     );
-    const { result } = renderHook(() => useTeams());
+    const { result } = renderHook(() => useTeams(PROJECT));
 
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.teams).toEqual([]);
@@ -97,7 +100,7 @@ describe("useTeams", () => {
   it("does not call out when no deployment is configured", async () => {
     deployment.value = { deploymentUrl: "", apiKey: "" };
     const fetchMock = mockTeams({ teams: [] });
-    const { result } = renderHook(() => useTeams());
+    const { result } = renderHook(() => useTeams(PROJECT));
 
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(fetchMock).not.toHaveBeenCalled();
@@ -133,7 +136,7 @@ describe("useTeams across a backend switch", () => {
     const answer = (url: string, teams: unknown[]) =>
       act(async () =>
         pending
-          .findLast((p) => p.url === `${url}/api/teams`)
+          .findLast((p) => p.url === `${url}/api/teams${QUERY}`)
           ?.resolve({ teams })
       );
     const answerCall = (n: number, teams: unknown[]) =>
@@ -144,20 +147,20 @@ describe("useTeams across a backend switch", () => {
   it("asks the deployment the client talks to, with its key", async () => {
     deployment.value = { deploymentUrl: `${B}/`, apiKey: "secret" };
     const fetchMock = mockTeams({ teams: [] });
-    renderHook(() => useTeams());
+    renderHook(() => useTeams(PROJECT));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
     const [url, init] = fetchMock.mock.calls[0] as unknown as [
       string,
       { headers: Record<string, string> }
     ];
-    expect(url).toBe(`${B}/api/teams`);
+    expect(url).toBe(`${B}/api/teams${QUERY}`);
     expect(init.headers["X-Api-Key"]).toBe("secret");
   });
 
   it("drops the old deployment's experts and reads the new one's", async () => {
     const { answer } = deferredTeams();
-    const { result, rerender } = renderHook(() => useTeams());
+    const { result, rerender } = renderHook(() => useTeams(PROJECT));
     await answer(A, [expertA]);
     expect(result.current.teams).toEqual([expertA]);
 
@@ -173,7 +176,7 @@ describe("useTeams across a backend switch", () => {
 
   it("ignores a late answer from the deployment it left", async () => {
     const { answer } = deferredTeams();
-    const { result, rerender } = renderHook(() => useTeams());
+    const { result, rerender } = renderHook(() => useTeams(PROJECT));
     deployment.value = { deploymentUrl: B, apiKey: "" };
     rerender();
 
@@ -186,7 +189,7 @@ describe("useTeams across a backend switch", () => {
   // deployment answers again.
   it("clears the list when it returns to a deployment", async () => {
     const { answer } = deferredTeams();
-    const { result, rerender } = renderHook(() => useTeams());
+    const { result, rerender } = renderHook(() => useTeams(PROJECT));
     await answer(A, [expertA]);
     deployment.value = { deploymentUrl: B, apiKey: "" };
     rerender();
@@ -203,7 +206,7 @@ describe("useTeams across a backend switch", () => {
   // what this key may see.
   it("drops the list when only the key changes, and reads with the new key", async () => {
     const { fetchMock, answer } = deferredTeams();
-    const { result, rerender } = renderHook(() => useTeams());
+    const { result, rerender } = renderHook(() => useTeams(PROJECT));
     await answer(A, [expertA]);
 
     deployment.value = { deploymentUrl: A, apiKey: "new-key" };
@@ -220,7 +223,7 @@ describe("useTeams across a backend switch", () => {
 
   it("ignores a late answer to a request sent with the old key", async () => {
     const { answerCall } = deferredTeams();
-    const { result, rerender } = renderHook(() => useTeams());
+    const { result, rerender } = renderHook(() => useTeams(PROJECT));
     deployment.value = { deploymentUrl: A, apiKey: "new-key" };
     rerender();
 
@@ -232,7 +235,7 @@ describe("useTeams across a backend switch", () => {
 
   it("keeps the newer refresh when two come back out of order", async () => {
     const { fetchMock, answerCall } = deferredTeams();
-    const { result } = renderHook(() => useTeams());
+    const { result } = renderHook(() => useTeams(PROJECT));
     await answerCall(0, [expertA]);
 
     act(() => result.current.refresh());
@@ -247,7 +250,9 @@ describe("useTeams across a backend switch", () => {
 
   it("settles on the deployment's list under StrictMode", async () => {
     const { answer } = deferredTeams();
-    const { result } = renderHook(() => useTeams(), { wrapper: StrictMode });
+    const { result } = renderHook(() => useTeams(PROJECT), {
+      wrapper: StrictMode,
+    });
     await answer(A, [expertA]);
     expect(result.current.teams).toEqual([expertA]);
     expect(result.current.loading).toBe(false);
@@ -257,7 +262,7 @@ describe("useTeams across a backend switch", () => {
   // up while it re-reads, so the Experts view doesn't flash empty.
   it("keeps the list while re-reading the same deployment", async () => {
     const { fetchMock, answer } = deferredTeams();
-    const { result } = renderHook(() => useTeams());
+    const { result } = renderHook(() => useTeams(PROJECT));
     await answer(A, [expertA]);
 
     act(() => result.current.refresh());
@@ -283,8 +288,8 @@ describe("useTeams across components", () => {
       { teams: [] },
       { teams: [{ name: "paper-review", description: "Just installed." }] }
     );
-    const viewer = renderHook(() => useTeams());
-    const composer = renderHook(() => useTeams());
+    const viewer = renderHook(() => useTeams(PROJECT));
+    const composer = renderHook(() => useTeams(PROJECT));
 
     await waitFor(() => expect(viewer.result.current.loading).toBe(false));
     await waitFor(() => expect(composer.result.current.loading).toBe(false));
@@ -299,5 +304,38 @@ describe("useTeams across components", () => {
       ])
     );
     expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("reads another project's experts, and none without a project", async () => {
+    deployment.value = { deploymentUrl: "http://127.0.0.1:6174", apiKey: "" };
+    const fetchMock = mockTeams({ teams: [] });
+    let project: string | null = PROJECT;
+    const { rerender } = renderHook(() => useTeams(project));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+    project = "/srv/projB";
+    rerender();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(String(fetchMock.mock.calls[1][0])).toContain(
+      "workspace_dir=%2Fsrv%2FprojB"
+    );
+
+    project = null;
+    rerender();
+    await act(async () => {});
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("drops a project's experts when another project is asked for", async () => {
+    deployment.value = { deploymentUrl: "http://127.0.0.1:6174", apiKey: "" };
+    mockTeams({ teams: [{ name: "a-expert", source: "workspace" }] });
+    let project: string | null = PROJECT;
+    const { result, rerender } = renderHook(() => useTeams(project));
+    await waitFor(() => expect(result.current.teams).toHaveLength(1));
+
+    project = null;
+    rerender();
+
+    expect(result.current.teams).toEqual([]);
   });
 });

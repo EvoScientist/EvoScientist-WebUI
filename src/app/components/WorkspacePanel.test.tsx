@@ -1,16 +1,16 @@
 // @vitest-environment jsdom
-import { mockWorkspace, readyWorkspace } from "@/test/mockWorkspace";
+import { TEST_PROJECT, mockProjects, readyProjects } from "@/test/mockProjects";
+import { projectHandle } from "@/lib/projects";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { WorkspacePanel } from "./WorkspacePanel";
 import { renderWithFilePane } from "@/test/filePaneHarness";
 
 const listings = () =>
-  vi
-    .mocked(fetch)
-    .mock.calls.filter(([url]) =>
-      String(url).startsWith("/api/workspace?path=")
-    ).length;
+  vi.mocked(fetch).mock.calls.filter(([url]) => {
+    const u = new URL(String(url), "http://x");
+    return u.pathname === "/api/workspace" && u.searchParams.has("path");
+  }).length;
 
 beforeEach(() => {
   vi.stubGlobal(
@@ -41,7 +41,8 @@ describe("WorkspacePanel", () => {
     const h = renderWithFilePane(<WorkspacePanel />);
     fireEvent.click(await screen.findByRole("button", { name: /a\.md/ }));
     expect(h.pane().activeTab).toMatchObject({
-      id: "workspace:a.md",
+      id: `workspace@${projectHandle(TEST_PROJECT)}:a.md`,
+      project: projectHandle(TEST_PROJECT),
       size: 3,
     });
     expect(
@@ -63,11 +64,10 @@ describe("WorkspacePanel", () => {
     await waitFor(() => expect(listings()).toBeGreaterThan(before));
   });
 
-  it("lists nothing when this machine's folder is not the backend's", () => {
+  it("lists nothing when the page's backend is another machine's", () => {
     renderWithFilePane(<WorkspacePanel />, {
-      workspace: mockWorkspace({
-        ...readyWorkspace("/srv/remote/projA"),
-        local: { dir: "/home/you/other", sameFolder: false },
+      projects: mockProjects(readyProjects("/srv/remote/projA"), {
+        files: "elsewhere",
       }),
     });
 

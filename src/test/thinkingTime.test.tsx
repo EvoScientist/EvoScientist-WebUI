@@ -56,7 +56,7 @@ vi.mock("sonner", () => ({
 
 import { renderChat } from "@/test/renderChat";
 import { ChatProvider, useChatContext } from "@/providers/ChatProvider";
-import { TestWorkspaceProvider, mockWorkspace } from "@/test/mockWorkspace";
+import { TestProjectsProvider, mockProjects } from "@/test/mockProjects";
 
 const human = { id: "h1", type: "human", content: "List the files" } as Message;
 const thinking = (id: string) =>
@@ -165,9 +165,9 @@ describe("thinking time", () => {
       },
       {
         wrapper: ({ children }: { children: ReactNode }) => (
-          <TestWorkspaceProvider value={mockWorkspace()}>
+          <TestProjectsProvider value={mockProjects()}>
             <ChatProvider>{children}</ChatProvider>
-          </TestWorkspaceProvider>
+          </TestProjectsProvider>
         ),
       }
     );
