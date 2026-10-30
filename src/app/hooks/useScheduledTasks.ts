@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Cron } from "@langchain/langgraph-sdk";
 import { Client } from "@langchain/langgraph-sdk";
 import { getConfig } from "@/lib/config";
@@ -50,13 +50,20 @@ export interface ScheduledTask {
   updated_at: string;
   /** The folder the task runs in; null for a task made before tags. */
   workspaceDir: string | null;
+  /** False while the task is paused: it keeps its schedule but doesn't run. */
+  enabled: boolean;
+  input: Record<string, unknown>;
+}
+
+/** When `task` runs next; null while it is paused or has no next run. */
+export function upcomingRun(task: ScheduledTask): string | null {
+  return task.enabled ? task.next_run_date : null;
 }
 
 /**
- * Why `task` can't be edited or run from here: it runs in another folder
- * than the backend's, and editing or running it would move it to this one.
- * Null when it can. An untagged task counts as this folder's, as the core's
- * scheduling does.
+ * Why `task` can't be run from here: it runs in another folder than the
+ * backend's, and a manual run would run it in this one. Null when it can. An
+ * untagged task counts as this folder's, as the core's scheduling does.
  */
 export function otherFolderReason(
   task: ScheduledTask,
@@ -83,7 +90,16 @@ function parseCron(cron: Cron): ScheduledTask {
       typeof meta.workspace_dir === "string" && meta.workspace_dir
         ? meta.workspace_dir
         : null,
+    enabled: cron.enabled !== false,
+    input: storedInput(cron),
   };
+}
+
+function storedInput(cron: Cron): Record<string, unknown> {
+  const input = cron.payload?.input;
+  return input && typeof input === "object" && !Array.isArray(input)
+    ? (input as Record<string, unknown>)
+    : {};
 }
 
 export async function listScheduledTasks(): Promise<ScheduledTask[]> {
@@ -140,6 +156,11 @@ export async function deleteScheduledTask(cronId: string): Promise<void> {
   await client.crons.delete(cronId);
 }
 
+/**
+ * Edit a task in place: it keeps its ID, its folder's assistant, its run
+ * history and whether it is paused. The server merges `metadata` into the
+ * stored one and replaces `input`.
+ */
 export async function updateScheduledTask(params: {
   cronId: string;
   name: string;
@@ -150,22 +171,43 @@ export async function updateScheduledTask(params: {
    * one (made before #61, meant as local time) moves to the browser's.
    */
   timezone: string | null;
-  target: SchedulerTarget;
-}): Promise<{ task: ScheduledTask; oldTaskDeleted: boolean }> {
-  const task = await createScheduledTask({
-    name: params.name,
-    prompt: params.prompt,
+  input: Record<string, unknown>;
+}): Promise<ScheduledTask> {
+  const client = makeClient();
+  if (!client) throw new Error("No EvoScientist deployment configured.");
+  const cron = await client.crons.update(params.cronId, {
+    input: {
+      ...params.input,
+      messages: [{ role: "user", content: params.prompt }],
+    },
     schedule: params.schedule,
-    timezone: params.timezone,
-    target: params.target,
+    timezone: params.timezone || browserTimeZone(),
+    metadata: { name: params.name, prompt: params.prompt },
   });
+  return parseCron(cron);
+}
 
-  try {
-    await deleteScheduledTask(params.cronId);
-    return { task, oldTaskDeleted: true };
-  } catch {
-    return { task, oldTaskDeleted: false };
-  }
+/**
+ * Pause a task (it keeps its schedule but doesn't run) or resume it. A pause
+ * leaves the next run date where it was, so the server would fire a resumed
+ * task at once for a time missed while paused; resuming sends the schedule
+ * again, which makes the server count the next run from now.
+ */
+export async function setScheduledTaskEnabled(
+  task: Pick<ScheduledTask, "cron_id" | "schedule">,
+  enabled: boolean
+): Promise<ScheduledTask> {
+  const client = makeClient();
+  if (!client) throw new Error("No EvoScientist deployment configured.");
+  const cron = await client.crons.update(
+    task.cron_id,
+    enabled ? { enabled, schedule: task.schedule } : { enabled }
+  );
+  return parseCron(cron);
+}
+
+export function scheduledTaskMissing(error: unknown): boolean {
+  return getHttpStatus(error) === 404;
 }
 
 export async function runScheduledTaskNow(
@@ -173,6 +215,8 @@ export async function runScheduledTaskNow(
     cron_id: string;
     name: string;
     prompt: string;
+    /** The task's stored run input: a rubric in it grades the run. */
+    input: Record<string, unknown>;
   },
   target: SchedulerTarget
 ): Promise<void> {
@@ -191,7 +235,10 @@ export async function runScheduledTaskNow(
     metadata,
   });
   await client.runs.create(thread.thread_id, target.assistantId, {
-    input: { messages: [{ role: "user", content: task.prompt }] },
+    input: {
+      ...task.input,
+      messages: [{ role: "user", content: task.prompt }],
+    },
     metadata,
     config: { configurable: { cron_id: task.cron_id } },
   });
@@ -256,21 +303,27 @@ export function useScheduledTasks(): {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [rev, setRev] = useState(0);
+  const requestRev = useRef(0);
 
-  const refresh = useCallback(() => setRev((r) => r + 1), []);
+  // Loading from the call on, in the same render as what the caller sets
+  // with it: nothing reads the list as current until the new read is in.
+  const refresh = useCallback(() => {
+    requestRev.current += 1;
+    setLoading(true);
+    setRev((r) => r + 1);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
     listScheduledTasks()
       .then((result) => {
-        if (!cancelled) {
+        if (!cancelled && requestRev.current === rev) {
           setTasks(result);
           setError(null);
         }
       })
       .catch((err: unknown) => {
-        if (!cancelled) {
+        if (!cancelled && requestRev.current === rev) {
           setError(
             err instanceof Error
               ? err.message
@@ -280,7 +333,7 @@ export function useScheduledTasks(): {
         }
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled && requestRev.current === rev) setLoading(false);
       });
     return () => {
       cancelled = true;

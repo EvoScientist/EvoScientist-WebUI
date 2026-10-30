@@ -564,6 +564,11 @@ function ConfigErrorNotice({ payload }: { payload: SettingsPayload }) {
   );
 }
 
+/** How to apply them when the notice has no app to ask for a restart (no
+ *  bridge: a browser, or the app while the page can't save to its core). */
+const APPLY_BY_SERVER_STOP =
+  "Apply them: quit EvoSci, run EvoSci server stop, then start EvoSci again. Stopping the server ends running work in every project that uses it.";
+
 /** Which saved changes wait for a restart of EvoSci, and the way to do it. */
 export function RestartNotice({
   payload,
@@ -636,7 +641,7 @@ export function RestartNotice({
       <div className="min-w-0 flex-1 space-y-2">
         <p>
           These changes take effect after EvoScientist restarts: {names}.
-          {!bridge?.restartBackend && " Restart EvoSci to apply them."}
+          {!bridge?.restartBackend && ` ${APPLY_BY_SERVER_STOP}`}
         </p>
         {bridge?.restartBackend && state.kind !== "done" && (
           <Button

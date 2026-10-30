@@ -527,7 +527,7 @@ describe("the Setup form", () => {
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
   });
 
-  it("shows which changes wait for a restart, and says to restart EvoSci", async () => {
+  it("shows which changes wait for a restart, and says to stop the server", async () => {
     server.settings = settings({
       restart_required: true,
       restart_fields: ["mcp.yaml", "tavily_api_key"],
@@ -535,7 +535,7 @@ describe("the Setup form", () => {
     renderView();
     expect(
       await screen.findByText(
-        /after EvoScientist restarts: MCP servers \(mcp\.yaml\), Tavily API key\. Restart EvoSci/
+        /after EvoScientist restarts: MCP servers \(mcp\.yaml\), Tavily API key\..*quit EvoSci.*EvoSci server stop/
       )
     ).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Restart now" })).toBeNull();
@@ -549,7 +549,11 @@ describe("the Setup form", () => {
       restart_fields: ["model"],
     });
     renderView();
-    fireEvent.click(await screen.findByRole("button", { name: "Restart now" }));
+    const restartNow = await screen.findByRole("button", {
+      name: "Restart now",
+    });
+    expect(screen.queryByText(/quit EvoSci/)).toBeNull();
+    fireEvent.click(restartNow);
     await screen.findByText("EvoScientist restarted.");
     expect(restartBackend).toHaveBeenCalledOnce();
   });
@@ -862,6 +866,7 @@ describe("the Setup form", () => {
         /run EvoSci server stop in a terminal, then press Retry in the app/
       )
     ).toBeTruthy();
+    expect(screen.queryByText(/quit EvoSci/)).toBeNull();
   });
 
   it("says EvoScientist restarted after the re-read clears the notice", async () => {
@@ -905,7 +910,9 @@ describe("the Setup form", () => {
     });
     renderView();
     expect(await screen.findByText(/read-only here/)).toBeTruthy();
-    expect(screen.getByText(/take effect after EvoScientist/)).toBeTruthy();
+    expect(
+      screen.getByText(/take effect after EvoScientist.*quit EvoSci/)
+    ).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Restart now" })).toBeNull();
     expect(restartBackend).not.toHaveBeenCalled();
   });
@@ -926,10 +933,10 @@ describe("the Setup form", () => {
     fireEvent.click(screen.getByRole("button", { name: "Reload" }));
     expect(await screen.findByText(/read-only here/)).toBeTruthy();
     expect(screen.getByText("Restarting EvoScientist...")).toBeTruthy();
-    expect(screen.queryByText(/Restart EvoSci to apply them/)).toBeNull();
+    expect(screen.queryByText(/quit EvoSci/)).toBeNull();
     answer({ ok: true });
     await screen.findByText("EvoScientist restarted.");
-    expect(screen.queryByText(/Restart EvoSci to apply them/)).toBeNull();
+    expect(screen.queryByText(/quit EvoSci/)).toBeNull();
   });
 
   it("shows a save's warning next to its field", async () => {
