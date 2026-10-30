@@ -34,10 +34,13 @@ function mount() {
   );
 }
 
-afterEach(() => {
+afterEach(async () => {
   act(() => {
     toast.dismiss();
   });
+  // sonner removes a dismissed toast by id 200 ms later: let that happen
+  // now, not in the next test (same id) or after the environment is gone.
+  await act(() => new Promise((r) => setTimeout(r, 300)));
   delete window.evoscientistDesktop;
 });
 
@@ -69,6 +72,24 @@ describe("DesktopUpdateNotice", () => {
     // Refused while the app is busy: the offer comes back and says why.
     expect(
       await screen.findByText("The app is busy. Try again in a moment.")
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Restart to update" })
+    ).toBeTruthy();
+  });
+
+  it("keeps the notice when a cached download is ready at once", async () => {
+    // A download already in the app's cache: downloading and ready arrive
+    // within milliseconds of the click, inside sonner's 200 ms exit of a
+    // toast whose action was clicked.
+    const app = fakeApp({ kind: "available", version: "0.4.3", failed: false });
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: "Download" }));
+    app.send({ kind: "downloading", version: "0.4.3", percent: 0 });
+    app.send({ kind: "ready", version: "0.4.3" });
+    await act(() => new Promise((r) => setTimeout(r, 400)));
+    expect(
+      screen.getByText("EvoScientist 0.4.3 is ready to install.")
     ).toBeTruthy();
     expect(
       screen.getByRole("button", { name: "Restart to update" })

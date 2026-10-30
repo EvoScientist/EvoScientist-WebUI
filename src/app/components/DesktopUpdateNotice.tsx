@@ -90,15 +90,18 @@ export function DesktopUpdateNotice() {
         action: label
           ? {
               label,
-              onClick: () => {
+              onClick: (e) => {
+                // The notice stays: the app's next state replaces it. Left to
+                // sonner, the click removes it 200 ms later, together with
+                // any update in between (a cached download is ready at once).
+                e.preventDefault();
                 if (notice.action === "download") {
                   void update.download();
                   return;
                 }
                 void update.restartToUpdate().then((r) => {
-                  // On success the app ends; otherwise the offer comes back
-                  // (the button's click removed the notice; only the close
-                  // button, a swipe or a dismiss call `onDismiss`).
+                  // On success the app ends; otherwise the offer stays and
+                  // says why.
                   if (!r.ok) show(s, RESTART_NOTES[r.code]);
                 });
               },
