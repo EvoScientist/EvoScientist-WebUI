@@ -279,6 +279,12 @@ export function checkCore(
   return null;
 }
 
+/** The desktop's default folder, Documents/EvoScientist; throws when the
+ *  Documents folder cannot be resolved (`app.getPath` does). */
+export function defaultFolder(deps: Pick<BootDeps, "documentsDir">): string {
+  return join(deps.documentsDir(), "EvoScientist");
+}
+
 /** The workspace folder: `default_workdir` when set, else Documents/EvoScientist. */
 export function resolveWorkspace(
   config: StartConfig,
@@ -289,7 +295,7 @@ export function resolveWorkspace(
   try {
     folder = config.defaultWorkdir
       ? expandWorkdir(config.defaultWorkdir)
-      : join(deps.documentsDir(), "EvoScientist");
+      : defaultFolder(deps);
     deps.ensureDir(folder);
   } catch (e) {
     return {

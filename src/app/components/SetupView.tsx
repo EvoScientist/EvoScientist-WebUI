@@ -42,6 +42,7 @@ import {
 } from "@/app/components/setupFieldContext";
 import { SetupWizard } from "@/app/components/SetupWizard";
 import { desktopBridge } from "@/lib/desktop";
+import { toast } from "sonner";
 import { isSetupDeferred } from "@/lib/setupDeferral";
 import { fieldLabel, readOnlyReason } from "@/lib/settingsForm";
 import type { SettingsPayload } from "@/lib/settings";
@@ -190,7 +191,7 @@ export function SetupView({
         <div className="space-y-4">
           <RestartNotice
             // A new set of waiting fields starts the notice afresh, so an
-            // earlier "restarting" answer does not hide Restart now.
+            // earlier answer that hid Restart now does not keep hiding it.
             key={payload.restart_fields.join(",")}
             payload={payload}
             onRestarted={refresh}
@@ -284,7 +285,7 @@ export function SetupView({
         {payload.config_error && <ConfigErrorNotice payload={payload} />}
         <RestartNotice
           // A new set of waiting fields starts the notice afresh, so an
-          // earlier "restarting" answer does not hide Restart now.
+          // earlier answer that hid Restart now does not keep hiding it.
           key={payload.restart_fields.join(",")}
           payload={payload}
           onRestarted={refresh}
@@ -563,7 +564,8 @@ function ConfigErrorNotice({ payload }: { payload: SettingsPayload }) {
   );
 }
 
-/** How to restart a backend the desktop app doesn't own. */
+/** How to apply them when the notice has no app to ask for a restart (no
+ *  bridge: a browser, or the app while the page can't save to its core). */
 const APPLY_BY_SERVER_STOP =
   "Apply them: quit EvoSci, run EvoSci server stop, then start EvoSci again. Stopping the server ends running work in every project that uses it.";
 
@@ -576,12 +578,19 @@ export function RestartNotice({
   onRestarted: () => Promise<unknown>;
 }) {
   const [state, setState] = useState<
-    { kind: "idle" } | { kind: "busy" } | { kind: "done"; text: string }
+    | { kind: "idle"; text?: string }
+    | { kind: "busy" }
+    | { kind: "done"; text: string }
   >({ kind: "idle" });
+  const { access } = useSettingsAccess();
   if (!payload.restart_required || payload.restart_fields.length === 0) {
     return null;
   }
-  const bridge = desktopBridge();
+  // Restart now restarts the app's own backend, so it is offered only when
+  // the page saves to that core; once started it stays, as the page reads as
+  // read-only while that backend is down.
+  const bridge =
+    access?.writable || state.kind !== "idle" ? desktopBridge() : null;
   const names = payload.restart_fields
     .map((field) => fieldLabel(field, payload.providers))
     .join(", ");
@@ -593,12 +602,25 @@ export function RestartNotice({
       code: "failed",
     }));
     if (result.ok) {
-      setState({ kind: "done", text: "EvoScientist is restarting." });
+      setState({ kind: "done", text: "EvoScientist restarted." });
+      // The re-read can clear the notice (the restarted core has no changes
+      // waiting), so the toast says it too.
+      toast.success("EvoScientist restarted.", {
+        id: "evoscientist-restarted",
+      });
       await onRestarted();
+    } else if (result.code === "cancelled") {
+      // The user answered Cancel to the app's question: nothing to say.
+      setState({ kind: "idle" });
+    } else if (result.code === "busy") {
+      setState({
+        kind: "idle",
+        text: "The app is busy. Try again in a moment.",
+      });
     } else if (result.code === "not_owned") {
       setState({
         kind: "done",
-        text: `The app did not start this EvoScientist. ${APPLY_BY_SERVER_STOP}`,
+        text: "The app did not start this EvoScientist. To restart it, run EvoSci server stop in a terminal, then press Retry in the app, which starts its own. Stopping it ends running work in every project that uses this backend.",
       });
     } else {
       setState({
@@ -631,7 +653,8 @@ export function RestartNotice({
             Restart now
           </Button>
         )}
-        {state.kind === "done" && <p>{state.text}</p>}
+        {state.kind === "busy" && <p>Restarting EvoScientist...</p>}
+        {state.kind !== "busy" && state.text && <p>{state.text}</p>}
       </div>
     </div>
   );
