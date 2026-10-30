@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Cron } from "@langchain/langgraph-sdk";
 import { Client } from "@langchain/langgraph-sdk";
 import { getConfig } from "@/lib/config";
@@ -303,10 +303,12 @@ export function useScheduledTasks(): {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [rev, setRev] = useState(0);
+  const requestRev = useRef(0);
 
   // Loading from the call on, in the same render as what the caller sets
   // with it: nothing reads the list as current until the new read is in.
   const refresh = useCallback(() => {
+    requestRev.current += 1;
     setLoading(true);
     setRev((r) => r + 1);
   }, []);
@@ -315,13 +317,13 @@ export function useScheduledTasks(): {
     let cancelled = false;
     listScheduledTasks()
       .then((result) => {
-        if (!cancelled) {
+        if (!cancelled && requestRev.current === rev) {
           setTasks(result);
           setError(null);
         }
       })
       .catch((err: unknown) => {
-        if (!cancelled) {
+        if (!cancelled && requestRev.current === rev) {
           setError(
             err instanceof Error
               ? err.message
@@ -331,7 +333,7 @@ export function useScheduledTasks(): {
         }
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled && requestRev.current === rev) setLoading(false);
       });
     return () => {
       cancelled = true;

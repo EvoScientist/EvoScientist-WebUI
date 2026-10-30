@@ -431,4 +431,48 @@ describe("useScheduledTasks", () => {
     expect(result.current.loading).toBe(false);
     expect(result.current.tasks.map((t) => t.name)).toEqual(["New"]);
   });
+
+  it("keeps the latest refresh loading when an older read finishes before cleanup", async () => {
+    const reads: Array<(name: string) => void> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        () =>
+          new Promise<Response>((resolve) =>
+            reads.push((name) =>
+              resolve(
+                new Response(
+                  JSON.stringify([
+                    cron({ metadata: { run_kind: "scheduled_task", name } }),
+                  ]),
+                  {
+                    status: 200,
+                    headers: { "Content-Type": "application/json" },
+                  }
+                )
+              )
+            )
+          )
+      )
+    );
+    const { result } = renderHook(() => useScheduledTasks());
+    await waitFor(() => expect(reads).toHaveLength(1));
+    await act(async () => reads[0]("First"));
+
+    act(() => result.current.refresh());
+    await waitFor(() => expect(reads).toHaveLength(2));
+    await act(async () => {
+      result.current.refresh();
+      reads[1]("Superseded");
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+    });
+
+    expect(reads).toHaveLength(3);
+    expect(result.current.loading).toBe(true);
+    expect(result.current.tasks.map((task) => task.name)).toEqual(["First"]);
+
+    await act(async () => reads[2]("Current"));
+    expect(result.current.loading).toBe(false);
+    expect(result.current.tasks.map((task) => task.name)).toEqual(["Current"]);
+  });
 });
