@@ -6,13 +6,14 @@
 //   src/lib/config.ts), keeping the other keys, so ConfigDialog never opens.
 //   Then expose the bridge that W01 reads in src/lib/desktop.ts
 //   (`window.evoscientistDesktop`): `restartBackend()` and `defaultFolder`
-//   (W03d); W04 adds its update members. The main process answers both only
-//   for the UI's own origin.
+//   (W03d), and `appUpdate` (W04). The main process answers them only for
+//   the UI's own origin.
 // - On the status page (file:): expose what it needs to show the current
-//   screen and run its actions.
+//   screen, run its actions and offer the app update.
 import { contextBridge, ipcRenderer } from "electron";
 import type { RestartResult } from "./app";
-import type { ActionId, Screen } from "./screens";
+import type { UpdateState } from "./appUpdate";
+import type { ActionId, Screen, UpdateOffer } from "./screens";
 
 const CONFIG_KEY = "evoscientist-config";
 
@@ -43,6 +44,17 @@ if (location.protocol === "file:") {
     },
     act: (id: ActionId, arg?: unknown): Promise<void> =>
       ipcRenderer.invoke("status:act", id, arg),
+    update: {
+      get: (): Promise<UpdateOffer | null> =>
+        ipcRenderer.invoke("status:update-offer"),
+      onChange: (cb: (o: UpdateOffer | null) => void) => {
+        ipcRenderer.on("status:update", (_e, o: UpdateOffer | null) => cb(o));
+      },
+      download: (): Promise<void> =>
+        ipcRenderer.invoke("desktop:update-download"),
+      restart: (): Promise<RestartResult> =>
+        ipcRenderer.invoke("desktop:update-restart"),
+    },
   });
 } else {
   try {
@@ -62,6 +74,22 @@ function exposeBridge(): void {
   contextBridge.exposeInMainWorld("evoscientistDesktop", {
     restartBackend: (): Promise<RestartResult> =>
       ipcRenderer.invoke("desktop:restart-backend"),
+    appUpdate: {
+      state: (): Promise<UpdateState> =>
+        ipcRenderer.invoke("desktop:update-state"),
+      /** Calls `cb` on each change; returns the unsubscribe. */
+      onState: (cb: (s: UpdateState) => void): (() => void) => {
+        const listener = (_e: unknown, st: UpdateState) => cb(st);
+        ipcRenderer.on("desktop:update", listener);
+        return () => {
+          ipcRenderer.removeListener("desktop:update", listener);
+        };
+      },
+      download: (): Promise<void> =>
+        ipcRenderer.invoke("desktop:update-download"),
+      restartToUpdate: (): Promise<RestartResult> =>
+        ipcRenderer.invoke("desktop:update-restart"),
+    },
     ...(folder ? { defaultFolder: folder } : {}),
   });
 }

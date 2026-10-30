@@ -7,6 +7,7 @@
 import type { BootError, BootState } from "./boot";
 import { DEFAULT_BACKEND_PORT } from "./paths";
 import type { Stage } from "./setup";
+import type { UpdateState } from "./appUpdate";
 import type { UpdateView } from "./update";
 
 export type ActionId =
@@ -202,7 +203,7 @@ export function setupScreen(stages: Stage[]): SetupScreen {
 
 /** The progress screen for a launch phase, the UI start or a stop. */
 export function progressScreen(
-  state: BootState | "starting_ui" | "stopping"
+  state: BootState | "starting_ui" | "stopping" | "preparing_update"
 ): ProgressScreen {
   const s = typeof state === "string" ? state : state.phase;
   const text: Record<string, [string, string]> = {
@@ -218,6 +219,10 @@ export function progressScreen(
     ready: ["Starting EvoScientist", "Starting the WebUI..."],
     starting_ui: ["Starting EvoScientist", "Starting the WebUI..."],
     stopping: ["Restarting the backend", "Stopping the backend..."],
+    preparing_update: [
+      "Updating the EvoScientist app",
+      "Getting ready to update... The app starts again once the update is installed.",
+    ],
     update_finishing: [
       "An update of EvoScientist is finishing",
       "The app waits until it is done, then goes on.",
@@ -576,4 +581,35 @@ export function errorScreen(error: BootError, ctx: ScreenContext): ErrorScreen {
         }
       : {}),
   };
+}
+
+/** The status page's line for an app update (W04), with its button. The
+ *  WebUI page shows the same texts (src/app/components/DesktopUpdateNotice.tsx). */
+export interface UpdateOffer {
+  text: string;
+  action: "download_update" | "restart_to_update" | null;
+}
+
+export function updateOffer(s: UpdateState): UpdateOffer | null {
+  switch (s.kind) {
+    case "none":
+      return null;
+    case "available":
+      return {
+        text: s.failed
+          ? `The download of EvoScientist ${s.version} did not finish.`
+          : `EvoScientist ${s.version} is available.`,
+        action: "download_update",
+      };
+    case "downloading":
+      return {
+        text: `Downloading EvoScientist ${s.version}... ${s.percent}%`,
+        action: null,
+      };
+    case "ready":
+      return {
+        text: `EvoScientist ${s.version} is ready to install.`,
+        action: "restart_to_update",
+      };
+  }
 }
