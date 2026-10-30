@@ -147,10 +147,17 @@ describe("checks", () => {
 
   it("fails a check without an answer after the limit and drops its late answer", async () => {
     const t = setup();
+    // electron-updater's own record of the running check (the feed test
+    // shows the real one): the limit forgets it.
+    const inFlight = t.updater as unknown as {
+      checkForUpdatesPromise: unknown;
+    };
+    inFlight.checkForUpdatesPromise = "pending";
     void t.u.check();
     const first = t.pending.check;
     await vi.advanceTimersByTimeAsync(CHECK_LIMIT_MS);
     expect(t.logs).toContain("warn update check: no answer in 60 s");
+    expect(inFlight.checkForUpdatesPromise).toBeNull();
     // The next check runs although the first never answered.
     void t.u.check();
     expect(t.updater.checkForUpdates).toHaveBeenCalledTimes(2);

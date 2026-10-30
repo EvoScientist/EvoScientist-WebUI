@@ -10,8 +10,10 @@
 //   (`autoInstallOnAppQuit` is off, and nothing else calls `install()`);
 // - a check without an answer within 60 s, and a download that receives no
 //   data for 60 s, fail: Electron's network stack never fires the updater's
-//   own idle timeout. A failure is only logged; the next check tries again.
-//   A cut download fails the updater's SHA-512 check; it is never "ready".
+//   own idle timeout. A failure is only logged; the next check tries again
+//   (the updater would hand a stalled check to every later one, so the limit
+//   drops it there too). A cut download fails the updater's SHA-512 check;
+//   it is never "ready".
 import type { CancellationToken } from "electron-updater";
 import type { Logger } from "./proc";
 
@@ -95,6 +97,14 @@ export function brief(e: unknown): string {
     .slice(0, 500);
 }
 
+/** electron-updater keeps a running check and returns it to every later
+ *  call; after the limit that check is forgotten so the next one asks again.
+ *  A private field (6.x): the feed test fails if it goes away. */
+function forgetPendingCheck(updater: Updater): void {
+  const u = updater as unknown as { checkForUpdatesPromise?: unknown };
+  if ("checkForUpdatesPromise" in u) u.checkForUpdatesPromise = null;
+}
+
 export function createAppUpdate(deps: UpdateDeps): AppUpdate {
   const { updater, log } = deps;
   const timers = deps.timers ?? realTimers;
@@ -167,6 +177,7 @@ export function createAppUpdate(deps: UpdateDeps): AppUpdate {
     const limit = timers.setTimeout(() => {
       if (checking !== id) return;
       checking = null;
+      forgetPendingCheck(updater);
       log.warn(
         `update check: no answer in ${Math.round(checkLimitMs / 1000)} s`
       );

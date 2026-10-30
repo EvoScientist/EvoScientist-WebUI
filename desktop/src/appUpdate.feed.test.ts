@@ -51,12 +51,16 @@ class LoopbackExecutor extends ElectronHttpExecutor {
 let server: Server;
 let base: string;
 let dir: string;
+/** `latest.yml` requests per feed. */
+const asked: Record<string, number> = {};
 
 beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), "evo-update-feed-"));
   server = createServer((req, res) => {
     // The updater adds `?noCache=...`.
     const [, feed, file] = new URL(req.url ?? "/", base).pathname.split("/");
+    if (file === "latest.yml") asked[feed] = (asked[feed] ?? 0) + 1;
+    if (file === "latest.yml" && feed === "hang") return; // never answers
     if (file === "latest.yml") {
       const yml =
         feed === "same"
@@ -147,7 +151,12 @@ function updaterFor(feed: string, name: string) {
 // electron-updater reports progress at most once a second, so a watchdog
 // shorter than that cancels a download that is merely slow; only the stall
 // test uses one.
-function flow(feed: string, name: string, stallMs = 5_000) {
+function flow(
+  feed: string,
+  name: string,
+  stallMs = 5_000,
+  checkLimitMs = 5_000
+) {
   const logs: string[] = [];
   const waiters: { pred: (s: UpdateState) => boolean; done: () => void }[] = [];
   const u = createAppUpdate({
@@ -165,7 +174,7 @@ function flow(feed: string, name: string, stallMs = 5_000) {
       }
     },
     stallMs,
-    checkLimitMs: 5_000,
+    checkLimitMs,
   });
   const until = (pred: (s: UpdateState) => boolean) =>
     pred(u.state)
@@ -193,6 +202,19 @@ describe("electron-updater against a loopback feed", () => {
     t.u.download();
     await t.until((s) => s.kind !== "downloading");
     expect(t.u.state).toEqual({ kind: "ready", version: "0.4.3" });
+  });
+
+  it("asks the feed again after a check that got no answer", async () => {
+    // electron-updater hands a running check to every later call; the limit
+    // must make the next check a new request.
+    const t = flow("hang", "hang", 5_000, 200);
+    const pause = () => new Promise((r) => setTimeout(r, 400));
+    void t.u.check();
+    await pause();
+    void t.u.check();
+    await pause();
+    expect(t.logs.filter((l) => l.includes("no answer"))).toHaveLength(2);
+    expect(asked.hang).toBe(2);
   });
 
   it("refuses a download whose SHA-512 does not match latest.yml", async () => {
