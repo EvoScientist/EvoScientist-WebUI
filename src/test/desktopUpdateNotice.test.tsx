@@ -5,7 +5,14 @@
 // restart says. In a plain browser nothing shows.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { Toaster, toast } from "sonner";
 import { DesktopUpdateNotice } from "@/app/components/DesktopUpdateNotice";
 import type { AppUpdateState } from "@/lib/desktop";
@@ -46,9 +53,16 @@ afterEach(async () => {
   act(() => {
     toast.dismiss();
   });
-  // sonner removes a dismissed toast by id 200 ms later: let that happen
-  // now, not in the next test (same id) or after the environment is gone.
-  await act(() => new Promise((r) => setTimeout(r, 300)));
+  // sonner removes a dismissed toast by id after an animation frame and
+  // 200 ms; unmounting the notice dismisses its id in another frame. Let all
+  // of that land now, while no Toaster listens, not in the next test (same
+  // id) or after the environment is torn down.
+  await waitFor(
+    () => expect(document.querySelector("[data-sonner-toast]")).toBeNull(),
+    { timeout: 5_000 }
+  );
+  cleanup();
+  await act(() => new Promise<void>((r) => requestAnimationFrame(() => r())));
   delete window.evoscientistDesktop;
 });
 
