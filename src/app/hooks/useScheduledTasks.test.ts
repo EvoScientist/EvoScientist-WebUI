@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+//
 // Scheduled tasks are LangGraph crons on the `scheduler` graph. A cron created
 // without `timezone` is stored with `timezone: null` and the server reads its
 // schedule in UTC, so "every day at 09:00" ran at 17:00 in Beijing (#61).
@@ -5,6 +7,7 @@
 // check the request the server actually receives.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, renderHook, waitFor } from "@testing-library/react";
 
 vi.mock("@/lib/config", () => ({
   getConfig: () => ({
@@ -20,6 +23,7 @@ import {
   runScheduledTaskNow,
   setScheduledTaskEnabled,
   updateScheduledTask,
+  useScheduledTasks,
 } from "./useScheduledTasks";
 
 const target = {
@@ -158,7 +162,7 @@ describe("scheduled tasks run in the backend's folder", () => {
     );
 
     await runScheduledTaskNow(
-      { cron_id: "cron-1", name: "Daily", prompt: "Brief me" },
+      { cron_id: "cron-1", name: "Daily", prompt: "Brief me", input: {} },
       target
     );
 
@@ -170,6 +174,35 @@ describe("scheduled tasks run in the backend's folder", () => {
     expect(run?.body).toMatchObject({
       assistant_id: target.assistantId,
       metadata: { workspace_dir: "/home/you/projA" },
+    });
+  });
+});
+
+describe("runScheduledTaskNow with a rubric", () => {
+  it("runs with the task's stored input, so its rubric grades the run", async () => {
+    const calls = mockServer((call) =>
+      call.path === "/threads"
+        ? { thread_id: "t-1", metadata: {} }
+        : { run_id: "r-1" }
+    );
+
+    await runScheduledTaskNow(
+      {
+        cron_id: "cron-1",
+        name: "Daily",
+        prompt: "Brief me",
+        input: {
+          messages: [{ role: "user", content: "old" }],
+          rubric: "- at least 3 papers",
+        },
+      },
+      target
+    );
+
+    const run = calls.find((c) => c.path === "/threads/t-1/runs");
+    expect(run?.body?.input).toEqual({
+      messages: [{ role: "user", content: "Brief me" }],
+      rubric: "- at least 3 papers",
     });
   });
 });
@@ -191,6 +224,7 @@ describe("updateScheduledTask", () => {
       prompt: "Brief me",
       schedule: "0 8 * * *",
       timezone: "Europe/London",
+      input: {},
     });
 
     expect(patchCalls(calls)).toHaveLength(1);
@@ -216,10 +250,43 @@ describe("updateScheduledTask", () => {
       prompt: "Brief me",
       schedule: "0 9 * * *",
       timezone: null,
+      input: {},
     });
 
     expect(patchCalls(calls)[0].body).toMatchObject({
       timezone: "Asia/Shanghai",
+    });
+  });
+
+  it("replaces only the message of the task's input, keeping its rubric", async () => {
+    const calls = mockServer((call) =>
+      call.path === "/runs/crons/search"
+        ? [
+            cron({
+              payload: {
+                input: {
+                  messages: [{ role: "user", content: "Brief me" }],
+                  rubric: "- at least 3 papers",
+                },
+              },
+            }),
+          ]
+        : cron()
+    );
+    const [task] = await listScheduledTasks();
+
+    await updateScheduledTask({
+      cronId: task.cron_id,
+      name: task.name,
+      prompt: "Brief me twice",
+      schedule: task.schedule,
+      timezone: task.timezone,
+      input: task.input,
+    });
+
+    expect(patchCalls(calls)[0].body?.input).toEqual({
+      messages: [{ role: "user", content: "Brief me twice" }],
+      rubric: "- at least 3 papers",
     });
   });
 });
@@ -314,5 +381,54 @@ describe("assistant recovery", () => {
     }).catch((e: unknown) => e);
 
     expect(assistantRecoveryNeeded(error)).toBe(true);
+  });
+});
+
+describe("useScheduledTasks", () => {
+  it("reports loading from the refresh on, and keeps only the newest read", async () => {
+    const reads: Array<(crons: unknown[]) => void> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        () =>
+          new Promise<Response>((resolve) =>
+            reads.push((crons) =>
+              resolve(
+                new Response(JSON.stringify(crons), {
+                  status: 200,
+                  headers: { "Content-Type": "application/json" },
+                })
+              )
+            )
+          )
+      )
+    );
+    const { result } = renderHook(() => useScheduledTasks());
+    await waitFor(() => expect(reads).toHaveLength(1));
+    await act(async () => {
+      reads[0]([
+        cron({ metadata: { run_kind: "scheduled_task", name: "First" } }),
+      ]);
+    });
+    expect(result.current.loading).toBe(false);
+
+    act(() => result.current.refresh());
+    expect(result.current.loading).toBe(true);
+    act(() => result.current.refresh());
+    await waitFor(() => expect(reads).toHaveLength(3));
+
+    await act(async () => {
+      reads[2]([
+        cron({ metadata: { run_kind: "scheduled_task", name: "New" } }),
+      ]);
+    });
+    await act(async () => {
+      reads[1]([
+        cron({ metadata: { run_kind: "scheduled_task", name: "Old" } }),
+      ]);
+    });
+
+    expect(result.current.loading).toBe(false);
+    expect(result.current.tasks.map((t) => t.name)).toEqual(["New"]);
   });
 });

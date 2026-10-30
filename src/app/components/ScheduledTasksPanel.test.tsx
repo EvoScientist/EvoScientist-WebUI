@@ -13,6 +13,12 @@ const hook = vi.hoisted(() => ({
   tasks: [] as ScheduledTask[],
   updateScheduledTask: vi.fn(),
   setScheduledTaskEnabled: vi.fn(),
+  createScheduledTask: vi.fn(),
+  deleteScheduledTask: vi.fn(),
+  refresh: vi.fn(),
+  recover: vi.fn(),
+  /** The next list read fails. */
+  failRead: false,
 }));
 
 vi.mock("@/app/hooks/useScheduledTasks", async (importOriginal) => {
@@ -21,21 +27,29 @@ vi.mock("@/app/hooks/useScheduledTasks", async (importOriginal) => {
     ...(await importOriginal<typeof import("@/app/hooks/useScheduledTasks")>()),
     useScheduledTasks: () => {
       const [tasks, setTasks] = useState(hook.tasks);
+      const [error, setError] = useState<string | null>(null);
       return {
         tasks,
         loading: false,
-        error: null,
-        refresh: vi.fn(),
-        replaceTask: (task: ScheduledTask) =>
-          setTasks((current) =>
-            current.map((t) => (t.cron_id === task.cron_id ? task : t))
-          ),
+        error,
+        refresh: () => {
+          hook.refresh();
+          if (hook.failRead) {
+            setTasks([]);
+            setError("Failed to load scheduled tasks.");
+          } else {
+            setTasks(hook.tasks);
+            setError(null);
+          }
+        },
       };
     },
     updateScheduledTask: hook.updateScheduledTask,
     setScheduledTaskEnabled: hook.setScheduledTaskEnabled,
+    createScheduledTask: hook.createScheduledTask,
+    deleteScheduledTask: hook.deleteScheduledTask,
     useServedFolder: () => "/home/you/projA",
-    useAssistantRecovery: () => () => {},
+    useAssistantRecovery: () => hook.recover,
     useSchedulerGate: () => () => true,
     useSchedulerTarget: () => ({
       assistantId: "scheduler-assistant",
@@ -75,6 +89,7 @@ function task(overrides: Partial<ScheduledTask>): ScheduledTask {
     updated_at: "2026-10-09T08:00:00+00:00",
     workspaceDir: null,
     enabled: true,
+    input: {},
     ...overrides,
   };
 }
@@ -109,6 +124,11 @@ beforeEach(() => {
   hook.tasks = [];
   hook.updateScheduledTask.mockReset();
   hook.setScheduledTaskEnabled.mockReset();
+  hook.createScheduledTask.mockReset();
+  hook.deleteScheduledTask.mockReset();
+  hook.refresh.mockReset();
+  hook.recover.mockReset();
+  hook.failRead = false;
 });
 
 afterEach(() => vi.restoreAllMocks());
@@ -137,7 +157,6 @@ describe("ScheduledTasksPanel time zones", () => {
     hook.tasks = [legacy];
     hook.updateScheduledTask.mockResolvedValue({
       ...legacy,
-      cron_id: "new",
       timezone: "Asia/Shanghai",
     });
     render(<ScheduledTasksPanel />);
@@ -158,6 +177,7 @@ describe("ScheduledTasksPanel time zones", () => {
         prompt: "Brief me",
         schedule: "0 9 * * *",
         timezone: null,
+        input: {},
       })
     );
   });
@@ -196,6 +216,269 @@ describe("ScheduledTasksPanel time zones", () => {
 
     expect(screen.queryByText(/Saving it switches it/)).toBeNull();
     expect(saveButton().hasAttribute("disabled")).toBe(true);
+  });
+
+  it("hands an edit the task's stored input", async () => {
+    const input = {
+      messages: [{ role: "user", content: "Brief me" }],
+      rubric: "- at least 3 papers",
+    };
+    const graded = task({ name: "Graded", input });
+    hook.tasks = [graded];
+    hook.updateScheduledTask.mockResolvedValue(graded);
+    render(<ScheduledTasksPanel />);
+    openEdit("Graded");
+
+    fireEvent.change(screen.getByLabelText("Task name"), {
+      target: { value: "Graded briefing" },
+    });
+    fireEvent.click(saveButton());
+    await waitFor(() =>
+      expect(hook.updateScheduledTask).toHaveBeenCalledWith(
+        expect.objectContaining({ name: "Graded briefing", input })
+      )
+    );
+  });
+
+  it("shows the task the server returns after an edit", async () => {
+    const zebra = task({ name: "Zebra" });
+    hook.tasks = [zebra];
+    hook.updateScheduledTask.mockImplementation(async () => {
+      const renamed = { ...zebra, name: "Renamed" };
+      hook.tasks = [renamed];
+      return renamed;
+    });
+    render(<ScheduledTasksPanel />);
+    openEdit("Zebra");
+
+    fireEvent.change(screen.getByLabelText("Task name"), {
+      target: { value: "Renamed" },
+    });
+    fireEvent.click(saveButton());
+
+    expect(
+      await screen.findByRole("heading", { name: "Renamed" })
+    ).toBeTruthy();
+    expect(screen.queryByText("Zebra")).toBeNull();
+  });
+
+  it("saves an edit of a task of another folder", async () => {
+    const elsewhere = task({
+      cron_id: "elsewhere",
+      name: "Elsewhere",
+      workspaceDir: "/home/you/projB",
+    });
+    hook.tasks = [elsewhere];
+    hook.updateScheduledTask.mockResolvedValue(elsewhere);
+    render(<ScheduledTasksPanel />);
+    openEdit("Elsewhere");
+
+    fireEvent.change(screen.getByLabelText("Task name"), {
+      target: { value: "Elsewhere briefing" },
+    });
+    fireEvent.click(saveButton());
+    await waitFor(() =>
+      expect(hook.updateScheduledTask).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cronId: "elsewhere",
+          name: "Elsewhere briefing",
+        })
+      )
+    );
+  });
+
+  it("reloads the list when an edit finds the task deleted", async () => {
+    hook.tasks = [task({ name: "Gone" })];
+    hook.updateScheduledTask.mockImplementation(async () => {
+      hook.tasks = [];
+      throw Object.assign(new Error("HTTP 404: Cron not found"), {
+        status: 404,
+      });
+    });
+    const { toast } = await import("sonner");
+    const error = vi.spyOn(toast, "error");
+    render(<ScheduledTasksPanel />);
+    openEdit("Gone");
+
+    fireEvent.change(screen.getByLabelText("Task name"), {
+      target: { value: "Gone briefing" },
+    });
+    fireEvent.click(saveButton());
+
+    await waitFor(() => expect(hook.refresh).toHaveBeenCalled());
+    expect(error).toHaveBeenCalledWith(
+      'Couldn\'t find "Gone"; it may have been deleted.'
+    );
+    expect(screen.queryByLabelText("Task name")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Gone/ })).toBeNull();
+  });
+
+  it("keeps the view on a save until it answers", async () => {
+    const alpha = task({ cron_id: "a", name: "Alpha" });
+    hook.tasks = [alpha, task({ cron_id: "b", name: "Beta" })];
+    let done: (value: ScheduledTask) => void = () => {};
+    hook.updateScheduledTask.mockReturnValue(
+      new Promise((resolve) => (done = resolve))
+    );
+    render(<ScheduledTasksPanel />);
+    openEdit("Alpha");
+    fireEvent.change(screen.getByLabelText("Task name"), {
+      target: { value: "Alpha briefing" },
+    });
+    fireEvent.click(saveButton());
+
+    const locked = () => [
+      screen.getByRole("button", { name: /^Beta/ }),
+      screen.getByRole("button", { name: /New task/ }),
+      screen.getByRole("button", { name: "Cancel" }),
+    ];
+    expect(locked().every((b) => b.hasAttribute("disabled"))).toBe(true);
+
+    hook.tasks = [
+      { ...alpha, name: "Alpha briefing" },
+      task({ cron_id: "b", name: "Beta" }),
+    ];
+    done({ ...alpha, name: "Alpha briefing" });
+
+    expect(
+      await screen.findByRole("heading", { name: "Alpha briefing" })
+    ).toBeTruthy();
+    expect(
+      [
+        screen.getByRole("button", { name: /^Beta/ }),
+        screen.getByRole("button", { name: /New task/ }),
+      ].some((b) => b.hasAttribute("disabled"))
+    ).toBe(false);
+  });
+
+  it("keeps the view on a pause until it answers", async () => {
+    const alpha = task({ cron_id: "a", name: "Alpha" });
+    hook.tasks = [alpha, task({ cron_id: "b", name: "Beta" })];
+    let done: (value: ScheduledTask) => void = () => {};
+    hook.setScheduledTaskEnabled.mockReturnValue(
+      new Promise((resolve) => (done = resolve))
+    );
+    render(<ScheduledTasksPanel />);
+    fireEvent.click(screen.getByRole("button", { name: /Alpha/ }));
+    fireEvent.click(
+      screen.getByRole("button", { name: 'Pause scheduled task "Alpha"' })
+    );
+
+    const locked = () => [
+      screen.getByRole("button", { name: /^Beta/ }),
+      screen.getByRole("button", { name: 'Edit scheduled task "Alpha"' }),
+      screen.getByRole("button", { name: 'Delete scheduled task "Alpha"' }),
+      screen.getByRole("button", { name: /Run now/ }),
+      screen.getByRole("button", { name: "Back to scheduled tasks" }),
+    ];
+    expect(locked().every((b) => b.hasAttribute("disabled"))).toBe(true);
+
+    hook.tasks = [
+      { ...alpha, enabled: false },
+      task({ cron_id: "b", name: "Beta" }),
+    ];
+    done({ ...alpha, enabled: false });
+
+    await waitFor(() =>
+      expect(locked().some((b) => b.hasAttribute("disabled"))).toBe(false)
+    );
+  });
+
+  it("unlocks the view when a save or a pause fails", async () => {
+    hook.tasks = [
+      task({ cron_id: "a", name: "Alpha" }),
+      task({ cron_id: "b", name: "Beta" }),
+    ];
+    hook.updateScheduledTask.mockRejectedValue(
+      Object.assign(new Error("HTTP 500: boom"), { status: 500 })
+    );
+    hook.setScheduledTaskEnabled.mockRejectedValue(
+      Object.assign(new Error("HTTP 500: boom"), { status: 500 })
+    );
+    render(<ScheduledTasksPanel />);
+    const beta = () => screen.getByRole("button", { name: /^Beta/ });
+
+    openEdit("Alpha");
+    fireEvent.change(screen.getByLabelText("Task name"), {
+      target: { value: "Alpha briefing" },
+    });
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(beta().hasAttribute("disabled")).toBe(false));
+
+    fireEvent.click(beta());
+    const pause = screen.getByRole("button", {
+      name: 'Pause scheduled task "Beta"',
+    });
+    fireEvent.click(pause);
+    expect(beta().hasAttribute("disabled")).toBe(true);
+    await waitFor(() => expect(beta().hasAttribute("disabled")).toBe(false));
+    expect(screen.getByRole("heading", { name: "Beta" })).toBeTruthy();
+  });
+
+  it("keeps the saved task on the pane when the list read after it fails", async () => {
+    const alpha = task({ name: "Alpha" });
+    hook.tasks = [alpha];
+    hook.updateScheduledTask.mockResolvedValue({ ...alpha, name: "Renamed" });
+    render(<ScheduledTasksPanel />);
+    openEdit("Alpha");
+    fireEvent.change(screen.getByLabelText("Task name"), {
+      target: { value: "Renamed" },
+    });
+    hook.failRead = true;
+
+    fireEvent.click(saveButton());
+
+    expect(
+      await screen.findByRole("heading", { name: "Renamed" })
+    ).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toMatch(/Failed to load/);
+  });
+
+  it("closes the pane when a delete finds the task already deleted, even if the list can't be read", async () => {
+    hook.tasks = [task({ name: "Gone" })];
+    hook.failRead = true;
+    hook.deleteScheduledTask.mockImplementation(async () => {
+      hook.tasks = [];
+      throw Object.assign(new Error("HTTP 404: Cron not found"), {
+        status: 404,
+      });
+    });
+    render(<ScheduledTasksPanel />);
+    fireEvent.click(screen.getByRole("button", { name: /Gone/ }));
+    fireEvent.click(
+      screen.getByRole("button", { name: 'Delete scheduled task "Gone"' })
+    );
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: 'Confirm delete scheduled task "Gone"',
+      })
+    );
+
+    await waitFor(() => expect(hook.refresh).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: /Gone/ })).toBeNull()
+    );
+  });
+
+  it("still recovers the folder's assistant when a create answers 404", async () => {
+    const failure = Object.assign(new Error("Assistant 'x' not found"), {
+      status: 404,
+    });
+    hook.createScheduledTask.mockRejectedValue(failure);
+    const { toast } = await import("sonner");
+    const error = vi.spyOn(toast, "error");
+    render(<ScheduledTasksPanel />);
+    fireEvent.click(screen.getByRole("button", { name: /New task/ }));
+    fireEvent.change(screen.getByLabelText("Task name"), {
+      target: { value: "Daily" },
+    });
+    fireEvent.change(screen.getByLabelText("Task description"), {
+      target: { value: "Brief me" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Create task/ }));
+
+    await waitFor(() => expect(hook.recover).toHaveBeenCalledWith(failure));
+    expect(error).toHaveBeenCalledWith("Assistant 'x' not found");
   });
 
   it("lets a task of another folder be edited in place but not run here", () => {
@@ -265,31 +548,50 @@ describe("ScheduledTasksPanel pause and resume", () => {
     );
   });
 
-  it("keeps the pane on the task the user moved to when a pause returns late", async () => {
-    hook.tasks = [
-      task({ cron_id: "a", name: "Alpha" }),
-      task({ cron_id: "b", name: "Beta" }),
-    ];
-    let finish: (value: ScheduledTask) => void = () => {};
-    hook.setScheduledTaskEnabled.mockReturnValue(
-      new Promise<ScheduledTask>((resolve) => (finish = resolve))
-    );
+  it("closes the pane when a pause finds the task deleted, even if the list can't be read", async () => {
+    hook.tasks = [task({ name: "Gone" })];
+    hook.failRead = true;
+    hook.setScheduledTaskEnabled.mockImplementation(async () => {
+      hook.tasks = [];
+      throw Object.assign(new Error("HTTP 404: Cron not found"), {
+        status: 404,
+      });
+    });
+    const { toast } = await import("sonner");
+    const error = vi.spyOn(toast, "error");
     render(<ScheduledTasksPanel />);
-    fireEvent.click(screen.getByRole("button", { name: /Alpha/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Gone/ }));
     fireEvent.click(
-      screen.getByRole("button", { name: 'Pause scheduled task "Alpha"' })
+      screen.getByRole("button", { name: 'Pause scheduled task "Gone"' })
     );
-    fireEvent.click(screen.getByRole("button", { name: /Beta/ }));
 
-    finish(task({ cron_id: "a", name: "Alpha", enabled: false }));
+    await waitFor(() => expect(hook.refresh).toHaveBeenCalled());
+    expect(error).toHaveBeenCalledWith(
+      'Couldn\'t find "Gone"; it may have been deleted.'
+    );
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: 'Pause scheduled task "Gone"' })
+      ).toBeNull()
+    );
+  });
 
-    expect(await screen.findByText("Paused")).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "Beta" })).toBeTruthy();
-    expect(
-      screen
-        .getByRole("button", { name: 'Pause scheduled task "Beta"' })
-        .hasAttribute("disabled")
-    ).toBe(false);
+  it("keeps the task and its pane when a pause fails for another reason", async () => {
+    hook.tasks = [task({ name: "Briefing" })];
+    hook.setScheduledTaskEnabled.mockRejectedValue(
+      Object.assign(new Error("HTTP 500: boom"), { status: 500 })
+    );
+    const { toast } = await import("sonner");
+    const error = vi.spyOn(toast, "error");
+    render(<ScheduledTasksPanel />);
+    fireEvent.click(screen.getByRole("button", { name: /Briefing/ }));
+    fireEvent.click(
+      screen.getByRole("button", { name: 'Pause scheduled task "Briefing"' })
+    );
+
+    await waitFor(() => expect(error).toHaveBeenCalledWith("HTTP 500: boom"));
+    expect(hook.refresh).not.toHaveBeenCalled();
+    expect(screen.getByRole("heading", { name: "Briefing" })).toBeTruthy();
   });
 
   it("lists a paused task as paused, not by its next run", () => {

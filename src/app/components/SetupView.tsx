@@ -563,10 +563,9 @@ function ConfigErrorNotice({ payload }: { payload: SettingsPayload }) {
   );
 }
 
-/** How to restart a backend the desktop app doesn't own: EvoSci reuses a
- *  running backend, which lasts across sessions until it is stopped. */
+/** How to restart a backend the desktop app doesn't own. */
 const APPLY_BY_SERVER_STOP =
-  "Apply them with EvoSci server stop, then start EvoSci again. Stopping it ends running work in every project that uses this backend.";
+  "Apply them: quit EvoSci, run EvoSci server stop, then start EvoSci again. Stopping the server ends running work in every project that uses it.";
 
 /** Which saved changes wait for a restart of EvoSci, and the way to do it. */
 export function RestartNotice({

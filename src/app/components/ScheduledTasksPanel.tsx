@@ -49,6 +49,7 @@ import {
   createScheduledTask,
   deleteScheduledTask,
   runScheduledTaskNow,
+  scheduledTaskMissing,
   setScheduledTaskEnabled,
   updateScheduledTask,
   upcomingRun,
@@ -368,17 +369,24 @@ interface TemplateButtonProps {
   template: Template;
   onSelect: (template: Template) => void;
   compact?: boolean;
+  disabled?: boolean;
 }
 
-function TemplateButton({ template, onSelect, compact }: TemplateButtonProps) {
+function TemplateButton({
+  template,
+  onSelect,
+  compact,
+  disabled,
+}: TemplateButtonProps) {
   const Icon = template.icon;
 
   return (
     <button
       type="button"
       onClick={() => onSelect(template)}
+      disabled={disabled}
       className={cn(
-        "hover:border-[var(--brand)]/40 group flex w-full min-w-0 items-start gap-2 rounded-md border border-border bg-[var(--color-surface)] text-left transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        "hover:border-[var(--brand)]/40 group flex w-full min-w-0 items-start gap-2 rounded-md border border-border bg-[var(--color-surface)] text-left transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50",
         compact ? "px-2.5 py-2" : "px-3 py-2.5"
       )}
     >
@@ -408,8 +416,12 @@ function TemplateButton({ template, onSelect, compact }: TemplateButtonProps) {
 interface CreateFormProps {
   initialTemplate?: Template;
   initialTask?: ScheduledTask;
+  /** The form's answer came: the task an edit saved, else nothing (a
+   *  create, or an edit whose task was deleted elsewhere). */
   onSaved: (task?: ScheduledTask) => void;
   onCancel: () => void;
+  /** Whether a save is in flight: the panel locks what would leave it. */
+  onBusy: (busy: boolean) => void;
 }
 
 function TaskForm({
@@ -417,6 +429,7 @@ function TaskForm({
   initialTask,
   onSaved,
   onCancel,
+  onBusy,
 }: CreateFormProps) {
   const isEditing = Boolean(initialTask);
   const [name, setName] = useState(
@@ -491,6 +504,10 @@ function TaskForm({
   const target = useSchedulerTarget();
   const recoverAssistant = useAssistantRecovery();
   const gateOpen = useSchedulerGate();
+  useEffect(() => {
+    onBusy(saving);
+    return () => onBusy(false);
+  }, [saving, onBusy]);
   const canSave = Boolean(
     (initialTask || target) &&
       name.trim() &&
@@ -530,6 +547,7 @@ function TaskForm({
           prompt: prompt.trim(),
           schedule: cron,
           timezone: initialTask.timezone,
+          input: initialTask.input,
         });
         toast.success(`"${name.trim()}" updated.`);
         onSaved(task);
@@ -544,6 +562,13 @@ function TaskForm({
         onSaved();
       }
     } catch (err) {
+      if (initialTask && scheduledTaskMissing(err)) {
+        toast.error(
+          `Couldn't find "${initialTask.name}"; it may have been deleted.`
+        );
+        onSaved();
+        return;
+      }
       // An edit changes the task in place, so only a create can find the
       // folder's assistant gone.
       if (!initialTask) recoverAssistant(err);
@@ -568,6 +593,7 @@ function TaskForm({
         <button
           type="button"
           onClick={onCancel}
+          disabled={saving}
           aria-label="Back to scheduled tasks"
           className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring md:hidden"
         >
@@ -669,6 +695,10 @@ interface TaskDetailProps {
   /** The task changed in place (paused or resumed). */
   onChanged: (task: ScheduledTask) => void;
   onDeleted: () => void;
+  onMissing: () => void;
+  /** Whether a pause or resume is in flight: the panel locks what would
+   *  leave it. */
+  onBusy: (busy: boolean) => void;
   onOpenThread?: (id: string) => void | Promise<void>;
 }
 
@@ -678,10 +708,16 @@ function TaskDetail({
   onEdit,
   onChanged,
   onDeleted,
+  onMissing,
+  onBusy,
   onOpenThread,
 }: TaskDetailProps) {
   const [running, setRunning] = useState(false);
   const [toggling, setToggling] = useState(false);
+  useEffect(() => {
+    onBusy(toggling);
+    return () => onBusy(false);
+  }, [toggling, onBusy]);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const nextRun = upcomingRun(task);
@@ -690,7 +726,6 @@ function TaskDetail({
   const elsewhere = otherFolderReason(task, useServedFolder());
   const recoverAssistant = useAssistantRecovery();
   const gateOpen = useSchedulerGate();
-
   const handleRunNow = useCallback(async () => {
     if (!target || elsewhere || !gateOpen()) return;
     setRunning(true);
@@ -716,6 +751,11 @@ function TaskDetail({
       );
       onChanged(changed);
     } catch (err) {
+      if (scheduledTaskMissing(err)) {
+        toast.error(`Couldn't find "${task.name}"; it may have been deleted.`);
+        onMissing();
+        return;
+      }
       toast.error(
         err instanceof Error
           ? err.message
@@ -726,7 +766,7 @@ function TaskDetail({
     } finally {
       setToggling(false);
     }
-  }, [task, onChanged]);
+  }, [task, onChanged, onMissing]);
 
   const handleDelete = useCallback(async () => {
     setDeleting(true);
@@ -736,6 +776,13 @@ function TaskDetail({
       setDeleteOpen(false);
       onDeleted();
     } catch (err) {
+      // Deleted elsewhere already: what the user asked for.
+      if (scheduledTaskMissing(err)) {
+        toast.success(`"${task.name}" was already deleted.`);
+        setDeleteOpen(false);
+        onDeleted();
+        return;
+      }
       toast.error(
         err instanceof Error ? err.message : "Failed to delete the task."
       );
@@ -751,6 +798,7 @@ function TaskDetail({
           <button
             type="button"
             onClick={onBack}
+            disabled={toggling}
             aria-label="Back to scheduled tasks"
             className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring md:hidden"
           >
@@ -769,7 +817,11 @@ function TaskDetail({
             size="sm"
             onClick={handleRunNow}
             disabled={
-              running || !target || Boolean(elsewhere) || !task.prompt.trim()
+              running ||
+              toggling ||
+              !target ||
+              Boolean(elsewhere) ||
+              !task.prompt.trim()
             }
             title={elsewhere ?? undefined}
           >
@@ -871,6 +923,7 @@ function TaskDetail({
               variant="outline"
               size="sm"
               onClick={onEdit}
+              disabled={toggling}
               aria-label={`Edit scheduled task "${task.name}"`}
             >
               <Pencil className="size-3.5" />
@@ -880,6 +933,7 @@ function TaskDetail({
               variant="outline"
               size="sm"
               onClick={() => setDeleteOpen(true)}
+              disabled={toggling}
               aria-label={`Delete scheduled task "${task.name}"`}
               className="text-destructive hover:border-destructive hover:text-destructive"
             >
@@ -934,10 +988,12 @@ function TaskRow({
   task,
   active,
   onSelect,
+  disabled,
 }: {
   task: ScheduledTask;
   active: boolean;
   onSelect: () => void;
+  disabled?: boolean;
 }) {
   const nextRun = upcomingRun(task);
 
@@ -945,9 +1001,10 @@ function TaskRow({
     <button
       type="button"
       onClick={onSelect}
+      disabled={disabled}
       aria-current={active}
       className={cn(
-        "flex w-full items-start gap-2 rounded-md px-2 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        "flex w-full items-start gap-2 rounded-md px-2 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-60",
         active ? "bg-accent" : "hover:bg-accent/60"
       )}
     >
@@ -1000,12 +1057,24 @@ export function ScheduledTasksPanel({
 }: {
   onOpenThread?: (id: string) => void | Promise<void>;
 }) {
-  const { tasks, loading, error, refresh, replaceTask } = useScheduledTasks();
+  const { tasks, loading, error, refresh } = useScheduledTasks();
   const [right, setRight] = useState<RightPane>({ kind: "empty" });
+  // A save, pause or resume in flight. Until it answers, everything that
+  // would change the pane is off: Cancel and the back arrow in the form;
+  // Back, Edit, Delete and Run now in the detail; and, here, the list, New
+  // task, the templates, Refresh and Retry, which also wait for the list
+  // read every write ends with, so the list's old copy can't be opened.
+  const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState("");
   const createIdRef = useRef(0);
   const editIdRef = useRef(0);
 
+  const locked = busy || loading;
+  // Only the first read shows the spinner; a re-read keeps what is on
+  // screen, an empty list too.
+  const loadedOnce = useRef(false);
+  if (!loading) loadedOnce.current = true;
+  const firstLoad = loading && !loadedOnce.current;
   const sortedTasks = useMemo(() => sortTasks(tasks), [tasks]);
   const filteredTasks = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -1018,15 +1087,17 @@ export function ScheduledTasksPanel({
   const nextTaskRun = nextTask ? upcomingRun(nextTask) : null;
   const selectedTaskId = right.kind === "detail" ? right.task.cron_id : null;
 
-  // Keep the detail pane in sync with the task list: an edit, a pause or a
-  // resume keeps the task's ID and replaces it in the list, so the list always
-  // holds the task the pane shows.
+  // Keep the detail pane in sync with the task list. A write shows the task
+  // the server returned and reads the list again; `refresh()` reports
+  // loading in that same render, so this effect never applies the list
+  // read before the write over it (and the list is locked until the new
+  // read is in). A read that failed leaves the pane as it is.
   useEffect(() => {
     if (!selectedTaskId) return;
-    if (loading) return;
+    if (loading || error) return;
     const updated = tasks.find((task) => task.cron_id === selectedTaskId);
     setRight(updated ? { kind: "detail", task: updated } : { kind: "empty" });
-  }, [loading, selectedTaskId, tasks]);
+  }, [error, loading, selectedTaskId, tasks]);
 
   const openCreate = useCallback((template?: Template) => {
     createIdRef.current += 1;
@@ -1038,31 +1109,23 @@ export function ScheduledTasksPanel({
     setRight({ kind: "edit", task, editId: editIdRef.current });
   }, []);
 
+  // The pane shows what the server returned at once; the list is read
+  // again, so a read that started before the write can't bring back the
+  // old copy.
   const handleSaved = useCallback(
     (task?: ScheduledTask) => {
-      if (task) {
-        replaceTask(task);
-        setRight({ kind: "detail", task });
-      } else {
-        refresh();
-        setRight({ kind: "empty" });
-      }
+      refresh();
+      setRight(task ? { kind: "detail", task } : { kind: "empty" });
     },
-    [refresh, replaceTask]
+    [refresh]
   );
 
-  // A pause or resume that returns after the user moved on updates the list
-  // only: it doesn't take the pane back to its task.
   const handleChanged = useCallback(
     (task: ScheduledTask) => {
-      replaceTask(task);
-      setRight((current) =>
-        current.kind === "detail" && current.task.cron_id === task.cron_id
-          ? { kind: "detail", task }
-          : current
-      );
+      refresh();
+      setRight({ kind: "detail", task });
     },
-    [replaceTask]
+    [refresh]
   );
 
   const handleDeleted = useCallback(() => {
@@ -1083,7 +1146,7 @@ export function ScheduledTasksPanel({
           <div className="min-w-0">
             <div className="flex min-w-0 items-center gap-2">
               <h1 className="truncate text-sm font-semibold">Scheduled</h1>
-              {!loading && (
+              {!firstLoad && (
                 <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
                   {tasks.length}
                 </span>
@@ -1100,7 +1163,7 @@ export function ScheduledTasksPanel({
           <button
             type="button"
             onClick={refresh}
-            disabled={loading}
+            disabled={loading || busy}
             aria-label="Refresh scheduled tasks"
             title="Refresh scheduled tasks"
             className="rounded-md p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
@@ -1113,6 +1176,7 @@ export function ScheduledTasksPanel({
           <Button
             size="sm"
             onClick={() => openCreate()}
+            disabled={locked}
           >
             <Plus className="size-3.5" />
             <span className="hidden sm:inline">New task</span>
@@ -1162,7 +1226,7 @@ export function ScheduledTasksPanel({
           </div>
 
           <ScrollArea className="h-0 flex-1">
-            {loading ? (
+            {firstLoad ? (
               <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
                 <Loader2
                   className="size-4 animate-spin"
@@ -1177,6 +1241,7 @@ export function ScheduledTasksPanel({
               >
                 <p className="text-sm text-destructive">{error}</p>
                 <Button
+                  disabled={locked}
                   variant="outline"
                   size="sm"
                   onClick={refresh}
@@ -1206,6 +1271,7 @@ export function ScheduledTasksPanel({
                       key={template.label}
                       template={template}
                       onSelect={openCreate}
+                      disabled={locked}
                     />
                   ))}
                 </div>
@@ -1245,6 +1311,7 @@ export function ScheduledTasksPanel({
                         task={task}
                         active={active}
                         onSelect={() => setRight({ kind: "detail", task })}
+                        disabled={locked}
                       />
                     );
                   })}
@@ -1259,6 +1326,7 @@ export function ScheduledTasksPanel({
                         key={template.label}
                         template={template}
                         onSelect={openCreate}
+                        disabled={locked}
                         compact
                       />
                     ))}
@@ -1296,6 +1364,7 @@ export function ScheduledTasksPanel({
                         key={template.label}
                         template={template}
                         onSelect={openCreate}
+                        disabled={locked}
                         compact
                       />
                     ))}
@@ -1311,6 +1380,7 @@ export function ScheduledTasksPanel({
               initialTemplate={right.template}
               onSaved={handleSaved}
               onCancel={() => setRight({ kind: "empty" })}
+              onBusy={setBusy}
             />
           )}
 
@@ -1320,6 +1390,7 @@ export function ScheduledTasksPanel({
               initialTask={right.task}
               onSaved={handleSaved}
               onCancel={() => setRight({ kind: "detail", task: right.task })}
+              onBusy={setBusy}
             />
           )}
 
@@ -1331,6 +1402,8 @@ export function ScheduledTasksPanel({
               onEdit={() => openEdit(right.task)}
               onChanged={handleChanged}
               onDeleted={handleDeleted}
+              onMissing={handleDeleted}
+              onBusy={setBusy}
               onOpenThread={onOpenThread}
             />
           )}

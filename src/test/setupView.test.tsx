@@ -454,7 +454,7 @@ describe("the Setup form", () => {
     renderView();
     fireEvent.click(await screen.findByRole("button", { name: "Restart now" }));
     await screen.findByText(
-      /did not start this EvoScientist.*EvoSci server stop/
+      /did not start this EvoScientist.*quit EvoSci.*EvoSci server stop/
     );
     expect(screen.queryByRole("button", { name: "Restart now" })).toBeNull();
     server.settings = settings({
@@ -528,7 +528,7 @@ describe("the Setup form", () => {
     renderView();
     expect(
       await screen.findByText(
-        /after EvoScientist restarts: MCP servers \(mcp\.yaml\), Tavily API key\..*EvoSci server stop/
+        /after EvoScientist restarts: MCP servers \(mcp\.yaml\), Tavily API key\..*quit EvoSci.*EvoSci server stop/
       )
     ).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Restart now" })).toBeNull();

@@ -52,6 +52,7 @@ export interface ScheduledTask {
   workspaceDir: string | null;
   /** False while the task is paused: it keeps its schedule but doesn't run. */
   enabled: boolean;
+  input: Record<string, unknown>;
 }
 
 /** When `task` runs next; null while it is paused or has no next run. */
@@ -90,7 +91,15 @@ function parseCron(cron: Cron): ScheduledTask {
         ? meta.workspace_dir
         : null,
     enabled: cron.enabled !== false,
+    input: storedInput(cron),
   };
+}
+
+function storedInput(cron: Cron): Record<string, unknown> {
+  const input = cron.payload?.input;
+  return input && typeof input === "object" && !Array.isArray(input)
+    ? (input as Record<string, unknown>)
+    : {};
 }
 
 export async function listScheduledTasks(): Promise<ScheduledTask[]> {
@@ -162,11 +171,15 @@ export async function updateScheduledTask(params: {
    * one (made before #61, meant as local time) moves to the browser's.
    */
   timezone: string | null;
+  input: Record<string, unknown>;
 }): Promise<ScheduledTask> {
   const client = makeClient();
   if (!client) throw new Error("No EvoScientist deployment configured.");
   const cron = await client.crons.update(params.cronId, {
-    input: { messages: [{ role: "user", content: params.prompt }] },
+    input: {
+      ...params.input,
+      messages: [{ role: "user", content: params.prompt }],
+    },
     schedule: params.schedule,
     timezone: params.timezone || browserTimeZone(),
     metadata: { name: params.name, prompt: params.prompt },
@@ -193,11 +206,17 @@ export async function setScheduledTaskEnabled(
   return parseCron(cron);
 }
 
+export function scheduledTaskMissing(error: unknown): boolean {
+  return getHttpStatus(error) === 404;
+}
+
 export async function runScheduledTaskNow(
   task: {
     cron_id: string;
     name: string;
     prompt: string;
+    /** The task's stored run input: a rubric in it grades the run. */
+    input: Record<string, unknown>;
   },
   target: SchedulerTarget
 ): Promise<void> {
@@ -216,7 +235,10 @@ export async function runScheduledTaskNow(
     metadata,
   });
   await client.runs.create(thread.thread_id, target.assistantId, {
-    input: { messages: [{ role: "user", content: task.prompt }] },
+    input: {
+      ...task.input,
+      messages: [{ role: "user", content: task.prompt }],
+    },
     metadata,
     config: { configurable: { cron_id: task.cron_id } },
   });
@@ -276,27 +298,21 @@ export function useScheduledTasks(): {
   loading: boolean;
   error: string | null;
   refresh: () => void;
-  /** Put a task the server just returned (edited, paused, resumed) in the
-   *  list in place of its old copy. */
-  replaceTask: (task: ScheduledTask) => void;
 } {
   const [tasks, setTasks] = useState<ScheduledTask[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [rev, setRev] = useState(0);
 
-  const refresh = useCallback(() => setRev((r) => r + 1), []);
-  const replaceTask = useCallback(
-    (task: ScheduledTask) =>
-      setTasks((current) =>
-        current.map((t) => (t.cron_id === task.cron_id ? task : t))
-      ),
-    []
-  );
+  // Loading from the call on, in the same render as what the caller sets
+  // with it: nothing reads the list as current until the new read is in.
+  const refresh = useCallback(() => {
+    setLoading(true);
+    setRev((r) => r + 1);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
     listScheduledTasks()
       .then((result) => {
         if (!cancelled) {
@@ -322,5 +338,5 @@ export function useScheduledTasks(): {
     };
   }, [rev]);
 
-  return { tasks, loading, error, refresh, replaceTask };
+  return { tasks, loading, error, refresh };
 }
