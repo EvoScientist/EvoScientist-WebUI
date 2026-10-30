@@ -11,7 +11,7 @@ An Electron app that runs the installed EvoScientist core (`EvoSci deploy --json
 - `resources/status.html`: the static status and error page, shown until the UI server answers. It never calls the backend.
 - `resources/ui-entry.mjs`: starts the bundled WebUI server (`dist/server.js` from the root build) with Electron's own Node.
 - `src/packaging.ts` + `scripts/builder.mjs`: run electron-builder with the app's version taken from the root `package.json` (the WebUI version it bundles; `desktop/package.json`'s own version is never used), and refuse `evoscientist.release` while the core range installs a core before 0.4.0.
-- `installer/check-app-running.nsh`: before the installer or the uninstaller replaces files, it asks a running app to quit through its own quit (`EvoScientist.exe --quit-for-install`, busy question included) and stops when the user cancels; electron-builder's own check would end the app's backend and its running work at once.
+- `installer/check-app-running.nsh`: before the installer or the uninstaller replaces files, it asks a running app to quit through its own quit (`EvoScientist.exe --quit-for-install`, busy question included) and stops when the user cancels; once the app is gone it ends a UI server left running on its own. electron-builder's own check would end the app's backend and its running work at once.
 - `scripts/fetch-core-scripts.mjs`: downloads the core's `install.ps1` and `install.sh` from the tag of the version the app installs (the lower bound of `evoscientist.coreRange`) into `core-scripts/`; `scripts/before-pack.cjs` refuses to package without them.
 
 ## Develop

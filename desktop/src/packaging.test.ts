@@ -105,7 +105,11 @@ describe("the installer's identity", () => {
 
 describe("the installer's running-app check (D12)", () => {
   const nsh = () =>
-    readFileSync(join(__dirname, "..", String(pkg.build.nsis.include)), "utf8");
+    // A Windows checkout has CRLF line ends.
+    readFileSync(
+      join(__dirname, "..", String(pkg.build.nsis.include)),
+      "utf8"
+    ).replace(/\r\n/g, "\n");
 
   it("is the installer's include", () => {
     expect(pkg.build.nsis.include).toBe("installer/check-app-running.nsh");
@@ -121,6 +125,23 @@ describe("the installer's running-app check (D12)", () => {
     );
     expect(nsh()).toContain(
       `$APPDATA\\${"${PRODUCT_NAME}"}\\${QUIT_FOR_INSTALL_CANCELLED}`
+    );
+  });
+
+  it("waits for the app only, then ends a UI server left alone", () => {
+    const macro = (name: string) =>
+      nsh().match(new RegExp(`^!macro ${name}\\b[^]*?^!macroend$`, "m"))?.[0] ??
+      "";
+    const entry = (
+      pkg.build.extraResources as { from: string; to: string }[]
+    ).find((r) => r.from === "resources/ui-entry.mjs")?.to;
+    expect(entry).toBe("ui-entry.mjs");
+    expect(macro("EVO_APP_RUNNING")).toContain(
+      `[string]$$_.CommandLine -notlike '*${entry}*'`
+    );
+    expect(macro("EVO_END_ALL")).not.toContain("CommandLine");
+    expect(macro("customCheckAppRunning")).toMatch(
+      /^ {2}evoDone:\n {4}!insertmacro EVO_END_ALL \$R0$/m
     );
   });
 
