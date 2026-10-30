@@ -128,10 +128,11 @@ describe("the installer's running-app check (D12)", () => {
     );
   });
 
+  const macro = (name: string) =>
+    nsh().match(new RegExp(`^!macro ${name}\\b[^]*?^!macroend$`, "m"))?.[0] ??
+    "";
+
   it("waits for the app only, then ends a UI server left alone", () => {
-    const macro = (name: string) =>
-      nsh().match(new RegExp(`^!macro ${name}\\b[^]*?^!macroend$`, "m"))?.[0] ??
-      "";
     const entry = (
       pkg.build.extraResources as { from: string; to: string }[]
     ).find((r) => r.from === "resources/ui-entry.mjs")?.to;
@@ -145,9 +146,25 @@ describe("the installer's running-app check (D12)", () => {
     );
   });
 
-  it("matches the install folder with a trailing backslash only", () => {
-    const matches = nsh().match(/StartsWith\('([^']*)'/g) ?? [];
-    expect(matches.length).toBeGreaterThan(0);
-    for (const m of matches) expect(m).toBe("StartsWith('$INSTDIR\\'");
+  it("matches the install folder with a trailing backslash, passed outside the command", () => {
+    // In the command line, an apostrophe in the path (a user name) would
+    // break PowerShell's quoting.
+    expect(macro("customCheckAppRunning")).toContain(
+      `SetEnvironmentVariable(t "EVO_INSTDIR", t "$INSTDIR")`
+    );
+    const matches = nsh().match(/StartsWith\([^,]*,/g) ?? [];
+    expect(matches).toHaveLength(2);
+    for (const m of matches)
+      expect(m).toBe("StartsWith($$env:EVO_INSTDIR + '\\',");
+    expect(nsh()).not.toMatch(/'\$INSTDIR/);
+  });
+
+  it("answers 0 or 2 from PowerShell, and falls back to the process name otherwise", () => {
+    const check = macro("EVO_APP_RUNNING");
+    expect(check).toContain("{ exit 0 } else { exit 2 }");
+    expect(check).toMatch(
+      /\$\{If\} \$\{_RETURN\} != 0\n {2}\$\{AndIf\} \$\{_RETURN\} != 2\n {4}nsExec::Exec `"\$SYSDIR\\cmd\.exe" \/C tasklist \/FI "USERNAME eq %USERNAME%" \/FI "IMAGENAME eq \$\{APP_EXECUTABLE_FILENAME\}"/
+    );
+    expect(macro("EVO_END_ALL")).toContain("{ exit 0 } else { exit 2 }");
   });
 });
