@@ -61,7 +61,7 @@ import {
   stampThreadWorkspace,
 } from "@/app/hooks/useThreads";
 import { useProjects } from "@/providers/ProjectsProvider";
-import { findProject } from "@/lib/projects";
+import { usableProjectKey } from "@/lib/projects";
 import { retryWithBackoff } from "@/lib/retry";
 import {
   assistantIsMissing,
@@ -836,11 +836,13 @@ export function useChat({
   // The open thread's own project, registered with its folder in place,
   // whether or not the thread may run here: it is the current one, so the
   // files and a new chat follow it.
-  const ownProject =
-    threadId && folders?.workspaceDir
-      ? findProject(projects, folders.workspaceDir)
-      : null;
-  const ownKey = ownProject && !ownProject.missing ? ownProject.key : null;
+  const ownKey = threadId
+    ? usableProjectKey(projects, folders?.workspaceDir)
+    : null;
+  // The project the chat runs in, only while it is registered with its
+  // folder: the assistant keeps a project removed after a send, which has
+  // no files here.
+  const runKey = usableProjectKey(projects, assistantKey);
   useEffect(() => {
     if (ownKey) selectProject(ownKey);
   }, [ownKey, selectProject]);
@@ -1636,8 +1638,9 @@ export function useChat({
     /** Whether the open thread runs here, and why not. */
     binding,
     /** The chat's project: the one it runs in, else the open thread's own
-     *  registered project (a read-only thread's too); null for none. */
-    projectKey: assistantKey ?? ownKey,
+     *  (a read-only thread's too), each while registered with its folder;
+     *  null for none. */
+    projectKey: runKey ?? ownKey,
     /** The open thread's run folder inside its project, which its file
      *  links name files from; null for none. */
     runFolder,

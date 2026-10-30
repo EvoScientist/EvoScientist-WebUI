@@ -434,6 +434,35 @@ describe("project binding", () => {
     expect(projects.selectProject).toHaveBeenCalledWith(OTHER);
   });
 
+  it.each(["removed", "missing its folder"])(
+    "drops a project %s after a message was sent in it",
+    async (state) => {
+      openThread({ graph_id: "EvoScientist", workspace_dir: KEY });
+      const projects = both();
+      const { result, rerender } = renderChat({ projects });
+      await waitFor(() => expect(result.current.canSend).toBe(true));
+      act(() => {
+        result.current.sendMessage("hi");
+      });
+      expect(result.current.projectKey).toBe(KEY);
+
+      // While the conversation is open: it turns read-only.
+      Object.assign(
+        projects,
+        mockProjects(
+          state === "removed"
+            ? readyProjects(OTHER)
+            : readyProjects({ key: KEY, name: "projA", missing: true }, OTHER),
+          { current: OTHER }
+        )
+      );
+      rerender();
+
+      await waitFor(() => expect(result.current.binding.kind).toBe("readOnly"));
+      expect(result.current.projectKey).toBeNull();
+    }
+  );
+
   it("remembers the project a message is sent in", () => {
     const projects = both();
     const { result } = renderChat({ projects });

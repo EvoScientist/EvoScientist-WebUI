@@ -83,6 +83,16 @@ export function findProject(
   return state.projects.find((project) => project.key === key) ?? null;
 }
 
+/** `key` while it names a registered project whose folder is in place;
+ *  null otherwise. */
+export function usableProjectKey(
+  state: ProjectsState,
+  key: string | null | undefined
+): string | null {
+  const project = findProject(state, key);
+  return project && !project.missing ? project.key : null;
+}
+
 /** The project a new conversation starts in: the first of `preferred` that
  *  is registered and has its folder, else the first such project by name. */
 export function pickProject(
