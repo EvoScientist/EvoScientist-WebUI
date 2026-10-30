@@ -172,19 +172,29 @@ jobs:
           ls -l release
       - name: Create the draft release
         run: |
-          gh release view "$TAG" >/dev/null 2>&1 ||
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # Published by hand before this job: the files still go up (a
+            # live release without latest.yml fails every update check).
+            if [ "$(gh release view "$TAG" --json isDraft --jq .isDraft)" != true ]; then
+              echo "::warning::Release $TAG is already published; desktop update checks fail until latest.yml is uploaded. Leave publishing to this workflow."
+            fi
+          else
             gh release create "$TAG" --draft --verify-tag --title "$TAG" --notes ""
+          fi
+      # Before any upload, so a template error stops the job with nothing
+      # uploaded.
+      - name: Render the release notes with the desktop section
+        working-directory: desktop
+        run: |
+          gh release view "$TAG" --json body --jq .body > "$RUNNER_TEMP/body.md"
+          node scripts/release-notes.mjs "$RUNNER_TEMP/body.md" release/EvoScientist-Setup.exe > "$RUNNER_TEMP/notes.md"
       - name: Upload the installer and its blockmap, then latest.yml
         working-directory: desktop/release
         run: |
           gh release upload "$TAG" EvoScientist-Setup.exe EvoScientist-Setup.exe.blockmap --clobber
           gh release upload "$TAG" latest.yml --clobber
-      - name: Add the desktop section to the release notes
-        working-directory: desktop
-        run: |
-          gh release view "$TAG" --json body --jq .body > "$RUNNER_TEMP/body.md"
-          node scripts/release-notes.mjs "$RUNNER_TEMP/body.md" release/EvoScientist-Setup.exe > "$RUNNER_TEMP/notes.md"
-          gh release edit "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
+      - name: Write the release notes
+        run: gh release edit "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
 
   publish:
     name: Publish the release

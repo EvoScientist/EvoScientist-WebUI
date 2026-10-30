@@ -11,7 +11,8 @@
 //        node scripts/smoke.mjs --list   (the versions to test, as JSON: one
 //        when the newest release inside the range is the pinned one)
 // `pinned` is the version the app installs, `newest` the newest release
-// inside its range (PyPI). Prints the version it tested on the last line.
+// inside its range (PyPI). Ends with `SMOKE OK core <version>` or
+// `SMOKE FAILED: <why>`, followed by the cleanups' lines.
 import { mkdirSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";

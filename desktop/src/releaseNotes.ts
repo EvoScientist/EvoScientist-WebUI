@@ -19,7 +19,8 @@ export interface NotesValues {
 export function renderNotes(template: string, values: NotesValues): string {
   const map = values as unknown as Record<string, string>;
   return template.replace(/\{\{(\w+)\}\}/g, (_m, name: string) => {
-    if (!(name in map)) throw new Error(`unknown placeholder {{${name}}}`);
+    if (!Object.hasOwn(map, name))
+      throw new Error(`unknown placeholder {{${name}}}`);
     return map[name];
   });
 }

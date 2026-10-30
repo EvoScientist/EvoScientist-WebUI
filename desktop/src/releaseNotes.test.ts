@@ -16,6 +16,8 @@ describe("renderNotes", () => {
       `v0.4.3 ${"ab".repeat(32)}`
     );
     expect(() => renderNotes("{{shasum}}", values)).toThrow(/shasum/);
+    // Inherited names are not values.
+    expect(() => renderNotes("{{constructor}}", values)).toThrow(/constructor/);
   });
 
   it("fills the repository's template completely", () => {
