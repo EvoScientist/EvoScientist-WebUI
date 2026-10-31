@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 //
 // Whether the backend's main graph takes a /goal request: its input schema
-// has `goal_request` (core v0.3.7 and later). getSchemas takes only an
-// assistant UUID; a legacy core's graph name gets a 422, and such a core has
-// no goal either.
+// has `goal_request` (core v0.3.7 and later), or, when the input schema is
+// missing or empty (a Python 3.11 core can't build it), its state schema has
+// it.
+// getSchemas takes only an assistant UUID; a legacy core's graph name gets a
+// 422, and such a core has no goal either.
 import { createElement, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
@@ -77,6 +79,76 @@ describe("useGoalSupport", () => {
     backendWith(() => Promise.resolve(WITHOUT_GOAL));
     const { result } = render(readyWorkspace("/ws"));
     await waitFor(() => expect(result.current).toBe(false));
+  });
+
+  // A core on Python 3.11 can't build its input schema (pydantic refuses
+  // typing.TypedDict there): langgraph-api answers it, and the output schema,
+  // null. Its state schema still lists goal_request, which is in the input
+  // whenever it is in the state.
+  it("is true when the input schema is null and the state has goal_request", async () => {
+    backendWith(() =>
+      Promise.resolve({
+        input_schema: null,
+        output_schema: null,
+        state_schema: { properties: { messages: {}, goal_request: {} } },
+      })
+    );
+    const { result } = render(readyWorkspace("/ws"));
+    await waitFor(() => expect(result.current).toBe(true));
+  });
+
+  it("falls back to the state when the input schema has no fields", async () => {
+    backendWith(() =>
+      Promise.resolve({
+        input_schema: { type: "object", properties: {} },
+        state_schema: { properties: { messages: {}, goal_request: {} } },
+      })
+    );
+    const { result } = render(readyWorkspace("/ws"));
+    await waitFor(() => expect(result.current).toBe(true));
+  });
+
+  it("falls back to the state when the input's properties are an array", async () => {
+    backendWith(() =>
+      Promise.resolve({
+        input_schema: { properties: ["messages"] },
+        state_schema: { properties: { messages: {}, goal_request: {} } },
+      })
+    );
+    const { result } = render(readyWorkspace("/ws"));
+    await waitFor(() => expect(result.current).toBe(true));
+  });
+
+  it("is false when the input schema is null and the state has no goal_request", async () => {
+    backendWith(() =>
+      Promise.resolve({
+        input_schema: null,
+        state_schema: { properties: { messages: {} } },
+      })
+    );
+    const { result } = render(readyWorkspace("/ws"));
+    await waitFor(() => expect(result.current).toBe(false));
+  });
+
+  it("decides from the input schema when it has fields", async () => {
+    backendWith(() =>
+      Promise.resolve({
+        input_schema: { properties: { messages: {} } },
+        state_schema: { properties: { messages: {}, goal_request: {} } },
+      })
+    );
+    const { result } = render(readyWorkspace("/ws"));
+    await waitFor(() => expect(result.current).toBe(false));
+  });
+
+  it("is true when there is no input schema and the state has goal_request", async () => {
+    backendWith(() =>
+      Promise.resolve({
+        state_schema: { properties: { messages: {}, goal_request: {} } },
+      })
+    );
+    const { result } = render(readyWorkspace("/ws"));
+    await waitFor(() => expect(result.current).toBe(true));
   });
 
   it("is false when the backend refuses, as a legacy core does a graph name", async () => {
