@@ -26,9 +26,16 @@ import {
   type MenuItemConstructorOptions,
   type WebContents,
 } from "electron";
+import { autoUpdater, CancellationToken } from "electron-updater";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { createApp, type AppWindow } from "./app";
+import {
+  QUIT_FOR_INSTALL,
+  QUIT_FOR_INSTALL_CANCELLED,
+  createApp,
+  type AppWindow,
+} from "./app";
+import { brief, createAppUpdate } from "./appUpdate";
 import type { Manifest } from "./boot";
 import { backendRequest, checkWork, waitForMemoryWorkers } from "./closeCheck";
 import { writeCrashReport } from "./crash";
@@ -132,6 +139,30 @@ function readKeptMirror(): boolean | null {
     return null;
   }
 }
+
+/** App updates from GitHub Releases (W04): only an installed Windows app
+ *  updates itself; macOS packaging is W06. electron-updater's own lines go
+ *  to desktop.log too. */
+const appUpdate =
+  app.isPackaged && process.platform === "win32"
+    ? createAppUpdate({
+        updater: (() => {
+          autoUpdater.autoDownload = false;
+          autoUpdater.autoInstallOnAppQuit = false;
+          autoUpdater.logger = {
+            info: (m: unknown) => log.info(`updater: ${m}`),
+            warn: (m: unknown) => log.warn(`updater: ${m}`),
+            error: (m: unknown) => log.warn(`updater: ${brief(m)}`),
+            debug: () => {},
+          };
+          return autoUpdater;
+        })(),
+        newToken: () => new CancellationToken(),
+        online: () => net.isOnline(),
+        log,
+        onChange: (s) => desktop.updateChanged(s),
+      })
+    : null;
 
 const desktop = createApp({
   appVersion: app.getVersion(),
@@ -295,6 +326,18 @@ const desktop = createApp({
       toolDir: uvToolDir(childEnv, folders.dataDir),
     }),
 
+  appUpdate,
+  installQuitCancelled: () => {
+    try {
+      writeFileSync(
+        userFile(QUIT_FOR_INSTALL_CANCELLED),
+        new Date().toISOString()
+      );
+    } catch (e) {
+      log.warn(`cannot tell the installer the quit was cancelled: ${e}`);
+    }
+  },
+
   checkWork: (url) => checkWork(backendRequest(url)),
   waitForMemoryWorkers: (url, cancelled) =>
     waitForMemoryWorkers(backendRequest(url), { cancelled }),
@@ -319,6 +362,11 @@ function appWindow(w: BrowserWindow): AppWindow {
       return () => {
         for (const x of shown) if (!x.isDestroyed()) x.show();
       };
+    },
+    // Each page's preload listens on its own channel.
+    sendUpdate: (state, offer) => {
+      w.webContents.send("desktop:update", state);
+      w.webContents.send("status:update", offer);
     },
   };
 }
@@ -451,6 +499,19 @@ function registerIpc(): void {
   ipcMain.handle("desktop:restart-backend", (e) =>
     desktop.restartFor(senderOrigin(e))
   );
+  // W04: the app update, for the WebUI page and the status page.
+  ipcMain.handle("desktop:update-state", (e) =>
+    desktop.updateFor(senderOrigin(e), fromStatusPage(e))
+  );
+  ipcMain.handle("status:update-offer", (e) =>
+    desktop.updateOfferFor(fromStatusPage(e))
+  );
+  ipcMain.handle("desktop:update-download", (e) =>
+    desktop.downloadUpdateFor(senderOrigin(e), fromStatusPage(e))
+  );
+  ipcMain.handle("desktop:update-restart", (e) =>
+    desktop.restartToUpdateFor(senderOrigin(e), fromStatusPage(e))
+  );
 }
 
 /** The origin of the frame that sent an IPC message, or null. */
@@ -486,7 +547,9 @@ function start(): void {
     log.warn(`unhandled rejection: ${e instanceof Error ? e.stack : e}`)
   );
 
-  app.on("second-instance", () => desktop.secondInstance());
+  app.on("second-instance", (_e, argv) =>
+    desktop.secondInstance(argv.includes(QUIT_FOR_INSTALL))
+  );
   app.on("before-quit", (e) => {
     if (desktop.exiting) return;
     e.preventDefault();
@@ -516,5 +579,8 @@ function start(): void {
   });
 }
 
-if (app.requestSingleInstanceLock()) start();
-else app.exit(0);
+// The installer's `--quit-for-install` reaches a running app through the
+// single-instance lock; with none running there is nothing to quit.
+if (!app.requestSingleInstanceLock()) app.exit(0);
+else if (process.argv.includes(QUIT_FOR_INSTALL)) app.exit(0);
+else start();

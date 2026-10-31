@@ -52,7 +52,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        # Windows runs in desktop.yml, with the build and the smoke test.
+        os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     # A hung test blocks no one for hours.
     timeout-minutes: 15
@@ -71,7 +72,7 @@ jobs:
           cache-dependency-path: desktop/package-lock.json
 
       # Installs no Electron binary (Electron 44 has no postinstall); the
-      # unit tests do not start Electron. Packaging stays in W04.
+      # unit tests do not start Electron. Packaging is in desktop.yml.
       - name: Install dependencies
         run: npm ci
 

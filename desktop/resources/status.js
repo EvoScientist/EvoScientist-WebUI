@@ -2,7 +2,9 @@
 // install script's last lines, the stages of setup or an update, a question
 // (mirrors, the update offer), or an error with its actions). It never calls
 // the backend: the core's browser boundary refuses requests from a file://
-// page (Origin: null).
+// page (Origin: null). Below the screen, an app update the app offers
+// ("Download", then "Restart to update"), also on an error screen such as
+// core_too_new, which asks the user to update the app.
 "use strict";
 
 const LABELS = {
@@ -146,6 +148,46 @@ async function run(id) {
     for (const b of document.querySelectorAll("button")) b.disabled = false;
   }
 }
+
+const UPDATE_LABELS = {
+  download_update: "Download",
+  restart_to_update: "Restart to update",
+};
+/** What a "Restart to update" that did not happen says. */
+const UPDATE_NOTES = {
+  busy: "The app is busy. Try again in a moment.",
+};
+let shownOffer = null;
+
+/** Draws the app update's line and button, or hides them. */
+function renderUpdate(offer, note) {
+  shownOffer = offer;
+  $("app-update").hidden = !offer;
+  if (!offer) return;
+  $("app-update-text").textContent = offer.text;
+  $("app-update-note").hidden = !note;
+  $("app-update-note").textContent = note || "";
+  const b = $("app-update-action");
+  b.hidden = !offer.action;
+  b.textContent = UPDATE_LABELS[offer.action] || "";
+  b.disabled = false;
+}
+
+$("app-update-action").addEventListener("click", async () => {
+  const offer = shownOffer;
+  if (!offer || !offer.action) return;
+  $("app-update-action").disabled = true;
+  if (offer.action === "download_update") {
+    await window.evoStatus.update.download();
+    return;
+  }
+  const r = await window.evoStatus.update.restart();
+  // On success the app ends; otherwise the offer comes back.
+  if (!r.ok) renderUpdate(shownOffer, UPDATE_NOTES[r.code]);
+});
+
+window.evoStatus.update.onChange((offer) => renderUpdate(offer));
+window.evoStatus.update.get().then((offer) => renderUpdate(offer));
 
 window.evoStatus.onScreen(render);
 window.evoStatus.get().then(render);

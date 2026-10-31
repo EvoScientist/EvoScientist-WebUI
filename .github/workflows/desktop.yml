@@ -1,0 +1,232 @@
+name: Desktop
+
+# The Windows desktop app (desktop/): lint and unit tests, an unpacked build
+# and its smoke test against the core, and on release tags the installer.
+# - Pull requests (all but docs): tests, build, smoke test.
+# - Weekly: the same, so a new core release inside the app's range is tested
+#   without waiting for a WebUI change.
+# - Tags v*: the same, then (once `evoscientist.release` is on, or always in
+#   a fork) the installer: built with publishing off, then uploaded with
+#   `gh release upload` - installer and blockmap first, latest.yml last - to
+#   the tag's release, kept a draft. The last job publishes it after every
+#   platform job (only Windows until macOS comes) has succeeded; a failed or
+#   unfinished run leaves the draft, and apps keep seeing the previous
+#   release. A fork's tag build gets its own app identity (W04Test) and
+#   publishes to the fork, so a test install never replaces a real one.
+# No signing secrets: the first releases are unsigned.
+
+on:
+  pull_request:
+    paths-ignore:
+      - "**/*.md"
+      - "notes/**"
+      - "LICENSE"
+  push:
+    tags: ["v*"]
+  schedule:
+    - cron: "17 4 * * 1" # Mondays
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # A release run is never cut off halfway.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  UPSTREAM: EvoScientist/EvoScientist-WebUI
+
+jobs:
+  plan:
+    name: Versions to test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      cores: ${{ steps.plan.outputs.cores }}
+      installer: ${{ steps.plan.outputs.installer }}
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      # The tag names the version the build stamps (the root package.json's).
+      - name: Check the tag
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          node -e "
+            const p = require('./dist/packaging.js');
+            const v = require('../package.json').version;
+            const problem = p.tagProblem(process.env.GITHUB_REF_NAME, v);
+            if (problem) { console.error(problem); process.exit(1); }
+          "
+      - name: Plan
+        id: plan
+        run: |
+          echo "cores=$(node scripts/smoke.mjs --list)" >> "$GITHUB_OUTPUT"
+          release=$(node -p "require('./package.json').evoscientist.release === true")
+          if [ "$release" = true ] || [ "$GITHUB_REPOSITORY" != "$UPSTREAM" ]; then
+            echo "installer=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "installer=false" >> "$GITHUB_OUTPUT"
+          fi
+          cat "$GITHUB_OUTPUT"
+
+  test:
+    name: Lint & unit tests (windows)
+    runs-on: windows-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v7
+      # Electron's Node is 24; the desktop code is checked against the same.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - name: Download the core's install scripts
+        run: npm run fetch-core-scripts
+      - run: npm test
+
+  smoke:
+    name: Smoke test (core ${{ matrix.core }})
+    needs: [plan, test]
+    runs-on: windows-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        core: ${{ fromJSON(needs.plan.outputs.cores) }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            desktop/package-lock.json
+      - name: Build the WebUI
+        run: npm ci && npm run build
+      - name: Build the unpacked app
+        working-directory: desktop
+        run: npm ci && npm run pack
+      - name: Smoke test
+        working-directory: desktop
+        run: node scripts/smoke.mjs --core ${{ matrix.core }}
+
+  installer:
+    name: Installer
+    needs: [plan, smoke]
+    if: startsWith(github.ref, 'refs/tags/v') && needs.plan.outputs.installer == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    # The token can change the release that every installed app updates from:
+    # only the `gh` steps get it, never the steps that run dependency code
+    # (`npm ci`, the build, electron-builder), and the checkout keeps no
+    # credential. No npm cache in this job, so the release build never starts
+    # from a cache another run wrote.
+    env:
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ github.ref_name }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Build the WebUI
+        run: npm ci && npm run build
+      - name: Build the installer (publishing off)
+        working-directory: desktop
+        run: |
+          args=()
+          if [ "$GITHUB_REPOSITORY" != "$UPSTREAM" ]; then
+            # A fork's test build: its own identity, install folder, userData
+            # and update feed (the fork's releases).
+            args=(-c.appId=com.evoscientist.desktop.w04test
+              -c.productName=W04Test
+              -c.extraMetadata.name=W04Test
+              -c.extraMetadata.productName=W04Test
+              "-c.publish.owner=$GITHUB_REPOSITORY_OWNER"
+              "-c.publish.repo=${GITHUB_REPOSITORY#*/}")
+          fi
+          npm ci
+          npm run dist -- "${args[@]}"
+          ls -l release
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # Published by hand before this job: the files still go up (a
+            # live release without latest.yml fails every update check).
+            if [ "$(gh release view "$TAG" --json isDraft --jq .isDraft)" != true ]; then
+              echo "::warning::Release $TAG is already published; desktop update checks fail until latest.yml is uploaded. Leave publishing to this workflow."
+            fi
+          else
+            gh release create "$TAG" --draft --verify-tag --title "$TAG" --notes ""
+          fi
+      # Before any upload, so a template error stops the job with nothing
+      # uploaded.
+      - name: Render the release notes with the desktop section
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: desktop
+        run: |
+          gh release view "$TAG" --json body --jq .body > "$RUNNER_TEMP/body.md"
+          node scripts/release-notes.mjs "$RUNNER_TEMP/body.md" release/EvoScientist-Setup.exe > "$RUNNER_TEMP/notes.md"
+      - name: Upload the installer and its blockmap, then latest.yml
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: desktop/release
+        run: |
+          gh release upload "$TAG" EvoScientist-Setup.exe EvoScientist-Setup.exe.blockmap --clobber
+          gh release upload "$TAG" latest.yml --clobber
+      - name: Write the release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
+
+  publish:
+    name: Publish the release
+    needs: [plan, smoke, installer]
+    # Also when the installer was not built (`evoscientist.release` off): the
+    # release then carries no desktop files, as before the first desktop
+    # release.
+    if: >-
+      always() && startsWith(github.ref, 'refs/tags/v') &&
+      needs.smoke.result == 'success' &&
+      (needs.installer.result == 'success' || needs.installer.result == 'skipped')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - name: Publish
+        run: |
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 ||
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --verify-tag --title "$TAG" --notes ""
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false
