@@ -9,6 +9,7 @@ import React, {
   useState,
 } from "react";
 import { useQueryState } from "nuqs";
+import { toast } from "sonner";
 import { FILE_LINK_EVENT, type FileLinkEventDetail } from "@/lib/fileLink";
 import {
   filePaneReducer,
@@ -45,7 +46,9 @@ function sameBridge(
   if (
     a.threadId !== b.threadId ||
     a.setFiles !== b.setFiles ||
-    a.editDisabled !== b.editDisabled
+    a.editDisabled !== b.editDisabled ||
+    a.project !== b.project ||
+    a.runFolder !== b.runFolder
   ) {
     return false;
   }
@@ -91,6 +94,8 @@ export function FilePaneProvider({
   const [refreshTick, setRefreshTick] = useState(0);
   const [treeRevision, setTreeRevision] = useState(0);
   const [chat, setChat] = useState<ChatFilesBridge | null>(null);
+  const chatRef = useRef(chat);
+  chatRef.current = chat;
 
   const onRevealRef = useRef(onReveal);
   useEffect(() => {
@@ -150,9 +155,31 @@ export function FilePaneProvider({
       if (detail.opener && !detail.opener.closest("[data-file-pane]")) {
         openerRef.current = detail.opener;
       }
+      if (detail.kind === "memory") {
+        open({ source: "memory", path: detail.path });
+        return;
+      }
+      // A workspace link names a file of the open conversation's project,
+      // which may not be the current one; when the chat can't show its
+      // project's files here, there is nothing to open.
+      const project = chatRef.current?.project;
+      if (project === null) {
+        toast.error("This conversation's project files can't be shown here.");
+        return;
+      }
+      // A link in the conversation names a file from its run folder; one
+      // elsewhere (an agent's thread) from the project root. An absolute
+      // `/skills/` path is the agent's skills, which the project's own
+      // `skills/` folder holds (global and built-in ones aren't files here).
+      const runFolder =
+        detail.opener?.closest("[data-chat-transcript]") &&
+        !detail.display.trim().startsWith("/skills/")
+          ? chatRef.current?.runFolder
+          : null;
       open({
-        source: detail.kind === "memory" ? "memory" : "workspace",
-        path: detail.path,
+        source: "workspace",
+        path: runFolder ? `${runFolder}/${detail.path}` : detail.path,
+        project,
       });
     };
     window.addEventListener(FILE_LINK_EVENT, onOpenFile);

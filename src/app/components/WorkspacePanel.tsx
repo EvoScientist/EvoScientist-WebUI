@@ -1,7 +1,6 @@
 "use client";
 
-import { useWorkspace } from "@/providers/WorkspaceProvider";
-import { localFilesNotice } from "@/lib/workspaceSession";
+import { useProjectFiles } from "@/app/hooks/useProjectFiles";
 import React, {
   useCallback,
   useEffect,
@@ -27,18 +26,25 @@ import { cn } from "@/lib/utils";
 import type { WorkspaceEntry } from "@/app/api/workspace/route";
 import { useFilePane } from "@/providers/filePaneContext";
 
-async function listDir(path: string): Promise<WorkspaceEntry[]> {
-  const res = await fetch(`/api/workspace?${new URLSearchParams({ path })}`);
+async function listDir(
+  project: string,
+  path: string
+): Promise<WorkspaceEntry[]> {
+  const res = await fetch(
+    `/api/workspace?${new URLSearchParams({ project, path })}`
+  );
   const body = await res.json().catch(() => null);
   if (!res.ok) throw new Error(body?.error || "Failed to list workspace.");
   return (body?.entries ?? []) as WorkspaceEntry[];
 }
 
-async function listAll(): Promise<{
+async function listAll(project: string): Promise<{
   entries: WorkspaceEntry[];
   truncated: boolean;
 }> {
-  const res = await fetch("/api/workspace?recursive=1");
+  const res = await fetch(
+    `/api/workspace?${new URLSearchParams({ project, recursive: "1" })}`
+  );
   const body = await res.json().catch(() => null);
   if (!res.ok) throw new Error(body?.error || "Failed to load workspace.");
   return {
@@ -145,18 +151,24 @@ for (const cat of CATEGORIES) {
 type ViewMode = "tree" | "type";
 
 export function WorkspacePanel() {
-  const notice = localFilesNotice(useWorkspace().workspace);
-  if (notice) return <LocalFilesNotice message={notice} />;
-  return <WorkspaceTree />;
+  const { project, notice } = useProjectFiles();
+  if (!project) return <LocalFilesNotice message={notice ?? ""} />;
+  // Another project starts the tree over.
+  return (
+    <WorkspaceTree
+      key={project}
+      project={project}
+    />
+  );
 }
 
 /** Shown instead of the WebUI's own file views when they can't show the
- *  backend's folder (see `localFilesNotice`). */
+ *  current project's folder (see `useProjectFiles`). */
 export function LocalFilesNotice({ message }: { message: string }) {
   return <p className="p-4 text-sm text-muted-foreground">{message}</p>;
 }
 
-function WorkspaceTree() {
+function WorkspaceTree({ project }: { project: string }) {
   const [view, setView] = useState<ViewMode>("tree");
 
   // --- Tree view state (listing cache keyed by dir path; "" = root) ---
@@ -177,43 +189,51 @@ function WorkspaceTree() {
   // Files open in the docked preview next to this tree.
   const pane = useFilePane();
   const openFile = (entry: { path: string; size: number }) =>
-    pane?.open({ source: "workspace", path: entry.path, size: entry.size });
+    pane?.open({
+      source: "workspace",
+      path: entry.path,
+      size: entry.size,
+      project,
+    });
   const openPaths = useMemo(
     () =>
       new Set(
         (pane?.state.tabs ?? [])
-          .filter((t) => t.source === "workspace")
+          .filter((t) => t.source === "workspace" && t.project === project)
           .map((t) => t.path)
       ),
-    [pane?.state.tabs]
+    [pane?.state.tabs, project]
   );
   const openCount = pane?.state.tabs.length ?? 0;
 
-  const loadDir = useCallback(async (path: string) => {
-    setLoading((prev) => new Set(prev).add(path));
-    try {
-      const entries = await listDir(path);
-      setChildren((prev) => ({ ...prev, [path]: entries }));
-      if (path === "") setError(null);
-      return entries;
-    } catch (err) {
-      if (path === "") {
-        setError(err instanceof Error ? err.message : "Failed to load.");
+  const loadDir = useCallback(
+    async (path: string) => {
+      setLoading((prev) => new Set(prev).add(path));
+      try {
+        const entries = await listDir(project, path);
+        setChildren((prev) => ({ ...prev, [path]: entries }));
+        if (path === "") setError(null);
+        return entries;
+      } catch (err) {
+        if (path === "") {
+          setError(err instanceof Error ? err.message : "Failed to load.");
+        }
+        throw err;
+      } finally {
+        setLoading((prev) => {
+          const next = new Set(prev);
+          next.delete(path);
+          return next;
+        });
       }
-      throw err;
-    } finally {
-      setLoading((prev) => {
-        const next = new Set(prev);
-        next.delete(path);
-        return next;
-      });
-    }
-  }, []);
+    },
+    [project]
+  );
 
   const loadAll = useCallback(async () => {
     setTypeLoading(true);
     try {
-      const { entries, truncated } = await listAll();
+      const { entries, truncated } = await listAll(project);
       setAllFiles(entries);
       setTruncated(truncated);
       setError(null);
@@ -222,7 +242,7 @@ function WorkspaceTree() {
     } finally {
       setTypeLoading(false);
     }
-  }, []);
+  }, [project]);
 
   // Initial tree load. loadDir surfaces root failures via `error`; catch the
   // rejection here so it doesn't become an unhandled promise rejection.
@@ -463,7 +483,9 @@ function WorkspaceTree() {
         </div>
         <div className="flex items-center gap-0.5">
           <a
-            href="/api/workspace/download"
+            href={`/api/workspace/download?${new URLSearchParams({
+              project,
+            })}`}
             download
             className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             title="Download the whole workspace as a zip"

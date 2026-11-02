@@ -21,15 +21,18 @@ vi.mock("@/lib/config", () => ({
   }),
 }));
 
+const A = "/home/you/projA";
+const projectsHolder = vi.hoisted(() => ({ value: null as unknown }));
+
+vi.mock("@/providers/ProjectsProvider", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/providers/ProjectsProvider")>()),
+  useProjects: () => projectsHolder.value,
+}));
+
 vi.mock("@/app/hooks/useScheduledTasks", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/app/hooks/useScheduledTasks")>()),
-  useServedFolder: () => "/home/you/projA",
   useAssistantRecovery: () => () => {},
   useSchedulerGate: () => () => true,
-  useSchedulerTarget: () => ({
-    assistantId: "scheduler-assistant",
-    workspaceDir: "/home/you/projA",
-  }),
 }));
 
 vi.mock("@/app/components/ScheduledTaskActivity", () => ({
@@ -37,6 +40,8 @@ vi.mock("@/app/components/ScheduledTaskActivity", () => ({
 }));
 
 import { ScheduledTasksPanel } from "./ScheduledTasksPanel";
+import { workspaceAssistantId } from "@/lib/workspaceAssistant";
+import { mockProjects, readyProjects } from "@/test/mockProjects";
 
 function cron(
   id: string,
@@ -45,7 +50,7 @@ function cron(
 ) {
   return {
     cron_id: id,
-    assistant_id: "scheduler",
+    assistant_id: workspaceAssistantId("scheduler", A),
     thread_id: null,
     on_run_completed: "keep",
     end_time: null,
@@ -135,6 +140,7 @@ const writes = {
 };
 
 beforeEach(() => {
+  projectsHolder.value = mockProjects(readyProjects(A), { current: A });
   vi.spyOn(Intl.DateTimeFormat.prototype, "resolvedOptions").mockReturnValue({
     ...new Intl.DateTimeFormat().resolvedOptions(),
     timeZone: "Asia/Shanghai",

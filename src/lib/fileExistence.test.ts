@@ -12,9 +12,11 @@ describe("workspaceFileExists", () => {
       json({ entries: [{ path: "out/a.md", type: "file" }] })
     );
     vi.stubGlobal("fetch", fetchMock);
-    expect(await workspaceFileExists("out/a.md")).toBe(true);
-    expect(await workspaceFileExists("out/b.md")).toBe(false);
-    expect(String(fetchMock.mock.calls[0][0])).toBe("/api/workspace?path=out");
+    expect(await workspaceFileExists("P", "out/a.md")).toBe(true);
+    expect(await workspaceFileExists("P", "out/b.md")).toBe(false);
+    expect(String(fetchMock.mock.calls[0][0])).toBe(
+      "/api/workspace?project=P&path=out"
+    );
   });
 
   it("treats a folder that can't be listed as gone", async () => {
@@ -22,7 +24,7 @@ describe("workspaceFileExists", () => {
       "fetch",
       vi.fn(async () => json({ error: "x" }, 400))
     );
-    expect(await workspaceFileExists("gone/a.md")).toBe(false);
+    expect(await workspaceFileExists("P", "gone/a.md")).toBe(false);
   });
 
   it("can't tell when the listing fails otherwise", async () => {
@@ -30,14 +32,14 @@ describe("workspaceFileExists", () => {
       "fetch",
       vi.fn(async () => json({ error: "x" }, 500))
     );
-    expect(await workspaceFileExists("a.md")).toBeNull();
+    expect(await workspaceFileExists("P", "a.md")).toBeNull();
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => {
         throw new TypeError("Failed to fetch");
       })
     );
-    expect(await workspaceFileExists("a.md")).toBeNull();
+    expect(await workspaceFileExists("P", "a.md")).toBeNull();
   });
 });
 

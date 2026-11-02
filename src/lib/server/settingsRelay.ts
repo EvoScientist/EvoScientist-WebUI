@@ -92,19 +92,37 @@ export function relayGate(
   return null;
 }
 
-/** The local secret file (C12): `DATA_DIR/server/local-secret`. */
-export function localSecretPath(): string {
-  return join(globalDataDir(), "server", "local-secret");
+/** Where the local backend is, from one reading of this server's
+ *  configuration per request: the port a request sends to is the port it
+ *  reports. */
+export interface LocalBackend {
+  /** The backend's port (see `readCoreConfig`). */
+  port: number;
+  /** Its base URL, on loopback. */
+  url: string;
+  /** The local secret file (C12): this server's own,
+   *  `globalDataDir()/server/local-secret`. */
+  secretPath: string;
+}
+
+/** The local backend, resolved once for a request. */
+export function localBackend(): LocalBackend {
+  const { port } = readCoreConfig();
+  return {
+    port,
+    url: `http://127.0.0.1:${port}`,
+    secretPath: join(globalDataDir(), "server", "local-secret"),
+  };
 }
 
 /** The local secret as the backend reads it (`ensure_local_secret()` in
  *  local_secret.py: the bytes with ASCII whitespace stripped, ASCII only), or
  *  null when the file is missing, empty or unreadable. Read per request: the
  *  backend creates the file when it first starts, possibly after the WebUI. */
-export function readLocalSecret(): string | null {
+export function readLocalSecret(backend: LocalBackend): string | null {
   let raw: string;
   try {
-    raw = readFileSync(localSecretPath(), "latin1");
+    raw = readFileSync(backend.secretPath, "latin1");
   } catch {
     return null;
   }
@@ -122,37 +140,32 @@ export function instanceOf(secret: string): string {
     .slice(0, 16);
 }
 
-/** The local backend's base URL, from this server's own configuration. */
-export function localBackendUrl(): string {
-  return `http://127.0.0.1:${localBackendPort()}`;
-}
-
-/** The local backend's port: the environment, else config.yaml, else 6174. */
-export function localBackendPort(): number {
-  return readCoreConfig().port;
-}
-
 export type ForwardResult =
   | { ok: true; response: Response }
   | { ok: false; refusal: "backend_unreachable" | "backend_timeout" };
 
-/** Send one request to the local backend, with the secret when given. */
+/** Send one request to `backend`, with the secret when given. */
 export async function forwardToBackend(
+  backend: LocalBackend,
   method: string,
   path: string,
-  { secret, body }: { secret?: string; body?: string } = {}
+  {
+    secret,
+    body,
+    timeoutMs = FORWARD_TIMEOUT_MS,
+  }: { secret?: string; body?: string; timeoutMs?: number } = {}
 ): Promise<ForwardResult> {
   const headers: Record<string, string> = {};
   if (secret !== undefined) headers[LOCAL_SECRET_HEADER] = secret;
   if (body !== undefined) headers["Content-Type"] = "application/json";
   try {
-    const response = await fetch(`${localBackendUrl()}${path}`, {
+    const response = await fetch(`${backend.url}${path}`, {
       method,
       headers,
       body,
       cache: "no-store",
       redirect: "manual",
-      signal: AbortSignal.timeout(FORWARD_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     return { ok: true, response };
   } catch (error) {
@@ -186,9 +199,10 @@ export async function relayWrite(
 ): Promise<NextResponse> {
   const refused = relayGate(request, { requireJson: true });
   if (refused) return refusal(refused);
-  const secret = readLocalSecret();
+  const backend = localBackend();
+  const secret = readLocalSecret(backend);
   if (secret === null) return refusal("secret_missing");
-  const result = await forwardToBackend(method, path, {
+  const result = await forwardToBackend(backend, method, path, {
     secret,
     body: await request.text(),
   });

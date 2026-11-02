@@ -3,18 +3,17 @@
 // Whether the backend's main graph takes a /goal request: its input schema
 // has `goal_request` (core v0.3.7 and later), or, when the input schema is
 // missing or empty (a Python 3.11 core can't build it), its state schema has
-// it.
-// getSchemas takes only an assistant UUID; a legacy core's graph name gets a
-// 422, and such a core has no goal either.
+// it; asked of the current project's chat assistant.
 import { createElement, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import {
-  mockWorkspace,
-  readyWorkspace,
-  TestWorkspaceProvider,
-} from "@/test/mockWorkspace";
-import { assistantIdFor, type WorkspaceState } from "@/lib/workspaceSession";
+  mockProjects,
+  readyProjects,
+  TestProjectsProvider,
+} from "@/test/mockProjects";
+import { workspaceAssistantId } from "@/lib/workspaceAssistant";
+import type { ProjectsState } from "@/lib/projects";
 
 // The SDK client: one per deployment, so a switch hands the hook a new one.
 const backend = vi.hoisted(() => ({
@@ -45,11 +44,11 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function render(workspace: WorkspaceState) {
-  const value = mockWorkspace(workspace);
+function render(projects: ProjectsState) {
+  const value = mockProjects(projects);
   return renderHook(() => useGoalSupport(), {
     wrapper: ({ children }: { children: ReactNode }) =>
-      createElement(TestWorkspaceProvider, { value, children }),
+      createElement(TestProjectsProvider, { value, children }),
   });
 }
 
@@ -65,19 +64,18 @@ afterEach(() => {
 
 describe("useGoalSupport", () => {
   it("is true when the main graph takes goal_request", async () => {
-    const workspace = readyWorkspace("/ws");
     const getSchemas = backendWith(() => Promise.resolve(WITH_GOAL));
-    const { result } = render(workspace);
+    const { result } = render(readyProjects("/ws"));
     expect(result.current).toBeUndefined();
     await waitFor(() => expect(result.current).toBe(true));
     expect(getSchemas).toHaveBeenCalledWith(
-      assistantIdFor(workspace, "EvoScientist")
+      workspaceAssistantId("EvoScientist", "/ws")
     );
   });
 
   it("is false when the input schema has no goal_request", async () => {
     backendWith(() => Promise.resolve(WITHOUT_GOAL));
-    const { result } = render(readyWorkspace("/ws"));
+    const { result } = render(readyProjects("/ws"));
     await waitFor(() => expect(result.current).toBe(false));
   });
 
@@ -93,7 +91,7 @@ describe("useGoalSupport", () => {
         state_schema: { properties: { messages: {}, goal_request: {} } },
       })
     );
-    const { result } = render(readyWorkspace("/ws"));
+    const { result } = render(readyProjects("/ws"));
     await waitFor(() => expect(result.current).toBe(true));
   });
 
@@ -104,7 +102,7 @@ describe("useGoalSupport", () => {
         state_schema: { properties: { messages: {}, goal_request: {} } },
       })
     );
-    const { result } = render(readyWorkspace("/ws"));
+    const { result } = render(readyProjects("/ws"));
     await waitFor(() => expect(result.current).toBe(true));
   });
 
@@ -115,7 +113,7 @@ describe("useGoalSupport", () => {
         state_schema: { properties: { messages: {}, goal_request: {} } },
       })
     );
-    const { result } = render(readyWorkspace("/ws"));
+    const { result } = render(readyProjects("/ws"));
     await waitFor(() => expect(result.current).toBe(true));
   });
 
@@ -126,7 +124,7 @@ describe("useGoalSupport", () => {
         state_schema: { properties: { messages: {} } },
       })
     );
-    const { result } = render(readyWorkspace("/ws"));
+    const { result } = render(readyProjects("/ws"));
     await waitFor(() => expect(result.current).toBe(false));
   });
 
@@ -137,7 +135,7 @@ describe("useGoalSupport", () => {
         state_schema: { properties: { messages: {}, goal_request: {} } },
       })
     );
-    const { result } = render(readyWorkspace("/ws"));
+    const { result } = render(readyProjects("/ws"));
     await waitFor(() => expect(result.current).toBe(false));
   });
 
@@ -147,11 +145,11 @@ describe("useGoalSupport", () => {
         state_schema: { properties: { messages: {}, goal_request: {} } },
       })
     );
-    const { result } = render(readyWorkspace("/ws"));
+    const { result } = render(readyProjects("/ws"));
     await waitFor(() => expect(result.current).toBe(true));
   });
 
-  it("is false when the backend refuses, as a legacy core does a graph name", async () => {
+  it("is false when the backend refuses the question", async () => {
     const getSchemas = backendWith(() =>
       Promise.reject(
         Object.assign(
@@ -162,9 +160,9 @@ describe("useGoalSupport", () => {
         )
       )
     );
-    const { result } = render({ status: "legacy" });
+    const { result } = render(readyProjects("/ws"));
     await waitFor(() => expect(result.current).toBe(false));
-    expect(getSchemas).toHaveBeenCalledWith("EvoScientist");
+    expect(getSchemas).toHaveBeenCalledTimes(1);
   });
 
   // Only a refusal is an answer. A failed request (no answer, 5xx) leaves
@@ -177,7 +175,7 @@ describe("useGoalSupport", () => {
         .mockRejectedValueOnce(new TypeError("Failed to fetch"))
         .mockResolvedValue(WITH_GOAL)
     );
-    const { result } = render(readyWorkspace("/ws"));
+    const { result } = render(readyProjects("/ws"));
     await waitFor(() => expect(getSchemas).toHaveBeenCalledTimes(1));
     expect(result.current).toBeUndefined();
     await waitFor(() => expect(result.current).toBe(true), { timeout: 3000 });
@@ -193,13 +191,13 @@ describe("useGoalSupport", () => {
         )
         .mockResolvedValue(WITHOUT_GOAL)
     );
-    const { result } = render(readyWorkspace("/ws"));
+    const { result } = render(readyProjects("/ws"));
     await waitFor(() => expect(result.current).toBe(false), { timeout: 3000 });
     expect(getSchemas).toHaveBeenCalledTimes(2);
   });
 
-  // Only a malformed question is refused for good (a legacy core answers a
-  // graph name with 422); a 408 or 429 from a proxy passes.
+  // Only a malformed question is refused for good; a 408 or 429 from a
+  // proxy passes.
   it("asks again after a 429", async () => {
     const getSchemas = backendWith(
       vi
@@ -209,7 +207,7 @@ describe("useGoalSupport", () => {
         )
         .mockResolvedValue(WITH_GOAL)
     );
-    const { result } = render(readyWorkspace("/ws"));
+    const { result } = render(readyProjects("/ws"));
     await waitFor(() => expect(result.current).toBe(true), { timeout: 3000 });
     expect(getSchemas).toHaveBeenCalledTimes(2);
   });
@@ -225,13 +223,13 @@ describe("useGoalSupport", () => {
         },
       },
     };
-    const { result } = render(readyWorkspace("/ws"));
+    const { result } = render(readyProjects("/ws"));
     await waitFor(() => expect(result.current).toBe(true), { timeout: 3000 });
   });
 
-  it("waits for the backend's folder before asking", async () => {
+  it("waits for the projects before asking", async () => {
     const getSchemas = backendWith(() => Promise.resolve(WITH_GOAL));
-    const { result } = render({ status: "pending" } as WorkspaceState);
+    const { result } = render({ status: "pending" });
     await act(async () => {});
     expect(result.current).toBeUndefined();
     expect(getSchemas).not.toHaveBeenCalled();
@@ -240,7 +238,7 @@ describe("useGoalSupport", () => {
   it("asks the new backend after a switch and drops the old one's late answer", async () => {
     const first = deferred<unknown>();
     backendWith(() => first.promise);
-    const { result, rerender } = render(readyWorkspace("/ws"));
+    const { result, rerender } = render(readyProjects("/ws"));
     expect(result.current).toBeUndefined();
 
     backendWith(() => Promise.resolve(WITHOUT_GOAL));

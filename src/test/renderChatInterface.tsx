@@ -88,8 +88,8 @@ import {
   type ComposerSnapshot,
 } from "@/app/components/ChatInterface";
 import { ChatProvider } from "@/providers/ChatProvider";
-import type { WorkspaceContextValue } from "@/providers/WorkspaceProvider";
-import { TestWorkspaceProvider, mockWorkspace } from "@/test/mockWorkspace";
+import type { ProjectsContextValue } from "@/providers/ProjectsProvider";
+import { TestProjectsProvider, mockProjects } from "@/test/mockProjects";
 
 interface RenderChatInterfaceOptions {
   draftSeed?: ComposerSnapshot | null;
@@ -99,8 +99,9 @@ interface RenderChatInterfaceOptions {
   /** Wrap the provider tree, e.g. in a FilePaneProvider. */
   wrapper?: React.ComponentType<{ children: React.ReactNode }>;
   onNavigate?: React.ComponentProps<typeof ChatInterface>["onNavigate"];
-  /** The backend's folder; defaults to a backend without the route. */
-  workspace?: WorkspaceContextValue;
+  /** The backend's projects; defaults to one registered project, current,
+   *  with its files here (`mockProjects()`). */
+  projects?: ProjectsContextValue;
   /** Receives the "Notify main chat" reporter ChatInterface hands out. */
   onNotifyReady?: React.ComponentProps<typeof ChatInterface>["onNotifyReady"];
 }
@@ -109,7 +110,7 @@ interface RenderChatInterfaceOptions {
  *  options (another workspace) and keeps the chat's state. */
 export function chatInterfaceTree(opts: RenderChatInterfaceOptions = {}) {
   return (
-    <TestWorkspaceProvider value={opts.workspace ?? mockWorkspace()}>
+    <TestProjectsProvider value={opts.projects ?? mockProjects()}>
       <ChatProvider>
         <ChatInterface
           draftSeed={opts.draftSeed}
@@ -118,7 +119,7 @@ export function chatInterfaceTree(opts: RenderChatInterfaceOptions = {}) {
           onNotifyReady={opts.onNotifyReady}
         />
       </ChatProvider>
-    </TestWorkspaceProvider>
+    </TestProjectsProvider>
   );
 }
 

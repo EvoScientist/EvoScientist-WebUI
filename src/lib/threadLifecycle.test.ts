@@ -30,9 +30,33 @@ describe("cancelActiveRuns", () => {
     expect(client.runs.cancel).not.toHaveBeenCalled();
   });
 
-  it("swallows cancel failures", async () => {
+  it("reports a cancel that failed", async () => {
     const client = fakeClient({ running: [{ run_id: "r1" }] });
-    client.runs.cancel.mockRejectedValueOnce(new Error("gone"));
-    await expect(cancelActiveRuns(client, "t1")).resolves.toBeUndefined();
+    client.runs.cancel.mockRejectedValueOnce(new Error("boom"));
+    await expect(cancelActiveRuns(client, "t1")).resolves.toBe(false);
+  });
+
+  it("counts a run already gone as stopped", async () => {
+    const client = fakeClient({ running: [{ run_id: "r1" }] });
+    client.runs.cancel.mockRejectedValueOnce(
+      Object.assign(new Error("HTTP 404"), { status: 404 })
+    );
+    await expect(cancelActiveRuns(client, "t1")).resolves.toBe(true);
+  });
+
+  it("reports runs it couldn't read as not stopped", async () => {
+    const client = fakeClient({});
+    client.runs.list.mockRejectedValueOnce(
+      Object.assign(new Error("HTTP 500"), { status: 500 })
+    );
+    await expect(cancelActiveRuns(client, "t1")).resolves.toBe(false);
+  });
+
+  it("counts a thread already gone as stopped", async () => {
+    const client = fakeClient({});
+    client.runs.list.mockRejectedValue(
+      Object.assign(new Error("HTTP 404"), { status: 404 })
+    );
+    await expect(cancelActiveRuns(client, "t1")).resolves.toBe(true);
   });
 });

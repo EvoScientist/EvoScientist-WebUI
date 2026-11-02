@@ -32,6 +32,18 @@ describe("filePaneReducer", () => {
     expect(s.activeId).toBe("workspace:a.md");
   });
 
+  it("tells the same path in different projects apart", () => {
+    let s = filePaneReducer(initialFilePaneState, {
+      type: "open",
+      ref: { source: "workspace", path: "a.md", project: "p1" },
+    });
+    s = filePaneReducer(s, {
+      type: "open",
+      ref: { source: "workspace", path: "a.md", project: "p2" },
+    });
+    expect(s.tabs.map((t) => t.project)).toEqual(["p1", "p2"]);
+  });
+
   it("tells the same path from different sources apart", () => {
     const s = run(ws("a.md"), {
       type: "open",
@@ -171,6 +183,18 @@ describe("file URL param", () => {
     }
   });
 
+  it("round-trips a workspace file of a named project", () => {
+    const ref = {
+      source: "workspace" as const,
+      path: "out/a.md",
+      project: "39dcbcc1-957e-51c1-8e52-c294d4031162",
+    };
+    expect(fileTabId(ref)).toBe(
+      "workspace@39dcbcc1-957e-51c1-8e52-c294d4031162:out/a.md"
+    );
+    expect(parseFileParam(fileTabId(ref))).toEqual(ref);
+  });
+
   it("keeps colons inside the path", () => {
     expect(parseFileParam("workspace:logs/12:30.txt")).toEqual({
       source: "workspace",
@@ -188,6 +212,9 @@ describe("file URL param", () => {
       "workspace:   ",
       "disk:a.md",
       "workspace:a\nb.md",
+      "workspace@not-a-handle:a.md",
+      "memory@39dcbcc1-957e-51c1-8e52-c294d4031162:a.md",
+      "workspace@39dcbcc1-957e-51c1-8e52-c294d4031162@x:a.md",
     ]) {
       expect(parseFileParam(value)).toBeNull();
     }

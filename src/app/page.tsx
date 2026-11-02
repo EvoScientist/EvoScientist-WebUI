@@ -14,7 +14,9 @@ import { toast } from "sonner";
 import { ConfigDialog } from "@/app/components/ConfigDialog";
 import { Button } from "@/components/ui/button";
 import { ClientProvider, useDeployment } from "@/providers/ClientProvider";
-import { WorkspaceProvider, useWorkspace } from "@/providers/WorkspaceProvider";
+import { ProjectsProvider, useProjects } from "@/providers/ProjectsProvider";
+import { findProject } from "@/lib/projects";
+import { ProjectDialogsProvider } from "@/providers/ProjectDialogsProvider";
 import { SetupNotice } from "@/app/components/SetupNotice";
 import { SetupView } from "@/app/components/SetupView";
 import { useSetupGate } from "@/app/hooks/useSetupGate";
@@ -116,8 +118,12 @@ function HomePageInner({ config, handleSaveConfig }: HomePageInnerProps) {
     null
   );
 
-  const { refresh: refreshWorkspace, refreshing: workspaceRefreshing } =
-    useWorkspace();
+  const {
+    projects,
+    refresh: refreshProjects,
+    refreshing: projectsRefreshing,
+    selectProject,
+  } = useProjects();
 
   useEffect(() => {
     const mediaQuery = window.matchMedia("(min-width: 768px)");
@@ -223,14 +229,24 @@ function HomePageInner({ config, handleSaveConfig }: HomePageInnerProps) {
   useEffect(() => {
     threadIdRef.current = threadId;
   }, [threadId]);
-  const startNewChat = useCallback(() => {
-    setThreadAutoApprove(null, false);
-    threadIdRef.current = null;
-    setThreadId(null);
-    setView(null);
-    setComposerSeed(null);
-    setChatSessionRevision((revision) => revision + 1);
-  }, [setThreadId, setView]);
+  // A new chat, in `project` when given (a registered project with its
+  // folder), else in the current project.
+  const startNewChat = useCallback(
+    (project?: string) => {
+      const chosen =
+        typeof project === "string" ? findProject(projects, project) : null;
+      if (chosen && !chosen.missing) {
+        selectProject(chosen.key, { remember: true });
+      }
+      setThreadAutoApprove(null, false);
+      threadIdRef.current = null;
+      setThreadId(null);
+      setView(null);
+      setComposerSeed(null);
+      setChatSessionRevision((revision) => revision + 1);
+    },
+    [setThreadId, setView, selectProject, projects]
+  );
   // The backend reported the open thread (or its assistant) gone. Take the
   // same reset path as New Chat, carrying the unsent message plus whatever
   // was still in the composer/queue — but only if the report is about the
@@ -316,7 +332,7 @@ function HomePageInner({ config, handleSaveConfig }: HomePageInnerProps) {
   );
 
   return (
-    <>
+    <ProjectDialogsProvider>
       <div className="app-shell flex flex-col">
         <header className="mobile-app-header flex h-14 shrink-0 items-center justify-between gap-1 border-b border-border px-2 sm:gap-2 sm:px-4">
           <div className="flex min-w-0 items-center gap-2 sm:gap-3">
@@ -367,7 +383,7 @@ function HomePageInner({ config, handleSaveConfig }: HomePageInnerProps) {
                 <Button
                   variant="ghost"
                   size="icon"
-                  onClick={startNewChat}
+                  onClick={() => startNewChat()}
                   aria-label="New chat"
                   className="size-8"
                 >
@@ -389,12 +405,12 @@ function HomePageInner({ config, handleSaveConfig }: HomePageInnerProps) {
                 handleSaveConfig({ ...config, deploymentUrl: url });
               }}
               // The backend may have restarted with other models or experts,
-              // or not have been up when the page loaded. A folder read
+              // or not have been up when the page loaded. A project read
               // already in progress (the first one, retrying while the
               // backend was down) answers for this return too.
               onOnline={() => {
                 refreshBackendLists(deploymentUrl);
-                if (!workspaceRefreshing) void refreshWorkspace();
+                if (!projectsRefreshing) void refreshProjects();
               }}
             />
             <ThemeToggle />
@@ -616,7 +632,7 @@ function HomePageInner({ config, handleSaveConfig }: HomePageInnerProps) {
           </div>
         </FilePaneProvider>
       </div>
-    </>
+    </ProjectDialogsProvider>
   );
 }
 
@@ -694,7 +710,7 @@ function HomePageContent() {
       deploymentUrl={config.deploymentUrl}
       apiKey={langsmithApiKey}
     >
-      <WorkspaceProvider
+      <ProjectsProvider
         deploymentUrl={config.deploymentUrl}
         apiKey={langsmithApiKey}
       >
@@ -702,7 +718,7 @@ function HomePageContent() {
           config={config}
           handleSaveConfig={handleSaveConfig}
         />
-      </WorkspaceProvider>
+      </ProjectsProvider>
     </ClientProvider>
   );
 }

@@ -78,7 +78,7 @@ export function useSlashMenu({
   value,
   setValue,
   disabled = false,
-  workspaceSkills = true,
+  project = null,
   onBrowse,
   pages = NO_PAGES,
   onPickSkill,
@@ -92,9 +92,10 @@ export function useSlashMenu({
   value: string;
   setValue: (value: string) => void;
   disabled?: boolean;
-  /** Offer the workspace's own skills: off when this machine's workspace
-   *  isn't the backend's folder, leaving the global tier. */
-  workspaceSkills?: boolean;
+  /** The project whose own skills are offered too (its handle,
+   *  `projectHandle`); null leaves the global tier, as when the page's
+   *  backend isn't this machine's. */
+  project?: string | null;
   /** Open the Skills marketplace (offered when none is installed). */
   onBrowse?: () => void;
   /** The commands, each a page, offered above the skills as the message's
@@ -258,9 +259,9 @@ export function useSlashMenu({
     activeState.key === key &&
     !!activeState.row?.startsWith("skill:");
 
-  const url = workspaceSkills
-    ? "/api/skills/pinnable"
-    : "/api/skills/pinnable?workspace=0";
+  const url = project
+    ? `/api/skills/pinnable?${new URLSearchParams({ project })}`
+    : "/api/skills/pinnable";
   const readSkills = useCallback(async (): Promise<MenuSkill[] | null> => {
     const id = ++readSeq.current;
     try {

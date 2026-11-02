@@ -14,13 +14,11 @@ import {
 import { useQueryState } from "nuqs";
 import { toast } from "sonner";
 import { useClient } from "@/providers/ClientProvider";
-import { useWorkspace } from "@/providers/WorkspaceProvider";
-import { assistantIdFor } from "@/lib/workspaceSession";
-import { stampThreadWorkspace } from "@/app/hooks/useThreads";
+import { useProjects } from "@/providers/ProjectsProvider";
 import {
-  AGENT_GRAPHS,
+  bindingAssistantId,
   canRun,
-  threadBinding,
+  followUpBinding,
   threadFolders,
   type ThreadFolders,
 } from "@/lib/threadBinding";
@@ -122,7 +120,7 @@ interface AgentsPanelProps {
 
 export function AgentsPanel({ onReportToMainChat }: AgentsPanelProps) {
   const client = useClient();
-  const { workspace, isReady, refresh: refreshWorkspace } = useWorkspace();
+  const { projects, isReady, refresh: refreshProjects } = useProjects();
   const [threadId] = useQueryState("threadId");
   const { tasks, loaded, error, refresh } = useAsyncAgents(threadId);
   const [now, setNow] = useState(() => Date.now());
@@ -174,21 +172,16 @@ export function AgentsPanel({ onReportToMainChat }: AgentsPanelProps) {
     const text = (chatInput[task.task_id] ?? "").trim();
     if (!text || chatBusy[task.task_id]) return;
     // The follow-up runs on the workspace assistant of the task thread's own
-    // graph, and only where that thread may run (see `threadBinding`).
+    // graph and project, and only where that thread may run (see
+    // `followUpBinding`).
     const folders = taskFolders[task.task_id];
     if (!folders?.graphId) return;
-    const binding = threadBinding(workspace, folders, AGENT_GRAPHS, null);
+    const binding = followUpBinding(projects, folders);
     if (!canRun(binding)) return;
-    // Computed from the folder answer this render carries; the gate opens
-    // only after that answer has rendered.
-    const assistantId = assistantIdFor(workspace, folders.graphId);
+    // Computed from the project list this render carries; the gate opens
+    // only after that list has rendered.
+    const assistantId = bindingAssistantId(binding, folders.graphId);
     if (!assistantId || !isReady()) return;
-    // A task thread with no folder joins the backend's, as in the chat.
-    if (binding.kind === "unbound" && workspace.status === "ready") {
-      const key = workspace.key;
-      void stampThreadWorkspace(task.thread_id, key).catch(() => {});
-      rememberFolders(task.task_id, { ...folders, workspaceDir: key });
-    }
     setChatBusy((b) => ({ ...b, [task.task_id]: true }));
     setChatError((e) => ({ ...e, [task.task_id]: null }));
     try {
@@ -229,7 +222,7 @@ export function AgentsPanel({ onReportToMainChat }: AgentsPanelProps) {
         (await assistantIsMissing(client, task.thread_id));
       if (!mountedRef.current) return;
       if (assistantsGone || isRunFolderMismatchError(err)) {
-        void refreshWorkspace();
+        void refreshProjects();
       }
       // The SDK raises run errors as plain Errors ("<error>: <message>") and
       // transport problems as HTTPError (numeric status) / TypeError (fetch) —
@@ -242,9 +235,9 @@ export function AgentsPanel({ onReportToMainChat }: AgentsPanelProps) {
       setChatError((e) => ({
         ...e,
         [task.task_id]: isRunFolderMismatchError(err)
-          ? "The backend doesn't serve this agent's folder."
+          ? "The backend doesn't serve this agent's project."
           : assistantsGone
-          ? "The backend lost this folder's assistants; they are being recreated. Try again."
+          ? "This agent's project is no longer served: it was removed, or its folder is missing."
           : isMissingThreadOrAssistantError(err)
           ? "This agent's conversation no longer exists."
           : transport
@@ -616,11 +609,9 @@ export function AgentsPanel({ onReportToMainChat }: AgentsPanelProps) {
                         const running =
                           normalizeAsyncStatus(task.liveStatus) === "running";
                         const busy = !!chatBusy[task.task_id];
-                        const followUp = threadBinding(
-                          workspace,
-                          taskFolders[task.task_id],
-                          AGENT_GRAPHS,
-                          null
+                        const followUp = followUpBinding(
+                          projects,
+                          taskFolders[task.task_id]
                         );
                         if (followUp.kind === "readOnly") {
                           return (

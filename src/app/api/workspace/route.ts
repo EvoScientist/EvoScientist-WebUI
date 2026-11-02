@@ -2,11 +2,11 @@ import { promises as fs } from "fs";
 import { extname } from "path";
 import { NextRequest, NextResponse } from "next/server";
 import {
-  getWorkspaceDir,
   safeResolve,
   isHiddenEntry,
   isCrossOrigin,
 } from "@/lib/server/workspace";
+import { ProjectRefusedError, projectDir } from "@/lib/server/projects";
 
 export const runtime = "nodejs";
 
@@ -90,7 +90,7 @@ export async function GET(request: NextRequest) {
 
     const relPath = request.nextUrl.searchParams.get("path") ?? "";
     const recursive = request.nextUrl.searchParams.get("recursive") === "1";
-    const workspaceDir = await getWorkspaceDir();
+    const workspaceDir = await projectDir(request);
     const dir = await safeResolve(workspaceDir, relPath);
 
     const stat = await fs.stat(dir);
@@ -173,7 +173,7 @@ export async function GET(request: NextRequest) {
         error:
           error instanceof Error ? error.message : "Failed to list workspace.",
       },
-      { status: 400 }
+      { status: error instanceof ProjectRefusedError ? 403 : 400 }
     );
   }
 }

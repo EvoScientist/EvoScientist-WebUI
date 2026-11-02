@@ -4,13 +4,13 @@ import { basename, extname } from "path";
 import { Readable } from "stream";
 import { NextRequest, NextResponse } from "next/server";
 import {
-  getWorkspaceDir,
   safeResolve,
   isCrossOrigin,
   writeWorkspaceFile,
   deleteWorkspaceFile,
   MAX_WORKSPACE_WRITE_BYTES,
 } from "@/lib/server/workspace";
+import { ProjectRefusedError, projectDir } from "@/lib/server/projects";
 
 /** RFC 6266 Content-Disposition value with both an ASCII fallback and a UTF-8
  *  `filename*` so non-ASCII names (e.g. Chinese) download with their real name
@@ -75,7 +75,7 @@ export async function GET(request: NextRequest) {
     }
     const download = request.nextUrl.searchParams.get("download") === "1";
 
-    const workspaceDir = await getWorkspaceDir();
+    const workspaceDir = await projectDir(request);
     // safeResolve canonicalizes + re-checks containment, so a symlink can't be
     // used to read a file outside the workspace (or a hidden/internal entry).
     const target = await safeResolve(workspaceDir, relPath);
@@ -115,7 +115,7 @@ export async function GET(request: NextRequest) {
       {
         error: error instanceof Error ? error.message : "Failed to read file.",
       },
-      { status: 400 }
+      { status: error instanceof ProjectRefusedError ? 403 : 400 }
     );
   }
 }
@@ -224,7 +224,7 @@ export async function PUT(request: NextRequest) {
         { status: 400 }
       );
     }
-    const workspaceDir = await getWorkspaceDir();
+    const workspaceDir = await projectDir(request);
     const result = await writeWorkspaceFile(
       workspaceDir,
       relPath,
@@ -236,7 +236,7 @@ export async function PUT(request: NextRequest) {
       {
         error: error instanceof Error ? error.message : "Failed to save file.",
       },
-      { status: 400 }
+      { status: error instanceof ProjectRefusedError ? 403 : 400 }
     );
   }
 }
@@ -254,7 +254,7 @@ export async function DELETE(request: NextRequest) {
     if (!relPath) {
       return NextResponse.json({ error: "Missing path." }, { status: 400 });
     }
-    const workspaceDir = await getWorkspaceDir();
+    const workspaceDir = await projectDir(request);
     await deleteWorkspaceFile(workspaceDir, relPath);
     return NextResponse.json({ ok: true });
   } catch (error) {
@@ -263,7 +263,7 @@ export async function DELETE(request: NextRequest) {
         error:
           error instanceof Error ? error.message : "Failed to delete file.",
       },
-      { status: 400 }
+      { status: error instanceof ProjectRefusedError ? 403 : 400 }
     );
   }
 }

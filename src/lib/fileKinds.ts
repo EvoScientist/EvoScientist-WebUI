@@ -117,11 +117,13 @@ export function isMarkdownExt(ext: string): boolean {
   return ext === "md" || ext === "markdown";
 }
 
+/** A file of the project `project` names (its handle, `projectHandle`). */
 export function workspaceFileUrl(
+  project: string,
   path: string,
   opts: { download?: boolean; version?: number } = {}
 ): string {
-  const qs = new URLSearchParams({ path });
+  const qs = new URLSearchParams({ project, path });
   if (opts.download) qs.set("download", "1");
   // Only defeats the browser cache when an image or PDF is shown again.
   if (opts.version) qs.set("v", String(opts.version));

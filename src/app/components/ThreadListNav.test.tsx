@@ -39,7 +39,7 @@ vi.mock("@/app/hooks/useMemoryActivity", () => ({
 
 vi.mock("@/app/hooks/useThreads", () => ({
   useThreads: () => ({
-    data: [[]],
+    data: [{ items: [], full: false }],
     size: 1,
     setSize: vi.fn(),
     mutate: vi.fn(),
@@ -53,6 +53,7 @@ vi.mock("@/app/hooks/useThreads", () => ({
 }));
 
 import { ThreadList } from "./ThreadList";
+import { TestProjectsProvider } from "@/test/mockProjects";
 
 beforeEach(() => {
   nav.view = null;
@@ -63,11 +64,13 @@ beforeEach(() => {
 describe("left rail Experts entry", () => {
   const renderRail = () =>
     render(
-      <ThreadList
-        onThreadSelect={vi.fn()}
-        onMutateReady={vi.fn()}
-        onInterruptCountChange={vi.fn()}
-      />
+      <TestProjectsProvider>
+        <ThreadList
+          onThreadSelect={vi.fn()}
+          onMutateReady={vi.fn()}
+          onInterruptCountChange={vi.fn()}
+        />
+      </TestProjectsProvider>
     );
 
   it("opens the Experts view", () => {
@@ -89,11 +92,13 @@ describe("left rail without Setup", () => {
   it("has no Setup entry, also once the deployment answered", () => {
     nav.settings = { setup_needed: false };
     render(
-      <ThreadList
-        onThreadSelect={vi.fn()}
-        onMutateReady={vi.fn()}
-        onInterruptCountChange={vi.fn()}
-      />
+      <TestProjectsProvider>
+        <ThreadList
+          onThreadSelect={vi.fn()}
+          onMutateReady={vi.fn()}
+          onInterruptCountChange={vi.fn()}
+        />
+      </TestProjectsProvider>
     );
     expect(screen.getByRole("button", { name: /^experts$/i })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /^setup$/i })).toBeNull();

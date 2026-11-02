@@ -25,18 +25,20 @@ export function notifyTeamsChanged(): void {
 }
 
 /**
- * The deployment's installed experts, from `GET ${deploymentUrl}/api/teams`.
+ * The experts installed for `project` (its key), from
+ * `GET ${deploymentUrl}/api/teams?workspace_dir=<project>`; none without a
+ * project.
  *
- * This is the authority on what is installed: the backend walks the workspace,
- * global and builtin skill tiers, while the Next.js `/api/skills` route only
- * reads the global one. Unlike the model registry this is NOT cached at module
+ * This is the authority on what is installed: the backend walks the
+ * project's, the global and the builtin skill tiers, while the Next.js
+ * `/api/skills` route only reads the global one. Unlike the model registry this is NOT cached at module
  * level — installing or uninstalling a skill changes it, so the Experts view
  * refetches after every mutation via `refresh`.
  *
  * Failures are non-fatal: an older deployment without the route simply yields
  * an empty list, and the view falls back to what the local scan can see.
  */
-export function useTeams(): {
+export function useTeams(project: string | null): {
   teams: TeamEntry[];
   loading: boolean;
   error: string | null;
@@ -48,7 +50,8 @@ export function useTeams(): {
   // deployment answers; a refresh of the same deployment keeps the list up
   // while it re-reads.
   const { deploymentUrl, apiKey } = useDeployment();
-  const key = `${deploymentUrl}\n${apiKey}`;
+  // Another project's experts are another list.
+  const key = `${deploymentUrl}\n${apiKey}\n${project ?? ""}`;
   const [revision, setRevision] = useState(0);
   const [loaded, setLoaded] = useState<{
     key: string;
@@ -70,11 +73,14 @@ export function useTeams(): {
   }, []);
 
   useEffect(() => {
-    if (!deploymentUrl) return;
+    if (!deploymentUrl || !project) return;
     let cancelled = false;
     const headers: Record<string, string> = {};
     if (apiKey) headers["X-Api-Key"] = apiKey;
-    fetch(`${deploymentUrl.replace(/\/$/, "")}/api/teams`, { headers })
+    const query = new URLSearchParams({ workspace_dir: project });
+    fetch(`${deploymentUrl.replace(/\/$/, "")}/api/teams?${query}`, {
+      headers,
+    })
       .then(async (r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return parseTeams(await r.json());
@@ -91,10 +97,10 @@ export function useTeams(): {
     return () => {
       cancelled = true;
     };
-  }, [deploymentUrl, apiKey, key, revision]);
+  }, [deploymentUrl, apiKey, key, revision, project]);
 
   const { teams, error } = loaded;
-  const loading = !!deploymentUrl && loaded.revision !== revision;
+  const loading = !!deploymentUrl && !!project && loaded.revision !== revision;
 
   return { teams, loading, error, refresh };
 }
