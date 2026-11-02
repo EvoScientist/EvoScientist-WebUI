@@ -53,6 +53,7 @@ import { createThinkingClock, streamedModel } from "@/lib/thinkingTimer";
 import {
   defaultModelPick,
   MODEL_OVERRIDE_METADATA_KEY,
+  pinnedModelHint,
   type ModelOverride,
 } from "@/lib/modelCommand";
 import type { ModelRegistry } from "@/app/hooks/useAvailableModels";
@@ -726,7 +727,11 @@ export function useChat({
       }
       lastSubmittedHumanIdRef.current = null;
       unsentGoalRef.current = null;
-      toast.error(formatStreamError(error));
+      const hint = pinnedModelHint(modelHintRef.current);
+      toast.error(
+        formatStreamError(error),
+        hint ? { description: hint } : undefined
+      );
     },
     // The backend made the run, so a goal request was not refused.
     onCreated: () => {
@@ -1152,6 +1157,9 @@ export function useChat({
     () => defaultModelPick(defaultModel),
     [defaultModel]
   );
+  // For a run error: the thread's pick and the default, read when it fails.
+  const modelHintRef = useRef({ pick: modelOverride, defaultModel });
+  modelHintRef.current = { pick: modelOverride, defaultModel };
   const modelForRun = useCallback((): ModelOverride | null => {
     if (modelOverride) return modelOverride;
     if (threadGraph !== CHAT_GRAPH_ID || !defaultPick) return null;

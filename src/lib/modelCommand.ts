@@ -111,3 +111,22 @@ export function isDefaultPick(
     pick.model_provider === defaultEntry.provider
   );
 }
+
+/** For a run that failed on a thread kept on another model than the
+ *  default (its provider may no longer be set up): how to move it. Null when
+ *  the thread is on the default, or either is unknown. */
+export function pinnedModelHint({
+  pick,
+  defaultModel,
+}: {
+  pick: ModelOverride | null;
+  defaultModel: { name: string; provider: string | null | undefined } | null;
+}): string | null {
+  const target = defaultModelPick(defaultModel);
+  if (!pick || !target || isDefaultPick(pick, defaultModel)) return null;
+  const named = (m: ModelOverride) =>
+    m.model_provider ? `${m.model} (${m.model_provider})` : m.model;
+  return `This chat runs on ${named(pick)}. /model reset moves it to ${named(
+    target
+  )}.`;
+}

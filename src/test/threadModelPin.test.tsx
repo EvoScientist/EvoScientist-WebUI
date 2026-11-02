@@ -5,6 +5,7 @@
 // the default moves only new threads.
 
 import { act, waitFor } from "@testing-library/react";
+import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   MockStreamStore,
@@ -71,6 +72,7 @@ describe("thread model pin", () => {
   beforeEach(() => {
     queryState.initialThreadId = null;
     writePick.mockClear();
+    vi.mocked(toast.error).mockClear();
     stream = new MockStreamStore();
     installMockStreamStore(stream);
     installMockClient(new MockClient());
@@ -228,5 +230,46 @@ describe("thread model pin", () => {
     expect(sentModel(0)).toMatchObject({ model: "m-0" });
     expect(sentModel(0)).not.toHaveProperty("model_provider");
     expect(writePick).toHaveBeenCalledWith(THREAD, { model: "m-0" });
+  });
+
+  it("says how to move a thread kept on another model when its run fails", async () => {
+    openThread({
+      graph_id: "EvoScientist",
+      workspace_dir: KEY,
+      model_override: { model: "m-2", model_provider: "p-1" },
+    });
+    const { result } = renderChat({ defaultModel: M0, projects: ready() });
+    await waitFor(() => expect(result.current.modelOverride).not.toBeNull());
+
+    act(() => {
+      stream.emitError(new Error("p-1 API key missing"));
+    });
+
+    expect(toast.error).toHaveBeenCalledWith(
+      expect.stringContaining("p-1 API key missing"),
+      {
+        description:
+          "This chat runs on m-2 (p-1). /model reset moves it to m-0 (p-0).",
+      }
+    );
+  });
+
+  it("adds nothing to a run error on a thread on the default", async () => {
+    openThread({
+      graph_id: "EvoScientist",
+      workspace_dir: KEY,
+      model_override: { model: "m-0", model_provider: "p-0" },
+    });
+    const { result } = renderChat({ defaultModel: M0, projects: ready() });
+    await waitFor(() => expect(result.current.modelOverride).not.toBeNull());
+
+    act(() => {
+      stream.emitError(new Error("provider quota exceeded"));
+    });
+
+    expect(toast.error).toHaveBeenCalledWith(
+      expect.stringContaining("quota"),
+      undefined
+    );
   });
 });

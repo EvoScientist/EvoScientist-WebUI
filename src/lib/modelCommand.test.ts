@@ -3,6 +3,7 @@ import {
   defaultModelPick,
   isDefaultPick,
   parseModelCommand,
+  pinnedModelHint,
 } from "./modelCommand";
 
 describe("parseModelCommand", () => {
@@ -130,5 +131,37 @@ describe("isDefaultPick", () => {
     );
     expect(isDefaultPick(null, def)).toBe(false);
     expect(isDefaultPick({ model: "m-0" }, null)).toBe(false);
+  });
+});
+
+describe("pinnedModelHint", () => {
+  const defaultModel = { name: "m-0", provider: "p-0" };
+
+  it("names the thread's model and the default it would move to", () => {
+    expect(
+      pinnedModelHint({
+        pick: { model: "m-2", model_provider: "p-1" },
+        defaultModel,
+      })
+    ).toBe("This chat runs on m-2 (p-1). /model reset moves it to m-0 (p-0).");
+    expect(
+      pinnedModelHint({
+        pick: { model: "m-2" },
+        defaultModel: { name: "m-0", provider: null },
+      })
+    ).toBe("This chat runs on m-2. /model reset moves it to m-0.");
+  });
+
+  it("says nothing on the default, without a pick or without a default", () => {
+    expect(
+      pinnedModelHint({
+        pick: { model: "m-0", model_provider: "p-0" },
+        defaultModel,
+      })
+    ).toBeNull();
+    expect(pinnedModelHint({ pick: null, defaultModel })).toBeNull();
+    expect(
+      pinnedModelHint({ pick: { model: "m-2" }, defaultModel: null })
+    ).toBeNull();
   });
 });
