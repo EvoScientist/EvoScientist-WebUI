@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import type { Cron } from "@langchain/langgraph-sdk";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ClientConfig, Cron } from "@langchain/langgraph-sdk";
 import { Client } from "@langchain/langgraph-sdk";
 import { getConfig } from "@/lib/config";
 import { browserTimeZone } from "@/lib/cronUtils";
@@ -25,7 +25,9 @@ function workspaceTag(target: SchedulerTarget): Record<string, string> {
   return target.workspaceDir ? { workspace_dir: target.workspaceDir } : {};
 }
 
-export function makeClient(): Client | null {
+export function makeClient(
+  options: Pick<ClientConfig, "callerOptions" | "timeoutMs"> = {}
+): Client | null {
   const config = getConfig();
   if (!config) return null;
   const apiKey =
@@ -34,7 +36,28 @@ export function makeClient(): Client | null {
     new Client({
       apiUrl: config.deploymentUrl,
       defaultHeaders: apiKey ? { "X-Api-Key": apiKey } : {},
+      ...options,
     })
+  );
+}
+
+// The panel is locked while its list read or a write is out, so these fail
+// at once instead of retrying: the SDK's retries took 16 to 23 s against a
+// closed port. Only the read has a timeout, which also covers the `keep`
+// fix-ups it sends (the same each time, so one cut off and sent again does
+// no harm); a write cut off by one may have been made on the server anyway.
+const LIST_READ_TIMEOUT_MS = 10_000;
+
+function panelClient(timeoutMs?: number): Client | null {
+  return makeClient({ callerOptions: { maxRetries: 0 }, timeoutMs });
+}
+
+/** A timed-out request: the browser's `TimeoutError`, or the SDK's wrap of
+ *  one that isn't an `Error` (its message starts with the name). */
+function isTimeoutError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error.name === "TimeoutError" || error.message.startsWith("TimeoutError"))
   );
 }
 
@@ -50,13 +73,20 @@ export interface ScheduledTask {
   updated_at: string;
   /** The folder the task runs in; null for a task made before tags. */
   workspaceDir: string | null;
+  /** False while the task is paused: it keeps its schedule but doesn't run. */
+  enabled: boolean;
+  input: Record<string, unknown>;
+}
+
+/** When `task` runs next; null while it is paused or has no next run. */
+export function upcomingRun(task: ScheduledTask): string | null {
+  return task.enabled ? task.next_run_date : null;
 }
 
 /**
- * Why `task` can't be edited or run from here: it runs in another folder
- * than the backend's, and editing or running it would move it to this one.
- * Null when it can. An untagged task counts as this folder's, as the core's
- * scheduling does.
+ * Why `task` can't be run from here: it runs in another folder than the
+ * backend's, and a manual run would run it in this one. Null when it can. An
+ * untagged task counts as this folder's, as the core's scheduling does.
  */
 export function otherFolderReason(
   task: ScheduledTask,
@@ -83,11 +113,20 @@ function parseCron(cron: Cron): ScheduledTask {
       typeof meta.workspace_dir === "string" && meta.workspace_dir
         ? meta.workspace_dir
         : null,
+    enabled: cron.enabled === true,
+    input: storedInput(cron),
   };
 }
 
+function storedInput(cron: Cron): Record<string, unknown> {
+  const input = cron.payload?.input;
+  return input && typeof input === "object" && !Array.isArray(input)
+    ? (input as Record<string, unknown>)
+    : {};
+}
+
 export async function listScheduledTasks(): Promise<ScheduledTask[]> {
-  const client = makeClient();
+  const client = panelClient(LIST_READ_TIMEOUT_MS);
   if (!client) return [];
   // Only EvoScientist crons carry run_kind in metadata. Scoping the list to
   // the backend's folder comes with the project sidebar.
@@ -116,7 +155,7 @@ export async function createScheduledTask(params: {
   timezone?: string | null;
   target: SchedulerTarget;
 }): Promise<ScheduledTask> {
-  const client = makeClient();
+  const client = panelClient();
   if (!client) throw new Error("No EvoScientist deployment configured.");
   const cron = await client.crons.create(params.target.assistantId, {
     input: { messages: [{ role: "user", content: params.prompt }] },
@@ -135,11 +174,19 @@ export async function createScheduledTask(params: {
 }
 
 export async function deleteScheduledTask(cronId: string): Promise<void> {
-  const client = makeClient();
+  const client = panelClient();
   if (!client) throw new Error("No EvoScientist deployment configured.");
   await client.crons.delete(cronId);
 }
 
+/**
+ * Edit a task in place: it keeps its ID, its folder's assistant, its run
+ * history and whether it is paused. The server merges `metadata` into the
+ * stored one and replaces `input`. It also folds the whole request into the
+ * stored run payload, whose `metadata` becomes just `{name, prompt}`: fired
+ * runs keep `run_kind` and `workspace_dir` only because the scheduler merges
+ * the cron's metadata into each run's when it fires.
+ */
 export async function updateScheduledTask(params: {
   cronId: string;
   name: string;
@@ -150,22 +197,43 @@ export async function updateScheduledTask(params: {
    * one (made before #61, meant as local time) moves to the browser's.
    */
   timezone: string | null;
-  target: SchedulerTarget;
-}): Promise<{ task: ScheduledTask; oldTaskDeleted: boolean }> {
-  const task = await createScheduledTask({
-    name: params.name,
-    prompt: params.prompt,
+  input: Record<string, unknown>;
+}): Promise<ScheduledTask> {
+  const client = panelClient();
+  if (!client) throw new Error("No EvoScientist deployment configured.");
+  const cron = await client.crons.update(params.cronId, {
+    input: {
+      ...params.input,
+      messages: [{ role: "user", content: params.prompt }],
+    },
     schedule: params.schedule,
-    timezone: params.timezone,
-    target: params.target,
+    timezone: params.timezone || browserTimeZone(),
+    metadata: { name: params.name, prompt: params.prompt },
   });
+  return parseCron(cron);
+}
 
-  try {
-    await deleteScheduledTask(params.cronId);
-    return { task, oldTaskDeleted: true };
-  } catch {
-    return { task, oldTaskDeleted: false };
-  }
+/**
+ * Pause a task (it keeps its schedule but doesn't run) or resume it. A pause
+ * leaves the next run date where it was, so the server would fire a resumed
+ * task at once for a time missed while paused; resuming sends the schedule
+ * again, which makes the server count the next run from now.
+ */
+export async function setScheduledTaskEnabled(
+  task: Pick<ScheduledTask, "cron_id" | "schedule">,
+  enabled: boolean
+): Promise<ScheduledTask> {
+  const client = panelClient();
+  if (!client) throw new Error("No EvoScientist deployment configured.");
+  const cron = await client.crons.update(
+    task.cron_id,
+    enabled ? { enabled, schedule: task.schedule } : { enabled }
+  );
+  return parseCron(cron);
+}
+
+export function scheduledTaskMissing(error: unknown): boolean {
+  return getHttpStatus(error) === 404;
 }
 
 export async function runScheduledTaskNow(
@@ -173,10 +241,12 @@ export async function runScheduledTaskNow(
     cron_id: string;
     name: string;
     prompt: string;
+    /** The task's stored run input: a rubric in it grades the run. */
+    input: Record<string, unknown>;
   },
   target: SchedulerTarget
 ): Promise<void> {
-  const client = makeClient();
+  const client = panelClient();
   if (!client) throw new Error("No EvoScientist deployment configured.");
   const metadata = {
     run_kind: SCHEDULED_RUN_KIND,
@@ -191,7 +261,10 @@ export async function runScheduledTaskNow(
     metadata,
   });
   await client.runs.create(thread.thread_id, target.assistantId, {
-    input: { messages: [{ role: "user", content: task.prompt }] },
+    input: {
+      ...task.input,
+      messages: [{ role: "user", content: task.prompt }],
+    },
     metadata,
     config: { configurable: { cron_id: task.cron_id } },
   });
@@ -256,23 +329,31 @@ export function useScheduledTasks(): {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [rev, setRev] = useState(0);
+  const requestRev = useRef(0);
 
-  const refresh = useCallback(() => setRev((r) => r + 1), []);
+  // Loading from the call on, in the same render as what the caller sets
+  // with it: nothing reads the list as current until the new read is in.
+  const refresh = useCallback(() => {
+    requestRev.current += 1;
+    setLoading(true);
+    setRev((r) => r + 1);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
     listScheduledTasks()
       .then((result) => {
-        if (!cancelled) {
+        if (!cancelled && requestRev.current === rev) {
           setTasks(result);
           setError(null);
         }
       })
       .catch((err: unknown) => {
-        if (!cancelled) {
+        if (!cancelled && requestRev.current === rev) {
           setError(
-            err instanceof Error
+            isTimeoutError(err)
+              ? "The backend didn't answer."
+              : err instanceof Error
               ? err.message
               : "Failed to load scheduled tasks."
           );
@@ -280,7 +361,7 @@ export function useScheduledTasks(): {
         }
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled && requestRev.current === rev) setLoading(false);
       });
     return () => {
       cancelled = true;

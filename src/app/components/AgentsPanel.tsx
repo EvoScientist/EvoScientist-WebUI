@@ -242,7 +242,7 @@ export function AgentsPanel({ onReportToMainChat }: AgentsPanelProps) {
       setChatError((e) => ({
         ...e,
         [task.task_id]: isRunFolderMismatchError(err)
-          ? "The backend serves another folder than this agent's."
+          ? "The backend doesn't serve this agent's folder."
           : assistantsGone
           ? "The backend lost this folder's assistants; they are being recreated. Try again."
           : isMissingThreadOrAssistantError(err)

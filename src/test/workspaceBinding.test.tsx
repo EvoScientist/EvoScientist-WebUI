@@ -276,28 +276,33 @@ describe("workspace binding", () => {
     expect(stream.getSubmitCalls()).toHaveLength(0);
   });
 
-  it("asks the backend again after a folder mismatch and explains a refusal", async () => {
-    const workspace = ready();
-    renderChat({ connected: true, workspace });
+  it.each([
+    "RunFolderMismatchError",
+    "ProjectNotServedError",
+    "NoProjectError",
+  ])(
+    "asks the backend again after a %s and explains the refusal",
+    async (name) => {
+      const workspace = ready();
+      renderChat({ connected: true, workspace });
 
-    act(() => {
-      stream.emitError(
-        Object.assign(
-          new Error("This EvoScientist server serves workspace /x"),
-          {
-            name: "RunFolderMismatchError",
-          }
+      act(() => {
+        stream.emitError(
+          Object.assign(
+            new Error("This EvoScientist server serves workspace /x"),
+            { name }
+          )
+        );
+      });
+
+      await waitFor(() =>
+        expect(toast.error).toHaveBeenCalledWith(
+          expect.stringContaining("serves workspace /x")
         )
       );
-    });
-
-    await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(
-        expect.stringContaining("serves workspace /x")
-      )
-    );
-    expect(workspace.refresh).toHaveBeenCalledTimes(1);
-  });
+      expect(workspace.refresh).toHaveBeenCalledTimes(1);
+    }
+  );
 
   it("says nothing when the read after a mismatch is cut short by another backend", async () => {
     vi.mocked(toast.info).mockClear();

@@ -99,16 +99,26 @@ export function isMissingThreadOrAssistantError(error: unknown): boolean {
   );
 }
 
+/** The core's `RunFolderMismatchError` and its subclasses: a run for a
+ *  project the backend doesn't serve (`ProjectNotServedError`), and a new
+ *  conversation on no known project's assistant (`NoProjectError`). */
+const FOLDER_REFUSALS = [
+  "RunFolderMismatchError",
+  "ProjectNotServedError",
+  "NoProjectError",
+];
+
 /**
- * The run was refused because the backend serves another folder than the one
- * the run is for (the core's `RunFolderMismatchError`). It reaches `useStream`
- * as an error with that name, and `runs.wait` as a message starting with it.
+ * The run was refused for its folder: the backend doesn't serve the folder
+ * the run is for. A run error carries its exact class name, so each of the
+ * core's refusals is matched. It reaches `useStream` as an error with that
+ * name, and `runs.wait` as a message starting with it.
  */
 export function isRunFolderMismatchError(error: unknown): boolean {
-  if ((error as { name?: unknown } | null)?.name === "RunFolderMismatchError") {
-    return true;
-  }
-  return formatStreamError(error).includes("RunFolderMismatchError");
+  const name = (error as { name?: unknown } | null)?.name;
+  if (typeof name === "string" && FOLDER_REFUSALS.includes(name)) return true;
+  const message = formatStreamError(error);
+  return FOLDER_REFUSALS.some((refusal) => message.includes(refusal));
 }
 
 /**

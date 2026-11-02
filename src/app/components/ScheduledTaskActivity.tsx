@@ -8,7 +8,11 @@ import {
   MessageCircleQuestion,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { makeClient, type ScheduledTask } from "@/app/hooks/useScheduledTasks";
+import {
+  makeClient,
+  upcomingRun,
+  type ScheduledTask,
+} from "@/app/hooks/useScheduledTasks";
 import { useScheduledTaskRuns } from "@/app/hooks/useScheduledTaskRuns";
 import {
   canStillProduceSteps,
@@ -66,6 +70,7 @@ export function ScheduledTaskActivity({
   onOpenThread?: (id: string) => void | Promise<void>;
 }) {
   const { runs, loaded, error } = useScheduledTaskRuns(task);
+  const nextRun = upcomingRun(task);
   const [now, setNow] = useState(() => Date.now());
   const [expandedThreadId, setExpandedThreadId] = useState<string | null>(null);
   const [stepsByThread, setStepsByThread] = useState<
@@ -149,10 +154,12 @@ export function ScheduledTaskActivity({
               aria-hidden="true"
             />
             <p className="min-w-0 truncate text-sm text-muted-foreground">
-              {task.next_run_date
-                ? `Next run ${nextRunLabel(
-                    task.next_run_date
-                  )} · ${formatRunDate(task.next_run_date)}`
+              {!task.enabled
+                ? "Paused"
+                : nextRun
+                ? `Next run ${nextRunLabel(nextRun)} · ${formatRunDate(
+                    nextRun
+                  )}`
                 : "Not scheduled"}
             </p>
           </div>
