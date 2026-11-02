@@ -7,9 +7,11 @@ import {
   useChat,
 } from "@/app/hooks/useChat";
 import type { UseStreamThread } from "@langchain/langgraph-sdk/react";
+import type { ModelRegistry } from "@/app/hooks/useAvailableModels";
 
 interface ChatProviderProps {
   children: ReactNode;
+  defaultModel?: ModelRegistry["defaultEntry"];
   onHistoryRevalidate?: () => void;
   onThreadUnavailable?: (
     info: ThreadUnavailableInfo
@@ -19,11 +21,13 @@ interface ChatProviderProps {
 
 export function ChatProvider({
   children,
+  defaultModel,
   onHistoryRevalidate,
   onThreadUnavailable,
   thread,
 }: ChatProviderProps) {
   const chat = useChat({
+    defaultModel,
     onHistoryRevalidate,
     onThreadUnavailable,
     thread,

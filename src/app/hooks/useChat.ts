@@ -51,9 +51,11 @@ import { parseFallbackNotice } from "@/lib/middlewareEvents";
 import { createRetryToasts, ModelRetryTracker } from "@/lib/modelRetry";
 import { createThinkingClock, streamedModel } from "@/lib/thinkingTimer";
 import {
+  defaultModelPick,
   MODEL_OVERRIDE_METADATA_KEY,
   type ModelOverride,
 } from "@/lib/modelCommand";
+import type { ModelRegistry } from "@/app/hooks/useAvailableModels";
 import {
   deriveThreadMetadata,
   persistThreadDerivedMetadata,
@@ -273,10 +275,14 @@ function goalBusyAfter(event: GoalEvent): GoalBusy {
 }
 
 export function useChat({
+  defaultModel = null,
   onHistoryRevalidate,
   onThreadUnavailable,
   thread,
 }: {
+  /** The model registry's default (`/api/models`): a chat thread without a
+   *  pick is pinned to it at its next run. Null while unknown. */
+  defaultModel?: ModelRegistry["defaultEntry"];
   onHistoryRevalidate?: () => void;
   /**
    * Called instead of the local `setThreadId(null)` fallback when the
@@ -1136,6 +1142,25 @@ export function useChat({
     },
     [threadId]
   );
+
+  // A chat thread keeps the model it runs on: one without a pick (a new
+  // chat, or a thread from before picks were written) is pinned to the
+  // registry's default at its next run, so a later change of the default
+  // moves only new threads. Not on open, so browsing writes nothing. A
+  // scheduled task's thread runs on its own model and stays unpinned.
+  const defaultPick = useMemo(
+    () => defaultModelPick(defaultModel),
+    [defaultModel]
+  );
+  const modelForRun = useCallback((): ModelOverride | null => {
+    if (modelOverride) return modelOverride;
+    if (threadGraph !== CHAT_GRAPH_ID || !defaultPick) return null;
+    void setModelOverride(defaultPick).catch(() => {
+      // The run still carries the pin; a thread whose write failed is
+      // pinned again at its next run after it is opened again.
+    });
+    return defaultPick;
+  }, [defaultPick, modelOverride, setModelOverride, threadGraph]);
   // `stream.interrupt` is a fresh object per access (SDK getter); key the
   // recovery effect on its ID (or value fallback) so a pending interrupt doesn't
   // re-run it per commit.
@@ -1350,16 +1375,18 @@ export function useChat({
   // practice.
   const messages = useDeferredValue(rawMessages);
 
-  // The run's config carries only the per-thread model override. The server
-  // layers the assistant's config (its `workspace_dir`) underneath, so a
-  // stale assistant held here can't send another folder that would win.
+  // The run's config carries only the thread's model (pinned here when it
+  // has none yet, see `modelForRun`; called only when a run is sent). The
+  // server layers the assistant's config (its `workspace_dir`) underneath,
+  // so a stale assistant held here can't send another folder that would win.
   const buildRunConfig = useCallback(
     (mode: RunMode = "thread") => {
       const configurable: Record<string, unknown> = {};
-      if (modelOverride) {
-        configurable.model = modelOverride.model;
-        if (modelOverride.model_provider) {
-          configurable.model_provider = modelOverride.model_provider;
+      const model = modelForRun();
+      if (model) {
+        configurable.model = model.model;
+        if (model.model_provider) {
+          configurable.model_provider = model.model_provider;
         }
       }
       // The core's grading marker: a thread's goal applies only to runs
@@ -1370,7 +1397,7 @@ export function useChat({
       }
       return { configurable };
     },
-    [modelOverride, goalSupported]
+    [modelForRun, goalSupported]
   );
 
   const sendMessage = useCallback(

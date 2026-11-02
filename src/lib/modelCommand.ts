@@ -84,3 +84,30 @@ export function parseModelCommand(input: string): ModelCommand | null {
   if (parts.length > 2) return null;
   return { kind: "set", model: parts[0], provider: parts[1] };
 }
+
+/** The registry's default model, as a thread pick. A thread is pinned to
+ *  it at its next run, and `/model reset` writes it. */
+export function defaultModelPick(
+  defaultEntry: { name: string; provider: string | null | undefined } | null
+): ModelOverride | null {
+  if (!defaultEntry?.name) return null;
+  return defaultEntry.provider
+    ? { model: defaultEntry.name, model_provider: defaultEntry.provider }
+    : { model: defaultEntry.name };
+}
+
+/** Whether a thread's pick is the registry's default model. A pick without
+ *  a provider (`/model <name>`) runs on the default provider for that name,
+ *  so only the name has to match then. */
+export function isDefaultPick(
+  pick: ModelOverride | null,
+  defaultEntry: { name: string; provider: string | null | undefined } | null
+): boolean {
+  if (!pick || !defaultEntry) return false;
+  if (pick.model !== defaultEntry.name) return false;
+  return (
+    !pick.model_provider ||
+    !defaultEntry.provider ||
+    pick.model_provider === defaultEntry.provider
+  );
+}
