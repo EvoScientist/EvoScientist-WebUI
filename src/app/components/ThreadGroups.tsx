@@ -29,8 +29,8 @@ const AUTO_PAGES = 5;
 /**
  * One section's threads (a project's, or those with no project): pinned
  * first, then by time, a page at a time. Threads in `exclude` show elsewhere
- * (Requiring Attention). Mounted only while its section is open, so a
- * collapsed section reads nothing.
+ * (Requiring Attention). Mounted only while its section is open (every
+ * section is, during a search), so a collapsed section reads nothing.
  */
 export function ThreadGroups({
   scope,
@@ -41,6 +41,7 @@ export function ThreadGroups({
   revision,
   renderThread,
   emptyText,
+  onEmptyChange,
 }: {
   scope: ThreadScope;
   status?: Thread["status"];
@@ -50,6 +51,8 @@ export function ThreadGroups({
   revision: number;
   renderThread: (thread: ThreadItem) => ReactNode;
   emptyText: string;
+  /** Told whether the section has settled with nothing to show. */
+  onEmptyChange?: (empty: boolean) => void;
 }) {
   const threads = useThreads({ scope, status, limit: PAGE_SIZE });
   useRevalidateOn(revision, threads.mutate);
@@ -89,6 +92,16 @@ export function ThreadGroups({
   useEffect(() => {
     if (fill) void setSize(size + 1);
   }, [fill, size, setSize]);
+
+  const empty =
+    !threads.error &&
+    threads.data !== undefined &&
+    shown.length === 0 &&
+    !fill &&
+    !isLoadingMore;
+  useEffect(() => {
+    onEmptyChange?.(empty);
+  }, [empty, onEmptyChange]);
 
   if (threads.error) {
     return (

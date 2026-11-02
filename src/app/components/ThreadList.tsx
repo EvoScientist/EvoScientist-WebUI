@@ -328,6 +328,33 @@ export function ThreadList({
     });
   const statusParam = statusFilter === "all" ? undefined : statusFilter;
 
+  // A search reads every section, closed ones too, and hides those with no
+  // match.
+  const searching = search.trim() !== "";
+  const [emptySections, setEmptySections] = useState<ReadonlySet<string>>(
+    () => new Set()
+  );
+  const sectionEmpty = useCallback(
+    (key: string, empty: boolean) =>
+      setEmptySections((prev) => {
+        if (prev.has(key) === empty) return prev;
+        const next = new Set(prev);
+        if (empty) next.add(key);
+        else next.delete(key);
+        return next;
+      }),
+    []
+  );
+  const sectionKeys = [
+    ...projectList.map((p) => p.key),
+    ...(ready ? [NO_PROJECT_SECTION] : []),
+  ];
+  const noMatch =
+    searching &&
+    attentionShown.length === 0 &&
+    sectionKeys.length > 0 &&
+    sectionKeys.every((key) => emptySections.has(key));
+
   // Expose thread list revalidation to the parent.
   const onMutateReadyRef = useRef(onMutateReady);
   useEffect(() => {
@@ -937,6 +964,11 @@ export function ThreadList({
               Couldn't check for conversations waiting for you.
             </p>
           )}
+          {noMatch && (
+            <p className="px-2.5 py-2 text-xs text-muted-foreground">
+              No research matches your search.
+            </p>
+          )}
           {attentionShown.length > 0 && (
             <section
               aria-label="Requiring Attention"
@@ -962,7 +994,8 @@ export function ThreadList({
             <ProjectSection
               key={project.key}
               project={project}
-              open={open.has(project.key)}
+              open={open.has(project.key) || searching}
+              hidden={searching && emptySections.has(project.key)}
               onToggle={() => toggleSection(project.key)}
               busy={busyProjects.has(project.key)}
               waiting={waitingByProject.get(project.key) ?? 0}
@@ -985,6 +1018,7 @@ export function ThreadList({
                 revision={revision}
                 renderThread={(thread) => renderThreadCard(thread)}
                 emptyText="No research in this project yet."
+                onEmptyChange={(empty) => sectionEmpty(project.key, empty)}
               />
             </ProjectSection>
           ))}
@@ -1007,7 +1041,8 @@ export function ThreadList({
             <ProjectSection
               title="No project"
               detail="Conversations that record no folder: pick a project in the composer to continue one."
-              open={open.has(NO_PROJECT_SECTION)}
+              open={open.has(NO_PROJECT_SECTION) || searching}
+              hidden={searching && emptySections.has(NO_PROJECT_SECTION)}
               onToggle={() => toggleSection(NO_PROJECT_SECTION)}
             >
               <ThreadGroups
@@ -1019,6 +1054,9 @@ export function ThreadList({
                 revision={revision}
                 renderThread={(thread) => renderThreadCard(thread)}
                 emptyText="None."
+                onEmptyChange={(empty) =>
+                  sectionEmpty(NO_PROJECT_SECTION, empty)
+                }
               />
             </ProjectSection>
           )}
@@ -1143,6 +1181,7 @@ function ProjectSection({
   title,
   detail,
   open,
+  hidden = false,
   onToggle,
   busy = false,
   waiting = 0,
@@ -1154,6 +1193,8 @@ function ProjectSection({
   title?: string;
   detail?: string;
   open: boolean;
+  /** Out of view, its threads still mounted (a search with no match here). */
+  hidden?: boolean;
   onToggle: () => void;
   busy?: boolean;
   waiting?: number;
@@ -1168,6 +1209,7 @@ function ProjectSection({
   return (
     <section
       aria-label={name}
+      hidden={hidden}
       className="mb-1"
     >
       <div className="flex items-center">

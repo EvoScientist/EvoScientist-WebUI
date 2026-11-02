@@ -443,6 +443,53 @@ describe("ThreadList by project", () => {
     expect(screen.queryByText("Has a folder")).toBeNull();
   });
 
+  it("searches closed sections too, and hides those with no match", async () => {
+    lists.all = [
+      thread({ id: "n-1", title: "Beta notes", workspaceDir: null }),
+    ];
+    renderList(<ThreadList onThreadSelect={vi.fn()} />, two());
+    const search = screen.getByRole("searchbox", { name: "Search research" });
+
+    fireEvent.change(search, { target: { value: "beta" } });
+
+    expect(await screen.findByText("Beta thread")).toBeTruthy();
+    expect(screen.getByText("Beta notes")).toBeTruthy();
+    expect(
+      screen
+        .getByRole("button", { name: /^projB/ })
+        .getAttribute("aria-expanded")
+    ).toBe("true");
+    await waitFor(() =>
+      expect(screen.queryByRole("region", { name: "projA" })).toBeNull()
+    );
+
+    // Cleared, each section is as it was.
+    fireEvent.change(search, { target: { value: "" } });
+    expect(screen.getByText("Alpha thread")).toBeTruthy();
+    expect(screen.queryByText("Beta thread")).toBeNull();
+    expect(screen.queryByText("Beta notes")).toBeNull();
+  });
+
+  it("says once when no section matches a search", async () => {
+    renderList(<ThreadList onThreadSelect={vi.fn()} />, two());
+
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search research" }),
+      { target: { value: "nothing like it" } }
+    );
+
+    await waitFor(() =>
+      expect(screen.queryByRole("region", { name: "projA" })).toBeNull()
+    );
+    expect(screen.queryByRole("region", { name: "projB" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "No project" })).toBeNull();
+    expect(
+      screen
+        .getAllByText("No research matches your search.")
+        .filter((el) => !el.closest("[hidden]"))
+    ).toHaveLength(1);
+  });
+
   it("tags a thread that works in a run folder", () => {
     lists.byProject[TEST_PROJECT] = [
       thread({
