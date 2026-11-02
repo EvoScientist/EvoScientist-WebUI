@@ -7,7 +7,7 @@ The installer is not signed yet, so Windows SmartScreen shows "Windows protected
 - The app installs for your Windows user only, without an administrator prompt, into `%LOCALAPPDATA%\Programs\EvoScientist`, with a Start menu entry.
 - It needs EvoScientist `{{coreRange}}`. On its first launch it installs EvoScientist {{installVersion}} if none is installed; an older one is offered an update, and for a newer one the app asks you to update the app.
 - The app updates itself from this repository's releases: when an update is out, it offers **Download**, then **Restart to update**. Upgrades keep your configuration, keys, conversations, workspaces and the installed EvoScientist.
-- Uninstalling the app (Settings > Apps) removes the app only. EvoScientist itself, your settings in `%USERPROFILE%\.config\evoscientist`, your data in `%USERPROFILE%\.evoscientist` and your workspace folder stay.
+- Uninstalling the app (Settings > Apps) removes the app only. EvoScientist itself, your settings in `%USERPROFILE%\.config\evoscientist`, your data in `%USERPROFILE%\.evoscientist` and your workspace folder stay, and so do the app's own folders: `%APPDATA%\EvoScientist` (the app's records and the window's browser storage) and `%LOCALAPPDATA%\evoscientist-updater` (a copy of the installer and update downloads).
 
 To remove EvoScientist itself too, as its install guide describes under "Uninstalling", run in PowerShell (the uv the install script uses is not on PATH):
 
@@ -17,6 +17,6 @@ $uv = (Get-Content -Raw -Encoding UTF8 -LiteralPath "$env:USERPROFILE\.evoscient
 Remove-Item -Recurse -Force -ErrorAction SilentlyContinue -LiteralPath "$env:USERPROFILE\.evoscientist\tools", "$env:USERPROFILE\.evoscientist\envs"
 ```
 
-Your settings and data stay in `.config\evoscientist` and `.evoscientist`; delete both for a full removal. Also remove `%USERPROFILE%\.local\bin` from your user PATH, unless other tools live there.
+Your settings and data stay in `.config\evoscientist` and `.evoscientist`; for a full removal, delete both, and the app's `%APPDATA%\EvoScientist` and `%LOCALAPPDATA%\evoscientist-updater`. Also remove `%USERPROFILE%\.local\bin` from your user PATH, unless other tools live there.
 
 In mainland China, downloads from GitHub, for the installer and for updates, can be slow or fail.
