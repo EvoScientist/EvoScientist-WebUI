@@ -1,0 +1,225 @@
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+import {
+  FIRST_RELEASE_CORE,
+  releaseFlagProblem,
+  tagProblem,
+  versionArgs,
+} from "./packaging";
+import { QUIT_FOR_INSTALL, QUIT_FOR_INSTALL_CANCELLED } from "./app";
+
+const pkg = JSON.parse(
+  readFileSync(join(__dirname, "..", "package.json"), "utf8")
+) as {
+  evoscientist: { coreRange: string; release?: unknown };
+  build: Record<string, unknown> & {
+    nsis: Record<string, unknown>;
+    publish: Record<string, unknown>;
+    extraMetadata: Record<string, unknown>;
+  };
+};
+
+describe("versionArgs", () => {
+  it("stamps the root version into the packaged package.json", () => {
+    expect(versionArgs("0.4.2")).toEqual(["-c.extraMetadata.version=0.4.2"]);
+  });
+
+  it("refuses a version that is not a plain release", () => {
+    expect(() => versionArgs("0.4.2-rc.1")).toThrow(/plain release/);
+    expect(() => versionArgs("")).toThrow(/plain release/);
+  });
+});
+
+describe("tagProblem", () => {
+  it("accepts the tag of the version", () => {
+    expect(tagProblem("v0.4.2", "0.4.2")).toBeNull();
+  });
+
+  it("names a tag on another version", () => {
+    expect(tagProblem("v0.4.3", "0.4.2")).toMatch(/v0\.4\.3.*v0\.4\.2/);
+    expect(tagProblem("0.4.2", "0.4.2")).not.toBeNull();
+  });
+});
+
+describe("releaseFlagProblem", () => {
+  it("lets the flag be off with any range", () => {
+    expect(releaseFlagProblem({ coreRange: ">=0.3.8,<0.4" })).toBeNull();
+    expect(
+      releaseFlagProblem({ coreRange: ">=0.3.8,<0.4", release: false })
+    ).toBeNull();
+  });
+
+  it("refuses the flag while the range installs a core before the first release core", () => {
+    expect(
+      releaseFlagProblem({ coreRange: ">=0.3.8,<0.4", release: true })
+    ).toMatch(/installs 0\.3\.8, before 0\.4\.0/);
+    expect(releaseFlagProblem({ coreRange: "<0.5", release: true })).toMatch(
+      /no version/
+    );
+  });
+
+  it("accepts the flag once the range installs that core or a newer one", () => {
+    expect(
+      releaseFlagProblem({
+        coreRange: `>=${FIRST_RELEASE_CORE},<0.5`,
+        release: true,
+      })
+    ).toBeNull();
+    expect(
+      releaseFlagProblem({ coreRange: ">=0.4.1,<0.5", release: true })
+    ).toBeNull();
+  });
+
+  it("holds for this package.json", () => {
+    expect(releaseFlagProblem(pkg.evoscientist)).toBeNull();
+  });
+});
+
+// Upgrades, uninstall and the update feed depend on these; none may change
+// after the first release.
+describe("the installer's identity", () => {
+  it("keeps the app id, the install folder name and the installer name", () => {
+    expect(pkg.build.appId).toBe("com.evoscientist.desktop");
+    // A one-click per-user install is named after the package name:
+    // %LOCALAPPDATA%\Programs\EvoScientist.
+    expect(pkg.build.extraMetadata.name).toBe("EvoScientist");
+    expect(pkg.build.nsis.artifactName).toBe("EvoScientist-Setup.${ext}");
+  });
+
+  it("installs per user, in the default folder, and keeps user data on uninstall", () => {
+    expect(pkg.build.nsis.oneClick).toBe(true);
+    expect(pkg.build.nsis.perMachine).toBe(false);
+    expect(pkg.build.nsis.allowToChangeInstallationDirectory).toBe(false);
+    expect(pkg.build.nsis.deleteAppDataOnUninstall).toBe(false);
+  });
+
+  it("reads updates from this repository's GitHub Releases", () => {
+    expect(pkg.build.publish).toEqual({
+      provider: "github",
+      owner: "EvoScientist",
+      repo: "EvoScientist-WebUI",
+    });
+  });
+});
+
+describe("the installer's running-app check (D12)", () => {
+  const nsh = () =>
+    // A Windows checkout has CRLF line ends.
+    readFileSync(
+      join(__dirname, "..", String(pkg.build.nsis.include)),
+      "utf8"
+    ).replace(/\r\n/g, "\n");
+
+  it("is the installer's include", () => {
+    expect(pkg.build.nsis.include).toBe("installer/check-app-running.nsh");
+    expect(
+      existsSync(join(__dirname, "..", "installer/check-app-running.nsh"))
+    ).toBe(true);
+    expect(nsh()).toMatch(/^!macro customCheckAppRunning$/m);
+  });
+
+  it("asks the app to quit with the argument and waits for the marker the app writes", () => {
+    expect(nsh()).toContain(
+      `${"${APP_EXECUTABLE_FILENAME}"}" ${QUIT_FOR_INSTALL}\``
+    );
+    expect(nsh()).toContain(
+      `$APPDATA\\${"${PRODUCT_NAME}"}\\${QUIT_FOR_INSTALL_CANCELLED}`
+    );
+  });
+
+  const macro = (name: string) =>
+    nsh().match(new RegExp(`^!macro ${name}\\b[^]*?^!macroend$`, "m"))?.[0] ??
+    "";
+
+  it("waits for the app only, then ends a UI server left alone", () => {
+    const entry = (
+      pkg.build.extraResources as { from: string; to: string }[]
+    ).find((r) => r.from === "resources/ui-entry.mjs")?.to;
+    expect(entry).toBe("ui-entry.mjs");
+    expect(macro("EVO_APP_RUNNING")).toContain(
+      `[string]$$_.CommandLine -notlike '*${entry}*'`
+    );
+    expect(macro("EVO_END_ALL")).not.toContain("CommandLine");
+    expect(macro("customCheckAppRunning")).toMatch(
+      /^ {2}evoDone:\n {4}!insertmacro EVO_END_ALL \$R0$/m
+    );
+  });
+
+  it("matches the app's executable, passed outside the command", () => {
+    // In the command line, an apostrophe in the path (a user name) would
+    // break PowerShell's quoting. A folder match took an old uninstaller run
+    // in place for the app, and ended it.
+    expect(macro("customCheckAppRunning")).toContain(
+      `SetEnvironmentVariable(t "EVO_APP_EXE", t "$INSTDIR\\${"${APP_EXECUTABLE_FILENAME}"}")`
+    );
+    for (const name of ["EVO_APP_RUNNING", "EVO_ANY_RUNNING", "EVO_END_ALL"])
+      expect(macro(name)).toContain("$$_.Path -eq $$env:EVO_APP_EXE");
+    expect(nsh()).not.toContain("StartsWith");
+    expect(nsh()).not.toMatch(/'\$INSTDIR/);
+  });
+
+  it("waits 3 minutes by the clock, and stops a PowerShell or tasklist run after 30 s without output", () => {
+    const check = macro("customCheckAppRunning");
+    expect(check).toContain("System::Call 'kernel32::GetTickCount()i.R2'");
+    expect(check).toContain(
+      "IntOp $R4 $R4 - $R2\n    IntCmpU $R4 180000 evoPoll evoPoll 0\n"
+    );
+    const runs = nsh().match(/nsExec::Exec[^`]*`/g) ?? [];
+    expect(runs.length).toBeGreaterThan(0);
+    for (const r of runs) expect(r).toContain("/TIMEOUT=30000");
+  });
+
+  it("installs nothing while a process of the app still runs after the ends", () => {
+    // A UI server that Stop-Process could not end, or the app itself after a
+    // silent run's end, would hold the files being replaced.
+    expect(macro("EVO_ANY_RUNNING")).not.toContain("CommandLine");
+    expect(macro("EVO_ANY_RUNNING")).toContain("{ exit 0 } else { exit 2 }");
+    // No answer from either check counts as running.
+    expect(macro("EVO_ANY_RUNNING")).toMatch(
+      /\$\{If\} \$\{_RETURN\} != 0\n {4}\$\{AndIf\} \$\{_RETURN\} != 1\n {6}StrCpy \$\{_RETURN\} 0\n/
+    );
+    expect(macro("customCheckAppRunning")).toMatch(
+      /!insertmacro EVO_END_ALL \$R0\n[^]*!insertmacro EVO_ANY_RUNNING \$R0\n {4}StrCmp \$R0 0 evoStill\n!macroend$/
+    );
+    // The "still running" box: a silent run stops there.
+    const box = macro("customCheckAppRunning").split("evoStill:")[1] ?? "";
+    for (const line of box
+      .split("\n")
+      .filter((l) => l.includes("MB_RETRYCANCEL")))
+      expect(line).toContain("/SD IDCANCEL IDRETRY evoCheck");
+  });
+
+  it("exits with code 2 whenever it stops, and names Task Manager in the box", () => {
+    // A silent run's caller would otherwise see success with nothing done.
+    const check = macro("customCheckAppRunning");
+    const quits = check.match(/^.*\n {4}Quit$/gm) ?? [];
+    expect(quits).toHaveLength(2);
+    for (const q of quits) expect(q).toMatch(/^ {4}SetErrorLevel 2\n/);
+    for (const line of check
+      .split("\n")
+      .filter((l) => l.includes("MB_RETRYCANCEL")))
+      expect(line).toContain(
+        "Close it (File > Quit) or end it in Task Manager, then press Retry."
+      );
+  });
+
+  it("speaks of the uninstall in the uninstaller", () => {
+    const check = macro("customCheckAppRunning");
+    expect(check).toMatch(
+      /!ifdef BUILD_UNINSTALLER\n[^!]*Cancel stops the uninstall\.[^!]*!else\n[^!]*Cancel stops the installer\./
+    );
+    expect(check).toMatch(
+      /!ifdef BUILD_UNINSTALLER\n[^!]*then uninstall it again\.[^!]*!else\n[^!]*then run the installer again\./
+    );
+  });
+
+  it("answers 0 or 2 from PowerShell, and falls back to the process name otherwise", () => {
+    const check = macro("EVO_APP_RUNNING");
+    expect(check).toContain("{ exit 0 } else { exit 2 }");
+    expect(check).toMatch(
+      /\$\{If\} \$\{_RETURN\} != 0\n {2}\$\{AndIf\} \$\{_RETURN\} != 2\n {4}nsExec::Exec \/TIMEOUT=30000 `"\$SYSDIR\\cmd\.exe" \/C tasklist \/FI "USERNAME eq %USERNAME%" \/FI "IMAGENAME eq \$\{APP_EXECUTABLE_FILENAME\}"/
+    );
+    expect(macro("EVO_END_ALL")).toContain("{ exit 0 } else { exit 2 }");
+  });
+});

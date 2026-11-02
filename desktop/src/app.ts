@@ -45,12 +45,15 @@ import {
   separateInstallQuestion,
   setupScreen,
   updateQuestion,
+  updateOffer,
   updateScreen,
   type ActionId,
+  type UpdateOffer,
   type ErrorScreen,
   type Screen,
 } from "./screens";
 import type { UiServer } from "./uiServer";
+import type { AppUpdate, UpdateState } from "./appUpdate";
 import type { UpdateRun, UpdateView } from "./update";
 
 /** How long the UI server gets to answer `/` after it starts. */
@@ -82,6 +85,9 @@ export interface AppWindow {
   /** Hides every visible window of the app, the ones the UI opened too, and
    *  returns a function that shows them again. */
   hideAll(): () => void;
+  /** Sends the app update's state to the page shown (W04): the WebUI's
+   *  bridge reads `state`, the status page `offer`. */
+  sendUpdate(state: UpdateState, offer: UpdateOffer | null): void;
 }
 
 export interface AppDeps {
@@ -195,7 +201,22 @@ export interface AppDeps {
   uvToolEnvExists(): Promise<boolean | null>;
 
   sessionEnd?: SessionEnd;
+
+  // App updates (W04): null where the app does not update itself (not
+  // packaged, or not on Windows).
+  appUpdate?: AppUpdate | null;
+  /** Resolves when the installer had its time to end the app; default 15 s. */
+  installWait?(): Promise<void>;
+  /** The user cancelled a quit the installer asked for (D12): leaves the
+   *  marker the installer waits for (installer/check-app-running.nsh). */
+  installQuitCancelled?(): void;
 }
+
+/** The argument the installer starts the app with to ask a running app to
+ *  quit before it replaces files (installer/check-app-running.nsh). */
+export const QUIT_FOR_INSTALL = "--quit-for-install";
+/** The file in userData that tells the installer the quit was cancelled. */
+export const QUIT_FOR_INSTALL_CANCELLED = "quit-for-install-cancelled";
 
 export type QuitState = "none" | "checking" | "waiting" | "stopping";
 
@@ -224,12 +245,33 @@ export interface App {
   restartBackend(): Promise<void>;
   /** The bridge's restart (W03d), for the WebUI's settings page. */
   restartFromPage(): Promise<RestartResult>;
+  /** "Restart to update" (W04): busy checks and stops as at quit, then the
+   *  installer of the downloaded update. `not_ready` without one (or when
+   *  its file cannot be opened), `busy` while a launch, restart, install,
+   *  setup, core update or quit runs or when the session ends meanwhile,
+   *  `cancelled` on Cancel, `update_failed` when the app started again on
+   *  the current version. On success the app ends. */
+  restartToUpdate(): Promise<RestartResult>;
+  /** The app update's state changed: tells the page shown. */
+  updateChanged(state: UpdateState): void;
+  /** The app update for the WebUI page from `senderOrigin` or the status
+   *  page (`statusPage`); any other page gets nothing and starts nothing
+   *  (`not_allowed`). */
+  updateFor(senderOrigin: string | null, statusPage: boolean): UpdateState;
+  updateOfferFor(statusPage: boolean): UpdateOffer | null;
+  downloadUpdateFor(senderOrigin: string | null, statusPage: boolean): void;
+  restartToUpdateFor(
+    senderOrigin: string | null,
+    statusPage: boolean
+  ): Promise<RestartResult>;
   requestQuit(): Promise<void>;
   act(id: ActionId, arg: unknown): Promise<void>;
   /** The renderer or the preload is broken: a native dialog instead. */
   nativeError(code: string, message: string): Promise<void>;
   crashReport(code: string, message: string, detail?: unknown): string | null;
-  secondInstance(): void;
+  /** A second launch; `forInstall` when the installer asks the app to quit
+   *  (`--quit-for-install`). */
+  secondInstance(forInstall?: boolean): void;
   querySessionEnd(reasons: string[]): void;
   endOfSession(why: string): void;
   /** The current screen, for `status:get`. */
@@ -248,6 +290,10 @@ export interface App {
   readonly exiting: boolean;
   readonly quitState: QuitState;
 }
+
+const INSTALL_WAIT_MS = 15_000;
+const defaultInstallWait = () =>
+  new Promise<void>((r) => setTimeout(r, INSTALL_WAIT_MS).unref?.());
 
 /** Builds the controller; main.ts attaches the window and calls `start()`. */
 export function createApp(deps: AppDeps): App {
@@ -284,6 +330,8 @@ export function createApp(deps: AppDeps): App {
    *  quit waits for it. */
   let stoppingDeploy: Promise<"stopped" | "killed"> | null = null;
   let relaunchAfterExit = false;
+  /** The running quit was asked for by the installer (D12). */
+  let quitForInstall = false;
   let exiting = false;
   /** The install script, setup or `EvoSci update` while it runs: closing
    *  asks, then stops the script or setup (D14) or waits for the update,
@@ -1034,9 +1082,156 @@ export function createApp(deps: AppDeps): App {
     }
   }
 
+  /** "Restart to update" (D5): the quit's busy check, then the status page's
+   *  "Getting ready to update..." during the memory wait, a second check for
+   *  work that started meanwhile (a scheduled task; Cancel brings the app
+   *  back with its backend), the stops, and only then the installer, which
+   *  first waits for the app to end (installer/check-app-running.nsh). A
+   *  backend the app reused keeps running. Never at the end of the session
+   *  and never on an ordinary quit: nothing else calls `install()`. An
+   *  installer file that cannot be opened stops it before anything stops (the
+   *  download is offered again); an error in the steps brings the app back. */
+  async function restartToUpdate(): Promise<RestartResult> {
+    const update = deps.appUpdate;
+    if (!update || update.state.kind !== "ready")
+      return { ok: false, code: "not_ready" };
+    if (working || step || quitState !== "none" || sessionEnd.ending) {
+      log.info("restart to update: busy");
+      return { ok: false, code: "busy" };
+    }
+    if (!update.installable()) return { ok: false, code: "not_ready" };
+    quitState = "checking";
+    heldError = null;
+    sendUpdateOffer();
+    let stopping = false;
+    const cancel = (): RestartResult => {
+      quitState = "none";
+      resumeAfterCancelledQuit();
+      return { ok: false, code: "cancelled" };
+    };
+    try {
+      const owned = ready?.owned && session ? ready : null;
+      const before = owned
+        ? await checkWorkLogged(owned.url, "the app update")
+        : null;
+      if (before && !(await askStop("update", before))) return cancel();
+      // The session ends: Windows ends the app right after (endOfSession).
+      if (sessionEnd.ending) return { ok: false, code: "busy" };
+      showScreen(progressScreen("preparing_update"));
+      if (owned && before && ready === owned) {
+        quitState = "waiting";
+        quitCancelled = false;
+        log.info("waiting for the memory workers before the app update");
+        const r = await deps.waitForMemoryWorkers(
+          owned.url,
+          () => quitCancelled || sessionEnd.ending
+        );
+        log.info(`memory workers: ${r}`);
+        if (sessionEnd.ending) return { ok: false, code: "busy" };
+        if (quitCancelled) {
+          log.info("second launch during the wait: app update cancelled");
+          return cancel();
+        }
+        const started = workStartedSince(
+          before,
+          await checkWorkLogged(owned.url, "the app update, after the wait")
+        );
+        if (started && ready === owned && !(await askStop("update", started)))
+          return cancel();
+        if (sessionEnd.ending) return { ok: false, code: "busy" };
+      }
+      quitState = "stopping";
+      stopping = true;
+      await stopUi();
+      if (session) {
+        const s = session;
+        session = null;
+        ready = null;
+        log.info(
+          `stopping deploy (${owned ? "owned" : "reused"}): ${await s.stop()}`
+        );
+      }
+      if (stoppingDeploy)
+        log.info(
+          `waiting for the deploy being stopped: ${await stoppingDeploy}`
+        );
+      if (sessionEnd.ending) {
+        exitNow();
+        return { ok: false, code: "busy" };
+      }
+      // The installer's `app.quit()` must go through the close handlers.
+      exiting = true;
+      update.stop();
+      if (!update.install()) return updateDidNotStart();
+      void (deps.installWait ?? defaultInstallWait)().then(() => {
+        if (exiting && quitState === "stopping") void updateDidNotStart();
+      });
+      return { ok: true };
+    } catch (e) {
+      log.warn(
+        `restart to update failed: ${e instanceof Error ? e.message : e}`
+      );
+      if (!stopping) return cancel();
+      return updateDidNotStart();
+    }
+  }
+
+  /** The installer file could not be opened, the steps failed after the
+   *  stops, or the app was still running 15 s after the installer was asked
+   *  for: the app starts again on the current version and says so. (A start
+   *  of the installer that fails after electron-updater has quit the app is
+   *  not seen: the next launch offers the update again.) */
+  async function updateDidNotStart(): Promise<RestartResult> {
+    log.warn(
+      "restart to update: no update was installed (a step failed, or the app still ran 15 s after the installer was asked for); launching again"
+    );
+    exiting = false;
+    quitState = "none";
+    // A launch during the stops asked for a relaunch after an exit that did
+    // not come; the update checks are scheduled again.
+    relaunchAfterExit = false;
+    releaseInstaller();
+    deps.appUpdate?.start();
+    sendUpdateOffer();
+    await launch();
+    void deps.messageBox({
+      type: "warning",
+      title: "EvoScientist",
+      message: "The update could not be installed.",
+      detail:
+        "EvoScientist runs the current version. The desktop log has the details; the app offers the update again.",
+      buttons: ["OK"],
+      noLink: true,
+    });
+    return { ok: false, code: "update_failed" };
+  }
+
+  /** A quit the installer asked for will not come: it stops at once. */
+  function releaseInstaller(): void {
+    if (!quitForInstall) return;
+    quitForInstall = false;
+    log.info("quit for the installer cancelled: the installer stops");
+    deps.installQuitCancelled?.();
+  }
+
+  /** The status page's offer: without its button while a quit or a Restart
+   *  to update runs, which would only answer `busy`. */
+  function offerNow(state: UpdateState): UpdateOffer | null {
+    const offer = updateOffer(state);
+    return offer && quitState !== "none" ? { ...offer, action: null } : offer;
+  }
+
+  /** Tells the page shown the offer again once a quit has ended. */
+  function sendUpdateOffer(): void {
+    const update = deps.appUpdate;
+    if (update) win?.sendUpdate(update.state, offerNow(update.state));
+  }
+
   /** After a cancelled quit: shows an error held during the quit question, or
    *  brings back the UI that a restart or launch left for the quit. */
   function resumeAfterCancelledQuit(): void {
+    releaseInstaller();
+    sendUpdateOffer();
     const error = heldError;
     heldError = null;
     if (error) return showError(error);
@@ -1162,15 +1357,30 @@ export function createApp(deps: AppDeps): App {
   }
 
   /** A second launch: cancels a quit that waits for the memory workers,
-   *  relaunches after one that is stopping, else brings the window back. */
-  function secondInstance(): void {
+   *  relaunches after one that is stopping (not the installer's), else brings
+   *  the window back. */
+  function secondInstance(forInstall = false): void {
+    if (forInstall) {
+      // A quit that runs goes on (no cancel, no relaunch) and the installer
+      // waits for it; else the normal quit starts, with its busy question.
+      // Either way a Cancel tells the installer. Ignored once the app exits
+      // (its own "Restart to update" started that installer).
+      log.info(`the installer asks the app to quit (quit state ${quitState})`);
+      if (exiting) return;
+      quitForInstall = true;
+      // The installer starts the new version when it is done.
+      relaunchAfterExit = false;
+      if (quitState === "none") void requestQuit();
+      return;
+    }
     log.info(`second launch (quit state ${quitState})`);
     if (quitState === "waiting") {
       quitCancelled = true;
       return;
     }
     if (quitState === "stopping") {
-      relaunchAfterExit = true;
+      // The installer's quit relaunches nothing: it starts the new version.
+      if (!quitForInstall) relaunchAfterExit = true;
       return;
     }
     win?.bringToFront();
@@ -1273,11 +1483,15 @@ export function createApp(deps: AppDeps): App {
     attachWindow: (w) => void (win = w),
     start: () => {
       showScreen(screen);
+      // Also when the launch stops on the status page: `core_too_new` tells
+      // the user to update the app.
+      deps.appUpdate?.start();
       void launch();
     },
     launch,
     restartBackend,
     restartFromPage,
+    restartToUpdate,
     requestQuit,
     act,
     nativeError,
@@ -1302,6 +1516,25 @@ export function createApp(deps: AppDeps): App {
         log.warn(`no default folder for the page: ${e}`);
         return null;
       }
+    },
+    updateChanged: (state) => {
+      log.info(`app update: ${JSON.stringify(state)}`);
+      win?.sendUpdate(state, offerNow(state));
+    },
+    updateFor: (senderOrigin, statusPage) =>
+      (statusPage || fromUi(senderOrigin)) && deps.appUpdate
+        ? deps.appUpdate.state
+        : { kind: "none" },
+    updateOfferFor: (statusPage) =>
+      statusPage && deps.appUpdate ? offerNow(deps.appUpdate.state) : null,
+    downloadUpdateFor: (senderOrigin, statusPage) => {
+      if (statusPage || fromUi(senderOrigin)) deps.appUpdate?.download();
+      else log.warn(`update download refused for the origin ${senderOrigin}`);
+    },
+    restartToUpdateFor: async (senderOrigin, statusPage) => {
+      if (statusPage || fromUi(senderOrigin)) return restartToUpdate();
+      log.warn(`restart to update refused for the origin ${senderOrigin}`);
+      return { ok: false, code: "not_allowed" };
     },
     restartFor: async (senderOrigin) => {
       if (fromUi(senderOrigin)) return restartFromPage();

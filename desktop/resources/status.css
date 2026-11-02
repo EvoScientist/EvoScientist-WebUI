@@ -178,3 +178,11 @@ button:disabled {
     transform: rotate(360deg);
   }
 }
+#app-update {
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+#app-update p {
+  margin: 0 0 8px;
+}

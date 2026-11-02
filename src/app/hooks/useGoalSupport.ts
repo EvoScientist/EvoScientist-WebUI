@@ -8,24 +8,43 @@ import { CHAT_GRAPH_ID, workspaceAssistantId } from "@/lib/workspaceAssistant";
 import { useClient } from "@/providers/ClientProvider";
 import { useProjects } from "@/providers/ProjectsProvider";
 
-function takesGoalRequest(schemas: unknown): boolean {
-  const input = (schemas as { input_schema?: { properties?: unknown } } | null)
-    ?.input_schema;
-  const properties = input?.properties;
-  return (
-    !!properties &&
+type SchemaFields = { properties?: unknown } | null | undefined;
+
+function fieldsOf(schema: SchemaFields): object | null {
+  const properties = schema?.properties;
+  return properties &&
     typeof properties === "object" &&
-    "goal_request" in properties
-  );
+    !Array.isArray(properties)
+    ? properties
+    : null;
+}
+
+function takesGoalRequest(schemas: unknown): boolean {
+  const all = schemas as {
+    input_schema?: SchemaFields;
+    state_schema?: SchemaFields;
+  } | null;
+  const input = fieldsOf(all?.input_schema);
+  if (input && Object.keys(input).length > 0) return "goal_request" in input;
+  const state = fieldsOf(all?.state_schema);
+  return !!state && "goal_request" in state;
 }
 
 /**
  * Whether the backend's main graph takes a /goal request: its input schema
- * has `goal_request` (core v0.3.7 and later). Undefined until known.
+ * has `goal_request` (core v0.3.7 and later). An empty or missing input
+ * schema falls back to the state schema, because a core on Python 3.11 can't
+ * build its input schema (pydantic refuses `typing.TypedDict` there; the
+ * server answers it `null`) while its state schema still lists the field.
+ * Reading the state is right only while the core declares `goal_request`
+ * `OmitFromOutput` (dropped from the output only); a private or
+ * `OmitFromInput` field would also be in the state schema and read as true.
+ * Undefined until known.
  * Asked of the current project's chat assistant (getSchemas takes only an
  * assistant UUID); a refusal (422) reads as false. Anything else (no answer,
  * a 5xx, a 404, 408 or 429) leaves it unknown, which still marks every run,
- * and is asked again: a goal review reloaded during a blip keeps its marker. The answer belongs to
+ * and is asked again: a goal review reloaded during a blip keeps its marker.
+ * The answer belongs to
  * the client it came from (one per deployment) and the assistant it asked: a
  * switch resets it during render.
  */

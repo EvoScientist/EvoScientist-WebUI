@@ -24,4 +24,4 @@
 
 ---
 
-> Merging ≠ shipping: releases are handled solely by the maintainer. A published release reaches users without a core release: EvoScientist v0.3.6+ picks up the newest version in its supported range (v0.3.6: `>=0.3,<0.4`; v0.3.7+: `>=0.3,<0.5`), and older versions run `@latest`.
+> Merging ≠ shipping: releases are handled solely by the maintainer. A published release reaches users without a core release: EvoScientist v0.3.6+ picks up the newest version in its supported range (v0.3.6: `>=0.3,<0.4`; v0.3.7 and v0.3.8: `>=0.3,<0.5`; v0.4.0+: `>=0.4,<0.6`), and older versions run `@latest`.

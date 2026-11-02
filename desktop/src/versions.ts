@@ -14,8 +14,9 @@ const CLAUSE = /^(>=|<=|==|>|<)\s*(\d+(?:\.\d+)*)$/;
 /**
  * The bundled WebUI's version: the `version` of the `package.json` next to
  * its `server.js` (the root's, kept in `dist/`), or null when it cannot be
- * read. The core's `webui_compat` is checked against it; the app's own
- * version (desktop/package.json) is not bumped by WebUI releases.
+ * read. The core's `webui_compat` is checked against it. A packaged app
+ * has the same version (stamped at build, packaging.ts); `npm start` does
+ * not.
  */
 export function bundledUiVersion(serverJs: string): string | null {
   try {

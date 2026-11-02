@@ -838,9 +838,10 @@ function TaskDetail({
       setDeleteOpen(false);
       onDeleted();
     } catch (err) {
-      // Deleted elsewhere already: what the user asked for.
+      // Most likely deleted elsewhere, but a 404 can also come from another
+      // backend, so it isn't reported as deleted.
       if (scheduledTaskMissing(err)) {
-        toast.success(`"${task.name}" was already deleted.`);
+        toast.error(`Couldn't find "${task.name}"; it may have been deleted.`);
         setDeleteOpen(false);
         onDeleted();
         return;

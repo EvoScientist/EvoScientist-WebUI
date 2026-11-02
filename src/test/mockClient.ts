@@ -50,8 +50,9 @@ export class MockClient {
     delete: vi.fn(async () => {}),
   };
 
-  // useGoalSupport reads the main graph's input schema; {} is a backend
-  // without /goal, which is what every other suite expects.
+  // useGoalSupport reads the main graph's input schema, else its state
+  // schema; {} is a backend without /goal, which is what every other suite
+  // expects.
   assistants = {
     getSchemas: vi.fn(async (id: string): Promise<unknown> => {
       void id;
