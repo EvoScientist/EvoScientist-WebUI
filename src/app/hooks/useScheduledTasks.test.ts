@@ -372,6 +372,121 @@ describe("listScheduledTasks", () => {
 
 describe("request timeouts", () => {
   /** Every timeout fires at once; `fetch` answers only by failing on it. */
+  function timeOutAtOnce(reason: unknown) {
+    vi.spyOn(AbortSignal, "timeout").mockImplementation(() =>
+      AbortSignal.abort(reason)
+    );
+    const fetch = vi.fn(
+      (_input: RequestInfo | URL, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          const signal = init?.signal;
+          if (signal?.aborted) reject(signal.reason);
+          signal?.addEventListener("abort", () => reject(signal.reason));
+        })
+    );
+    vi.stubGlobal("fetch", fetch);
+    return fetch;
+  }
+
+  it("ends a list read the backend doesn't answer, without retrying", async () => {
+    // A browser's timeout: an Error named TimeoutError.
+    const fetch = timeOutAtOnce(
+      Object.assign(new Error("signal timed out"), { name: "TimeoutError" })
+    );
+    const { result } = renderHook(() => useScheduledTasks());
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.error).toBe("The backend didn't answer.");
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads the SDK's wrap of a timeout that isn't an Error the same way", async () => {
+    timeOutAtOnce(new DOMException("signal timed out", "TimeoutError"));
+    const { result } = renderHook(() => useScheduledTasks());
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.error).toBe("The backend didn't answer.");
+  });
+
+  const daily = { cron_id: "cron-1", schedule: "0 9 * * *" };
+
+  it("pauses a task without touching its schedule", async () => {
+    const calls = mockServer(() => cron({ enabled: false }));
+
+    const task = await setScheduledTaskEnabled(daily, false);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      method: "PATCH",
+      path: "/runs/crons/cron-1",
+    });
+    expect(calls[0].body).toEqual({ enabled: false });
+    expect(task.enabled).toBe(false);
+  });
+
+  it("resumes a task with its schedule, so the next run counts from now", async () => {
+    const calls = mockServer(() => cron({ enabled: true }));
+
+    const task = await setScheduledTaskEnabled(daily, true);
+
+    expect(calls[0].body).toEqual({ enabled: true, schedule: "0 9 * * *" });
+    expect(task.enabled).toBe(true);
+  });
+
+  it("fails at once when the backend can't be reached", async () => {
+    const fetch = vi.fn(async () => {
+      throw new TypeError("fetch failed");
+    });
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(setScheduledTaskEnabled(daily, false)).rejects.toThrow();
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("listScheduledTasks", () => {
+  it("reads each task's time zone, null for a cron stored without one", async () => {
+    mockServer((call) =>
+      call.path === "/runs/crons/search"
+        ? [
+            cron({ cron_id: "local", timezone: "Europe/London" }),
+            cron({ cron_id: "legacy", timezone: null }),
+          ]
+        : cron()
+    );
+
+    const tasks = await listScheduledTasks();
+
+    expect(tasks.map((t) => [t.cron_id, t.timezone])).toEqual([
+      ["local", "Europe/London"],
+      ["legacy", null],
+    ]);
+  });
+
+  it("reads whether each task is paused", async () => {
+    mockServer((call) =>
+      call.path === "/runs/crons/search"
+        ? [
+            cron({ cron_id: "on", enabled: true }),
+            cron({ cron_id: "off", enabled: false }),
+            // The scheduler skips a cron without the flag.
+            cron({ cron_id: "unset", enabled: undefined }),
+          ]
+        : cron()
+    );
+
+    const tasks = await listScheduledTasks();
+
+    expect(tasks.map((t) => [t.cron_id, t.enabled])).toEqual([
+      ["on", true],
+      ["off", false],
+      ["unset", false],
+    ]);
+  });
+});
+
+describe("request timeouts", () => {
+  /** Every timeout fires at once; `fetch` answers only by failing on it. */
   function timeOutAtOnce() {
     const timeout = vi
       .spyOn(AbortSignal, "timeout")
