@@ -4,6 +4,9 @@
 // backend's registry, so a crafted request can't reach a folder that isn't a
 // registered project with its folder in place. Anyone who reaches the backend
 // can make an assistant for any folder, so assistants prove nothing here.
+// Known limit: nothing checks that the process on the port is this user's
+// backend, so on a shared machine another user who binds it while the
+// backend is down decides which folders these routes reach.
 
 import { promises as fs } from "fs";
 import { resolve } from "path";
