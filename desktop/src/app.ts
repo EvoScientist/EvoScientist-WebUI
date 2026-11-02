@@ -1100,6 +1100,7 @@ export function createApp(deps: AppDeps): App {
     if (!update.installable()) return { ok: false, code: "not_ready" };
     quitState = "checking";
     heldError = null;
+    sendUpdateOffer();
     let stopping = false;
     const cancel = (): RestartResult => {
       quitState = "none";
@@ -1182,6 +1183,12 @@ export function createApp(deps: AppDeps): App {
     log.warn("restart to update: the installer did not start; launching again");
     exiting = false;
     quitState = "none";
+    // A launch during the stops asked for a relaunch after an exit that did
+    // not come; the update checks are scheduled again.
+    relaunchAfterExit = false;
+    releaseInstaller();
+    deps.appUpdate?.start();
+    sendUpdateOffer();
     await launch();
     void deps.messageBox({
       type: "warning",
@@ -1195,14 +1202,32 @@ export function createApp(deps: AppDeps): App {
     return { ok: false, code: "update_failed" };
   }
 
+  /** A quit the installer asked for will not come: it stops at once. */
+  function releaseInstaller(): void {
+    if (!quitForInstall) return;
+    quitForInstall = false;
+    log.info("quit for the installer cancelled: the installer stops");
+    deps.installQuitCancelled?.();
+  }
+
+  /** The status page's offer: without its button while a quit or a Restart
+   *  to update runs, which would only answer `busy`. */
+  function offerNow(state: UpdateState): UpdateOffer | null {
+    const offer = updateOffer(state);
+    return offer && quitState !== "none" ? { ...offer, action: null } : offer;
+  }
+
+  /** Tells the page shown the offer again once a quit has ended. */
+  function sendUpdateOffer(): void {
+    const update = deps.appUpdate;
+    if (update) win?.sendUpdate(update.state, offerNow(update.state));
+  }
+
   /** After a cancelled quit: shows an error held during the quit question, or
    *  brings back the UI that a restart or launch left for the quit. */
   function resumeAfterCancelledQuit(): void {
-    if (quitForInstall) {
-      quitForInstall = false;
-      log.info("quit for the installer cancelled: the installer stops");
-      deps.installQuitCancelled?.();
-    }
+    releaseInstaller();
+    sendUpdateOffer();
     const error = heldError;
     heldError = null;
     if (error) return showError(error);
@@ -1328,7 +1353,8 @@ export function createApp(deps: AppDeps): App {
   }
 
   /** A second launch: cancels a quit that waits for the memory workers,
-   *  relaunches after one that is stopping, else brings the window back. */
+   *  relaunches after one that is stopping (not the installer's), else brings
+   *  the window back. */
   function secondInstance(forInstall = false): void {
     if (forInstall) {
       // A quit that runs goes on (no cancel, no relaunch) and the installer
@@ -1338,6 +1364,8 @@ export function createApp(deps: AppDeps): App {
       log.info(`the installer asks the app to quit (quit state ${quitState})`);
       if (exiting) return;
       quitForInstall = true;
+      // The installer starts the new version when it is done.
+      relaunchAfterExit = false;
       if (quitState === "none") void requestQuit();
       return;
     }
@@ -1347,7 +1375,8 @@ export function createApp(deps: AppDeps): App {
       return;
     }
     if (quitState === "stopping") {
-      relaunchAfterExit = true;
+      // The installer's quit relaunches nothing: it starts the new version.
+      if (!quitForInstall) relaunchAfterExit = true;
       return;
     }
     win?.bringToFront();
@@ -1486,14 +1515,14 @@ export function createApp(deps: AppDeps): App {
     },
     updateChanged: (state) => {
       log.info(`app update: ${JSON.stringify(state)}`);
-      win?.sendUpdate(state, updateOffer(state));
+      win?.sendUpdate(state, offerNow(state));
     },
     updateFor: (senderOrigin, statusPage) =>
       (statusPage || fromUi(senderOrigin)) && deps.appUpdate
         ? deps.appUpdate.state
         : { kind: "none" },
     updateOfferFor: (statusPage) =>
-      statusPage && deps.appUpdate ? updateOffer(deps.appUpdate.state) : null,
+      statusPage && deps.appUpdate ? offerNow(deps.appUpdate.state) : null,
     downloadUpdateFor: (senderOrigin, statusPage) => {
       if (statusPage || fromUi(senderOrigin)) deps.appUpdate?.download();
       else log.warn(`update download refused for the origin ${senderOrigin}`);

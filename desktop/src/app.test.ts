@@ -1830,6 +1830,12 @@ describe("restart to update (W04)", () => {
     await vi.waitFor(() => expect(h.sessions).toHaveLength(2));
     expect(h.app.exiting).toBe(false);
     expect(h.app.quitState).toBe("none");
+    // The checks are scheduled again, and the status page gets its button
+    // back.
+    expect(appUpdate.start).toHaveBeenCalledTimes(1);
+    expect(h.win.calls.filter((c) => c.startsWith("update ")).at(-1)).toBe(
+      "update ready restart_to_update"
+    );
     await vi.waitFor(() =>
       expect(h.messageBox).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1914,6 +1920,68 @@ describe("restart to update (W04)", () => {
     expect(h.app.quitState).toBe("none");
   });
 
+  it("after a confirmed question, asks again for work that started during the memory wait", async () => {
+    let work: WorkCheck = BUSY;
+    const appUpdate = fakeAppUpdate();
+    const h = await launched({
+      appUpdate,
+      checkWork: async () => work,
+      waitForMemoryWorkers: async () => {
+        work = {
+          ...BUSY,
+          busyThreads: 3,
+          threadIds: [...BUSY.threadIds, "t9"],
+        };
+        return "quiet";
+      },
+    });
+    h.messageBox
+      .mockResolvedValueOnce({ response: 0 })
+      .mockResolvedValueOnce({ response: 1 });
+    await expect(h.app.restartToUpdate()).resolves.toEqual({
+      ok: false,
+      code: "cancelled",
+    });
+    expect(h.messageBox).toHaveBeenCalledTimes(2);
+    expect(appUpdate.install).not.toHaveBeenCalled();
+    expect(h.sessions[0].stopped.count).toBe(0);
+  });
+
+  it("a launch during the stops of an update that does not install relaunches nothing later", async () => {
+    const appUpdate = fakeAppUpdate();
+    appUpdate.install.mockReturnValue(false);
+    const h = await launched({ appUpdate });
+    const stop = h.sessions[0].stop;
+    h.sessions[0].stop = async () => (h.app.secondInstance(), stop());
+    await expect(h.app.restartToUpdate()).resolves.toMatchObject({
+      code: "update_failed",
+    });
+    await h.app.requestQuit();
+    expect(h.exit).toHaveBeenCalledWith(false);
+  });
+
+  it("an installer's quit request during the stops of an update that does not install is answered at once", async () => {
+    const appUpdate = fakeAppUpdate();
+    appUpdate.install.mockReturnValue(false);
+    const installQuitCancelled = vi.fn();
+    const h = await launched({
+      appUpdate,
+      installQuitCancelled,
+      checkWork: async () => BUSY,
+    });
+    const stop = h.sessions[0].stop;
+    h.sessions[0].stop = async () => (h.app.secondInstance(true), stop());
+    await expect(h.app.restartToUpdate()).resolves.toMatchObject({
+      code: "update_failed",
+    });
+    // The app stays: the installer stops instead of waiting for it.
+    expect(installQuitCancelled).toHaveBeenCalledOnce();
+    // The user's own quit, cancelled, is no installer's.
+    h.messageBox.mockResolvedValueOnce({ response: 1 });
+    await h.app.requestQuit();
+    expect(installQuitCancelled).toHaveBeenCalledOnce();
+  });
+
   it("exits without the installer when the session ends during the stops", async () => {
     const appUpdate = fakeAppUpdate();
     const h = await launched({ appUpdate });
@@ -1970,6 +2038,31 @@ describe("app update on the pages (W04)", () => {
       h.app.restartToUpdateFor("https://evil.example", false)
     ).resolves.toEqual({ ok: false, code: "not_allowed" });
     expect(ready.install).not.toHaveBeenCalled();
+  });
+
+  it("offers no button on the status page while Restart to update runs, and the button again after Cancel", async () => {
+    const h = await launched({ appUpdate: ready, checkWork: async () => BUSY });
+    let during: unknown;
+    let sent: string | undefined;
+    let changed: string | undefined;
+    h.messageBox.mockImplementationOnce(async () => {
+      during = h.app.updateOfferFor(true);
+      sent = h.win.calls.at(-1);
+      h.app.updateChanged(ready.state);
+      changed = h.win.calls.at(-1);
+      return { response: 1 };
+    });
+    await expect(h.app.restartToUpdate()).resolves.toMatchObject({
+      code: "cancelled",
+    });
+    expect(during).toMatchObject({ action: null });
+    // A status page already open drops its button too, also on a change.
+    expect(sent).toBe("update ready -");
+    expect(changed).toBe("update ready -");
+    expect(h.win.calls.at(-1)).toBe("update ready restart_to_update");
+    expect(h.app.updateOfferFor(true)).toMatchObject({
+      action: "restart_to_update",
+    });
   });
 
   it("offers nothing where the app does not update itself", async () => {
@@ -2043,6 +2136,23 @@ describe("the installer asks the app to quit (D12)", () => {
     await quit;
     expect(h.exit).not.toHaveBeenCalled();
     expect(installQuitCancelled).toHaveBeenCalledOnce();
+  });
+
+  it("a launch while that quit stops does not start the old version again, in either order", async () => {
+    const a = await launched();
+    const stopA = a.sessions[0].stop;
+    a.sessions[0].stop = async () => (a.app.secondInstance(), stopA());
+    a.app.secondInstance(true);
+    await vi.waitFor(() => expect(a.exit).toHaveBeenCalled());
+    expect(a.exit).toHaveBeenCalledWith(false);
+
+    const b = await launched();
+    const stopB = b.sessions[0].stop;
+    b.sessions[0].stop = async () => (
+      b.app.secondInstance(), b.app.secondInstance(true), stopB()
+    );
+    await b.app.requestQuit();
+    expect(b.exit).toHaveBeenCalledWith(false);
   });
 
   it("is ignored once the app exits for its own update", async () => {
