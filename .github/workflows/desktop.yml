@@ -9,8 +9,9 @@ name: Desktop
 # - Tags v*: the same, then (once `evoscientist.release` is on, or always in
 #   a fork) the installer: built with publishing off, then uploaded with
 #   `gh release upload` - installer and blockmap first, latest.yml last - to
-#   the tag's release, kept a draft, by a job of its own that holds the write
-#   token and runs no npm code. The last job publishes it after every
+#   the tag's draft release (one published by hand gets the files and a
+#   warning), by a job of its own that holds the write token and runs no
+#   npm code. The last job publishes it after every
 #   platform job (only Windows until macOS comes) has succeeded and the
 #   release has notes of its own (a fork's test release needs none); a failed
 #   or unfinished run leaves the draft, and apps keep seeing the previous
