@@ -434,7 +434,7 @@ describe("ScheduledTasksPanel time zones", () => {
     expect(screen.getByRole("alert").textContent).toMatch(/Failed to load/);
   });
 
-  it("closes the pane when a delete finds the task already deleted, even if the list can't be read", async () => {
+  it("closes the pane without reporting a deletion when a delete answers 404, even if the list can't be read", async () => {
     hook.tasks = [task({ name: "Gone" })];
     hook.failRead = true;
     hook.deleteScheduledTask.mockImplementation(async () => {
@@ -443,6 +443,9 @@ describe("ScheduledTasksPanel time zones", () => {
         status: 404,
       });
     });
+    const { toast } = await import("sonner");
+    const success = vi.spyOn(toast, "success");
+    const error = vi.spyOn(toast, "error");
     render(<ScheduledTasksPanel />);
     fireEvent.click(screen.getByRole("button", { name: /Gone/ }));
     fireEvent.click(
@@ -458,6 +461,8 @@ describe("ScheduledTasksPanel time zones", () => {
     await waitFor(() =>
       expect(screen.queryByRole("button", { name: /Gone/ })).toBeNull()
     );
+    expect(error).toHaveBeenCalled();
+    expect(success).not.toHaveBeenCalled();
   });
 
   it("still recovers the folder's assistant when a create answers 404", async () => {
