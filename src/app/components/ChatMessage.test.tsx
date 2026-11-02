@@ -145,6 +145,49 @@ describe("ChatMessage pinned skill", () => {
   });
 });
 
+// Each reply says which model wrote it, next to its copy button.
+describe("ChatMessage model", () => {
+  const reply = (response_metadata?: Record<string, unknown>): Message =>
+    ({
+      id: "a1",
+      type: "ai",
+      content: "Done.",
+      response_metadata,
+    } as unknown as Message);
+
+  it("shows the reply's model and provider, the raw id as a tooltip", () => {
+    renderMessage(
+      reply({
+        model_name: "qwen/qwen3.8-max-0902",
+        model_provider: "openrouter",
+      })
+    );
+
+    const label = screen.getByText("qwen3.8-max-0902 · Openrouter");
+    expect(label.getAttribute("title")).toBe(
+      "qwen/qwen3.8-max-0902 (openrouter)"
+    );
+  });
+
+  it("shows nothing for a reply without a model name", () => {
+    renderMessage(reply({ finish_reason: "stop" }));
+
+    expect(screen.getByLabelText("Copy message")).toBeTruthy();
+    expect(screen.queryByText(/ · /)).toBeNull();
+  });
+
+  it("shows nothing on a user message", () => {
+    renderMessage({
+      id: "u1",
+      type: "human",
+      content: "hi",
+      response_metadata: { model_name: "z-ai/glm-5.3" },
+    } as unknown as Message);
+
+    expect(screen.queryByText("glm-5.3")).toBeNull();
+  });
+});
+
 // Models put their reasoning in one of two places: OpenAI-compatible routes
 // (DeepSeek, OpenRouter) in `additional_kwargs.reasoning_content`, Anthropic's
 // extended thinking in `thinking` content blocks ahead of the text (the shape

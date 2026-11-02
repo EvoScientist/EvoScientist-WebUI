@@ -30,6 +30,7 @@ import { ComposerChip } from "@/app/components/ComposerChip";
 import { isRubricRevision } from "@/lib/rubricRevision";
 import { messageReasoning } from "@/lib/reasoning";
 import { thoughtLabel, useThoughtSeconds } from "@/lib/thinkingTimer";
+import { replyModel } from "@/lib/model";
 import { AlertTriangle, Bell, Check, Copy, Pencil } from "lucide-react";
 import {
   extractStringFromMessageContent,
@@ -164,6 +165,12 @@ export const ChatMessage = React.memo<ChatMessageProps>(
           content: message.content,
         }),
       [message.additional_kwargs, message.content]
+    );
+    // Which model wrote this reply: the thread's model can change (a pick,
+    // or a thread from before models were pinned), so each reply says.
+    const model = useMemo(
+      () => replyModel(message.response_metadata),
+      [message.response_metadata]
     );
     // An abnormal turn-end is otherwise invisible: the run finishes
     // server-side, the thread goes idle, and no interrupt is raised.
@@ -406,7 +413,7 @@ export const ChatMessage = React.memo<ChatMessageProps>(
             </div>
           )}
           {!isUser && hasContent && (
-            <div className="mt-1">
+            <div className="mt-1 flex items-center gap-1">
               <button
                 type="button"
                 onClick={handleCopy}
@@ -425,6 +432,16 @@ export const ChatMessage = React.memo<ChatMessageProps>(
                   />
                 )}
               </button>
+              {model && (
+                <span
+                  title={model.raw}
+                  className="min-w-0 truncate text-xs text-muted-foreground"
+                >
+                  {model.provider
+                    ? `${model.name} · ${model.provider}`
+                    : model.name}
+                </span>
+              )}
             </div>
           )}
           {terminalError && terminalError.variant === "partial" && (

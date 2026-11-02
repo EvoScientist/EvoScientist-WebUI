@@ -34,3 +34,21 @@ export function formatModel(
 
   return { name, provider };
 }
+
+/** The model that wrote a reply, from its `response_metadata`, readable and
+ *  as the provider named it (for a tooltip). The name is the provider's own
+ *  id, which can differ from the name picked with `/model` (a dated or
+ *  sized variant). Null when the reply carries no model name. */
+export function replyModel(
+  responseMetadata: unknown
+): (ModelInfo & { raw: string }) | null {
+  const rm = (responseMetadata ?? {}) as Record<string, unknown>;
+  const rawName = rm.model_name ?? rm.model;
+  const info = formatModel(rawName, rm.model_provider);
+  if (!info) return null;
+  const provider =
+    typeof rm.model_provider === "string" && rm.model_provider.trim()
+      ? ` (${rm.model_provider.trim()})`
+      : "";
+  return { ...info, raw: `${(rawName as string).trim()}${provider}` };
+}
