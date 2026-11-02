@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
 import { NuqsAdapter } from "nuqs/adapters/next/app";
 import { ThemeProvider, ThemedToaster } from "@/providers/ThemeProvider";
+import { DesktopUpdateNotice } from "@/app/components/DesktopUpdateNotice";
 import { THEME_STORAGE_KEY } from "@/lib/theme";
 import "katex/dist/katex.min.css";
 import "./globals.css";
@@ -50,6 +51,7 @@ export default function RootLayout({
           <ThemeProvider>
             {children}
             <ThemedToaster />
+            <DesktopUpdateNotice />
           </ThemeProvider>
         </NuqsAdapter>
       </body>
