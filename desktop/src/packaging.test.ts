@@ -146,24 +146,65 @@ describe("the installer's running-app check (D12)", () => {
     );
   });
 
-  it("matches the install folder with a trailing backslash, passed outside the command", () => {
+  it("matches the app's executable, passed outside the command", () => {
     // In the command line, an apostrophe in the path (a user name) would
-    // break PowerShell's quoting.
+    // break PowerShell's quoting. A folder match took an old uninstaller run
+    // in place for the app, and ended it.
     expect(macro("customCheckAppRunning")).toContain(
-      `SetEnvironmentVariable(t "EVO_INSTDIR", t "$INSTDIR")`
+      `SetEnvironmentVariable(t "EVO_APP_EXE", t "$INSTDIR\\${"${APP_EXECUTABLE_FILENAME}"}")`
     );
-    const matches = nsh().match(/StartsWith\([^,]*,/g) ?? [];
-    expect(matches).toHaveLength(2);
-    for (const m of matches)
-      expect(m).toBe("StartsWith($$env:EVO_INSTDIR + '\\',");
+    for (const name of ["EVO_APP_RUNNING", "EVO_ANY_RUNNING", "EVO_END_ALL"])
+      expect(macro(name)).toContain("$$_.Path -eq $$env:EVO_APP_EXE");
+    expect(nsh()).not.toContain("StartsWith");
     expect(nsh()).not.toMatch(/'\$INSTDIR/);
+  });
+
+  it("waits 3 minutes by the clock, and stops a PowerShell or tasklist run after 30 s without output", () => {
+    const check = macro("customCheckAppRunning");
+    expect(check).toContain("System::Call 'kernel32::GetTickCount()i.R2'");
+    expect(check).toContain(
+      "IntOp $R4 $R4 - $R2\n    IntCmpU $R4 180000 evoPoll evoPoll 0\n"
+    );
+    const runs = nsh().match(/nsExec::Exec[^`]*`/g) ?? [];
+    expect(runs.length).toBeGreaterThan(0);
+    for (const r of runs) expect(r).toContain("/TIMEOUT=30000");
+  });
+
+  it("installs nothing while a process of the app still runs after the ends", () => {
+    // A UI server that Stop-Process could not end, or the app itself after a
+    // silent run's end, would hold the files being replaced.
+    expect(macro("EVO_ANY_RUNNING")).not.toContain("CommandLine");
+    expect(macro("EVO_ANY_RUNNING")).toContain("{ exit 0 } else { exit 2 }");
+    // No answer from either check counts as running.
+    expect(macro("EVO_ANY_RUNNING")).toMatch(
+      /\$\{If\} \$\{_RETURN\} != 0\n {4}\$\{AndIf\} \$\{_RETURN\} != 1\n {6}StrCpy \$\{_RETURN\} 0\n/
+    );
+    expect(macro("customCheckAppRunning")).toMatch(
+      /!insertmacro EVO_END_ALL \$R0\n[^]*!insertmacro EVO_ANY_RUNNING \$R0\n {4}StrCmp \$R0 0 evoStill\n!macroend$/
+    );
+    // The "still running" box: a silent run stops there.
+    const box = macro("customCheckAppRunning").split("evoStill:")[1] ?? "";
+    for (const line of box
+      .split("\n")
+      .filter((l) => l.includes("MB_RETRYCANCEL")))
+      expect(line).toContain("/SD IDCANCEL IDRETRY evoCheck");
+  });
+
+  it("speaks of the uninstall in the uninstaller", () => {
+    const check = macro("customCheckAppRunning");
+    expect(check).toMatch(
+      /!ifdef BUILD_UNINSTALLER\n[^!]*Cancel stops the uninstall\.[^!]*!else\n[^!]*Cancel stops the installer\./
+    );
+    expect(check).toMatch(
+      /!ifdef BUILD_UNINSTALLER\n[^!]*then uninstall it again\.[^!]*!else\n[^!]*then run the installer again\./
+    );
   });
 
   it("answers 0 or 2 from PowerShell, and falls back to the process name otherwise", () => {
     const check = macro("EVO_APP_RUNNING");
     expect(check).toContain("{ exit 0 } else { exit 2 }");
     expect(check).toMatch(
-      /\$\{If\} \$\{_RETURN\} != 0\n {2}\$\{AndIf\} \$\{_RETURN\} != 2\n {4}nsExec::Exec `"\$SYSDIR\\cmd\.exe" \/C tasklist \/FI "USERNAME eq %USERNAME%" \/FI "IMAGENAME eq \$\{APP_EXECUTABLE_FILENAME\}"/
+      /\$\{If\} \$\{_RETURN\} != 0\n {2}\$\{AndIf\} \$\{_RETURN\} != 2\n {4}nsExec::Exec \/TIMEOUT=30000 `"\$SYSDIR\\cmd\.exe" \/C tasklist \/FI "USERNAME eq %USERNAME%" \/FI "IMAGENAME eq \$\{APP_EXECUTABLE_FILENAME\}"/
     );
     expect(macro("EVO_END_ALL")).toContain("{ exit 0 } else { exit 2 }");
   });
