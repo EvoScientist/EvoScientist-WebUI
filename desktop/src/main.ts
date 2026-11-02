@@ -35,7 +35,7 @@ import {
   createApp,
   type AppWindow,
 } from "./app";
-import { brief, createAppUpdate } from "./appUpdate";
+import { configureUpdater, createAppUpdate } from "./appUpdate";
 import type { Manifest } from "./boot";
 import { backendRequest, checkWork, waitForMemoryWorkers } from "./closeCheck";
 import { writeCrashReport } from "./crash";
@@ -146,17 +146,7 @@ function readKeptMirror(): boolean | null {
 const appUpdate =
   app.isPackaged && process.platform === "win32"
     ? createAppUpdate({
-        updater: (() => {
-          autoUpdater.autoDownload = false;
-          autoUpdater.autoInstallOnAppQuit = false;
-          autoUpdater.logger = {
-            info: (m: unknown) => log.info(`updater: ${m}`),
-            warn: (m: unknown) => log.warn(`updater: ${m}`),
-            error: (m: unknown) => log.warn(`updater: ${brief(m)}`),
-            debug: () => {},
-          };
-          return autoUpdater;
-        })(),
+        updater: configureUpdater(autoUpdater, log),
         newToken: () => new CancellationToken(),
         online: () => net.isOnline(),
         log,

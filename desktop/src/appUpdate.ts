@@ -1,9 +1,9 @@
 // Updates of the app itself, from this repository's GitHub Releases through
 // electron-updater (not `update.ts`, which updates the core). The app checks
 // on its own and downloads and installs only when the user asks:
-// - a check about 5 s after the first page load, then every hour; skipped
-//   while offline, while a download runs or once one is ready; a check
-//   downloads nothing (`autoDownload` is off);
+// - a check about 5 s after the app starts, then every hour; skipped while
+//   offline, while a download runs or once one is ready; a check downloads
+//   nothing (`autoDownload` is off, `configureUpdater`);
 // - "Download" starts the download; "Restart to update" (app.ts, after the
 //   busy checks and the stops) calls `install()`;
 // - an update is never installed on quit or at the end of the session
@@ -12,14 +12,16 @@
 //   data for 60 s, fail: Electron's network stack never fires the updater's
 //   own idle timeout. A failure is only logged; the next check tries again
 //   (the updater would hand a stalled check to every later one, so the limit
-//   drops it there too). A cut download fails the updater's SHA-512 check;
-//   it is never "ready";
+//   drops it there too). Downloads fetch the whole installer: a download of
+//   the changed blocks reads the cancel only when data comes, so a stalled
+//   one could not be ended. A cut download fails (the response errors or the
+//   SHA-512 check fails); it is never "ready";
 // - "Restart to update" starts the installer only when the downloaded file
 //   can still be opened (an antivirus may have removed it); otherwise the
 //   download is offered again. The updater quits the app as soon as it has
 //   asked for the installer, so a start that fails after that is not seen.
 import { closeSync, openSync } from "node:fs";
-import type { CancellationToken } from "electron-updater";
+import type { AppUpdater, CancellationToken } from "electron-updater";
 import type { Logger } from "./proc";
 
 export const FIRST_CHECK_MS = 5_000;
@@ -79,7 +81,7 @@ export interface UpdateDeps {
 
 export interface AppUpdate {
   readonly state: UpdateState;
-  /** Schedules the first check and the hourly ones; once. */
+  /** Schedules the first check and the hourly ones; once until `stop()`. */
   start(): void;
   /** One check now (skipped when it does not apply). */
   check(): Promise<void>;
@@ -93,8 +95,41 @@ export interface AppUpdate {
    *  or its file cannot be opened. The caller has stopped everything and lets
    *  the app quit. */
   install(): boolean;
-  /** Stops the timers (the app quits). */
+  /** Stops the timers; `start()` schedules them again. */
   stop(): void;
+}
+
+/** electron-updater's settings for the app: it downloads and installs only
+ *  when asked (both default to on), downloads the whole installer, the new
+ *  version starts after the install, and its lines go to the desktop log. */
+export function configureUpdater<
+  T extends Pick<
+    AppUpdater,
+    | "autoDownload"
+    | "autoInstallOnAppQuit"
+    | "disableDifferentialDownload"
+    | "autoRunAppAfterInstall"
+    | "logger"
+  >
+>(updater: T, log: Logger): T {
+  updater.autoDownload = false;
+  updater.autoInstallOnAppQuit = false;
+  // A download of the changed blocks ends only when its range requests do
+  // (it reads the cancel when data comes): after a stall every later
+  // download waited on it, and letting a new one start lost that one when
+  // the stalled request ended (it empties the download folder). A whole
+  // download fails at once on cancel.
+  updater.disableDifferentialDownload = true;
+  // The installer starts the new version (a non-silent install reads this,
+  // not `quitAndInstall`'s second argument).
+  updater.autoRunAppAfterInstall = true;
+  updater.logger = {
+    info: (m: unknown) => log.info(`updater: ${m}`),
+    warn: (m: unknown) => log.warn(`updater: ${m}`),
+    error: (m: unknown) => log.warn(`updater: ${brief(m)}`),
+    debug: () => {},
+  };
+  return updater;
 }
 
 /** An updater error for the log: its first lines, without the response
@@ -125,6 +160,14 @@ function canOpenFile(path: string): boolean {
 function forgetPendingCheck(updater: Updater): void {
   const u = updater as unknown as { checkForUpdatesPromise?: unknown };
   if ("checkForUpdatesPromise" in u) u.checkForUpdatesPromise = null;
+}
+
+/** electron-updater ignores an install while an earlier one is still marked
+ *  started (a private field, 6.x): after an installer that did not end the
+ *  app, the next Restart to update would stop everything for nothing. */
+function forgetEarlierInstall(updater: Updater): void {
+  const u = updater as unknown as { quitAndInstallCalled?: boolean };
+  if ("quitAndInstallCalled" in u) u.quitAndInstallCalled = false;
 }
 
 export function createAppUpdate(deps: UpdateDeps): AppUpdate {
@@ -279,6 +322,7 @@ export function createAppUpdate(deps: UpdateDeps): AppUpdate {
     install() {
       if (!installable() || state.kind !== "ready") return false;
       log.info(`update install: ${state.version}`);
+      forgetEarlierInstall(updater);
       updater.quitAndInstall(false, true);
       return true;
     },
@@ -286,6 +330,7 @@ export function createAppUpdate(deps: UpdateDeps): AppUpdate {
       if (firstTimer !== null) timers.clearTimeout(firstTimer);
       if (interval !== null) timers.clearInterval(interval);
       firstTimer = interval = null;
+      started = false;
     },
   };
 }

@@ -1,23 +1,46 @@
 // electron-updater's own Windows updater against a loopback feed, through
-// the app's update flow (appUpdate.ts): no update, an update, a SHA-512
-// mismatch, a cut download, a stalled download and a feed without
-// `latest.yml`. Node's HTTP client stands in for Electron's `net` under
+// the app's update flow (appUpdate.ts) and its settings (`configureUpdater`):
+// no update, an update, a SHA-512 mismatch, a cut download, a stalled
+// download, a whole download where one of the changed blocks could run, and
+// a feed without `latest.yml`.
+// Node's HTTP client stands in for Electron's `net` under
 // electron-updater's own executor, and the
 // updater runs as on Windows (`_testOnlyOptions.platform`), as in
 // electron-updater's own tests.
 import { createHash, randomBytes } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, request, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { gzipSync } from "node:zlib";
 import { CancellationToken, NsisUpdater } from "electron-updater";
 import { ElectronHttpExecutor } from "electron-updater/out/electronHttpExecutor";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createAppUpdate, type UpdateState } from "./appUpdate";
+import {
+  configureUpdater,
+  createAppUpdate,
+  type UpdateState,
+} from "./appUpdate";
 
 const INSTALLER = randomBytes(256 * 1024);
 const SHA512 = createHash("sha512").update(INSTALLER).digest("base64");
+
+/** A blockmap of the installer in two halves, as electron-builder writes. */
+const blockmap = (checksums: string[]) =>
+  gzipSync(
+    JSON.stringify({
+      version: "2",
+      files: [
+        {
+          name: "file",
+          offset: 0,
+          checksums,
+          sizes: [INSTALLER.length / 2, INSTALLER.length / 2],
+        },
+      ],
+    })
+  );
 
 function latestYml(version: string, sha512 = SHA512): string {
   return [
@@ -53,6 +76,10 @@ let base: string;
 let dir: string;
 /** `latest.yml` requests per feed. */
 const asked: Record<string, number> = {};
+/** Installer requests per feed: the range asked for, or "whole". */
+const fetched: Record<string, string[]> = {};
+/** The quit handlers electron-updater registered, per updater. */
+const quitHandlers: Record<string, number> = {};
 
 beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), "evo-update-feed-"));
@@ -80,8 +107,22 @@ beforeAll(async () => {
       res.writeHead(200, { "content-type": "text/yaml" }).end(yml);
       return;
     }
+    if (file === "EvoScientist-Setup.exe.blockmap" && feed === "blockstall") {
+      res.writeHead(200).end(blockmap(["new-a", "new-b"]));
+      return;
+    }
     if (file !== "EvoScientist-Setup.exe") {
       res.writeHead(404).end();
+      return;
+    }
+    (fetched[feed] ??= []).push(req.headers.range ?? "whole");
+    if (feed === "blockstall" && req.headers.range) {
+      // The changed blocks: some bytes, then nothing.
+      res.writeHead(206, {
+        "content-length": INSTALLER.length,
+        "content-range": `bytes 0-${INSTALLER.length - 1}/${INSTALLER.length}`,
+      });
+      res.write(INSTALLER.subarray(0, 1024));
       return;
     }
     res.writeHead(200, {
@@ -112,8 +153,16 @@ afterAll(async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-function updaterFor(feed: string, name: string) {
+function updaterFor(feed: string, name: string, blocks = false) {
   const home = join(dir, name);
+  if (blocks) {
+    // What the installer leaves for a download of the changed blocks: itself
+    // and its blockmap in the updater's cache.
+    const cache = join(home, `${name}-updater`);
+    mkdirSync(cache, { recursive: true });
+    writeFileSync(join(cache, "installer.exe"), randomBytes(INSTALLER.length));
+    writeFileSync(join(cache, "current.blockmap"), blockmap(["a", "b"]));
+  }
   const appUpdateConfigPath = join(dir, `${name}-app-update.yml`);
   writeFileSync(
     appUpdateConfigPath,
@@ -129,7 +178,9 @@ function updaterFor(feed: string, name: string) {
     whenReady: () => Promise.resolve(),
     relaunch: () => {},
     quit: () => {},
-    onQuit: () => {},
+    onQuit: () => {
+      quitHandlers[name] = (quitHandlers[name] ?? 0) + 1;
+    },
   });
   const internals = updater as unknown as {
     httpExecutor: unknown;
@@ -138,14 +189,16 @@ function updaterFor(feed: string, name: string) {
   internals.httpExecutor = new LoopbackExecutor();
   internals._testOnlyOptions = {
     platform: "win32",
-    isUseDifferentialDownload: false,
+    isUseDifferentialDownload: blocks,
   };
-  // The provider takes the executor when the feed is set.
-  updater.setFeedURL({ provider: "generic", url: `${base}/${feed}` });
-  updater.autoDownload = false;
-  updater.autoInstallOnAppQuit = false;
-  updater.logger = null;
-  return updater;
+  // The provider takes the executor when the feed is set. GitHub's provider
+  // asks for one range per request.
+  updater.setFeedURL({
+    provider: "generic",
+    url: `${base}/${feed}`,
+    useMultipleRangeRequest: false,
+  });
+  return configureUpdater(updater, { info: () => {}, warn: () => {} });
 }
 
 // electron-updater reports progress at most once a second, so a watchdog
@@ -155,12 +208,13 @@ function flow(
   feed: string,
   name: string,
   stallMs = 5_000,
-  checkLimitMs = 5_000
+  checkLimitMs = 5_000,
+  blocks = false
 ) {
   const logs: string[] = [];
   const waiters: { pred: (s: UpdateState) => boolean; done: () => void }[] = [];
   const u = createAppUpdate({
-    updater: updaterFor(feed, name),
+    updater: updaterFor(feed, name, blocks),
     newToken: () => new CancellationToken(),
     online: () => true,
     log: {
@@ -184,6 +238,13 @@ function flow(
 }
 
 describe("electron-updater against a loopback feed", () => {
+  it("has the private fields the app resets", () => {
+    // forgetPendingCheck and forgetEarlierInstall (appUpdate.ts).
+    const updater = updaterFor("same", "fields");
+    expect("checkForUpdatesPromise" in updater).toBe(true);
+    expect("quitAndInstallCalled" in updater).toBe(true);
+  });
+
   it("finds no update when the feed has the running version", async () => {
     const t = flow("same", "same");
     await t.u.check();
@@ -199,11 +260,16 @@ describe("electron-updater against a loopback feed", () => {
       version: "0.4.3",
       failed: false,
     });
+    // The check downloads nothing.
+    await new Promise((r) => setTimeout(r, 300));
+    expect(fetched.ok).toBeUndefined();
     t.u.download();
     await t.until((s) => s.kind !== "downloading");
     expect(t.u.state).toEqual({ kind: "ready", version: "0.4.3" });
     // The installer electron-updater saved is the one Restart to update runs.
     expect(t.u.installable()).toBe(true);
+    // Nothing installs it on quit.
+    expect(quitHandlers.ok).toBeUndefined();
   });
 
   it("asks the feed again after a check that got no answer", async () => {
@@ -246,6 +312,18 @@ describe("electron-updater against a loopback feed", () => {
     expect(t.logs).toContain(
       "warn update download: no data for 0 s, cancelled"
     );
+  });
+
+  it("downloads the whole installer even where it could download the changed blocks", async () => {
+    // electron-updater's block download reads the cancel only when data
+    // comes: a stalled one held every later Download, and when it ended it
+    // emptied the download folder.
+    const t = flow("blockstall", "blockstall", 300, 5_000, true);
+    await t.u.check();
+    t.u.download();
+    await t.until((s) => s.kind !== "downloading");
+    expect(t.u.state).toEqual({ kind: "ready", version: "0.4.3" });
+    expect(fetched.blockstall).toEqual(["whole"]);
   });
 
   it("logs a feed without latest.yml as a failed check and offers nothing", async () => {

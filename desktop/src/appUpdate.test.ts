@@ -5,6 +5,7 @@ import {
   CHECK_LIMIT_MS,
   FIRST_CHECK_MS,
   STALL_MS,
+  configureUpdater,
   createAppUpdate,
   type Updater,
   type UpdateState,
@@ -276,7 +277,7 @@ describe("download", () => {
     expect(t.updater.checkForUpdates).toHaveBeenCalledTimes(2);
   });
 
-  it("offers a failed download again (a cut download fails the SHA-512 check)", async () => {
+  it("offers a failed download again", async () => {
     const t = await offered();
     t.u.download();
     t.pending.download?.reject(new Error("sha512 checksum mismatch"));
@@ -306,6 +307,34 @@ describe("install", () => {
     expect(t.updater.quitAndInstall).toHaveBeenCalledWith(false, true);
   });
 
+  it("starts the installer again after one that did not end the app", async () => {
+    // electron-updater's BaseUpdater: a call while `quitAndInstallCalled` is
+    // set is ignored and only clears the flag.
+    const t = setup();
+    let started = 0;
+    const marked = t.updater as typeof t.updater & {
+      quitAndInstallCalled: boolean;
+    };
+    marked.quitAndInstallCalled = false;
+    t.updater.quitAndInstall.mockImplementation(() => {
+      if (marked.quitAndInstallCalled) {
+        marked.quitAndInstallCalled = false;
+        return;
+      }
+      marked.quitAndInstallCalled = true;
+      started++;
+    });
+    const done = t.u.check();
+    t.pending.check?.resolve(available("0.4.3"));
+    await done;
+    t.u.download();
+    t.pending.download?.resolve();
+    await settle();
+    expect(t.u.install()).toBe(true);
+    expect(t.u.install()).toBe(true);
+    expect(started).toBe(2);
+  });
+
   it("offers the download again when the downloaded installer cannot be opened", async () => {
     let present = true;
     const t = setup({ canOpen: (p) => present && p === INSTALLER });
@@ -331,6 +360,37 @@ describe("install", () => {
   });
 });
 
+describe("configureUpdater", () => {
+  it("downloads and installs only when asked, starts the new version after, and logs", () => {
+    const lines: string[] = [];
+    const u = configureUpdater(
+      {
+        autoDownload: true,
+        autoInstallOnAppQuit: true,
+        disableDifferentialDownload: false,
+        autoRunAppAfterInstall: false,
+        logger: null as unknown as Parameters<
+          typeof configureUpdater
+        >[0]["logger"],
+      },
+      {
+        info: (m) => lines.push(`info ${m}`),
+        warn: (m) => lines.push(`warn ${m}`),
+      }
+    );
+    expect(u.autoDownload).toBe(false);
+    expect(u.autoInstallOnAppQuit).toBe(false);
+    expect(u.disableDifferentialDownload).toBe(true);
+    expect(u.autoRunAppAfterInstall).toBe(true);
+    u.logger?.info("checking");
+    u.logger?.error(new Error("HttpError: 404\nHeaders: {}"));
+    expect(lines).toEqual([
+      "info updater: checking",
+      "warn updater: HttpError: 404",
+    ]);
+  });
+});
+
 describe("stop", () => {
   it("ends the scheduled checks", async () => {
     const t = setup();
@@ -338,5 +398,14 @@ describe("stop", () => {
     t.u.stop();
     await vi.advanceTimersByTimeAsync(CHECK_INTERVAL_MS * 2);
     expect(t.updater.checkForUpdates).not.toHaveBeenCalled();
+  });
+
+  it("schedules them again on the next start", async () => {
+    const t = setup();
+    t.u.start();
+    t.u.stop();
+    t.u.start();
+    await vi.advanceTimersByTimeAsync(FIRST_CHECK_MS);
+    expect(t.updater.checkForUpdates).toHaveBeenCalledTimes(1);
   });
 });
