@@ -1578,7 +1578,7 @@ describe("ChatInterface composition", () => {
       expect(stream.getSubmitCalls()).toHaveLength(0);
     });
 
-    it("sets the model from the Model page, and resets it", async () => {
+    it("sets the model from the Model page, and resets it to the default", async () => {
       const { container } = renderChatInterface();
       const openModelPage = async () => {
         const textarea = typeInComposer(container, "/mo");
@@ -1588,34 +1588,62 @@ describe("ChatInterface composition", () => {
         fireEvent.keyDown(textarea, { key: "Enter" });
         return textarea;
       };
-      let textarea = await openModelPage();
-      // The curated list here (no registry): its first row, then Enter.
-      expect(screen.getAllByRole("option")[0].textContent).toContain(
-        "claude-sonnet-4-6"
+      // A model other than the default, by name.
+      let textarea = typeInComposer(
+        container,
+        "/model claude-haiku-4-5 anthropic"
       );
       fireEvent.keyDown(textarea, { key: "Enter" });
       await waitFor(() =>
         expect(toast.success).toHaveBeenCalledWith(
-          "Model set to claude-sonnet-4-6 (anthropic)."
+          "Model set to claude-haiku-4-5 (anthropic)."
         )
       );
       expect(screen.queryByRole("listbox")).toBeNull();
-      // Back on the page: the current model is highlighted, and Reset to
-      // default is the last row.
+      // Back on the page: Reset to default is the last row.
       textarea = await openModelPage();
       const active = () =>
         document.getElementById(
           textarea.getAttribute("aria-activedescendant") ?? ""
         );
-      expect(active()?.textContent).toContain("claude-sonnet-4-6");
+      expect(screen.getByText("Current: claude-haiku-4-5")).toBeTruthy();
       const rows = screen.getAllByRole("option");
       expect(rows[rows.length - 1].textContent).toContain("Reset to default");
-      fireEvent.keyDown(textarea, { key: "ArrowUp" });
+      fireEvent.keyDown(textarea, { key: "ArrowDown" });
+      expect(active()?.textContent).toContain("Reset to default");
       fireEvent.keyDown(textarea, { key: "Enter" });
+      // Reset pins the default at once, so it is the thread's pick now.
       await waitFor(() =>
-        expect(toast.success).toHaveBeenCalledWith("Model override cleared.")
+        expect(toast.success).toHaveBeenCalledWith(
+          "Model set to the default, claude-sonnet-4-6 (anthropic)."
+        )
       );
       expect(stream.getSubmitCalls()).toHaveLength(0);
+      // On the default: said so, and no Reset row.
+      textarea = await openModelPage();
+      expect(
+        screen.getByText("Current: claude-sonnet-4-6 (default)")
+      ).toBeTruthy();
+      expect(
+        screen
+          .getAllByRole("option")
+          .some((o) => o.textContent?.includes("Reset to default"))
+      ).toBe(false);
+    });
+
+    it("`/model reset` clears the pick when the registry has no default", async () => {
+      const { registryStub } = await import("@/test/mocks/chatInterfaceStubs");
+      registryStub.failed = true;
+      try {
+        const { container } = renderChatInterface();
+        const textarea = typeInComposer(container, "/model reset");
+        fireEvent.keyDown(textarea, { key: "Enter" });
+        await waitFor(() =>
+          expect(toast.success).toHaveBeenCalledWith("Model override cleared.")
+        );
+      } finally {
+        registryStub.failed = false;
+      }
     });
 
     it("notes the curated list when the registry didn't load", async () => {

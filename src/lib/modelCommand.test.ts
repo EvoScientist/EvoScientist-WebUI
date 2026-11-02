@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { parseModelCommand } from "./modelCommand";
+import {
+  defaultModelPick,
+  isDefaultPick,
+  parseModelCommand,
+} from "./modelCommand";
 
 describe("parseModelCommand", () => {
   it("returns null for non-/model inputs", () => {
@@ -78,5 +82,53 @@ describe("parseModelCommand", () => {
       model: "Claude-Sonnet-4-6",
       provider: undefined,
     });
+  });
+});
+
+describe("defaultModelPick", () => {
+  it("turns the registry default into a pick", () => {
+    expect(defaultModelPick({ name: "m-0", provider: "p-0" })).toEqual({
+      model: "m-0",
+      model_provider: "p-0",
+    });
+    expect(defaultModelPick({ name: "m-0", provider: null })).toEqual({
+      model: "m-0",
+    });
+  });
+
+  it("returns null without a default", () => {
+    expect(defaultModelPick(null)).toBeNull();
+    expect(defaultModelPick({ name: "", provider: "p-0" })).toBeNull();
+  });
+});
+
+describe("isDefaultPick", () => {
+  const def = { name: "m-0", provider: "p-0" };
+
+  it("matches the same model and provider", () => {
+    expect(isDefaultPick({ model: "m-0", model_provider: "p-0" }, def)).toBe(
+      true
+    );
+  });
+
+  it("matches by name when either side has no provider", () => {
+    expect(isDefaultPick({ model: "m-0" }, def)).toBe(true);
+    expect(
+      isDefaultPick(
+        { model: "m-0", model_provider: "p-0" },
+        { name: "m-0", provider: null }
+      )
+    ).toBe(true);
+  });
+
+  it("does not match another model or provider, or a missing side", () => {
+    expect(isDefaultPick({ model: "m-1", model_provider: "p-0" }, def)).toBe(
+      false
+    );
+    expect(isDefaultPick({ model: "m-0", model_provider: "p-1" }, def)).toBe(
+      false
+    );
+    expect(isDefaultPick(null, def)).toBe(false);
+    expect(isDefaultPick({ model: "m-0" }, null)).toBe(false);
   });
 });

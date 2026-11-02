@@ -165,6 +165,8 @@ import { useQueryState } from "nuqs";
 import { toast } from "sonner";
 import { useFilePane } from "@/providers/filePaneContext";
 import {
+  defaultModelPick,
+  isDefaultPick,
   parseModelCommand,
   type ModelCommand,
   type ModelOverride,
@@ -1395,7 +1397,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
 
     // Apply a parsed `/model` command. Three forms:
     //   - show  → open the model picker dialog
-    //   - reset → clear the per-thread override (revert to assistant default)
+    //   - reset → pin the thread to the current default (see resetModel)
     //   - set   → persist the new override and confirm via toast. Names that
     //             aren't in our curated list are still accepted — the backend
     //             accepts anything `init_chat_model` knows, and we'd rather
@@ -1426,41 +1428,50 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       },
       [setModelOverride]
     );
+    // Reset pins the thread to the current default at once, so a later
+    // change of the default doesn't move it. With no default known (an older
+    // backend) the pick is cleared, and the next run pins the default.
     const resetModel = useCallback(async (): Promise<boolean> => {
+      const pick = defaultModelPick(modelRegistry.defaultEntry);
       try {
-        await setModelOverride(null);
-        toast.success("Model override cleared.");
+        await setModelOverride(pick);
+        toast.success(
+          pick
+            ? `Model set to the default, ${pick.model}${
+                pick.model_provider ? ` (${pick.model_provider})` : ""
+              }.`
+            : "Model override cleared."
+        );
         return true;
       } catch (err) {
         toast.error(
           err instanceof Error
-            ? `Couldn't clear override: ${err.message}`
-            : "Couldn't clear override — try again."
+            ? `Couldn't update model: ${err.message}`
+            : "Couldn't update model — try again."
         );
         return false;
       }
-    }, [setModelOverride]);
+    }, [modelRegistry.defaultEntry, setModelOverride]);
 
     const applyModelCommand = useCallback(
       async (cmd: Exclude<ModelCommand, { kind: "show" }>) => {
         // Pre-thread picks are staged in useChat and applied to the first
         // run; no threadId guard needed.
+        if (cmd.kind === "reset") {
+          await resetModel();
+          return;
+        }
         try {
-          if (cmd.kind === "reset") {
-            await setModelOverride(null);
-            toast.success("Model override cleared.");
-          } else {
-            const next: ModelOverride = {
-              model: cmd.model,
-              ...(cmd.provider ? { model_provider: cmd.provider } : {}),
-            };
-            await setModelOverride(next);
-            toast.success(
-              `Model set to ${cmd.model}${
-                cmd.provider ? ` (${cmd.provider})` : ""
-              }.`
-            );
-          }
+          const next: ModelOverride = {
+            model: cmd.model,
+            ...(cmd.provider ? { model_provider: cmd.provider } : {}),
+          };
+          await setModelOverride(next);
+          toast.success(
+            `Model set to ${cmd.model}${
+              cmd.provider ? ` (${cmd.provider})` : ""
+            }.`
+          );
         } catch (err) {
           toast.error(
             err instanceof Error
@@ -1469,7 +1480,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
           );
         }
       },
-      [setModelOverride]
+      [resetModel, setModelOverride]
     );
 
     const handleSubmit = useCallback(
@@ -1871,6 +1882,8 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       defaultEntry: modelRegistry.defaultEntry,
       filter: "",
     }).find((e) => e.current);
+    // The thread's pick is the default a new chat would get.
+    const onDefault = isDefaultPick(modelOverride, modelRegistry.defaultEntry);
     const modelPage: MenuPage = {
       word: "model",
       label: "Model",
@@ -1878,7 +1891,9 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       description: "Change the model for this chat",
       tail: currentModel?.name,
       status: currentModel
-        ? `Current: ${currentModel.name}${modelOverride ? "" : " (default)"}`
+        ? `Current: ${currentModel.name}${
+            !modelOverride || onDefault ? " (default)" : ""
+          }`
         : undefined,
       note: isFallbackModelList
         ? "Showing a curated list: the backend's model registry didn't load."
@@ -1901,7 +1916,9 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
           run: () =>
             void chooseModel({ model: e.model, model_provider: e.provider }),
         }));
-        if (modelOverride && !filter.trim()) {
+        // Hidden when the thread is on the default already: it would change
+        // nothing.
+        if (modelOverride && !onDefault && !filter.trim()) {
           const fallback = modelRegistry.defaultEntry?.name;
           rows.push({
             id: "reset",
