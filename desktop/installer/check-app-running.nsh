@@ -28,6 +28,7 @@
 ;    executable still runs (or the check gets no answer), its files cannot be
 ;    replaced, so the installer asks to close the app and retry, or stops (a
 ;    silent run stops).
+; Every stop exits with code 2, so a silent run's caller sees it.
 ;
 ; PowerShell gets the executable's path in EVO_APP_EXE, not in its command
 ; line, so no character of the path (an apostrophe in a user name) can break
@@ -40,7 +41,8 @@
 ; desktop/package.json (the ui-entry.mjs resource).
 
 !macro EVO_APP_RUNNING _RETURN
-  ; 0 when the app runs (its executable, not a UI server), else 1.
+  ; 0 when the app runs, else 1. PowerShell leaves a UI server out; the
+  ; fallback by name counts it, and the same name in any folder.
   nsExec::Exec /TIMEOUT=30000 `"$PowerShellPath" -NoProfile -NonInteractive -C "if (@(Get-CimInstance -ClassName Win32_Process | ? {$$_.Path -eq $$env:EVO_APP_EXE -and [string]$$_.CommandLine -notlike '*ui-entry.mjs*'}).Count -gt 0) { exit 0 } else { exit 2 }"`
   Pop ${_RETURN}
   ${If} ${_RETURN} != 0
@@ -100,10 +102,12 @@
     IfSilent evoKill
   evoStill:
     !ifdef BUILD_UNINSTALLER
-      MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "${PRODUCT_NAME} is still running. Close it (File > Quit), then press Retry. Cancel stops the uninstall." /SD IDCANCEL IDRETRY evoCheck
+      MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "${PRODUCT_NAME} is still running. Close it (File > Quit) or end it in Task Manager, then press Retry. Cancel stops the uninstall." /SD IDCANCEL IDRETRY evoCheck
     !else
-      MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "${PRODUCT_NAME} is still running. Close it (File > Quit), then press Retry. Cancel stops the installer." /SD IDCANCEL IDRETRY evoCheck
+      MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "${PRODUCT_NAME} is still running. Close it (File > Quit) or end it in Task Manager, then press Retry. Cancel stops the installer." /SD IDCANCEL IDRETRY evoCheck
     !endif
+    ; A silent run's caller sees that nothing was installed or removed.
+    SetErrorLevel 2
     Quit
   evoCancelled:
     Delete "$R3"
@@ -112,6 +116,8 @@
     !else
       MessageBox MB_OK|MB_ICONINFORMATION "${PRODUCT_NAME} keeps running, so nothing was changed. Close ${PRODUCT_NAME}, then run the installer again." /SD IDOK
     !endif
+    ; A silent run's caller sees that nothing was installed or removed.
+    SetErrorLevel 2
     Quit
   evoKill:
     DetailPrint "Ending ${PRODUCT_NAME}..."

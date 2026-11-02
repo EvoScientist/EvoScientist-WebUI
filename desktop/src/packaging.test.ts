@@ -190,6 +190,20 @@ describe("the installer's running-app check (D12)", () => {
       expect(line).toContain("/SD IDCANCEL IDRETRY evoCheck");
   });
 
+  it("exits with code 2 whenever it stops, and names Task Manager in the box", () => {
+    // A silent run's caller would otherwise see success with nothing done.
+    const check = macro("customCheckAppRunning");
+    const quits = check.match(/^.*\n {4}Quit$/gm) ?? [];
+    expect(quits).toHaveLength(2);
+    for (const q of quits) expect(q).toMatch(/^ {4}SetErrorLevel 2\n/);
+    for (const line of check
+      .split("\n")
+      .filter((l) => l.includes("MB_RETRYCANCEL")))
+      expect(line).toContain(
+        "Close it (File > Quit) or end it in Task Manager, then press Retry."
+      );
+  });
+
   it("speaks of the uninstall in the uninstaller", () => {
     const check = macro("customCheckAppRunning");
     expect(check).toMatch(
