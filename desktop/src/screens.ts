@@ -587,6 +587,8 @@ export function errorScreen(error: BootError, ctx: ScreenContext): ErrorScreen {
  *  WebUI page shows the same texts (src/app/components/DesktopUpdateNotice.tsx). */
 export interface UpdateOffer {
   text: string;
+  /** The download's percent, shown after the text but not announced. */
+  percent: number | null;
   action: "download_update" | "restart_to_update" | null;
 }
 
@@ -599,16 +601,19 @@ export function updateOffer(s: UpdateState): UpdateOffer | null {
         text: s.failed
           ? `The download of EvoScientist ${s.version} did not finish.`
           : `EvoScientist ${s.version} is available.`,
+        percent: null,
         action: "download_update",
       };
     case "downloading":
       return {
-        text: `Downloading EvoScientist ${s.version}... ${s.percent}%`,
+        text: `Downloading EvoScientist ${s.version}...`,
+        percent: s.percent,
         action: null,
       };
     case "ready":
       return {
         text: `EvoScientist ${s.version} is ready to install.`,
+        percent: null,
         action: "restart_to_update",
       };
   }

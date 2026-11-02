@@ -156,17 +156,24 @@ const UPDATE_LABELS = {
 /** What a "Restart to update" that did not happen says. */
 const UPDATE_NOTES = {
   busy: "The app is busy. Try again in a moment.",
+  not_ready: "The downloaded installer could not be opened. Download it again.",
 };
 let shownOffer = null;
 
-/** Draws the app update's line and button, or hides them. */
+/** Draws the app update's line and button, or hides them. The section is a
+ *  polite live region: the text is rewritten only when it changes, and the
+ *  percent of a download is not announced. */
 function renderUpdate(offer, note) {
   shownOffer = offer;
   $("app-update").hidden = !offer;
   if (!offer) return;
-  $("app-update-text").textContent = offer.text;
+  if ($("app-update-text").textContent !== offer.text)
+    $("app-update-text").textContent = offer.text;
+  $("app-update-percent").textContent =
+    typeof offer.percent === "number" ? `${offer.percent}%` : "";
+  if ($("app-update-note").textContent !== (note || ""))
+    $("app-update-note").textContent = note || "";
   $("app-update-note").hidden = !note;
-  $("app-update-note").textContent = note || "";
   const b = $("app-update-action");
   b.hidden = !offer.action;
   b.textContent = UPDATE_LABELS[offer.action] || "";

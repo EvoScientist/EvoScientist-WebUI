@@ -460,13 +460,19 @@ describe("updateOffer (W04)", () => {
       updateOffer({ kind: "available", version: "0.4.3", failed: false })
     ).toEqual({
       text: "EvoScientist 0.4.3 is available.",
+      percent: null,
       action: "download_update",
     });
     expect(
       updateOffer({ kind: "downloading", version: "0.4.3", percent: 42 })
-    ).toEqual({ text: "Downloading EvoScientist 0.4.3... 42%", action: null });
+    ).toEqual({
+      text: "Downloading EvoScientist 0.4.3...",
+      percent: 42,
+      action: null,
+    });
     expect(updateOffer({ kind: "ready", version: "0.4.3" })).toEqual({
       text: "EvoScientist 0.4.3 is ready to install.",
+      percent: null,
       action: "restart_to_update",
     });
   });
@@ -476,6 +482,7 @@ describe("updateOffer (W04)", () => {
       updateOffer({ kind: "available", version: "0.4.3", failed: true })
     ).toEqual({
       text: "The download of EvoScientist 0.4.3 did not finish.",
+      percent: null,
       action: "download_update",
     });
   });
