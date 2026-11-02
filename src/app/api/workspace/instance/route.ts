@@ -1,5 +1,9 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { instanceOf, readLocalSecret } from "@/lib/server/settingsRelay";
+import {
+  instanceOf,
+  localBackend,
+  readLocalSecret,
+} from "@/lib/server/settingsRelay";
 import { isCrossOrigin } from "@/lib/server/workspace";
 
 export const runtime = "nodejs";
@@ -22,7 +26,7 @@ export async function GET(request: NextRequest) {
       { status: 403, headers: NO_STORE_HEADERS }
     );
   }
-  const secret = readLocalSecret();
+  const secret = readLocalSecret(localBackend());
   return NextResponse.json(
     { instance: secret ? instanceOf(secret) : null },
     { headers: NO_STORE_HEADERS }

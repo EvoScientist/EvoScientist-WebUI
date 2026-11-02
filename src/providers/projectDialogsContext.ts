@@ -6,7 +6,7 @@ import type { Project } from "@/lib/projects";
 export interface ProjectDialogsValue {
   /** Ask for a folder to add as a project; `folder` fills the field. */
   openAddProject: (folder?: string) => void;
-  /** Confirm removing `project` from the sidebar. */
+  /** Confirm removing `project`. */
   openRemoveProject: (project: Project) => void;
 }
 

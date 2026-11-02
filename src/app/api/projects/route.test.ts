@@ -50,6 +50,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
   rmSync(dataDir, { recursive: true, force: true });
@@ -74,6 +75,18 @@ describe("/api/projects", () => {
       workspace_dir: "/home/you/my project",
     });
     expect(init.headers["X-EvoScientist-Local-Secret"]).toBe(SECRET);
+  });
+
+  it("waits longer than the backend's own 120 s for an add or a remove", async () => {
+    const timeout = vi.spyOn(AbortSignal, "timeout");
+    fetchMock.mockImplementation(async () =>
+      answer(200, { workspace_dir: "/x" })
+    );
+
+    await POST(request("POST"));
+    await DELETE(request("DELETE"));
+
+    expect(timeout.mock.calls).toEqual([[150_000], [150_000]]);
   });
 
   it("removes a project with the folder in the query, and no body", async () => {

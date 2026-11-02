@@ -57,11 +57,21 @@ function request(project: string | null, path = "/api/workspace") {
   });
 }
 
+/** The registry as read at `ms` on the clock. */
+function at(ms: number) {
+  vi.setSystemTime(ms);
+  return localProjects();
+}
+
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
   root = mkdtempSync(join(tmpdir(), "evo projects ą-"));
   projA = join(root, "projA");
   mkdirSync(projA);
   writeFileSync(join(projA, "notes.md"), "hi");
+  vi.stubEnv("HOME", join(root, "home"));
+  vi.stubEnv("USERPROFILE", join(root, "home"));
+  vi.stubEnv("XDG_CONFIG_HOME", join(root, "home", "xdg"));
   vi.stubEnv("EVOSCIENTIST_LANGGRAPH_DEV_PORT", "6606");
   resetCoreConfigCache();
   resetProjectRegistryCache();
@@ -70,6 +80,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
   rmSync(root, { recursive: true, force: true });
@@ -128,19 +140,117 @@ describe("projectDir", () => {
   it("reads the registry at most once a second", async () => {
     registry([{ workspace_dir: projA }]);
 
-    await localProjects(1_000);
-    await localProjects(1_500);
+    await at(1_000);
+    await at(1_500);
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    await localProjects(2_100);
+    await at(2_100);
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("asks again after a failed read", async () => {
     fetchMock.mockRejectedValueOnce(new TypeError("fetch failed"));
-    await expect(localProjects(1_000)).rejects.toThrow();
+    await expect(at(1_000)).rejects.toThrow();
     registry([{ workspace_dir: projA }]);
 
-    await expect(localProjects(1_100)).resolves.toHaveLength(1);
+    await expect(at(1_100)).resolves.toHaveLength(1);
+  });
+
+  it("shares one read still running, however long it takes", async () => {
+    let answer: (response: Response) => void = () => {};
+    fetchMock.mockImplementationOnce(
+      () => new Promise<Response>((done) => (answer = done))
+    );
+
+    const first = at(1_000);
+    const second = at(3_000);
+    answer(
+      new Response(JSON.stringify({ workspaces: [] }), {
+        headers: { "content-type": "application/json" },
+      })
+    );
+    await expect(first).resolves.toEqual([]);
+    await expect(second).resolves.toEqual([]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("gives up on a registry that doesn't answer, and asks again next time", async () => {
+    const timeout = vi
+      .spyOn(AbortSignal, "timeout")
+      .mockImplementationOnce(() => AbortSignal.abort());
+    fetchMock.mockImplementationOnce(
+      (_url: string, init: RequestInit) =>
+        new Promise<Response>((_, fail) => {
+          if (init.signal?.aborted) fail(init.signal.reason);
+        })
+    );
+
+    await expect(at(1_000)).rejects.toThrow(/can't be reached/);
+    expect(timeout).toHaveBeenCalledWith(5_000);
+    registry([{ workspace_dir: projA }]);
+    await expect(at(1_100)).resolves.toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("counts the second from when a slow read settles", async () => {
+    let answer: (response: Response) => void = () => {};
+    fetchMock.mockImplementationOnce(
+      () => new Promise<Response>((done) => (answer = done))
+    );
+
+    const slow = at(1_000);
+    vi.setSystemTime(1_500);
+    answer(
+      new Response(JSON.stringify({ workspaces: [] }), {
+        headers: { "content-type": "application/json" },
+      })
+    );
+    await slow;
+
+    await expect(at(2_000)).resolves.toEqual([]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("can't reach a registry whose answer can't be read, and asks again next time", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response("{not json", {
+        headers: { "content-type": "application/json" },
+      })
+    );
+
+    await expect(projectDir(request(projectHandle(projA)))).rejects.toThrow(
+      /can't be reached/
+    );
+    registry([{ workspace_dir: projA }]);
+    await expect(projectDir(request(projectHandle(projA)))).resolves.toBe(
+      realpathSync(projA)
+    );
+  });
+
+  it("asks a backend on another port itself, within the second", async () => {
+    registry([{ workspace_dir: projA }]);
+    await at(1_000);
+    vi.stubEnv("EVOSCIENTIST_LANGGRAPH_DEV_PORT", "16409");
+    resetCoreConfigCache();
+
+    await at(1_100);
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "http://127.0.0.1:6606/api/workspaces",
+      "http://127.0.0.1:16409/api/workspaces",
+    ]);
+  });
+
+  it("doesn't answer for another port with a read still running", async () => {
+    fetchMock.mockImplementationOnce(() => new Promise<Response>(() => {}));
+    void at(1_000);
+    vi.stubEnv("EVOSCIENTIST_LANGGRAPH_DEV_PORT", "16409");
+    resetCoreConfigCache();
+    registry([{ workspace_dir: projA }]);
+
+    await expect(at(1_100)).resolves.toHaveLength(1);
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      "http://127.0.0.1:16409/api/workspaces"
+    );
   });
 });
 

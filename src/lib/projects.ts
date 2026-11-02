@@ -55,8 +55,9 @@ export function parseProjects(body: unknown): Project[] {
 
 /**
  * The projects the backend at `deploymentUrl` serves, or null when it has no
- * `GET /api/workspaces`. Throws when the backend can't be reached, so the
- * caller can retry.
+ * `GET /api/workspaces`. Throws on any other failure (the backend can't be
+ * reached, a refusal such as 401, an answer it can't read), so the caller
+ * can retry.
  */
 export async function fetchProjects(
   deploymentUrl: string,
@@ -107,8 +108,9 @@ export function pickProject(
   return state.projects.find((project) => !project.missing) ?? null;
 }
 
-/** The core's graphs (its langgraph.json): each has an assistant per
- *  project, and what runs on any of them is the project's. */
+/** The core's graphs, as its langgraph.json lists them: each has an
+ *  assistant per project. Scheduled tasks are placed by these; removing a
+ *  project also covers the assistants the backend lists for it. */
 export const PROJECT_GRAPHS = [
   "EvoScientist",
   "scheduler",

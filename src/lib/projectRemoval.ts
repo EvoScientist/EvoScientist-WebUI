@@ -1,4 +1,4 @@
-// Removing a project from the sidebar without leaving work out of sight:
+// Removing a project without leaving work out of sight:
 // the conversations it has running and the scheduled tasks it has on, and
 // the order the removal takes.
 
@@ -12,13 +12,29 @@ import { SCHEDULED_RUN_KIND } from "@/app/hooks/useScheduledTasks";
 const PAGE = 100;
 const MAX_PAGES = 10;
 
+/** How many of a project's assistants are read, at most: it has one per
+ *  graph. */
+const ASSISTANTS_LIMIT = 100;
+
 /** What removing a project stops and pauses. */
 export interface ProjectWork {
   /** Its threads with a run going: conversations, scheduled runs, agents. */
   running: Array<{ id: string; title: string }>;
   /** Its scheduled tasks that are on (not the hidden AutoSkills ones). */
   tasks: Array<{ id: string; name: string }>;
+  /** Its assistants' IDs (see `projectAssistants`): the runs are found
+   *  again by these once it is removed. */
+  assistants: string[];
+  /** False when the backend's list of them couldn't be read: runs on a
+   *  graph the WebUI doesn't know can't have been found. */
+  assistantsComplete: boolean;
 }
+
+/** The part of `ProjectWork` its runs are found again by. */
+export type ProjectAssistants = Pick<
+  ProjectWork,
+  "assistants" | "assistantsComplete"
+>;
 
 function label(metadata: unknown, fallback: string): string {
   const md = (metadata ?? {}) as Record<string, unknown>;
@@ -29,18 +45,43 @@ function label(metadata: unknown, fallback: string): string {
   return fallback;
 }
 
-/** The project's threads with a run going: every graph, so a scheduled
- *  run or an agent counts as much as a conversation. A thread is the
- *  project's by the folder it records or by the assistant it runs on: an
- *  async agent's thread is made without metadata, and its run adds only
- *  the graph and the assistant to it. */
-async function runningThreads(
+/** The IDs of the project at `key`'s assistants: one per graph the WebUI
+ *  knows, and whatever else the backend lists for the folder (it stamps the
+ *  folder on every one, whatever its graph). Without the backend's list,
+ *  the known ones alone, and `complete` is false. */
+async function projectAssistants(
   client: Client,
   key: string
+): Promise<{ ids: string[]; complete: boolean }> {
+  const listed = await client.assistants
+    .search({
+      metadata: { workspace_dir: key },
+      limit: ASSISTANTS_LIMIT,
+      select: ["assistant_id"],
+    })
+    .then(
+      (assistants) => assistants.map((assistant) => assistant.assistant_id),
+      () => null
+    );
+  return {
+    ids: [...new Set([...projectAssistantIds(key), ...(listed ?? [])])],
+    complete: listed !== null,
+  };
+}
+
+/** The project's threads with a run going: every graph, so a scheduled
+ *  run or an agent counts as much as a conversation. A thread is the
+ *  project's by the folder it records or by the assistant it runs on (one
+ *  of `assistants`): an async agent's thread is made without metadata, and
+ *  its run adds only the graph and the assistant to it. */
+async function runningThreads(
+  client: Client,
+  key: string,
+  assistants: readonly string[]
 ): Promise<ProjectWork["running"]> {
   const scopes: Record<string, string>[] = [
     { workspace_dir: key },
-    ...projectAssistantIds(key).map((assistant_id) => ({ assistant_id })),
+    ...assistants.map((assistant_id) => ({ assistant_id })),
   ];
   const matches = await Promise.all(
     scopes.map(async (metadata) => {
@@ -51,6 +92,7 @@ async function runningThreads(
           metadata,
           limit: PAGE,
           offset: page * PAGE,
+          select: ["thread_id", "metadata"],
         });
         for (const thread of threads) {
           found.push({
@@ -78,47 +120,63 @@ export async function projectWork(
   client: Client,
   key: string
 ): Promise<ProjectWork> {
-  const assistants = new Set(projectAssistantIds(key));
-  const [running, crons] = await Promise.all([
-    runningThreads(client, key),
-    client.crons.search({
-      metadata: { run_kind: SCHEDULED_RUN_KIND },
-      enabled: true,
-      limit: 1000,
-    }),
-  ]);
+  const [{ assistants, assistantsComplete, running }, crons] =
+    await Promise.all([
+      projectAssistants(client, key).then(async ({ ids, complete }) => ({
+        assistants: ids,
+        assistantsComplete: complete,
+        running: await runningThreads(client, key, ids),
+      })),
+      client.crons.search({
+        metadata: { run_kind: SCHEDULED_RUN_KIND },
+        enabled: true,
+        limit: 1000,
+      }),
+    ]);
+  const own = new Set(assistants);
   const tasks = crons
     .filter(
       (cron) =>
         cron.enabled !== false &&
         cron.assistant_id !== null &&
-        assistants.has(cron.assistant_id)
+        own.has(cron.assistant_id)
     )
     .map((cron) => ({
       id: cron.cron_id,
       name: label(cron.metadata, "Unnamed task"),
     }));
-  return { running, tasks };
+  return { running, tasks, assistants, assistantsComplete };
 }
 
 /** How stopping a project's runs went. */
 export interface StopRunsResult {
   /** The threads whose runs couldn't be cancelled. */
   unstopped: ProjectWork["running"];
-  /** False when its running threads couldn't be read: the `known` ones
-   *  were tried (those that failed are in `unstopped`), and others may be
-   *  going. */
+  /** False when its running threads couldn't be read (the `known` ones
+   *  were tried), or when its assistants were known only in part (the
+   *  threads found were tried): those that failed are in `unstopped`, and
+   *  others may be going. */
   checked: boolean;
 }
 
-/** Stop the runs going in the project at `key`, as far as it can. */
+/** Stop the runs going in the project at `key`, as far as it can: its
+ *  threads, by its folder and by its assistants (from `projectWork`). When
+ *  that list was incomplete, the backend's list is asked for again. */
 export async function stopProjectRuns(
   client: Client,
   key: string,
+  { assistants, assistantsComplete }: ProjectAssistants,
   known: ProjectWork["running"]
 ): Promise<StopRunsResult> {
-  const { running, checked } = await runningThreads(client, key).then(
-    (found) => ({ running: found, checked: true }),
+  let ids: readonly string[] = assistants;
+  let complete = assistantsComplete;
+  if (!complete) {
+    const again = await projectAssistants(client, key);
+    ids = [...new Set([...assistants, ...again.ids])];
+    complete = again.complete;
+  }
+  const { running, checked } = await runningThreads(client, key, ids).then(
+    (found) => ({ running: found, checked: complete }),
     () => ({ running: known, checked: false })
   );
   const stopped = await Promise.all(
@@ -166,7 +224,7 @@ export async function removeProjectAndWork(
   if (result.ok || result.gone || !(await isRegistered().catch(() => true))) {
     return {
       ok: true,
-      ...(await stopProjectRuns(client, key, work.running)),
+      ...(await stopProjectRuns(client, key, work, work.running)),
     };
   }
   await Promise.allSettled(

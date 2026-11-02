@@ -240,6 +240,41 @@ describe("project binding", () => {
     await waitFor(() => expect(result.current.binding.kind).toBe("readOnly"));
   });
 
+  it("sends nothing on the current project's assistant for a thread whose checkpoint names another", async () => {
+    openThread({ graph_id: "EvoScientist" });
+    stream.setHistory([{ metadata: { workspace_dir: OTHER } }]);
+    const renders: Array<{
+      canSend: boolean;
+      bindingKey: string | null;
+      assistantId: string;
+    }> = [];
+    const { result } = renderChat({
+      projects: both(),
+      onRender: (chat) =>
+        renders.push({
+          canSend: chat.canSend,
+          bindingKey: "key" in chat.binding ? chat.binding.key : null,
+          assistantId: chat.stream.assistantId,
+        }),
+    });
+    const own = workspaceAssistantId("EvoScientist", OTHER);
+
+    await waitFor(() => expect(result.current.canSend).toBe(true));
+
+    expect(
+      renders.filter((r) => r.canSend).every((r) => r.assistantId === own)
+    ).toBe(true);
+    // The window the gate closes: the thread reads as OTHER's while its
+    // assistant is still the current project's.
+    expect(
+      renders.some(
+        (r) =>
+          r.bindingKey === OTHER &&
+          r.assistantId === workspaceAssistantId("EvoScientist", KEY)
+      )
+    ).toBe(true);
+  });
+
   it("stamps the current project on a thread that had none", async () => {
     openThread({ graph_id: "EvoScientist" });
     const { result } = renderChat({

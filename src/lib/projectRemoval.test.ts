@@ -6,8 +6,12 @@ import {
   stopProjectRuns,
 } from "./projectRemoval";
 import { workspaceAssistantId } from "@/lib/workspaceAssistant";
+import { projectAssistantIds } from "@/lib/projects";
 
 const KEY = "/home/you/projA";
+
+/** The graphs the fake backend has, one the WebUI doesn't know among them. */
+const GRAPHS = ["EvoScientist", "scheduler", "expert-container-async", "new"];
 
 interface BusyThread {
   thread_id: string;
@@ -15,10 +19,25 @@ interface BusyThread {
 }
 
 /** A backend with these busy threads: a search returns the ones whose
- *  metadata has every value it asks for, a page at a time. */
+ *  metadata has every value it asks for, a page at a time. Its assistants
+ *  are one per graph for KEY and for /srv/projB. */
 function fakeClient(busy: BusyThread[] = []) {
   const order: string[] = [];
+  const assistants = [KEY, "/srv/projB"].flatMap((key) =>
+    GRAPHS.map((graph) => ({
+      assistant_id: workspaceAssistantId(graph, key),
+      metadata: { workspace_dir: key },
+    }))
+  );
   const client = {
+    assistants: {
+      search: vi.fn(
+        async ({ metadata = {} }: { metadata?: Record<string, string> }) =>
+          assistants.filter(
+            (a) => a.metadata.workspace_dir === metadata.workspace_dir
+          )
+      ),
+    },
     threads: {
       search: vi.fn(
         async ({
@@ -53,6 +72,13 @@ function fakeClient(busy: BusyThread[] = []) {
           assistant_id: workspaceAssistantId("EvoScientist", KEY),
           enabled: true,
           metadata: { run_kind: "scheduled_task", name: "Weekly" },
+        },
+        {
+          // On a graph the WebUI doesn't know: the backend lists it.
+          cron_id: "task-3",
+          assistant_id: workspaceAssistantId("new", KEY),
+          enabled: true,
+          metadata: { run_kind: "scheduled_task", name: "Hourly" },
         },
         {
           cron_id: "elsewhere",
@@ -91,6 +117,8 @@ function stubRemoval(status: number, body: unknown, order: string[]) {
 const WORK = {
   running: [{ id: "t-1", title: "x" }],
   tasks: [{ id: "task-1", name: "Daily" }],
+  assistants: GRAPHS.map((graph) => workspaceAssistantId(graph, KEY)),
+  assistantsComplete: true,
 };
 
 afterEach(() => vi.unstubAllGlobals());
@@ -109,8 +137,66 @@ describe("projectWork", () => {
       tasks: [
         { id: "task-1", name: "Daily" },
         { id: "task-2", name: "Weekly" },
+        { id: "task-3", name: "Hourly" },
       ],
+      // The ones the WebUI knows, and the one only the backend lists.
+      assistants: expect.arrayContaining([
+        ...projectAssistantIds(KEY),
+        workspaceAssistantId("new", KEY),
+      ]),
+      assistantsComplete: true,
     });
+  });
+
+  it("counts a thread on any assistant the backend lists for the project", async () => {
+    const { client } = fakeClient([
+      {
+        thread_id: "new-1",
+        metadata: { assistant_id: workspaceAssistantId("new", KEY) },
+      },
+      {
+        thread_id: "new-2",
+        metadata: { assistant_id: workspaceAssistantId("new", "/srv/projB") },
+      },
+    ]);
+
+    const work = await projectWork(client, KEY);
+
+    expect(work.running.map((t) => t.id)).toEqual(["new-1"]);
+  });
+
+  it("counts the work on the assistants it knows when the backend's list can't be read", async () => {
+    const { client, raw } = fakeClient([
+      {
+        thread_id: "agent-1",
+        metadata: {
+          assistant_id: workspaceAssistantId("expert-container-async", KEY),
+        },
+      },
+    ]);
+    raw.assistants.search.mockRejectedValue(new Error("network"));
+
+    const work = await projectWork(client, KEY);
+
+    expect(work.running.map((t) => t.id)).toEqual(["agent-1"]);
+    expect(work.tasks.map((t) => t.id)).toEqual(["task-1", "task-2"]);
+  });
+
+  it("counts a task on an assistant it knows when the backend lists none", async () => {
+    const { client, raw } = fakeClient();
+    raw.assistants.search.mockResolvedValue([]);
+    raw.crons.search.mockResolvedValue([
+      {
+        cron_id: "writing",
+        assistant_id: workspaceAssistantId("writing-agent", KEY),
+        enabled: true,
+        metadata: { run_kind: "scheduled_task", name: "Draft" },
+      },
+    ]);
+
+    const work = await projectWork(client, KEY);
+
+    expect(work.tasks).toEqual([{ id: "writing", name: "Draft" }]);
   });
 
   it("counts an async agent's thread by the assistant it runs on", async () => {
@@ -287,10 +373,62 @@ describe("stopProjectRuns", () => {
       Object.assign(new Error("HTTP 500"), { status: 500 })
     );
 
-    const first = await stopProjectRuns(client, KEY, []);
-    const second = await stopProjectRuns(client, KEY, first.unstopped);
+    const first = await stopProjectRuns(client, KEY, WORK, []);
+    const second = await stopProjectRuns(client, KEY, WORK, first.unstopped);
 
     expect(first.unstopped).toEqual([{ id: "t-1", title: "Long" }]);
     expect(second).toEqual({ unstopped: [], checked: true });
+  });
+
+  it("finds runs by the assistants it was given, without the backend listing them again", async () => {
+    // Removed: the backend may no longer list the project's assistants.
+    const { client, raw, order } = fakeClient([
+      {
+        thread_id: "agent-1",
+        metadata: { assistant_id: workspaceAssistantId("new", KEY) },
+      },
+    ]);
+    raw.assistants.search.mockResolvedValue([]);
+
+    const result = await stopProjectRuns(client, KEY, WORK, []);
+
+    expect(result).toEqual({ unstopped: [], checked: true });
+    expect(order).toEqual(["cancel agent-1"]);
+    expect(raw.assistants.search).not.toHaveBeenCalled();
+  });
+
+  it("stops the runs it found but says it couldn't check them all when the backend's list of assistants couldn't be read", async () => {
+    const { client, raw, order } = fakeClient([
+      {
+        thread_id: "agent-1",
+        metadata: {
+          assistant_id: workspaceAssistantId("expert-container-async", KEY),
+        },
+      },
+    ]);
+    raw.assistants.search.mockRejectedValue(new Error("network"));
+    const work = await projectWork(client, KEY);
+
+    const result = await stopProjectRuns(client, KEY, work, []);
+
+    expect(result).toEqual({ unstopped: [], checked: false });
+    expect(order).toEqual(["cancel agent-1"]);
+  });
+
+  it("asks for the backend's list of assistants again, and checks them all once it answers", async () => {
+    const { client, raw, order } = fakeClient([
+      {
+        thread_id: "new-1",
+        metadata: { assistant_id: workspaceAssistantId("new", KEY) },
+      },
+    ]);
+    raw.assistants.search.mockRejectedValueOnce(new Error("network"));
+    const work = await projectWork(client, KEY);
+    expect(work.running).toEqual([]);
+
+    const result = await stopProjectRuns(client, KEY, work, []);
+
+    expect(result).toEqual({ unstopped: [], checked: true });
+    expect(order).toEqual(["cancel new-1"]);
   });
 });

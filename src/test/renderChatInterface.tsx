@@ -99,7 +99,8 @@ interface RenderChatInterfaceOptions {
   /** Wrap the provider tree, e.g. in a FilePaneProvider. */
   wrapper?: React.ComponentType<{ children: React.ReactNode }>;
   onNavigate?: React.ComponentProps<typeof ChatInterface>["onNavigate"];
-  /** The backend's folder; defaults to a backend without the route. */
+  /** The backend's projects; defaults to one registered project, current,
+   *  with its files here (`mockProjects()`). */
   projects?: ProjectsContextValue;
   /** Receives the "Notify main chat" reporter ChatInterface hands out. */
   onNotifyReady?: React.ComponentProps<typeof ChatInterface>["onNotifyReady"];

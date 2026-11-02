@@ -90,9 +90,15 @@ function storedInput(cron: Cron): Record<string, unknown> {
 export async function listScheduledTasks(): Promise<ScheduledTask[]> {
   const client = makeClient();
   if (!client) return [];
-  // Only EvoScientist crons carry run_kind in metadata. Every folder's
-  // tasks: the views keep the registered projects' (`registeredTasks`).
-  const crons = await client.crons.search({ limit: 200 });
+  // Only EvoScientist crons carry run_kind in metadata; the search asks for
+  // the scheduled tasks alone, so the projects' system crons take no rows.
+  // Every folder's tasks: the views keep the registered projects'
+  // (`registeredTasks`).
+  const crons = await client.crons.search({
+    metadata: { run_kind: SCHEDULED_RUN_KIND },
+    limit: 1000,
+  });
+  // A backend that ignores the metadata filter still lists only tasks.
   const scheduledCrons = crons.filter(
     (c) =>
       (c.metadata as Record<string, unknown>)?.run_kind === SCHEDULED_RUN_KIND

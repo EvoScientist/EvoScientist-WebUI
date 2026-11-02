@@ -310,6 +310,24 @@ describe("GET /api/settings/access", () => {
     expect(fetchMock.mock.calls[1][1].headers).toEqual({});
   });
 
+  it("reports the port it checked, even when the configuration changes meanwhile", async () => {
+    fetchMock
+      .mockImplementationOnce(async () => {
+        vi.stubEnv("EVOSCIENTIST_LANGGRAPH_DEV_PORT", "7007");
+        resetCoreConfigCache();
+        return backendAnswer(204);
+      })
+      .mockResolvedValueOnce(backendAnswer(200, { revision: "abc" }));
+
+    const res = await get();
+
+    expect(await res.json()).toMatchObject({ writable: true, port: 6606 });
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "http://127.0.0.1:6606/api/local-secret/verify",
+      "http://127.0.0.1:6606/api/settings",
+    ]);
+  });
+
   it.each([
     [403, "secret_rejected"],
     [404, "unsupported"],

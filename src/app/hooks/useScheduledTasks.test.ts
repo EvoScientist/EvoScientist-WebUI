@@ -319,6 +319,17 @@ describe("setScheduledTaskEnabled", () => {
 });
 
 describe("listScheduledTasks", () => {
+  it("asks the backend for the scheduled tasks alone", async () => {
+    const calls = mockServer(() => []);
+
+    await listScheduledTasks();
+
+    const search = calls.find((call) => call.path === "/runs/crons/search");
+    expect(search?.body).toMatchObject({
+      metadata: { run_kind: "scheduled_task" },
+    });
+  });
+
   it("reads each task's time zone, null for a cron stored without one", async () => {
     mockServer((call) =>
       call.path === "/runs/crons/search"

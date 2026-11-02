@@ -71,7 +71,7 @@ describe("WorkspacePanel", () => {
       }),
     });
 
-    expect(screen.getByText(/The files are on the backend/)).toBeTruthy();
+    expect(screen.getByText(/runs on the backend's machine/)).toBeTruthy();
     expect(listings()).toBe(0);
   });
 });

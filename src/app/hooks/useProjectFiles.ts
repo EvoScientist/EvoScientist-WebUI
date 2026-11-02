@@ -29,7 +29,7 @@ export function useProjectFiles(): {
     return {
       project: null,
       notice:
-        "The files are on the backend's machine: this WebUI can only show files when it runs where the backend runs.",
+        "Files show only when this WebUI runs on the backend's machine, with the same EvoScientist data folder.",
       here: false,
     };
   }

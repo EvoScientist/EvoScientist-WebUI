@@ -9,36 +9,70 @@ import { promises as fs } from "fs";
 import { resolve } from "path";
 import type { NextRequest } from "next/server";
 import { parseProjects, projectHandle, type Project } from "@/lib/projects";
-import { forwardToBackend } from "@/lib/server/settingsRelay";
+import { forwardToBackend, localBackend } from "@/lib/server/settingsRelay";
 
 /** How long one read of the registry answers for: a removed project stops
- *  serving files within this. */
+ *  serving files within this, or, while a read is still running, once it
+ *  settles (at most `REGISTRY_TIMEOUT_MS`). */
 const REGISTRY_CACHE_MS = 1_000;
 
-let cached: { at: number; projects: Promise<Project[]> } | null = null;
+/** How long the file routes and the `/` menu wait for the registry. */
+const REGISTRY_TIMEOUT_MS = 5_000;
+
+const UNREACHABLE =
+  "The local EvoScientist backend can't be reached, so its projects' files can't be shown.";
+
+let cached: {
+  at: number;
+  /** The backend's port the read went to. */
+  port: number;
+  projects: Promise<Project[]>;
+  pending: boolean;
+} | null = null;
 
 /** Forget the cached registry (tests). */
 export function resetProjectRegistryCache() {
   cached = null;
 }
 
-/** The local backend's registered projects, read at most once a second. */
-export function localProjects(now: number = Date.now()): Promise<Project[]> {
-  if (cached && now - cached.at < REGISTRY_CACHE_MS) return cached.projects;
+/** The local backend's registered projects, read at most once a second
+ *  (counted from when a read settles); a read still running answers every
+ *  request until it settles. A read answers only for the port it went to:
+ *  a backend on another port is asked itself. */
+export function localProjects(): Promise<Project[]> {
+  const backend = localBackend();
+  if (
+    cached &&
+    cached.port === backend.port &&
+    (cached.pending || Date.now() - cached.at < REGISTRY_CACHE_MS)
+  )
+    return cached.projects;
   const projects = (async () => {
-    const result = await forwardToBackend("GET", "/api/workspaces");
+    const result = await forwardToBackend(backend, "GET", "/api/workspaces", {
+      timeoutMs: REGISTRY_TIMEOUT_MS,
+    });
     if (!result.ok || !result.response.ok) {
-      throw new ProjectRefusedError(
-        "The local EvoScientist backend can't be reached, so its projects' files can't be shown."
-      );
+      throw new ProjectRefusedError(UNREACHABLE);
     }
-    return parseProjects(await result.response.json());
+    try {
+      return parseProjects(await result.response.json());
+    } catch {
+      // A body cut off (the timeout), or one that isn't a registry.
+      throw new ProjectRefusedError(UNREACHABLE);
+    }
   })();
-  cached = { at: now, projects };
+  const entry = { at: 0, port: backend.port, projects, pending: true };
+  cached = entry;
   // A failed read isn't kept: the next request asks again.
-  projects.catch(() => {
-    if (cached?.projects === projects) cached = null;
-  });
+  projects.then(
+    () => {
+      entry.at = Date.now();
+      entry.pending = false;
+    },
+    () => {
+      if (cached === entry) cached = null;
+    }
+  );
   return projects;
 }
 

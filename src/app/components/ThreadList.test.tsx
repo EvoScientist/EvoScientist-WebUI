@@ -516,7 +516,7 @@ describe("ThreadList by project", () => {
     ).toBeNull();
   });
 
-  it("adds a project and removes one from the sidebar through the dialogs", async () => {
+  it("adds a project and removes one through the dialogs", async () => {
     const dialogs = {
       openAddProject: vi.fn(),
       openRemoveProject: vi.fn(),
@@ -537,7 +537,7 @@ describe("ThreadList by project", () => {
       { key: "Enter" }
     );
     fireEvent.click(
-      await screen.findByRole("menuitem", { name: "Remove from sidebar" })
+      await screen.findByRole("menuitem", { name: "Remove project" })
     );
     expect(dialogs.openRemoveProject).toHaveBeenCalledWith(
       expect.objectContaining({ key: OTHER })

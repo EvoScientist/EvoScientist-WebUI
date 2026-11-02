@@ -46,6 +46,8 @@ interface RenderChatOptions {
   onThreadUnavailable?: (info: ThreadUnavailableInfo) => void;
   /** The backend's projects; see `connected` for the default. */
   projects?: ProjectsContextValue;
+  /** Called with the chat's value on every render. */
+  onRender?: (value: ChatContextValue) => void;
 }
 
 export function renderChat(
@@ -56,22 +58,30 @@ export function renderChat(
     onHistoryRevalidate,
     onThreadUnavailable,
     projects,
+    onRender,
   } = opts;
-  return renderHook(() => useChatContext(), {
-    wrapper: ({ children }: { children: ReactNode }) => (
-      <TestProjectsProvider
-        value={
-          projects ??
-          mockProjects(connected ? undefined : { status: "pending" })
-        }
-      >
-        <ChatProvider
-          onHistoryRevalidate={onHistoryRevalidate}
-          onThreadUnavailable={onThreadUnavailable}
+  return renderHook(
+    () => {
+      const value = useChatContext();
+      onRender?.(value);
+      return value;
+    },
+    {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <TestProjectsProvider
+          value={
+            projects ??
+            mockProjects(connected ? undefined : { status: "pending" })
+          }
         >
-          {children}
-        </ChatProvider>
-      </TestProjectsProvider>
-    ),
-  });
+          <ChatProvider
+            onHistoryRevalidate={onHistoryRevalidate}
+            onThreadUnavailable={onThreadUnavailable}
+          >
+            {children}
+          </ChatProvider>
+        </TestProjectsProvider>
+      ),
+    }
+  );
 }

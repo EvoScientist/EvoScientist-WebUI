@@ -4,6 +4,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { readCoreConfig, resetCoreConfigCache } from "./coreConfig";
 import { configDir } from "./paths";
+import { localBackend } from "./settingsRelay";
 
 let home: string;
 
@@ -91,5 +92,26 @@ describe("the backend's port", () => {
     record({ pid: process.pid, port: 16409, config_dir: "/elsewhere" });
 
     expect(readCoreConfig().port).toBe(6174);
+  });
+});
+
+describe("localBackend", () => {
+  it("takes a recorded port of null as none", () => {
+    record({ pid: process.pid, port: null });
+
+    expect(localBackend()).toMatchObject({
+      port: 6174,
+      url: "http://127.0.0.1:6174",
+    });
+  });
+
+  it("takes the environment's port over the recorded one", () => {
+    vi.stubEnv("EVOSCIENTIST_LANGGRAPH_DEV_PORT", "6606");
+    record({ pid: process.pid, port: 16409 });
+
+    expect(localBackend()).toMatchObject({
+      port: 6606,
+      url: "http://127.0.0.1:6606",
+    });
   });
 });

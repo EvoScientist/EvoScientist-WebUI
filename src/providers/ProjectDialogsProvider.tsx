@@ -279,21 +279,22 @@ function RemoveProjectDialog({
       setRemoved({ unstopped: result.unstopped, checked: result.checked });
       return;
     }
-    toast.success(`${project.name} removed from the sidebar.`);
+    toast.success(`${project.name} removed.`);
     onClose();
   };
 
   const stopAgain = async () => {
-    if (!removed || stopping) return;
+    if (!removed || !work || stopping) return;
     setStopping(true);
     try {
       const again = await stopProjectRuns(
         client,
         project.key,
+        work,
         removed.unstopped
       );
       if (again.checked && again.unstopped.length === 0) {
-        toast.success(`${project.name} removed from the sidebar.`);
+        toast.success(`${project.name} removed.`);
         onClose();
         return;
       }
@@ -327,7 +328,7 @@ function RemoveProjectDialog({
       >
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>{project.name} removed from the sidebar</DialogTitle>
+            <DialogTitle>{project.name} removed</DialogTitle>
             <DialogDescription>{removedText(removed)}</DialogDescription>
           </DialogHeader>
           {removed.unstopped.length > 0 && (
@@ -377,11 +378,12 @@ function RemoveProjectDialog({
     >
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Remove {project.name} from the sidebar?</DialogTitle>
+          <DialogTitle>Remove the project {project.name}?</DialogTitle>
           <DialogDescription>
-            Its folder, files and conversations stay. Its conversations come
-            back when the folder is added again, or when EvoScientist runs in
-            it.
+            The backend stops serving it, for every app connected to it, and its
+            running conversations stop. Its folder, files and conversations
+            stay. Its conversations come back when the folder is added again, or
+            when EvoScientist runs in it.
           </DialogDescription>
         </DialogHeader>
         {readOnly ? (
@@ -475,7 +477,7 @@ function RemoveProjectDialog({
                   aria-hidden="true"
                 />
               )}
-              {action ? `${action} and remove` : "Remove from sidebar"}
+              {action ? `${action} and remove` : "Remove project"}
             </Button>
           )}
         </DialogFooter>

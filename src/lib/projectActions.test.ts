@@ -36,6 +36,22 @@ describe("addProject", () => {
     expect(JSON.parse(String(init.body))).toEqual({ workspace_dir: "~/p" });
   });
 
+  it("takes a path pasted in quotes, as Windows Explorer copies one", async () => {
+    const fetchMock = answer(200, {
+      workspace_dir: "C:\\Users\\me\\My Project",
+    });
+
+    await addProject(' "C:\\Users\\me\\My Project" ');
+
+    const [, init] = fetchMock.mock.calls[0] as unknown as [
+      string,
+      RequestInit
+    ];
+    expect(JSON.parse(String(init.body))).toEqual({
+      workspace_dir: "C:\\Users\\me\\My Project",
+    });
+  });
+
   it("warns when other machines can reach the backend", async () => {
     answer(200, { workspace_dir: "/p", host: "0.0.0.0", tunnel: true });
 

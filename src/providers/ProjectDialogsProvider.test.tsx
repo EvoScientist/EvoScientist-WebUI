@@ -13,6 +13,7 @@ const access = vi.hoisted(() => ({
   value: { writable: true } as unknown,
 }));
 const client = vi.hoisted(() => ({
+  assistants: { search: vi.fn() },
   threads: { search: vi.fn() },
   crons: { search: vi.fn(), update: vi.fn() },
   runs: { list: vi.fn(async () => []), cancel: vi.fn() },
@@ -62,7 +63,7 @@ function renderDialogs() {
  *  disabled, with the same label. */
 async function removeButton() {
   const button = await screen.findByRole("button", {
-    name: "Remove from sidebar",
+    name: "Remove project",
   });
   await waitFor(() => expect(button.hasAttribute("disabled")).toBe(false));
   return button;
@@ -83,6 +84,11 @@ function stubRelay(status: number, body: unknown) {
 
 beforeEach(() => {
   access.value = { writable: true };
+  client.assistants.search.mockResolvedValue(
+    ["EvoScientist", "scheduler"].map((graph) => ({
+      assistant_id: workspaceAssistantId(graph, A),
+    }))
+  );
   client.threads.search.mockResolvedValue([]);
   client.crons.search.mockResolvedValue([]);
   client.crons.update.mockResolvedValue({});
@@ -142,7 +148,7 @@ describe("Add project", () => {
   });
 });
 
-describe("Remove from sidebar", () => {
+describe("Remove project", () => {
   it("lists what it stops and pauses, then removes", async () => {
     client.threads.search.mockResolvedValue([
       { thread_id: "t-1", metadata: { title: "Long run", workspace_dir: A } },
@@ -175,6 +181,27 @@ describe("Remove from sidebar", () => {
       enabled: false,
     });
     expect(projects.refresh).toHaveBeenCalled();
+  });
+
+  it("lists the tasks on the assistants it knows when the backend's list can't be read", async () => {
+    client.assistants.search.mockRejectedValue(new Error("network"));
+    client.crons.search.mockResolvedValue([
+      {
+        cron_id: "task-1",
+        assistant_id: workspaceAssistantId("scheduler", A),
+        enabled: true,
+        metadata: { run_kind: "scheduled_task", name: "Daily" },
+      },
+    ]);
+    renderDialogs();
+    act(() =>
+      dialogs!.openRemoveProject({ key: A, name: "projA", missing: false })
+    );
+
+    expect(await screen.findByText("Daily")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Pause 1 task and remove" })
+    ).toBeTruthy();
   });
 
   it("removes a project with nothing running in one step", async () => {
@@ -264,7 +291,7 @@ describe("Remove from sidebar", () => {
         dialogs!.openRemoveProject({ key: A, name: "projA", missing: false })
       );
       const remove = await screen.findByRole("button", {
-        name: "Remove from sidebar",
+        name: "Remove project",
       });
       await waitFor(() => expect(remove.hasAttribute("disabled")).toBe(false));
       client.threads.search.mockRejectedValue(new Error("network"));

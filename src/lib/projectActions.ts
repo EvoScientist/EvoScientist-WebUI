@@ -66,7 +66,7 @@ function errorText(body: ErrorBody, status: number): string {
   const code = typeof body.error === "string" ? body.error : "";
   switch (code) {
     case "invalid_path":
-      return "Give the folder's full path, for example /home/you/my-project.";
+      return "Give the folder's full path, for example /home/you/my-project or C:\\Users\\you\\my-project.";
     case "folder_missing":
       return "There is no folder at that path. EvoScientist adds only folders that exist; it never creates one.";
     case "setup_failed":
@@ -126,7 +126,9 @@ export type AddProjectResult =
 
 /** Register `folder` (an absolute path; `~` is expanded by the backend). */
 export async function addProject(folder: string): Promise<AddProjectResult> {
-  const { ok, status, body } = await send("POST", folder);
+  // Explorer's "Copy as path" puts the path in quotes.
+  const path = folder.trim().replace(/^"(.+)"$/, "$1");
+  const { ok, status, body } = await send("POST", path);
   if (!ok || typeof body.workspace_dir !== "string") {
     return { ok: false, message: errorText(body, status) };
   }

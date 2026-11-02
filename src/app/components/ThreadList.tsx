@@ -1159,7 +1159,7 @@ function ProjectSection({
   waiting?: number;
   /** Start a new chat in this project (absent: no such action). */
   onNewChat?: () => void;
-  /** Remove this project from the sidebar (absent: no such action). */
+  /** Remove this project (absent: no such action). */
   onRemove?: () => void;
   children: React.ReactNode;
 }) {
@@ -1251,7 +1251,7 @@ function ProjectSection({
                 onSelect={onRemove}
               >
                 <FolderMinus aria-hidden="true" />
-                Remove from sidebar
+                Remove project
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>

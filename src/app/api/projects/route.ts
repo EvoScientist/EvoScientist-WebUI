@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import {
   forwardToBackend,
+  localBackend,
   passThrough,
   readLocalSecret,
   refusal,
@@ -55,16 +56,18 @@ async function relay(
   if (refused) return refusal(refused);
   const folder = await folderOf(request);
   if (folder === null) return invalidPath();
-  const secret = readLocalSecret();
+  const backend = localBackend();
+  const secret = readLocalSecret(backend);
   if (secret === null) return refusal("secret_missing");
   const result =
     method === "POST"
-      ? await forwardToBackend("POST", "/api/workspaces", {
+      ? await forwardToBackend(backend, "POST", "/api/workspaces", {
           secret,
           body: JSON.stringify({ workspace_dir: folder }),
           timeoutMs: REGISTER_TIMEOUT_MS,
         })
       : await forwardToBackend(
+          backend,
           "DELETE",
           `/api/workspaces?${new URLSearchParams({ workspace_dir: folder })}`,
           { secret, timeoutMs: REGISTER_TIMEOUT_MS }
