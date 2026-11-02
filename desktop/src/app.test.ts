@@ -1843,9 +1843,9 @@ describe("restart to update (W04)", () => {
         })
       )
     );
-    expect(
-      h.log.lines.some((l) => l.includes("the installer did not start"))
-    ).toBe(true);
+    expect(h.log.lines.some((l) => l.includes("no update was installed"))).toBe(
+      true
+    );
   });
 
   it("stops nothing when the downloaded installer cannot be opened", async () => {

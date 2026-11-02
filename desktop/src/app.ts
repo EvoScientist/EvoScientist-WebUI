@@ -246,9 +246,11 @@ export interface App {
   /** The bridge's restart (W03d), for the WebUI's settings page. */
   restartFromPage(): Promise<RestartResult>;
   /** "Restart to update" (W04): busy checks and stops as at quit, then the
-   *  installer of the downloaded update. `not_ready` without one, `busy`
-   *  while a launch, restart, install, setup, core update or quit runs,
-   *  `cancelled` on Cancel. On success the app ends. */
+   *  installer of the downloaded update. `not_ready` without one (or when
+   *  its file cannot be opened), `busy` while a launch, restart, install,
+   *  setup, core update or quit runs or when the session ends meanwhile,
+   *  `cancelled` on Cancel, `update_failed` when the app started again on
+   *  the current version. On success the app ends. */
   restartToUpdate(): Promise<RestartResult>;
   /** The app update's state changed: tells the page shown. */
   updateChanged(state: UpdateState): void;
@@ -1180,7 +1182,9 @@ export function createApp(deps: AppDeps): App {
    *  of the installer that fails after electron-updater has quit the app is
    *  not seen: the next launch offers the update again.) */
   async function updateDidNotStart(): Promise<RestartResult> {
-    log.warn("restart to update: the installer did not start; launching again");
+    log.warn(
+      "restart to update: no update was installed (a step failed, or the app still ran 15 s after the installer was asked for); launching again"
+    );
     exiting = false;
     quitState = "none";
     // A launch during the stops asked for a relaunch after an exit that did
