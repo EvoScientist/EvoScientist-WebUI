@@ -27,7 +27,10 @@ export interface DesktopAppUpdate {
   /** "Download": the app downloads only when asked. */
   download(): Promise<void>;
   /** "Restart to update": the app asks first while work runs, as at quit.
-   *  On success the app ends; `busy`, `cancelled`, `not_ready` otherwise. */
+   *  On success the app ends; otherwise `busy`, `cancelled`, `not_ready`
+   *  (no downloaded installer, or it cannot be opened), `update_failed` (the
+   *  app started again on the current version), `not_allowed`, or `failed`
+   *  (no answer the bridge could read). */
   restartToUpdate(): Promise<RestartResult>;
 }
 

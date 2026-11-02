@@ -4,9 +4,11 @@
 // closed: "Download" when an update is available, the progress while it
 // downloads, then "Restart to update". The app checks on its own and
 // downloads and installs only when asked; "Restart to update" asks first
-// while work runs, as closing does. A closed notice comes back only with
-// the next step or another version. In a plain browser nothing shows. The
-// status page shows the same texts (desktop/src/screens.ts updateOffer).
+// while work runs, as closing does. A notice the user closed comes back
+// only with the next step or another version. The percent is not announced
+// (aria-hidden): the toaster is a live region. In a plain browser nothing
+// shows. The status page shows the same texts (desktop/src/screens.ts
+// updateOffer).
 
 import { useEffect } from "react";
 import { toast } from "sonner";
@@ -17,11 +19,13 @@ const ID = "desktop-app-update";
 /** What a "Restart to update" that did not happen says. */
 const RESTART_NOTES: Record<string, string> = {
   busy: "The app is busy. Try again in a moment.",
+  not_ready: "The downloaded installer could not be opened. Download it again.",
 };
 
 interface UpdateNotice {
   tone: "info" | "success" | "warning";
   text: string;
+  percent: number | null;
   action: "download" | "restart" | null;
 }
 
@@ -35,23 +39,27 @@ function updateNotice(s: AppUpdateState): UpdateNotice | null {
         ? {
             tone: "warning",
             text: `The download of EvoScientist ${s.version} did not finish.`,
+            percent: null,
             action: "download",
           }
         : {
             tone: "info",
             text: `EvoScientist ${s.version} is available.`,
+            percent: null,
             action: "download",
           };
     case "downloading":
       return {
         tone: "info",
-        text: `Downloading EvoScientist ${s.version}... ${s.percent}%`,
+        text: `Downloading EvoScientist ${s.version}...`,
+        percent: s.percent,
         action: null,
       };
     case "ready":
       return {
         tone: "success",
         text: `EvoScientist ${s.version} is ready to install.`,
+        percent: null,
         action: "restart",
       };
   }
@@ -65,28 +73,51 @@ export function DesktopUpdateNotice() {
   useEffect(() => {
     const update = desktopBridge()?.appUpdate;
     if (!update) return;
+    /** The step the user closed. */
     let closed: string | null = null;
+    /** The toast's id. sonner keeps a dismissed toast for 200 ms and merges
+     *  a toast with the same id into it, so a toast that goes takes its id
+     *  with it; and its `onDismiss`, which sonner also calls for our own
+     *  dismiss, counts only while its id is current. */
+    let id = ID;
+    let ids = 0;
+    let restarting = false;
 
     const show = (s: AppUpdateState, note?: string) => {
       const notice = updateNotice(s);
       if (!notice) {
-        toast.dismiss(ID);
+        toast.dismiss(id);
+        id = `${ID}-${++ids}`;
         return;
       }
       const step = stepOf(s);
       if (closed === step) return;
       closed = null;
+      const mine = id;
       const label =
         notice.action === "download"
           ? "Download"
           : notice.action === "restart"
           ? "Restart to update"
           : null;
-      toast[notice.tone](notice.text, {
-        id: ID,
+      const title =
+        notice.percent === null ? (
+          notice.text
+        ) : (
+          <>
+            {notice.text}
+            <span aria-hidden="true"> {notice.percent}%</span>
+          </>
+        );
+      toast[notice.tone](title, {
+        id: mine,
         duration: Infinity,
         description: note,
-        onDismiss: () => (closed = step),
+        onDismiss: () => {
+          if (mine !== id) return;
+          closed = step;
+          id = `${ID}-${++ids}`;
+        },
         action: label
           ? {
               label,
@@ -99,7 +130,10 @@ export function DesktopUpdateNotice() {
                   void update.download();
                   return;
                 }
+                if (restarting) return;
+                restarting = true;
                 void update.restartToUpdate().then(async (r) => {
+                  restarting = false;
                   // On success the app ends; otherwise the offer stays and
                   // says why, from the app's state now (an installer that
                   // could not be opened is offered for download again).
@@ -115,7 +149,7 @@ export function DesktopUpdateNotice() {
     void update.state().then((s) => show(s));
     return () => {
       off();
-      toast.dismiss(ID);
+      toast.dismiss(id);
     };
   }, []);
   return null;

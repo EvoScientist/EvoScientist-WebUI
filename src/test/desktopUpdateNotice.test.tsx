@@ -82,14 +82,20 @@ describe("DesktopUpdateNotice", () => {
     fireEvent.click(screen.getByRole("button", { name: "Download" }));
     expect(app.appUpdate.download).toHaveBeenCalledOnce();
     app.send({ kind: "downloading", version: "0.4.3", percent: 42 });
-    expect(
-      await screen.findByText("Downloading EvoScientist 0.4.3... 42%")
-    ).toBeTruthy();
+    // The toaster is a live region: the percent is shown, not announced.
+    const title = await screen.findByText("Downloading EvoScientist 0.4.3...");
+    expect(title.textContent).toBe("Downloading EvoScientist 0.4.3... 42%");
+    expect(screen.getByText("42%").getAttribute("aria-hidden")).toBe("true");
+    app.send({ kind: "downloading", version: "0.4.3", percent: 43 });
+    await vi.waitFor(() => expect(screen.getByText("43%")).toBeTruthy());
     expect(screen.queryByRole("button", { name: "Download" })).toBeNull();
     app.send({ kind: "ready", version: "0.4.3" });
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Restart to update" })
-    );
+    const restart = await screen.findByRole("button", {
+      name: "Restart to update",
+    });
+    // A second click while the first runs asks nothing more.
+    fireEvent.click(restart);
+    fireEvent.click(restart);
     expect(app.appUpdate.restartToUpdate).toHaveBeenCalledOnce();
     // Refused while the app is busy: the offer comes back and says why.
     expect(
@@ -98,6 +104,9 @@ describe("DesktopUpdateNotice", () => {
     expect(
       screen.getByRole("button", { name: "Restart to update" })
     ).toBeTruthy();
+    // Once answered, the button works again.
+    fireEvent.click(screen.getByRole("button", { name: "Restart to update" }));
+    expect(app.appUpdate.restartToUpdate).toHaveBeenCalledTimes(2);
   });
 
   it("keeps the notice when a cached download is ready at once", async () => {
@@ -132,6 +141,11 @@ describe("DesktopUpdateNotice", () => {
     expect(
       await screen.findByText(
         "The download of EvoScientist 0.4.3 did not finish."
+      )
+    ).toBeTruthy();
+    expect(
+      await screen.findByText(
+        "The downloaded installer could not be opened. Download it again."
       )
     ).toBeTruthy();
     await act(() => new Promise((r) => setTimeout(r, 50)));
@@ -171,5 +185,52 @@ describe("DesktopUpdateNotice", () => {
     await vi.waitFor(() =>
       expect(screen.queryByText("EvoScientist 0.4.4 is available.")).toBeNull()
     );
+  });
+
+  it("offers a version again after a check withdrew it", async () => {
+    // The app's own `none` is no close by the user.
+    const app = fakeApp({ kind: "available", version: "0.4.3", failed: false });
+    mount();
+    await screen.findByText("EvoScientist 0.4.3 is available.");
+    app.send({ kind: "none" });
+    await vi.waitFor(() =>
+      expect(document.querySelector("[data-sonner-toast]")).toBeNull()
+    );
+    app.send({ kind: "available", version: "0.4.3", failed: false });
+    expect(
+      await screen.findByText("EvoScientist 0.4.3 is available.")
+    ).toBeTruthy();
+  });
+
+  it("offers a version again at once after a check withdrew it", async () => {
+    const app = fakeApp({ kind: "available", version: "0.4.3", failed: false });
+    mount();
+    await screen.findByText("EvoScientist 0.4.3 is available.");
+    app.send({ kind: "none" });
+    await act(() => new Promise((r) => setTimeout(r, 50)));
+    app.send({ kind: "available", version: "0.4.3", failed: false });
+    await act(() => new Promise((r) => setTimeout(r, 400)));
+    expect(screen.getByText("EvoScientist 0.4.3 is available.")).toBeTruthy();
+    // And it is still the user's to close: a close keeps it closed.
+    fireEvent.click(screen.getByRole("button", { name: /close/i }));
+    await vi.waitFor(() =>
+      expect(screen.queryByText("EvoScientist 0.4.3 is available.")).toBeNull()
+    );
+    app.send({ kind: "available", version: "0.4.3", failed: false });
+    await act(() => new Promise((r) => setTimeout(r, 300)));
+    expect(screen.queryByText("EvoScientist 0.4.3 is available.")).toBeNull();
+  });
+
+  it("shows the next step that arrives while a closed notice is leaving", async () => {
+    const app = fakeApp({ kind: "downloading", version: "0.4.3", percent: 50 });
+    mount();
+    await screen.findByText("Downloading EvoScientist 0.4.3...");
+    fireEvent.click(screen.getByRole("button", { name: /close/i }));
+    await act(() => new Promise((r) => setTimeout(r, 50)));
+    app.send({ kind: "ready", version: "0.4.3" });
+    await act(() => new Promise((r) => setTimeout(r, 400)));
+    expect(
+      screen.getByRole("button", { name: "Restart to update" })
+    ).toBeTruthy();
   });
 });
