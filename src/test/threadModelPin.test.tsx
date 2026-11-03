@@ -4,7 +4,8 @@
 // pinned to the registry's default at its next run, so a later change of
 // the default moves only new threads.
 
-import { act, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -60,7 +61,12 @@ vi.mock("sonner", () => ({
 }));
 
 import { renderChat } from "@/test/renderChat";
-import { mockProjects, readyProjects } from "@/test/mockProjects";
+import {
+  TestProjectsProvider,
+  mockProjects,
+  readyProjects,
+} from "@/test/mockProjects";
+import { ChatProvider, useChatContext } from "@/providers/ChatProvider";
 
 const KEY = "/home/you/projA";
 const ready = () => mockProjects(readyProjects(KEY));
@@ -126,6 +132,69 @@ describe("thread model pin", () => {
       result.current.sendMessage("again");
     });
     expect(sentModel(1)).toMatchObject({ model: "m-0", model_provider: "p-0" });
+  });
+
+  it("pins a new chat to the default its first run goes out with, after a send that made no thread", async () => {
+    const opts: Parameters<typeof renderChat>[0] = {
+      connected: true,
+      defaultModel: M0,
+      projects: ready(),
+    };
+    const { result, rerender } = renderChat(opts);
+
+    act(() => {
+      result.current.sendMessage("hi");
+    });
+    act(() => {
+      stream.emitError(new TypeError("Failed to fetch"));
+    });
+    opts.defaultModel = { name: "m-1", provider: "p-0" };
+    rerender();
+    act(() => {
+      result.current.sendMessage("hi again");
+    });
+
+    expect(sentModel(1)).toMatchObject({ model: "m-1", model_provider: "p-0" });
+    act(() => {
+      (stream.getOptions()?.onThreadId as (id: string) => void)(NEW_THREAD);
+    });
+    await waitFor(() =>
+      expect(writePick).toHaveBeenCalledWith(NEW_THREAD, {
+        model: "m-1",
+        model_provider: "p-0",
+      })
+    );
+    expect(result.current.modelOverride).toEqual({
+      model: "m-1",
+      model_provider: "p-0",
+    });
+  });
+
+  it("drops a new chat's pin when the default is gone by its next send", async () => {
+    const opts: Parameters<typeof renderChat>[0] = {
+      connected: true,
+      defaultModel: M0,
+      projects: ready(),
+    };
+    const { result, rerender } = renderChat(opts);
+
+    act(() => {
+      result.current.sendMessage("hi");
+    });
+    act(() => {
+      stream.emitError(new TypeError("Failed to fetch"));
+    });
+    opts.defaultModel = null;
+    rerender();
+    act(() => {
+      result.current.sendMessage("hi again");
+    });
+    act(() => {
+      (stream.getOptions()?.onThreadId as (id: string) => void)(NEW_THREAD);
+    });
+
+    expect(sentModel(1)).not.toHaveProperty("model");
+    expect(writePick).not.toHaveBeenCalled();
   });
 
   it("pins a thread without a pick at its next run, not when it opens", async () => {
@@ -210,6 +279,68 @@ describe("thread model pin", () => {
       result.current.sendMessage("hi");
     });
 
+    expect(sentModel(0)).toMatchObject({ model: "m-2", model_provider: "p-1" });
+    expect(writePick).not.toHaveBeenCalled();
+  });
+
+  it("keeps a reset made before the thread's metadata arrived", async () => {
+    openThread({
+      graph_id: "EvoScientist",
+      workspace_dir: KEY,
+      model_override: { model: "m-2", model_provider: "p-1" },
+    });
+    const client = getActiveMockClient();
+    const record = await client.threads.get(THREAD);
+    let answer!: () => void;
+    client.threads.get.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          answer = () => resolve(record);
+        })
+    );
+    const { result } = renderChat({ defaultModel: null, projects: ready() });
+
+    await act(async () => {
+      await result.current.setModelOverride(null);
+    });
+    await act(async () => {
+      answer();
+    });
+    await waitFor(() => expect(result.current.canSend).toBe(true));
+    act(() => {
+      result.current.sendMessage("hi");
+    });
+
+    expect(sentModel(0)).not.toHaveProperty("model");
+  });
+
+  it("keeps a thread's own pick for a run sent as the thread becomes runnable", async () => {
+    openThread({
+      graph_id: "EvoScientist",
+      workspace_dir: KEY,
+      model_override: { model: "m-2", model_provider: "p-1" },
+    });
+    const projects = ready();
+    renderHook(
+      () => {
+        const chat = useChatContext();
+        const sent = useRef(false);
+        useEffect(() => {
+          if (!chat.canSend || sent.current) return;
+          sent.current = true;
+          chat.sendMessage("[Async tasks update]", { mode: "followup" });
+        }, [chat]);
+      },
+      {
+        wrapper: ({ children }: { children: ReactNode }) => (
+          <TestProjectsProvider value={projects}>
+            <ChatProvider defaultModel={M0}>{children}</ChatProvider>
+          </TestProjectsProvider>
+        ),
+      }
+    );
+
+    await waitFor(() => expect(stream.getSubmitCalls()).toHaveLength(1));
     expect(sentModel(0)).toMatchObject({ model: "m-2", model_provider: "p-1" });
     expect(writePick).not.toHaveBeenCalled();
   });

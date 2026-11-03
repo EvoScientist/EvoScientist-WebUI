@@ -4,6 +4,7 @@ import {
   isDefaultPick,
   parseModelCommand,
   pinnedModelHint,
+  storedModelPick,
 } from "./modelCommand";
 
 describe("parseModelCommand", () => {
@@ -173,5 +174,25 @@ describe("pinnedModelHint", () => {
     expect(
       pinnedModelHint({ pick: { model: "m-2" }, defaultModel: null })
     ).toBeNull();
+  });
+});
+
+describe("storedModelPick", () => {
+  it("reads a thread's pick from its metadata", () => {
+    expect(
+      storedModelPick({
+        model_override: { model: "m-2", model_provider: "p-1" },
+      })
+    ).toEqual({ model: "m-2", model_provider: "p-1" });
+    expect(storedModelPick({ model_override: { model: "m-2" } })).toEqual({
+      model: "m-2",
+      model_provider: undefined,
+    });
+  });
+
+  it("returns null without a pick, or a cleared or broken one", () => {
+    expect(storedModelPick({})).toBeNull();
+    expect(storedModelPick({ model_override: null })).toBeNull();
+    expect(storedModelPick({ model_override: { model: 3 } })).toBeNull();
   });
 });

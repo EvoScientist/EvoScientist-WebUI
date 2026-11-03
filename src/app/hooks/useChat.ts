@@ -54,6 +54,7 @@ import {
   defaultModelPick,
   MODEL_OVERRIDE_METADATA_KEY,
   pinnedModelHint,
+  storedModelPick,
   type ModelOverride,
 } from "@/lib/modelCommand";
 import type { ModelRegistry } from "@/app/hooks/useAvailableModels";
@@ -1075,11 +1076,12 @@ export function useChat({
     }
     // Thread just came into existence (or we switched onto an existing one).
     // If we have a pending pre-thread override, write it through to metadata
-    // and keep the local state as-is.
+    // and hold it as the new thread's pick.
     if (pendingOverrideRef.current) {
       const pending = pendingOverrideRef.current;
       pendingOverrideRef.current = null;
       wrotePendingForRef.current = threadId;
+      setModelOverrideState(pending);
       void (async () => {
         try {
           await setThreadModelOverride(threadId, pending);
@@ -1097,21 +1099,7 @@ export function useChat({
   useEffect(() => {
     if (!threadId || !openMeta) return;
     if (wrotePendingForRef.current === threadId) return;
-    const raw = openMeta.metadata[MODEL_OVERRIDE_METADATA_KEY];
-    if (
-      raw &&
-      typeof raw === "object" &&
-      typeof (raw as { model?: unknown }).model === "string"
-    ) {
-      const r = raw as { model: string; model_provider?: unknown };
-      setModelOverrideState({
-        model: r.model,
-        model_provider:
-          typeof r.model_provider === "string" ? r.model_provider : undefined,
-      });
-    } else {
-      setModelOverrideState(null);
-    }
+    setModelOverrideState(storedModelPick(openMeta.metadata));
   }, [threadId, openMeta]);
 
   // Persist + apply locally. When the thread row exists, writes metadata
@@ -1158,17 +1146,38 @@ export function useChat({
     [defaultModel]
   );
   // For a run error: the thread's pick and the default, read when it fails.
-  const modelHintRef = useRef({ pick: modelOverride, defaultModel });
-  modelHintRef.current = { pick: modelOverride, defaultModel };
+  const modelHintRef = useRef({
+    pick: modelOverride,
+    defaultModel,
+    threadGraph,
+  });
+  modelHintRef.current = { pick: modelOverride, defaultModel, threadGraph };
   const modelForRun = useCallback((): ModelOverride | null => {
     if (modelOverride) return modelOverride;
-    if (threadGraph !== CHAT_GRAPH_ID || !defaultPick) return null;
-    void setModelOverride(defaultPick).catch(() => {
+    const stored =
+      openMeta && wrotePendingForRef.current !== threadId
+        ? storedModelPick(openMeta.metadata)
+        : null;
+    if (stored) return stored;
+    const pin = threadGraph === CHAT_GRAPH_ID ? defaultPick : null;
+    if (!threadId) {
+      pendingOverrideRef.current = pin;
+      return pin;
+    }
+    if (!pin) return null;
+    void setModelOverride(pin).catch(() => {
       // The run still carries the pin; a thread whose write failed is
       // pinned again at its next run after it is opened again.
     });
-    return defaultPick;
-  }, [defaultPick, modelOverride, setModelOverride, threadGraph]);
+    return pin;
+  }, [
+    defaultPick,
+    modelOverride,
+    openMeta,
+    setModelOverride,
+    threadGraph,
+    threadId,
+  ]);
   // `stream.interrupt` is a fresh object per access (SDK getter); key the
   // recovery effect on its ID (or value fallback) so a pending interrupt doesn't
   // re-run it per commit.

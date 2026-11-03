@@ -85,6 +85,26 @@ export function parseModelCommand(input: string): ModelCommand | null {
   return { kind: "set", model: parts[0], provider: parts[1] };
 }
 
+/** The pick stored in a thread's metadata, or null when it has none. */
+export function storedModelPick(
+  metadata: Record<string, unknown>
+): ModelOverride | null {
+  const raw = metadata[MODEL_OVERRIDE_METADATA_KEY];
+  if (
+    !raw ||
+    typeof raw !== "object" ||
+    typeof (raw as { model?: unknown }).model !== "string"
+  ) {
+    return null;
+  }
+  const r = raw as { model: string; model_provider?: unknown };
+  return {
+    model: r.model,
+    model_provider:
+      typeof r.model_provider === "string" ? r.model_provider : undefined,
+  };
+}
+
 /** The registry's default model, as a thread pick. A thread is pinned to
  *  it at its next run, and `/model reset` writes it. */
 export function defaultModelPick(
