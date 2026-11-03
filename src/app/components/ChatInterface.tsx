@@ -1430,9 +1430,14 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
     );
     // Reset pins the thread to the current default at once, so a later
     // change of the default doesn't move it. With no default known (an older
-    // backend) the pick is cleared, and the next run pins the default.
+    // backend) the pick is cleared, and the thread is pinned once a default
+    // is. A scheduled task's thread runs on its own model: its pick is
+    // cleared.
     const resetModel = useCallback(async (): Promise<boolean> => {
-      const pick = defaultModelPick(modelRegistry.defaultEntry);
+      const pick =
+        threadGraph === CHAT_GRAPH_ID
+          ? defaultModelPick(modelRegistry.defaultEntry)
+          : null;
       try {
         await setModelOverride(pick);
         toast.success(
@@ -1451,7 +1456,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
         );
         return false;
       }
-    }, [modelRegistry.defaultEntry, setModelOverride]);
+    }, [modelRegistry.defaultEntry, setModelOverride, threadGraph]);
 
     const applyModelCommand = useCallback(
       async (cmd: Exclude<ModelCommand, { kind: "show" }>) => {

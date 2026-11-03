@@ -56,6 +56,13 @@ let mockDeployment: { deploymentUrl: string | null; apiKey: string } = {
   apiKey: "",
 };
 
+// A thread's model pick, written to its metadata.
+const writePick = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock("@/app/hooks/useThreads", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  setThreadModelOverride: writePick,
+}));
+
 vi.mock("nuqs", async () => {
   const react = await import("react");
   return {
@@ -1643,6 +1650,38 @@ describe("ChatInterface composition", () => {
         );
       } finally {
         registryStub.failed = false;
+      }
+    });
+
+    it("`/model reset` on a scheduled task's thread clears its pick", async () => {
+      mockThreadId = "t-1";
+      getActiveMockClient().setThreadRecord("t-1", {
+        metadata: {
+          graph_id: "scheduler",
+          workspace_dir: "/home/you/projA",
+          model_override: {
+            model: "claude-haiku-4-5",
+            model_provider: "anthropic",
+          },
+        },
+      });
+      try {
+        const { container } = renderChatInterface();
+        // The thread's pick is read with its graph.
+        await waitFor(() =>
+          expect(
+            screen.getByRole("button", { name: "Change model for this chat" })
+              .textContent
+          ).toContain("claude-haiku-4-5")
+        );
+        const textarea = typeInComposer(container, "/model reset");
+        fireEvent.keyDown(textarea, { key: "Enter" });
+        await waitFor(() =>
+          expect(toast.success).toHaveBeenCalledWith("Model override cleared.")
+        );
+        expect(writePick).toHaveBeenCalledWith("t-1", null);
+      } finally {
+        mockThreadId = null;
       }
     });
 
