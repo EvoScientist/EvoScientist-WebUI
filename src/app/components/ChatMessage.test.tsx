@@ -184,7 +184,14 @@ describe("ChatMessage model", () => {
       response_metadata: { model_name: "z-ai/glm-5.3" },
     } as unknown as Message);
 
-    expect(screen.queryByText("glm-5.3")).toBeNull();
+    expect(screen.queryByText(/glm-5\.3/)).toBeNull();
+  });
+
+  it("shows the name alone for a reply without a provider", () => {
+    renderMessage(reply({ model: "llama3" }));
+
+    expect(screen.getByText("llama3").getAttribute("title")).toBe("llama3");
+    expect(screen.queryByText(/ · /)).toBeNull();
   });
 });
 
