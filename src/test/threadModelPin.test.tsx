@@ -150,6 +150,31 @@ describe("thread model pin", () => {
     });
   });
 
+  it("keeps the pin for this session when writing it fails", async () => {
+    openThread({ graph_id: "EvoScientist", workspace_dir: KEY });
+    writePick.mockRejectedValueOnce(new Error("offline"));
+    const opts: Parameters<typeof renderChat>[0] = {
+      defaultModel: M0,
+      projects: ready(),
+    };
+    const { result, rerender } = renderChat(opts);
+    await waitFor(() => expect(result.current.canSend).toBe(true));
+
+    act(() => {
+      result.current.sendMessage("hi");
+    });
+    expect(sentModel(0)).toMatchObject({ model: "m-0", model_provider: "p-0" });
+    await waitFor(() => expect(writePick).toHaveBeenCalledTimes(1));
+    expect(toast.error).not.toHaveBeenCalled();
+
+    opts.defaultModel = { name: "m-1", provider: "p-0" };
+    rerender();
+    act(() => {
+      result.current.sendMessage("again");
+    });
+    expect(sentModel(1)).toMatchObject({ model: "m-0", model_provider: "p-0" });
+  });
+
   it("pins a thread at a resume too", async () => {
     openThread({ graph_id: "EvoScientist", workspace_dir: KEY });
     const { result } = renderChat({ defaultModel: M0, projects: ready() });

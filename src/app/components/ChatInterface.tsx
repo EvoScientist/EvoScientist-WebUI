@@ -105,7 +105,7 @@ import { useSlashMenu } from "@/app/hooks/useSlashMenu";
 import { useOverflowing } from "@/app/hooks/useOverflowing";
 import { cn } from "@/lib/utils";
 import { copyText } from "@/lib/clipboard";
-import { formatModel } from "@/lib/model";
+import { formatModel, replyModel } from "@/lib/model";
 import {
   getThreadAutoApprove,
   setThreadAutoApprove,
@@ -1181,11 +1181,7 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       for (let i = messages.length - 1; i >= 0; i--) {
         const m = messages[i];
         if (m.type !== "ai") continue;
-        const rm = m.response_metadata as Record<string, unknown> | undefined;
-        const info = formatModel(
-          rm?.model_name ?? rm?.model,
-          rm?.model_provider
-        );
+        const info = replyModel(m.response_metadata);
         if (info) return info;
       }
       return null;
