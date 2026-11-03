@@ -112,14 +112,18 @@ describe("isDefaultPick", () => {
     );
   });
 
-  it("matches by name when either side has no provider", () => {
-    expect(isDefaultPick({ model: "m-0" }, def)).toBe(true);
+  it("matches a pick without a provider only to a default without one", () => {
+    expect(
+      isDefaultPick({ model: "m-0" }, { name: "m-0", provider: null })
+    ).toBe(true);
+    // The core runs a bare name on its own registry provider, not p-0.
+    expect(isDefaultPick({ model: "m-0" }, def)).toBe(false);
     expect(
       isDefaultPick(
         { model: "m-0", model_provider: "p-0" },
         { name: "m-0", provider: null }
       )
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("does not match another model or provider, or a missing side", () => {
@@ -150,6 +154,12 @@ describe("pinnedModelHint", () => {
         defaultModel: { name: "m-0", provider: null },
       })
     ).toBe("This chat runs on m-2. /model reset moves it to m-0.");
+  });
+
+  it("names a pick without a provider that the default has one for", () => {
+    expect(pinnedModelHint({ pick: { model: "m-0" }, defaultModel })).toBe(
+      "This chat runs on m-0. /model reset moves it to m-0 (p-0)."
+    );
   });
 
   it("says nothing on the default, without a pick or without a default", () => {

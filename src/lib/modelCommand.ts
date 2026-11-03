@@ -96,20 +96,17 @@ export function defaultModelPick(
     : { model: defaultEntry.name };
 }
 
-/** Whether a thread's pick is the registry's default model. A pick without
- *  a provider (`/model <name>`) runs on the default provider for that name,
- *  so only the name has to match then. */
+/** Whether a thread's pick is the registry's default model: the same name
+ *  and the same provider. A pick without a provider (`/model <name>`) runs on
+ *  that name's own provider in the core's registry, which may not be the
+ *  default's, so it matches only a default without a provider. */
 export function isDefaultPick(
   pick: ModelOverride | null,
   defaultEntry: { name: string; provider: string | null | undefined } | null
 ): boolean {
   if (!pick || !defaultEntry) return false;
   if (pick.model !== defaultEntry.name) return false;
-  return (
-    !pick.model_provider ||
-    !defaultEntry.provider ||
-    pick.model_provider === defaultEntry.provider
-  );
+  return (pick.model_provider ?? null) === (defaultEntry.provider ?? null);
 }
 
 /** For a run that failed on a thread kept on another model than the
