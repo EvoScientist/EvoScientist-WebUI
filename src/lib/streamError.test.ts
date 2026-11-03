@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { formatStreamError, isRunFolderMismatchError } from "@/lib/streamError";
+import {
+  formatStreamError,
+  isModelError,
+  isRunFolderMismatchError,
+} from "@/lib/streamError";
 
 describe("isRunFolderMismatchError", () => {
   it.each([
@@ -56,5 +60,33 @@ describe("formatStreamError", () => {
     );
     expect(formatStreamError("raw failure")).toBe("raw failure");
     expect(formatStreamError(undefined)).toBe("Run failed.");
+  });
+});
+
+describe("isModelError", () => {
+  it("matches the provider envelope and an unknown model", () => {
+    expect(
+      isModelError({
+        error: "RateLimitError",
+        message: "insufficient credits",
+        provider: "openai",
+      })
+    ).toBe(true);
+    expect(
+      isModelError(
+        Object.assign(new Error("bare name"), { name: "UnknownModelError" })
+      )
+    ).toBe(true);
+    expect(isModelError(new Error("UnknownModelError: bare name"))).toBe(true);
+  });
+
+  it("does not match a tool or stream failure", () => {
+    expect(
+      isModelError(
+        Object.assign(new Error("boom"), { name: "GraphRecursionError" })
+      )
+    ).toBe(false);
+    expect(isModelError(new Error("network error"))).toBe(false);
+    expect(isModelError({ message: "x", provider: "" })).toBe(false);
   });
 });

@@ -242,7 +242,11 @@ describe("thread model pin", () => {
     await waitFor(() => expect(result.current.modelOverride).not.toBeNull());
 
     act(() => {
-      stream.emitError(new Error("p-1 API key missing"));
+      stream.emitError({
+        error: "AuthenticationError",
+        message: "p-1 API key missing",
+        provider: "p-1",
+      });
     });
 
     expect(toast.error).toHaveBeenCalledWith(
@@ -251,6 +255,29 @@ describe("thread model pin", () => {
         description:
           "This chat runs on m-2 (p-1). /model reset moves it to m-0 (p-0).",
       }
+    );
+  });
+
+  it("adds nothing to an error that isn't the model's", async () => {
+    openThread({
+      graph_id: "EvoScientist",
+      workspace_dir: KEY,
+      model_override: { model: "m-2", model_provider: "p-1" },
+    });
+    const { result } = renderChat({ defaultModel: M0, projects: ready() });
+    await waitFor(() => expect(result.current.modelOverride).not.toBeNull());
+
+    act(() => {
+      stream.emitError(
+        Object.assign(new Error("recursion limit"), {
+          name: "GraphRecursionError",
+        })
+      );
+    });
+
+    expect(toast.error).toHaveBeenCalledWith(
+      expect.stringContaining("recursion limit"),
+      undefined
     );
   });
 
@@ -264,7 +291,11 @@ describe("thread model pin", () => {
     await waitFor(() => expect(result.current.modelOverride).not.toBeNull());
 
     act(() => {
-      stream.emitError(new Error("provider quota exceeded"));
+      stream.emitError({
+        error: "RateLimitError",
+        message: "provider quota exceeded",
+        provider: "p-0",
+      });
     });
 
     expect(toast.error).toHaveBeenCalledWith(
