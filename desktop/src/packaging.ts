@@ -5,13 +5,13 @@
 //   stamps it into the packaged package.json (`extraMetadata.version`);
 //   desktop/package.json's own version is never used.
 // - A release tag names that version.
-// - Desktop files go out only once `evoscientist.release` is true, which the
-//   pull request that moves the core range to a release with the Windows
-//   clean stop (EvoScientist#712, v0.4.0 or later) sets.
+// - Desktop files go out only while `evoscientist.release` is true, and the
+//   flag may be on only while the core range installs a core with the
+//   Windows clean stop (EvoScientist#712, fixed by #716 in v0.4.1).
 import { compareReleases, installVersion, parseRelease } from "./versions";
 
 /** The first core version a desktop release may install. */
-export const FIRST_RELEASE_CORE = "0.4.0";
+export const FIRST_RELEASE_CORE = "0.4.1";
 
 /** The electron-builder arguments that stamp the app's version. */
 export function versionArgs(rootVersion: string): string[] {
