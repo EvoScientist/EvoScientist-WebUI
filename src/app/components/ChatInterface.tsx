@@ -1883,8 +1883,11 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(
       defaultEntry: modelRegistry.defaultEntry,
       filter: "",
     }).find((e) => e.current);
-    // The thread's pick is the default a new chat would get.
-    const onDefault = isDefaultPick(modelOverride, modelRegistry.defaultEntry);
+    // The thread's pick is the default a new chat would get. A scheduled
+    // task's thread has no such default: reset clears its pick.
+    const onDefault =
+      threadGraph === CHAT_GRAPH_ID &&
+      isDefaultPick(modelOverride, modelRegistry.defaultEntry);
     const modelPage: MenuPage = {
       word: "model",
       label: "Model",

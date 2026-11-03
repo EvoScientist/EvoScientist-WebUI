@@ -1685,6 +1685,40 @@ describe("ChatInterface composition", () => {
       }
     });
 
+    it("offers Reset to default on a scheduled task's thread whose pick is the chat default", async () => {
+      mockThreadId = "t-1";
+      getActiveMockClient().setThreadRecord("t-1", {
+        metadata: {
+          graph_id: "scheduler",
+          workspace_dir: "/home/you/projA",
+          model_override: {
+            model: "claude-sonnet-4-6",
+            model_provider: "anthropic",
+          },
+        },
+      });
+      try {
+        const { container } = renderChatInterface();
+        await waitFor(() =>
+          expect(
+            screen.getByRole("button", { name: "Change model for this chat" })
+              .textContent
+          ).toContain("claude-sonnet-4-6")
+        );
+        const textarea = typeInComposer(container, "/mo");
+        await waitFor(() =>
+          expect(screen.getAllByRole("option")).toHaveLength(1)
+        );
+        fireEvent.keyDown(textarea, { key: "Enter" });
+
+        expect(screen.getByText("Current: claude-sonnet-4-6")).toBeTruthy();
+        const rows = screen.getAllByRole("option");
+        expect(rows[rows.length - 1].textContent).toContain("Reset to default");
+      } finally {
+        mockThreadId = null;
+      }
+    });
+
     it("notes the curated list when the registry didn't load", async () => {
       const { registryStub } = await import("@/test/mocks/chatInterfaceStubs");
       registryStub.failed = true;
