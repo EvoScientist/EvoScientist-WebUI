@@ -541,6 +541,45 @@ describe("the Setup form", () => {
     expect(screen.queryByRole("button", { name: "Restart now" })).toBeNull();
   });
 
+  it("says new chats use a saved model at once when its key is not new", async () => {
+    server.settings = settings({
+      restart_required: true,
+      restart_fields: ["model"],
+    });
+    renderView();
+    expect(
+      await screen.findByText(
+        /^New chats in the WebUI use the saved model already\. Scheduled tasks and Agents panel follow-ups switch to it after EvoScientist restarts\./
+      )
+    ).toBeTruthy();
+    expect(screen.queryByText(/These changes take effect/)).toBeNull();
+  });
+
+  it("names the other fields waiting with the saved model", async () => {
+    server.settings = settings({
+      restart_required: true,
+      restart_fields: ["model", "tavily_api_key"],
+    });
+    renderView();
+    expect(
+      await screen.findByText(
+        /switch to it after EvoScientist restarts, as do these changes: Tavily API key\./
+      )
+    ).toBeTruthy();
+  });
+
+  it("says nothing of new chats when the provider's key waits for the restart too", async () => {
+    server.settings = settings({
+      restart_required: true,
+      restart_fields: ["openai_api_key", "provider"],
+    });
+    renderView();
+    await screen.findByText(
+      /These changes take effect after EvoScientist restarts:/
+    );
+    expect(screen.queryByText(/New chats/)).toBeNull();
+  });
+
   it("restarts through the desktop bridge when there is one", async () => {
     const restartBackend = vi.fn(async () => ({ ok: true as const }));
     window.evoscientistDesktop = { restartBackend };
@@ -911,7 +950,7 @@ describe("the Setup form", () => {
     renderView();
     expect(await screen.findByText(/read-only here/)).toBeTruthy();
     expect(
-      screen.getByText(/take effect after EvoScientist.*quit EvoSci/)
+      screen.getByText(/after EvoScientist restarts.*quit EvoSci/)
     ).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Restart now" })).toBeNull();
     expect(restartBackend).not.toHaveBeenCalled();

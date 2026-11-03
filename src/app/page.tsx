@@ -36,7 +36,10 @@ import {
 import { ThreadList } from "@/app/components/ThreadList";
 import { ChatProvider } from "@/providers/ChatProvider";
 import type { ThreadUnavailableInfo } from "@/app/hooks/useChat";
-import { refreshModelRegistry } from "@/app/hooks/useAvailableModels";
+import {
+  refreshModelRegistry,
+  useAvailableModels,
+} from "@/app/hooks/useAvailableModels";
 import {
   refreshBackendLists,
   useBackendListsRefresh,
@@ -75,6 +78,8 @@ function HomePageInner({ config, handleSaveConfig }: HomePageInnerProps) {
   // Panels that hold one backend's data start over on another.
   const backendKey = `${deploymentUrl}\n${apiKey}`;
   useBackendListsRefresh(deploymentUrl);
+  // A chat thread without a model is pinned to this default at its next run.
+  const { registry: modelRegistry } = useAvailableModels();
   const [threadId, setThreadId] = useQueryState("threadId");
   const [sidebar, setSidebar] = useQueryState("sidebar");
   const [view, setView] = useQueryState("view");
@@ -556,6 +561,7 @@ function HomePageInner({ config, handleSaveConfig }: HomePageInnerProps) {
                   <SetupNotice onOpenSetup={() => void setView("setup")} />
                   <ChatProvider
                     key={chatSessionRevision}
+                    defaultModel={modelRegistry.defaultEntry}
                     onHistoryRevalidate={() => mutateThreads?.()}
                     onThreadUnavailable={handleThreadUnavailable}
                   >

@@ -64,7 +64,9 @@ export type ModelCommand =
  *
  * Recognised forms:
  *   - `/model`              → kind: "show" (open the picker)
- *   - `/model reset`        → kind: "reset" (clear thread override)
+ *   - `/model reset`        → kind: "reset" (pin the thread to the current
+ *                             default; clear the pick on a scheduled task's
+ *                             thread or without a known default)
  *   - `/model <name>`       → kind: "set", model=<name>
  *   - `/model <name> <prov>`→ kind: "set", model=<name>, provider=<prov>
  *
@@ -83,4 +85,67 @@ export function parseModelCommand(input: string): ModelCommand | null {
   }
   if (parts.length > 2) return null;
   return { kind: "set", model: parts[0], provider: parts[1] };
+}
+
+/** The pick stored in a thread's metadata, or null when it has none. */
+export function storedModelPick(
+  metadata: Record<string, unknown>
+): ModelOverride | null {
+  const raw = metadata[MODEL_OVERRIDE_METADATA_KEY];
+  if (
+    !raw ||
+    typeof raw !== "object" ||
+    typeof (raw as { model?: unknown }).model !== "string"
+  ) {
+    return null;
+  }
+  const r = raw as { model: string; model_provider?: unknown };
+  return {
+    model: r.model,
+    model_provider:
+      typeof r.model_provider === "string" ? r.model_provider : undefined,
+  };
+}
+
+/** The registry's default model, as a thread pick. A thread is pinned to
+ *  it at its next run, and `/model reset` writes it. */
+export function defaultModelPick(
+  defaultEntry: { name: string; provider: string | null | undefined } | null
+): ModelOverride | null {
+  if (!defaultEntry?.name) return null;
+  return defaultEntry.provider
+    ? { model: defaultEntry.name, model_provider: defaultEntry.provider }
+    : { model: defaultEntry.name };
+}
+
+/** Whether a thread's pick is the registry's default model: the same name
+ *  and the same provider. A pick without a provider (`/model <name>`) runs on
+ *  that name's own provider in the core's registry, which may not be the
+ *  default's, so it matches only a default without a provider. */
+export function isDefaultPick(
+  pick: ModelOverride | null,
+  defaultEntry: { name: string; provider: string | null | undefined } | null
+): boolean {
+  if (!pick || !defaultEntry) return false;
+  if (pick.model !== defaultEntry.name) return false;
+  return (pick.model_provider ?? null) === (defaultEntry.provider ?? null);
+}
+
+/** For a run that failed on a thread kept on another model than the
+ *  default (its provider may no longer be set up): how to move it. Null when
+ *  the thread is on the default, or either is unknown. */
+export function pinnedModelHint({
+  pick,
+  defaultModel,
+}: {
+  pick: ModelOverride | null;
+  defaultModel: { name: string; provider: string | null | undefined } | null;
+}): string | null {
+  const target = defaultModelPick(defaultModel);
+  if (!pick || !target || isDefaultPick(pick, defaultModel)) return null;
+  const named = (m: ModelOverride) =>
+    m.model_provider ? `${m.model} (${m.model_provider})` : m.model;
+  return `This chat runs on ${named(pick)}. /model reset moves it to ${named(
+    target
+  )}.`;
 }

@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { parseModelCommand } from "./modelCommand";
+import {
+  defaultModelPick,
+  isDefaultPick,
+  parseModelCommand,
+  pinnedModelHint,
+  storedModelPick,
+} from "./modelCommand";
 
 describe("parseModelCommand", () => {
   it("returns null for non-/model inputs", () => {
@@ -78,5 +84,115 @@ describe("parseModelCommand", () => {
       model: "Claude-Sonnet-4-6",
       provider: undefined,
     });
+  });
+});
+
+describe("defaultModelPick", () => {
+  it("turns the registry default into a pick", () => {
+    expect(defaultModelPick({ name: "m-0", provider: "p-0" })).toEqual({
+      model: "m-0",
+      model_provider: "p-0",
+    });
+    expect(defaultModelPick({ name: "m-0", provider: null })).toEqual({
+      model: "m-0",
+    });
+  });
+
+  it("returns null without a default", () => {
+    expect(defaultModelPick(null)).toBeNull();
+    expect(defaultModelPick({ name: "", provider: "p-0" })).toBeNull();
+  });
+});
+
+describe("isDefaultPick", () => {
+  const def = { name: "m-0", provider: "p-0" };
+
+  it("matches the same model and provider", () => {
+    expect(isDefaultPick({ model: "m-0", model_provider: "p-0" }, def)).toBe(
+      true
+    );
+  });
+
+  it("matches a pick without a provider only to a default without one", () => {
+    expect(
+      isDefaultPick({ model: "m-0" }, { name: "m-0", provider: null })
+    ).toBe(true);
+    // The core runs a bare name on its own registry provider, not p-0.
+    expect(isDefaultPick({ model: "m-0" }, def)).toBe(false);
+    expect(
+      isDefaultPick(
+        { model: "m-0", model_provider: "p-0" },
+        { name: "m-0", provider: null }
+      )
+    ).toBe(false);
+  });
+
+  it("does not match another model or provider, or a missing side", () => {
+    expect(isDefaultPick({ model: "m-1", model_provider: "p-0" }, def)).toBe(
+      false
+    );
+    expect(isDefaultPick({ model: "m-0", model_provider: "p-1" }, def)).toBe(
+      false
+    );
+    expect(isDefaultPick(null, def)).toBe(false);
+    expect(isDefaultPick({ model: "m-0" }, null)).toBe(false);
+  });
+});
+
+describe("pinnedModelHint", () => {
+  const defaultModel = { name: "m-0", provider: "p-0" };
+
+  it("names the thread's model and the default it would move to", () => {
+    expect(
+      pinnedModelHint({
+        pick: { model: "m-2", model_provider: "p-1" },
+        defaultModel,
+      })
+    ).toBe("This chat runs on m-2 (p-1). /model reset moves it to m-0 (p-0).");
+    expect(
+      pinnedModelHint({
+        pick: { model: "m-2" },
+        defaultModel: { name: "m-0", provider: null },
+      })
+    ).toBe("This chat runs on m-2. /model reset moves it to m-0.");
+  });
+
+  it("names a pick without a provider that the default has one for", () => {
+    expect(pinnedModelHint({ pick: { model: "m-0" }, defaultModel })).toBe(
+      "This chat runs on m-0. /model reset moves it to m-0 (p-0)."
+    );
+  });
+
+  it("says nothing on the default, without a pick or without a default", () => {
+    expect(
+      pinnedModelHint({
+        pick: { model: "m-0", model_provider: "p-0" },
+        defaultModel,
+      })
+    ).toBeNull();
+    expect(pinnedModelHint({ pick: null, defaultModel })).toBeNull();
+    expect(
+      pinnedModelHint({ pick: { model: "m-2" }, defaultModel: null })
+    ).toBeNull();
+  });
+});
+
+describe("storedModelPick", () => {
+  it("reads a thread's pick from its metadata", () => {
+    expect(
+      storedModelPick({
+        model_override: { model: "m-2", model_provider: "p-1" },
+      })
+    ).toEqual({ model: "m-2", model_provider: "p-1" });
+    expect(storedModelPick({ model_override: { model: "m-2" } })).toEqual({
+      model: "m-2",
+      model_provider: undefined,
+    });
+  });
+
+  it("returns null without a pick, or a cleared or broken one", () => {
+    expect(storedModelPick({})).toBeNull();
+    expect(storedModelPick({ model_override: null })).toBeNull();
+    expect(storedModelPick({ model_override: { model: 3 } })).toBeNull();
   });
 });

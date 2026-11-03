@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatModel } from "./model";
+import { formatModel, replyModel } from "./model";
 
 describe("formatModel", () => {
   it("returns null for empty or non-string input", () => {
@@ -50,5 +50,40 @@ describe("formatModel", () => {
       name: "claude-4.8-opus-2026",
       provider: null,
     });
+  });
+});
+
+describe("replyModel", () => {
+  it("reads the provider's id and provider from response_metadata", () => {
+    expect(
+      replyModel({ model_name: "z-ai/glm-5.3", model_provider: "openrouter" })
+    ).toEqual({
+      name: "glm-5.3",
+      provider: "Openrouter",
+      raw: "z-ai/glm-5.3 (openrouter)",
+    });
+  });
+
+  it("keeps a variant suffix the provider added, and shows it raw too", () => {
+    expect(
+      replyModel({ model_name: "GLM-V5.2-32K", model_provider: "openai" })
+    ).toEqual({
+      name: "GLM-V5.2-32K",
+      provider: "Openai",
+      raw: "GLM-V5.2-32K (openai)",
+    });
+  });
+
+  it("falls back to `model` and leaves the provider out when none is given", () => {
+    expect(replyModel({ model: "llama3" })).toEqual({
+      name: "llama3",
+      provider: null,
+      raw: "llama3",
+    });
+  });
+
+  it("returns null for a reply without a model name", () => {
+    expect(replyModel(undefined)).toBeNull();
+    expect(replyModel({ model_provider: "openrouter" })).toBeNull();
   });
 });

@@ -591,7 +591,20 @@ export function RestartNotice({
   // read-only while that backend is down.
   const bridge =
     access?.writable || state.kind !== "idle" ? desktopBridge() : null;
+  // A new chat is pinned to the saved model, so it runs on it at once,
+  // unless the provider's key or address is new too: the running core reads
+  // those only at its start.
+  const provider = payload.settings.provider;
+  const info =
+    typeof provider === "string" ? payload.providers[provider] : undefined;
+  const newChatsAtOnce =
+    payload.restart_fields.some((f) => f === "model" || f === "provider") &&
+    ![info?.key_field, info?.base_url_field].some(
+      (f) => !!f && payload.restart_fields.includes(f)
+    );
+  // The model and provider are then said apart from the other fields.
   const names = payload.restart_fields
+    .filter((f) => !newChatsAtOnce || (f !== "model" && f !== "provider"))
     .map((field) => fieldLabel(field, payload.providers))
     .join(", ");
   const restart = async () => {
@@ -640,7 +653,11 @@ export function RestartNotice({
       />
       <div className="min-w-0 flex-1 space-y-2">
         <p>
-          These changes take effect after EvoScientist restarts: {names}.
+          {newChatsAtOnce
+            ? `New chats in the WebUI use the saved model already. Scheduled tasks and Agents panel follow-ups switch to it after EvoScientist restarts${
+                names ? `, as do these changes: ${names}` : ""
+              }.`
+            : `These changes take effect after EvoScientist restarts: ${names}.`}
           {!bridge?.restartBackend && ` ${APPLY_BY_SERVER_STOP}`}
         </p>
         {bridge?.restartBackend && state.kind !== "done" && (

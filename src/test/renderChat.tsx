@@ -33,6 +33,7 @@ import { renderHook, type RenderHookResult } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { ChatProvider, useChatContext } from "@/providers/ChatProvider";
 import type { ThreadUnavailableInfo } from "@/app/hooks/useChat";
+import type { ModelRegistry } from "@/app/hooks/useAvailableModels";
 import type { ProjectsContextValue } from "@/providers/ProjectsProvider";
 import { TestProjectsProvider, mockProjects } from "@/test/mockProjects";
 
@@ -42,6 +43,9 @@ interface RenderChatOptions {
   /** A backend with one project the chat can run in; false (the default)
    *  leaves the projects unknown, so nothing runs. */
   connected?: boolean;
+  /** The model registry's default handed to the chat. Read at each render,
+   *  so a test can change it on the options object and rerender. */
+  defaultModel?: ModelRegistry["defaultEntry"];
   onHistoryRevalidate?: () => void;
   onThreadUnavailable?: (info: ThreadUnavailableInfo) => void;
   /** The backend's projects; see `connected` for the default. */
@@ -75,6 +79,7 @@ export function renderChat(
           }
         >
           <ChatProvider
+            defaultModel={opts.defaultModel}
             onHistoryRevalidate={onHistoryRevalidate}
             onThreadUnavailable={onThreadUnavailable}
           >
