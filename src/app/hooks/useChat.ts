@@ -629,7 +629,7 @@ export function useChat({
       unsentGoalRef.current = null;
       onHistoryRevalidate?.();
     },
-    onError: (error) => {
+    onError: (error, run) => {
       // A history fetch or run can reject after this hook instance was torn
       // down (the page remounts ChatProvider on thread switches and on New
       // Chat); the user has moved on, so nothing here applies any more.
@@ -728,7 +728,10 @@ export function useChat({
       }
       lastSubmittedHumanIdRef.current = null;
       unsentGoalRef.current = null;
-      const hint = pinnedModelHint(modelHintRef.current);
+      const hint =
+        run?.run_id && modelHintRef.current.threadGraph === CHAT_GRAPH_ID
+          ? pinnedModelHint(modelHintRef.current)
+          : null;
       toast.error(
         formatStreamError(error),
         hint ? { description: hint } : undefined

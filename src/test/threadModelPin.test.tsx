@@ -23,6 +23,10 @@ import {
 
 const THREAD = "5f2c8e6a-9b1d-4c3e-8a7f-1d2e3c4b5a69";
 const NEW_THREAD = "0b6c1d2e-3f40-4a51-8b62-7c83d94e0fa1";
+const RUN = {
+  run_id: "3e9a7c51-2d4b-4f86-9a13-6b0c5d7e8f24",
+  thread_id: THREAD,
+};
 const queryState = vi.hoisted(() => ({
   initialThreadId: null as string | null,
 }));
@@ -93,6 +97,12 @@ describe("thread model pin", () => {
     queryState.initialThreadId = THREAD;
     getActiveMockClient().setThreadRecord(THREAD, { metadata });
   }
+
+  const runError = (error: unknown) =>
+    (stream.getOptions()?.onError as (e: unknown, run: unknown) => void)(
+      error,
+      RUN
+    );
 
   const sentModel = (i: number) =>
     (
@@ -400,7 +410,7 @@ describe("thread model pin", () => {
     // As the SDK hands it over: the core's provider envelope as a
     // `StreamError`, its class as the name and no `provider` field.
     act(() => {
-      stream.emitError(
+      runError(
         Object.assign(new Error("p-1 API key missing"), {
           name: "AuthenticationError",
         })
@@ -426,7 +436,46 @@ describe("thread model pin", () => {
     await waitFor(() => expect(result.current.modelOverride).not.toBeNull());
 
     act(() => {
-      stream.emitError(new Error("provider quota exceeded"));
+      runError(new Error("provider quota exceeded"));
+    });
+
+    expect(toast.error).toHaveBeenCalledWith(
+      expect.stringContaining("quota"),
+      undefined
+    );
+  });
+
+  it("adds nothing to an error no run raised, such as a history read", async () => {
+    openThread({
+      graph_id: "EvoScientist",
+      workspace_dir: KEY,
+      model_override: { model: "m-2", model_provider: "p-1" },
+    });
+    const { result } = renderChat({ defaultModel: M0, projects: ready() });
+    await waitFor(() => expect(result.current.modelOverride).not.toBeNull());
+
+    act(() => {
+      stream.emitError(new TypeError("Failed to fetch"));
+    });
+
+    expect(toast.error).toHaveBeenCalledWith(
+      expect.stringContaining("Failed to fetch"),
+      undefined
+    );
+  });
+
+  it("adds nothing to a run error on a scheduled task's thread", async () => {
+    openThread({
+      graph_id: "scheduler",
+      workspace_dir: KEY,
+      model_override: { model: "m-2", model_provider: "p-1" },
+    });
+    const { result } = renderChat({ defaultModel: M0, projects: ready() });
+    await waitFor(() => expect(result.current.threadGraph).toBe("scheduler"));
+    await waitFor(() => expect(result.current.modelOverride).not.toBeNull());
+
+    act(() => {
+      runError(new Error("provider quota exceeded"));
     });
 
     expect(toast.error).toHaveBeenCalledWith(
