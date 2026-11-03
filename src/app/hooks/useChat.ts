@@ -72,7 +72,6 @@ import {
   getHttpStatus,
   folderRefusal,
   isMissingThreadOrAssistantError,
-  isModelError,
   missingThreadIdFromError,
 } from "@/lib/streamError";
 import { CHAT_GRAPH_ID, workspaceAssistantId } from "@/lib/workspaceAssistant";
@@ -728,10 +727,7 @@ export function useChat({
       }
       lastSubmittedHumanIdRef.current = null;
       unsentGoalRef.current = null;
-      // Only a model's failure: /model reset doesn't help with another one.
-      const hint = isModelError(error)
-        ? pinnedModelHint(modelHintRef.current)
-        : null;
+      const hint = pinnedModelHint(modelHintRef.current);
       toast.error(
         formatStreamError(error),
         hint ? { description: hint } : undefined

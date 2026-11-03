@@ -148,17 +148,3 @@ export async function assistantIsMissing(
     return getHttpStatus(error) !== 404;
   }
 }
-
-/**
- * Whether a run failed on its model: the core's provider error envelope
- * (`ProviderStreamError`, with its `provider`), or a model name a router
- * can't address (`UnknownModelError`). A tool or stream failure is not.
- */
-export function isModelError(error: unknown): boolean {
-  const e = error as { provider?: unknown; name?: unknown } | null;
-  if (typeof e?.provider === "string" && e.provider) return true;
-  return (
-    e?.name === "UnknownModelError" ||
-    formatStreamError(error).includes("UnknownModelError")
-  );
-}
