@@ -1,8 +1,9 @@
 // The desktop section of a GitHub Release's notes (release-notes.md, filled
 // by the release workflow): the installer's SHA-256, the core range, the
 // SmartScreen steps, where the app goes and what uninstall leaves. It sits
-// between two markers below the maintainers' own notes, so a re-run of the
-// workflow replaces it instead of adding a second one.
+// between two markers: in place of a marker pair the maintainers' notes
+// already hold, else below them, so a re-run of the workflow replaces it
+// instead of adding a second one.
 
 export const START = "<!-- desktop-release-notes -->";
 export const END = "<!-- /desktop-release-notes -->";

@@ -53,7 +53,11 @@ describe("releaseFlagProblem", () => {
   it("refuses the flag while the range installs a core before the first release core", () => {
     expect(
       releaseFlagProblem({ coreRange: ">=0.3.8,<0.4", release: true })
-    ).toMatch(/installs 0\.3\.8, before 0\.4\.0/);
+    ).toMatch(/installs 0\.3\.8, before 0\.4\.1/);
+    // 0.4.0 lacks the Windows clean stop (EvoScientist#716 shipped in 0.4.1).
+    expect(
+      releaseFlagProblem({ coreRange: ">=0.4.0,<0.5", release: true })
+    ).toMatch(/installs 0\.4\.0, before 0\.4\.1/);
     expect(releaseFlagProblem({ coreRange: "<0.5", release: true })).toMatch(
       /no version/
     );
@@ -67,12 +71,18 @@ describe("releaseFlagProblem", () => {
       })
     ).toBeNull();
     expect(
-      releaseFlagProblem({ coreRange: ">=0.4.1,<0.5", release: true })
+      releaseFlagProblem({ coreRange: ">=0.4.2,<0.5", release: true })
     ).toBeNull();
   });
 
   it("holds for this package.json", () => {
     expect(releaseFlagProblem(pkg.evoscientist)).toBeNull();
+  });
+
+  // On since the first desktop release (0.5.1); the check above holds with
+  // the flag off too.
+  it("is on in this package.json", () => {
+    expect(pkg.evoscientist.release).toBe(true);
   });
 });
 
