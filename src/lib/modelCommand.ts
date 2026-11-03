@@ -64,7 +64,9 @@ export type ModelCommand =
  *
  * Recognised forms:
  *   - `/model`              → kind: "show" (open the picker)
- *   - `/model reset`        → kind: "reset" (clear thread override)
+ *   - `/model reset`        → kind: "reset" (pin the thread to the current
+ *                             default; clear the pick on a scheduled task's
+ *                             thread or without a known default)
  *   - `/model <name>`       → kind: "set", model=<name>
  *   - `/model <name> <prov>`→ kind: "set", model=<name>, provider=<prov>
  *
