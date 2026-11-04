@@ -3,6 +3,7 @@ import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Draft, DraftList } from "@/lib/autoskills";
 import type { Project } from "@/lib/projects";
+import { autoSkillsReadOnlyReason } from "@/lib/autoskills";
 
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 vi.mock("sonner", () => ({ toast }));
@@ -13,12 +14,13 @@ vi.mock("@/providers/ClientProvider", () => ({
 }));
 
 const state = vi.hoisted(() => ({
+  status: "ready" as string,
   list: null as unknown,
   refresh: vi.fn(),
 }));
 vi.mock("@/app/hooks/useAutoSkills", () => ({
   useAutoSkills: () => ({
-    status: "ready",
+    status: state.status,
     list: state.list,
     refresh: state.refresh,
   }),
@@ -74,6 +76,7 @@ beforeEach(() => {
   toast.success.mockClear();
   toast.error.mockClear();
   runsGet.mockReset();
+  state.status = "ready";
   state.list = listOf([draft("old", B)]);
   state.refresh.mockReset();
   state.refresh.mockResolvedValue(listOf([draft("old", B)]));
@@ -245,10 +248,102 @@ describe("useRunNow", () => {
     await act(async () => {
       await result.current.run(B);
     });
-    expect(toast.error).toHaveBeenCalledTimes(1);
-    const text = toast.error.mock.calls[0][0] as string;
-    expect(text).not.toMatch(/didn't start/);
-    expect(text.length).toBeGreaterThan(0);
+    expect(toast.error).toHaveBeenCalledWith(
+      autoSkillsReadOnlyReason({ writable: false, reason: "secret_rejected" })
+    );
+  });
+
+  it("local_secret_required reads as the secret_rejected sentence", async () => {
+    stubRelay(403, { error: "local_secret_required" });
+    const { result } = renderHook(() => useRunNow(projects));
+    await act(async () => {
+      await result.current.run(B);
+    });
+    expect(toast.error).toHaveBeenCalledWith(
+      autoSkillsReadOnlyReason({ writable: false, reason: "secret_rejected" })
+    );
+  });
+
+  it("a 2xx without ids is the generic failure even with an error field", async () => {
+    stubRelay(200, { error: "autoskills_off" });
+    const { result } = renderHook(() => useRunNow(projects));
+    await act(async () => {
+      await result.current.run(B);
+    });
+    expect(toast.error).toHaveBeenCalledWith(
+      "AutoSkills didn't start in project_B. Try Run now again later."
+    );
+  });
+
+  it("without a read list at the start, finishing gives no count", async () => {
+    state.status = "loading";
+    state.list = null;
+    stubRelay(200, started);
+    runsGet.mockResolvedValue({ status: "success" });
+    state.refresh.mockResolvedValue(listOf([draft("old", B)]));
+    const { result } = renderHook(() => useRunNow(projects));
+    await act(async () => {
+      void result.current.run(B);
+    });
+    await flush();
+    await tick();
+    expect(toast.success).toHaveBeenCalledWith(
+      "AutoSkills finished in project_B."
+    );
+  });
+
+  it("unmount during a wait settles run() and clears the key", async () => {
+    stubRelay(200, started);
+    runsGet.mockResolvedValue({ status: "running" });
+    const { result, unmount } = renderHook(() => useRunNow(projects));
+    let settled = false;
+    await act(async () => {
+      void result.current.run(B).then(() => {
+        settled = true;
+      });
+    });
+    await flush();
+    await tick();
+    unmount();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBe(true);
+    expect(runsGet).toHaveBeenCalledTimes(1);
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("unmount while the relay start is in flight toasts nothing", async () => {
+    let release!: (r: Response) => void;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        () =>
+          new Promise<Response>((resolve) => {
+            release = resolve;
+          })
+      )
+    );
+    const { result, unmount } = renderHook(() => useRunNow(projects));
+    let settled = false;
+    await act(async () => {
+      void result.current.run(B).then(() => {
+        settled = true;
+      });
+    });
+    unmount();
+    await act(async () => {
+      release(
+        new Response(JSON.stringify(started), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        })
+      );
+      await vi.advanceTimersByTimeAsync(RUN_POLL_MS * 2);
+    });
+    expect(settled).toBe(true);
+    expect(runsGet).not.toHaveBeenCalled();
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
   });
 
   it("a run that errors says it didn't finish", async () => {

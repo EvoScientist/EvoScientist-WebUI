@@ -53,27 +53,38 @@ export function useRunNow(projects: readonly Project[]): {
   refreshRef.current = auto.refresh;
 
   const activeRef = useRef(new Set<string>());
-  const cancelledRef = useRef(false);
-  const timersRef = useRef(new Set<ReturnType<typeof setTimeout>>());
+  // Bumped on every cleanup: a run that started before it is cancelled.
+  const epochRef = useRef(0);
+  const mountedRef = useRef(false);
+  const sleepersRef = useRef(
+    new Set<{ timer: ReturnType<typeof setTimeout>; resolve: () => void }>()
+  );
 
   useEffect(() => {
-    cancelledRef.current = false;
-    const timers = timersRef.current;
+    mountedRef.current = true;
+    const sleepers = sleepersRef.current;
     return () => {
-      cancelledRef.current = true;
-      for (const t of timers) clearTimeout(t);
-      timers.clear();
+      mountedRef.current = false;
+      epochRef.current += 1;
+      for (const s of sleepers) {
+        clearTimeout(s.timer);
+        s.resolve();
+      }
+      sleepers.clear();
     };
   }, []);
 
   const sleep = useCallback(
     (ms: number) =>
       new Promise<void>((resolve) => {
-        const t = setTimeout(() => {
-          timersRef.current.delete(t);
-          resolve();
-        }, ms);
-        timersRef.current.add(t);
+        const sleeper = {
+          timer: setTimeout(() => {
+            sleepersRef.current.delete(sleeper);
+            resolve();
+          }, ms),
+          resolve,
+        };
+        sleepersRef.current.add(sleeper);
       }),
     []
   );
@@ -83,11 +94,36 @@ export function useRunNow(projects: readonly Project[]): {
       if (activeRef.current.has(key)) return;
       activeRef.current.add(key);
       setRunning(new Set(activeRef.current));
+      const epoch = epochRef.current;
+      const cancelled = () => epochRef.current !== epoch;
       const label = labelFor(key, projectLabels(projectsRef.current));
-      const before = pendingIds(listRef.current ?? { drafts: [] }, key);
+      // Only a list that was read can say what is new afterwards.
+      const before = listRef.current ? pendingIds(listRef.current, key) : null;
+
+      /** true: success; false: any other end; null: cancelled. */
+      async function poll(
+        threadId: string,
+        runId: string
+      ): Promise<boolean | null> {
+        let failed = 0;
+        for (;;) {
+          await sleep(RUN_POLL_MS);
+          if (cancelled()) return null;
+          try {
+            const r = await clientRef.current.runs.get(threadId, runId);
+            if (cancelled()) return null;
+            failed = 0;
+            if (END_STATES.has(r.status)) return r.status === "success";
+          } catch {
+            if (cancelled()) return null;
+            if (++failed >= MAX_FAILED_POLLS) return false;
+          }
+        }
+      }
+
       try {
         const start = await postRelay({ action: "run", workspace_dir: key });
-        if (cancelledRef.current) return;
+        if (cancelled()) return;
         const data = start === "network" ? {} : start.data;
         if (
           start === "network" ||
@@ -95,8 +131,10 @@ export function useRunNow(projects: readonly Project[]): {
           typeof data.thread_id !== "string" ||
           typeof data.run_id !== "string"
         ) {
+          // The specific sentences are for refused answers; a 2xx without
+          // ids is always the generic one.
           const code =
-            start !== "network" && typeof data.error === "string"
+            start !== "network" && !start.ok && typeof data.error === "string"
               ? data.error
               : "";
           toast.error(startFailure(code, label));
@@ -116,9 +154,10 @@ export function useRunNow(projects: readonly Project[]): {
         } catch {
           list = undefined;
         }
-        if (cancelledRef.current) return;
-        const drafts = (list as { drafts?: unknown } | null)?.drafts;
-        if (!Array.isArray(drafts)) {
+        if (cancelled()) return;
+        const drafts = (list as { drafts?: unknown } | null | undefined)
+          ?.drafts;
+        if (before === null || !Array.isArray(drafts)) {
           toast.success(`AutoSkills finished in ${label}.`);
           return;
         }
@@ -134,28 +173,7 @@ export function useRunNow(projects: readonly Project[]): {
         );
       } finally {
         activeRef.current.delete(key);
-        if (!cancelledRef.current) setRunning(new Set(activeRef.current));
-      }
-
-      /** true: a final state of success; false: any other end; null: unmounted. */
-      async function poll(
-        threadId: string,
-        runId: string
-      ): Promise<boolean | null> {
-        let failed = 0;
-        for (;;) {
-          await sleep(RUN_POLL_MS);
-          if (cancelledRef.current) return null;
-          try {
-            const r = await clientRef.current.runs.get(threadId, runId);
-            if (cancelledRef.current) return null;
-            failed = 0;
-            if (END_STATES.has(r.status)) return r.status === "success";
-          } catch {
-            if (cancelledRef.current) return null;
-            if (++failed >= MAX_FAILED_POLLS) return false;
-          }
-        }
+        if (mountedRef.current) setRunning(new Set(activeRef.current));
       }
     },
     [sleep]
