@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { createElement, useCallback, useRef, useState } from "react";
 import { toast } from "sonner";
 import { refreshAutoSkills } from "@/app/hooks/useAutoSkills";
 import { notifyTeamsChanged } from "@/app/hooks/useTeams";
@@ -24,17 +24,17 @@ type Answer = { status: number; error?: string; detail?: string } | "network";
 
 const UNDO_MS = 10_000;
 
-const RELAY_REFUSALS: readonly string[] = [
-  "not_loopback",
-  "host_not_loopback",
-  "cross_origin",
-  "json_required",
-  "secret_missing",
-  "secret_rejected",
-  "backend_unreachable",
-  "backend_timeout",
-  "unsupported",
-] satisfies RelayRefusal[];
+const RELAY_REFUSALS: Record<RelayRefusal, true> = {
+  not_loopback: true,
+  host_not_loopback: true,
+  cross_origin: true,
+  json_required: true,
+  secret_missing: true,
+  secret_rejected: true,
+  backend_unreachable: true,
+  backend_timeout: true,
+  unsupported: true,
+};
 
 function skills(n: number): string {
   return `${n} skills`;
@@ -103,7 +103,8 @@ export function decisionError(
       )} isn't served by this backend right now, so ${name} wasn't changed.`;
     case "approve_failed":
     case "reject_failed":
-      return `${name}: ${answer.detail ?? ""}`;
+      if (answer.detail?.trim()) return `${name}: ${answer.detail}`;
+      return `${name} couldn't be changed (HTTP ${answer.status}).`;
     case "local_secret_required":
       return (
         autoSkillsReadOnlyReason({
@@ -112,7 +113,7 @@ export function decisionError(
         }) ?? ""
       );
     default:
-      if (RELAY_REFUSALS.includes(code)) {
+      if (Object.hasOwn(RELAY_REFUSALS, code)) {
         return (
           autoSkillsReadOnlyReason({
             writable: false,
@@ -124,8 +125,14 @@ export function decisionError(
   }
 }
 
+const SUCCESS_FLAG = {
+  approve: "approved",
+  reject: "rejected",
+  revert: "reverted",
+} as const;
+
 async function post(
-  body: Record<string, unknown>
+  body: Record<string, unknown> & { action: keyof typeof SUCCESS_FLAG }
 ): Promise<{ ok: true } | { ok: false; answer: Answer }> {
   let res: Response;
   try {
@@ -139,7 +146,9 @@ async function post(
     return { ok: false, answer: "network" };
   }
   const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-  if (res.ok) return { ok: true };
+  if (res.ok && data[SUCCESS_FLAG[body.action]] === true) {
+    return { ok: true };
+  }
   return {
     ok: false,
     answer: {
@@ -152,7 +161,7 @@ async function post(
 
 async function decideAll(
   drafts: Draft[],
-  bodyOf: (d: Draft) => Record<string, unknown>,
+  bodyOf: (d: Draft) => Parameters<typeof post>[0],
   labels: Map<string, string>,
   failure: (answer: Answer, d: Draft) => string
 ): Promise<DecisionResult> {
@@ -167,9 +176,31 @@ async function decideAll(
   return result;
 }
 
+/** Read the drafts and experts again; a failure here must not hide the
+ *  toasts of a decision that was made. */
+async function reread(): Promise<void> {
+  try {
+    await refreshAutoSkills();
+  } catch {
+    // The next poll reads again.
+  }
+  try {
+    notifyTeamsChanged();
+  } catch {
+    // Same.
+  }
+}
+
 function toastErrors(failed: DecisionResult["failed"]): void {
   if (failed.length > 0) {
-    toast.error(failed.map((f) => f.message).join("\n"));
+    const lines = [...new Set(failed.map((f) => f.message))];
+    toast.error(
+      createElement(
+        "div",
+        null,
+        lines.map((line) => createElement("div", { key: line }, line))
+      )
+    );
   }
 }
 
@@ -220,8 +251,7 @@ export function useDraftActions(projects: readonly Project[]): {
               return decisionError(answer, d, labels);
             }
           );
-          await refreshAutoSkills();
-          notifyTeamsChanged();
+          await reread();
           if (done.length > 0) {
             toast.success(
               done.length === 1
@@ -257,8 +287,7 @@ export function useDraftActions(projects: readonly Project[]): {
           labels,
           (answer, d) => decisionError(answer, d, labels)
         );
-        await refreshAutoSkills();
-        notifyTeamsChanged();
+        await reread();
         if (result.done.length > 0) {
           const revertible = result.done.filter((d) => isRevertible(d, action));
           const text = decisionToast(action, result.done, scopes, labels);

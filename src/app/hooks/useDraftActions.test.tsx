@@ -12,6 +12,7 @@ const notify = vi.hoisted(() => vi.fn());
 vi.mock("@/app/hooks/useTeams", () => ({ notifyTeamsChanged: notify }));
 
 import {
+  type DecisionResult,
   decisionError,
   decisionToast,
   useDraftActions,
@@ -83,6 +84,14 @@ function stubFetch(answers: Array<[number, Record<string, unknown>]>) {
 
 const okApprove = { approved: true };
 const okRevert = { reverted: true, status: "pending" };
+
+/** The lines of the last error toast's title node. */
+function errorLines(): string[] {
+  const node = toast.error.mock.calls.at(-1)?.[0] as {
+    props: { children: Array<{ props: { children: string } }> };
+  };
+  return node.props.children.map((c) => c.props.children);
+}
 
 function setup() {
   return renderHook(() => useDraftActions(projects));
@@ -163,9 +172,7 @@ describe("useDraftActions", () => {
       failed: [{ draft: d, message: "x was already decided elsewhere." }],
     });
     expect(toast.success).not.toHaveBeenCalled();
-    expect(toast.error).toHaveBeenCalledWith(
-      "x was already decided elsewhere."
-    );
+    expect(errorLines()).toEqual(["x was already decided elsewhere."]);
   });
 
   it("mixed bulk approve reports each draft", async () => {
@@ -189,9 +196,9 @@ describe("useDraftActions", () => {
       "Installed 2 skills.",
       expect.objectContaining({ action: expect.anything() })
     );
-    expect(toast.error).toHaveBeenCalledWith(
-      "project_B isn't served by this backend right now, so t wasn't changed."
-    );
+    expect(errorLines()).toEqual([
+      "project_B isn't served by this backend right now, so t wasn't changed.",
+    ]);
     stubFetch([[200, okRevert]]);
     const options = toast.success.mock.calls[0][1];
     await act(async () => {
@@ -258,9 +265,9 @@ describe("useDraftActions", () => {
       await toast.success.mock.calls[0][1].action.onClick();
     });
     expect(toast.success).toHaveBeenLastCalledWith("Moved b back to Pending.");
-    expect(toast.error).toHaveBeenCalledWith(
-      "a changed since it was installed, so it stays installed."
-    );
+    expect(errorLines()).toEqual([
+      "a changed since it was installed, so it stays installed.",
+    ]);
   });
 
   it("undo says not_decided per draft", async () => {
@@ -273,7 +280,7 @@ describe("useDraftActions", () => {
     await act(async () => {
       await toast.success.mock.calls[0][1].action.onClick();
     });
-    expect(toast.error).toHaveBeenCalledWith("a is already back in Pending.");
+    expect(errorLines()).toEqual(["a is already back in Pending."]);
     expect(toast.success).toHaveBeenCalledTimes(1);
   });
 
@@ -290,6 +297,163 @@ describe("useDraftActions", () => {
       "Rejected r.",
       expect.objectContaining({ duration: 10_000 })
     );
+  });
+});
+
+describe("useDraftActions fixes", () => {
+  it("a 2xx without the success flag is a failure", async () => {
+    calls = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          new Response(calls.push({}) === 1 ? "OK" : "{}", { status: 200 })
+        )
+      )
+    );
+    const { result } = setup();
+    const a = draft({ proposal_id: "a" });
+    const b = draft({ proposal_id: "b" });
+    let out;
+    await act(async () => {
+      out = await result.current.approve([a, b]);
+    });
+    expect(out).toEqual({
+      done: [],
+      failed: [
+        { draft: a, message: "a couldn't be changed (HTTP 200)." },
+        { draft: b, message: "b couldn't be changed (HTTP 200)." },
+      ],
+    });
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(errorLines()).toEqual([
+      "a couldn't be changed (HTTP 200).",
+      "b couldn't be changed (HTTP 200).",
+    ]);
+  });
+
+  it("each action needs its own flag", async () => {
+    stubFetch([[200, { approved: true }]]);
+    const { result } = setup();
+    let out: DecisionResult | undefined;
+    await act(async () => {
+      out = await result.current.reject([draft({ proposal_id: "r" })]);
+    });
+    expect(out?.done).toEqual([]);
+  });
+
+  it("failures show one line each, identical lines once", async () => {
+    stubFetch([
+      [403, { error: "secret_rejected" }],
+      [403, { error: "secret_rejected" }],
+      [404, { error: "not_found" }],
+    ]);
+    const { result } = setup();
+    await act(async () => {
+      await result.current.approve([
+        draft({ proposal_id: "a" }),
+        draft({ proposal_id: "b" }),
+        draft({ proposal_id: "c" }),
+      ]);
+    });
+    expect(toast.error).toHaveBeenCalledTimes(1);
+    const lines = errorLines();
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatch(/local secret/);
+    expect(lines[1]).toBe("c is no longer there.");
+    expect(toast.error.mock.calls[0][1]).toBeUndefined();
+  });
+
+  it("toasts come out when the re-read rejects", async () => {
+    refresh.mockRejectedValueOnce(new Error("down"));
+    notify.mockImplementationOnce(() => {
+      throw new Error("x");
+    });
+    stubFetch([[200, okApprove]]);
+    const { result } = setup();
+    let out: DecisionResult | undefined;
+    await act(async () => {
+      out = await result.current.approve([draft({ proposal_id: "a" })]);
+    });
+    expect(out?.done).toHaveLength(1);
+    expect(toast.success).toHaveBeenCalledTimes(1);
+    refresh.mockRejectedValueOnce(new Error("down"));
+    stubFetch([[200, okRevert]]);
+    await act(async () => {
+      await toast.success.mock.calls[0][1].action.onClick();
+    });
+    expect(toast.success).toHaveBeenLastCalledWith("Moved a back to Pending.");
+  });
+
+  it("a failure without detail says the generic line", () => {
+    const d = draft({ proposal_id: "n" });
+    for (const detail of [undefined, "  "]) {
+      expect(
+        decisionError(
+          { status: 409, error: "approve_failed", detail },
+          d,
+          labels
+        )
+      ).toBe("n couldn't be changed (HTTP 409).");
+    }
+  });
+
+  it("busy covers in-flight and overlapping calls", async () => {
+    const pending: Array<(r: Response) => void> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise<Response>((r) => pending.push(r)))
+    );
+    const { result } = setup();
+    const ok = () =>
+      new Response(JSON.stringify({ rejected: true }), { status: 200 });
+    let p1: Promise<unknown>, p2: Promise<unknown>;
+    act(() => {
+      p1 = result.current.reject([draft({ proposal_id: "a" })]);
+    });
+    expect(result.current.busy).toBe(true);
+    act(() => {
+      p2 = result.current.reject([draft({ proposal_id: "b" })]);
+    });
+    await act(async () => {
+      pending[0](ok());
+      await p1;
+    });
+    expect(result.current.busy).toBe(true);
+    await act(async () => {
+      pending[1](ok());
+      await p2;
+    });
+    expect(result.current.busy).toBe(false);
+    expect(toast.success).toHaveBeenCalledTimes(2);
+  });
+
+  it("a network failure is reported", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.reject(new TypeError("fail")))
+    );
+    const { result } = setup();
+    await act(async () => {
+      await result.current.approve([draft({ proposal_id: "a" })]);
+    });
+    expect(errorLines()).toEqual([
+      "The WebUI server did not answer. Nothing was changed.",
+    ]);
+  });
+
+  it("a reject can be undone", async () => {
+    stubFetch([[200, { rejected: true }]]);
+    const { result } = setup();
+    await act(async () => {
+      await result.current.reject([draft({ proposal_id: "r" })]);
+    });
+    stubFetch([[200, okRevert]]);
+    await act(async () => {
+      await toast.success.mock.calls[0][1].action.onClick();
+    });
+    expect(calls).toEqual([{ action: "revert", proposal_id: "r" }]);
+    expect(toast.success).toHaveBeenLastCalledWith("Moved r back to Pending.");
   });
 });
 
