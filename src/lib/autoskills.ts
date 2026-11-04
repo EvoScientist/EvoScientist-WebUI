@@ -83,13 +83,21 @@ function count(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
-function parseCounts(value: unknown): DraftCounts {
-  const v = (value ?? {}) as Record<string, unknown>;
-  return {
-    pending: count(v.pending),
-    approved: count(v.approved),
-    rejected: count(v.rejected),
-  };
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function validCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+function parseCounts(value: unknown): DraftCounts | null {
+  if (!isPlainObject(value)) return null;
+  const { pending, approved, rejected } = value;
+  if (!validCount(pending) || !validCount(approved) || !validCount(rejected)) {
+    return null;
+  }
+  return { pending, approved, rejected };
 }
 
 function parseDraft(row: unknown): Draft | null {
@@ -100,7 +108,9 @@ function parseDraft(row: unknown): Draft | null {
     typeof r.skill_name !== "string" ||
     typeof r.workspace_dir !== "string" ||
     typeof r.status !== "string" ||
-    !STATUSES.includes(r.status)
+    !STATUSES.includes(r.status) ||
+    (r.operation !== "create" && r.operation !== "update") ||
+    (r.scope !== "workspace" && r.scope !== "global")
   ) {
     return null;
   }
@@ -120,9 +130,9 @@ function parseDraft(row: unknown): Draft | null {
     proposal_id: r.proposal_id,
     skill_name: r.skill_name,
     description: text(r.description),
-    operation: r.operation === "update" ? "update" : "create",
+    operation: r.operation,
     target_skill_name: textOrNull(r.target_skill_name),
-    scope: r.scope === "global" ? "global" : "workspace",
+    scope: r.scope,
     submitted_scope: textOrNull(r.submitted_scope),
     status: r.status as DraftStatus,
     workspace_dir: r.workspace_dir,
@@ -163,19 +173,22 @@ export function parseDraftList(body: unknown): DraftList | null {
     by_project?: unknown;
   } | null;
   if (!b || !Array.isArray(b.proposals)) return null;
-  if (!b.counts || typeof b.counts !== "object") return null;
+  const counts = parseCounts(b.counts);
+  if (!counts) return null;
+  if (b.by_project !== undefined && !isPlainObject(b.by_project)) return null;
   const drafts: Draft[] = [];
   for (const row of b.proposals) {
     const d = parseDraft(row);
     if (d) drafts.push(d);
   }
   const byProject: Record<string, DraftCounts> = {};
-  if (b.by_project && typeof b.by_project === "object") {
+  if (b.by_project) {
     for (const [key, value] of Object.entries(b.by_project)) {
-      byProject[key] = parseCounts(value);
+      const c = parseCounts(value);
+      if (c) byProject[key] = c;
     }
   }
-  return { drafts, counts: parseCounts(b.counts), byProject };
+  return { drafts, counts, byProject };
 }
 
 function segments(path: string): string[] {
@@ -209,6 +222,13 @@ export function projectLabels(
     if (label === undefined) labels.set(p.key, p.name);
     else if ((withParent.get(label) ?? 0) > 1) labels.set(p.key, p.key);
   }
+  const shared = new Map<string, number>();
+  for (const label of labels.values()) {
+    shared.set(label, (shared.get(label) ?? 0) + 1);
+  }
+  for (const [key, label] of labels) {
+    if ((shared.get(label) ?? 0) > 1) labels.set(key, key);
+  }
   return labels;
 }
 
@@ -217,9 +237,19 @@ export function labelFor(key: string, labels: Map<string, string>): string {
   return labels.get(key) ?? lastSegment(key);
 }
 
+/** A timestamp's milliseconds, or null when it doesn't parse. */
+function timeOf(value: string): number | null {
+  const t = Date.parse(value);
+  return Number.isNaN(t) ? null : t;
+}
+
 function newestFirst(a: Draft, b: Draft): number {
-  if (a.created_at !== b.created_at) {
-    return a.created_at < b.created_at ? 1 : -1;
+  const ta = timeOf(a.created_at);
+  const tb = timeOf(b.created_at);
+  if (ta !== tb) {
+    if (ta === null) return 1;
+    if (tb === null) return -1;
+    return tb - ta;
   }
   return a.skill_name.localeCompare(b.skill_name);
 }
@@ -234,7 +264,7 @@ export function groupDrafts(
   const all = [...projects];
   const known = new Set(all.map((p) => p.key));
   for (const d of list.drafts) {
-    if (!known.has(d.workspace_dir)) {
+    if (d.status === status && !known.has(d.workspace_dir)) {
       known.add(d.workspace_dir);
       all.push({
         key: d.workspace_dir,
@@ -280,8 +310,12 @@ export function bannerSummary(
     if (n > 0) split.push({ label: labelFor(p.key, labels), count: n });
   }
   let latest: string | null = null;
+  let latestTime = -Infinity;
   for (const d of list.drafts) {
-    if (d.status === "pending" && (latest === null || d.created_at > latest)) {
+    if (d.status !== "pending") continue;
+    const t = timeOf(d.created_at);
+    if (t !== null && t > latestTime) {
+      latestTime = t;
       latest = d.created_at;
     }
   }
@@ -319,8 +353,9 @@ export function statusLine(
   }
   const cadence =
     CADENCE_TEXT[String(settings.memory_skill_synthesis_cadence)] ??
-    CADENCE_TEXT.nightly;
-  const time = String(settings.memory_skill_synthesis_time ?? "");
+    CADENCE_TEXT.weekly;
+  const rawTime = settings.memory_skill_synthesis_time;
+  const time = typeof rawTime === "string" && rawTime ? rawTime : "03:00";
   const mode =
     settings.memory_skill_synthesis_mode === "auto"
       ? "drafts install automatically"
@@ -375,8 +410,14 @@ export function autoSkillsReadOnlyReason(
 ): string | null {
   if (!access) return "Checking whether this page can review drafts…";
   if (access.writable) return null;
-  const reason = access.reason;
-  return reason in AUTOSKILLS_REFUSAL_TEXT
-    ? AUTOSKILLS_REFUSAL_TEXT[reason as keyof typeof AUTOSKILLS_REFUSAL_TEXT]
-    : RELAY_REFUSAL_TEXT[reason as keyof typeof RELAY_REFUSAL_TEXT];
+  const reason: string = access.reason;
+  if (Object.hasOwn(AUTOSKILLS_REFUSAL_TEXT, reason)) {
+    return AUTOSKILLS_REFUSAL_TEXT[
+      reason as keyof typeof AUTOSKILLS_REFUSAL_TEXT
+    ];
+  }
+  if (Object.hasOwn(RELAY_REFUSAL_TEXT, reason)) {
+    return RELAY_REFUSAL_TEXT[reason as keyof typeof RELAY_REFUSAL_TEXT];
+  }
+  return "This page can't review drafts right now.";
 }

@@ -16,6 +16,7 @@ import {
   type DraftList,
 } from "./autoskills";
 import type { Project } from "./projects";
+import type { SettingsWriteAccess } from "./settings";
 
 function project(key: string, name?: string): Project {
   return {
@@ -71,7 +72,39 @@ describe("parseDraftList", () => {
           skill_name: "s",
           workspace_dir: "/w",
           status: "approved",
+          operation: "create",
+          scope: "workspace",
           files: [{ path: "SKILL.md", size: 3, installed: true }, { size: 1 }],
+        },
+        {
+          proposal_id: "bad-op",
+          skill_name: "s",
+          workspace_dir: "/w",
+          status: "pending",
+          operation: "delete",
+          scope: "workspace",
+        },
+        {
+          proposal_id: "bad-scope",
+          skill_name: "s",
+          workspace_dir: "/w",
+          status: "pending",
+          operation: "create",
+          scope: "wrong",
+        },
+        {
+          proposal_id: "no-op",
+          skill_name: "s",
+          workspace_dir: "/w",
+          status: "pending",
+          scope: "workspace",
+        },
+        {
+          proposal_id: "no-scope",
+          skill_name: "s",
+          workspace_dir: "/w",
+          status: "pending",
+          operation: "update",
         },
         { proposal_id: "b", skill_name: "s", workspace_dir: "/w" },
         { proposal_id: "c", skill_name: "s", workspace_dir: "/w", status: "x" },
@@ -115,6 +148,45 @@ describe("parseDraftList", () => {
   });
 });
 
+describe("parseDraftList counts", () => {
+  const ok = { pending: 1, approved: 0, rejected: 0 };
+
+  it("refuses counts that aren't a plain object of numbers", () => {
+    expect(parseDraftList({ proposals: [], counts: [] })).toBeNull();
+    expect(
+      parseDraftList({ proposals: [], counts: { pending: 1 } })
+    ).toBeNull();
+    expect(
+      parseDraftList({
+        proposals: [],
+        counts: { pending: -1, approved: 0, rejected: 0 },
+      })
+    ).toBeNull();
+    expect(
+      parseDraftList({
+        proposals: [],
+        counts: { pending: "1", approved: 0, rejected: 0 },
+      })
+    ).toBeNull();
+    expect(parseDraftList({ proposals: [], counts: ok })).not.toBeNull();
+  });
+
+  it("refuses a by_project that isn't a plain object and skips bad entries", () => {
+    expect(
+      parseDraftList({ proposals: [], counts: ok, by_project: [] })
+    ).toBeNull();
+    expect(
+      parseDraftList({ proposals: [], counts: ok, by_project: "x" })
+    ).toBeNull();
+    const parsed = parseDraftList({
+      proposals: [],
+      counts: ok,
+      by_project: { "/a": ok, "/b": { pending: "x" }, "/c": [] },
+    });
+    expect(parsed?.byProject).toEqual({ "/a": ok });
+  });
+});
+
 describe("projectLabels", () => {
   it("disambiguates folders that share a name", () => {
     const labels = projectLabels([
@@ -134,6 +206,17 @@ describe("projectLabels", () => {
     ]);
     expect(labels.get("/a/work/x")).toBe("/a/work/x");
     expect(labels.get("/b/work/x")).toBe("/b/work/x");
+  });
+
+  it("falls back to the key when a disambiguated label is still shared", () => {
+    const labels = projectLabels([
+      project("/work/A", "A"),
+      project("/home/A", "A"),
+      project("/x/y", "A (work)"),
+    ]);
+    expect(labels.get("/work/A")).toBe("/work/A");
+    expect(labels.get("/x/y")).toBe("/x/y");
+    expect(labels.get("/home/A")).toBe("A (home)");
   });
 
   it("labelFor falls back to the last path segment", () => {
@@ -186,6 +269,48 @@ describe("groupDrafts", () => {
     expect(groups[2].drafts).toHaveLength(1);
   });
 
+  it("orders drafts by the time they name, not the text", () => {
+    const groups = groupDrafts(
+      list([
+        draft({
+          proposal_id: "1",
+          skill_name: "plus2",
+          created_at: "2026-11-01T10:00:00+02:00",
+        }),
+        draft({
+          proposal_id: "2",
+          skill_name: "utc",
+          created_at: "2026-11-01T09:00:00Z",
+        }),
+        draft({ proposal_id: "3", skill_name: "junk", created_at: "" }),
+        draft({ proposal_id: "4", skill_name: "also", created_at: "nope" }),
+      ]),
+      projects,
+      "pending"
+    );
+    expect(groups[0].drafts.map((d) => d.skill_name)).toEqual([
+      "utc",
+      "plus2",
+      "also",
+      "junk",
+    ]);
+  });
+
+  it("gives an unknown project a Pending group only for a pending draft", () => {
+    const groups = groupDrafts(
+      list([
+        draft({
+          proposal_id: "1",
+          status: "approved",
+          workspace_dir: "/elsewhere/Z",
+        }),
+      ]),
+      projects,
+      "pending"
+    );
+    expect(groups.map((g) => g.label)).toEqual(["A", "B"]);
+  });
+
   it("lists only projects with drafts on Approved and Rejected", () => {
     const l = list([
       draft({ proposal_id: "1", status: "approved", workspace_dir: "/work/B" }),
@@ -222,6 +347,25 @@ describe("bannerSummary", () => {
       latest: "2026-11-03T00:00:00Z",
     });
     expect(bannerSummary(list([]), projects).latest).toBeNull();
+  });
+
+  it("compares times, not text, and names a project only byProject knows", () => {
+    const l = list(
+      [
+        draft({ proposal_id: "1", created_at: "2026-11-01T10:00:00+02:00" }),
+        draft({ proposal_id: "2", created_at: "2026-11-01T09:00:00Z" }),
+        draft({ proposal_id: "3", created_at: "garbage" }),
+      ],
+      { "/other/Q": { pending: 3, approved: 0, rejected: 0 } }
+    );
+    expect(bannerSummary(l, [project("/work/A")])).toEqual({
+      pending: 3,
+      split: [{ label: "Q", count: 3 }],
+      latest: "2026-11-01T09:00:00Z",
+    });
+    expect(
+      bannerSummary(list([draft({ created_at: "garbage" })]), []).latest
+    ).toBeNull();
   });
 });
 
@@ -283,6 +427,9 @@ describe("statusLine", () => {
         memory_skill_synthesis_time: "04:00",
       })
     ).toBe("Every project · runs monthly at 04:00 · you review each draft");
+    expect(statusLine({ memory_skill_synthesis_enabled: true })).toBe(
+      "Every project · runs weekly at 03:00 · you review each draft"
+    );
     expect(statusLine({ memory_skill_synthesis_enabled: false })).toBe(
       "AutoSkills is off in every project"
     );
@@ -357,6 +504,14 @@ describe("autoSkillsReadOnlyReason", () => {
     expect(
       autoSkillsReadOnlyReason({ writable: false, reason: "unsupported" })
     ).toBe("This EvoScientist version cannot review drafts from the WebUI.");
+    for (const reason of ["constructor", "toString", "made_up"]) {
+      expect(
+        autoSkillsReadOnlyReason({
+          writable: false,
+          reason,
+        } as unknown as SettingsWriteAccess)
+      ).toBe("This page can't review drafts right now.");
+    }
     expect(
       autoSkillsReadOnlyReason({ writable: false, reason: "backend_timeout" })
     ).toBe("EvoScientist did not answer in time.");
