@@ -1,0 +1,564 @@
+// @vitest-environment jsdom
+import { fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Draft, DraftList } from "@/lib/autoskills";
+import type { SettingsWriteAccess } from "@/lib/settings";
+import {
+  mockProjects,
+  readyProjects,
+  TestProjectsProvider,
+} from "@/test/mockProjects";
+
+// The URL's query state, shared by every useQueryState of a key (the page
+// and SkillsMarketplace both read skillsPage).
+const q = vi.hoisted(() => {
+  const values = new Map<string, string | null>();
+  const listeners = new Set<() => void>();
+  return {
+    values,
+    listeners,
+    set: (key: string, value: string | null) => {
+      values.set(key, value);
+      for (const l of listeners) l();
+    },
+    writes: [] as Array<[string, string | null]>,
+  };
+});
+
+vi.mock("nuqs", async () => {
+  const react = await import("react");
+  return {
+    useQueryState: (key: string) => {
+      const value = react.useSyncExternalStore(
+        (l: () => void) => {
+          q.listeners.add(l);
+          return () => q.listeners.delete(l);
+        },
+        () => q.values.get(key) ?? null
+      );
+      const set = (next: string | null) => {
+        q.writes.push([key, next]);
+        q.set(key, next);
+        return Promise.resolve(new URLSearchParams());
+      };
+      return [value, set];
+    },
+  };
+});
+
+const URL_ = "http://127.0.0.1:6174";
+
+const hooks = vi.hoisted(() => ({
+  auto: { status: "loading" } as Record<string, unknown>,
+  refresh: vi.fn(async () => undefined),
+  mark: vi.fn((_url: string, _at: string) => undefined),
+  approve: vi.fn(async (_drafts: Draft[], _scopes?: unknown) => ({})),
+  reject: vi.fn(async (_drafts: Draft[]) => ({})),
+  busy: false,
+  running: new Set<string>() as ReadonlySet<string>,
+  run: vi.fn(async (_key: string) => undefined),
+  settings: undefined as Record<string, unknown> | undefined,
+  access: undefined as SettingsWriteAccess | undefined,
+}));
+
+vi.mock("@/app/hooks/useAutoSkills", () => ({
+  useAutoSkills: () => ({ ...hooks.auto, refresh: hooks.refresh }),
+  markAutoSeen: hooks.mark,
+}));
+vi.mock("@/app/hooks/useDraftActions", () => ({
+  useDraftActions: () => ({
+    approve: hooks.approve,
+    reject: hooks.reject,
+    busy: hooks.busy,
+  }),
+}));
+vi.mock("@/app/hooks/useRunNow", () => ({
+  useRunNow: () => ({ running: hooks.running, run: hooks.run }),
+}));
+vi.mock("@/app/hooks/useSettings", () => ({
+  useSettings: () => ({
+    payload: hooks.settings ? { settings: hooks.settings } : undefined,
+  }),
+  useSettingsAccess: () => ({ access: hooks.access, refresh: vi.fn() }),
+}));
+vi.mock("@/providers/ClientProvider", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  useDeployment: () => ({ deploymentUrl: URL_, apiKey: "" }),
+}));
+vi.mock("@/app/components/SkillDetailDialog", () => ({
+  SkillDetailDialog: () => null,
+}));
+
+import { SkillsMarketplace } from "@/app/components/SkillsMarketplace";
+import { DraftsPage } from "./DraftsPage";
+
+const A = "/work/EvoSci_test";
+const B = "/work/project_B";
+
+function draft(over: Partial<Draft> & { proposal_id: string }): Draft {
+  return {
+    skill_name: over.proposal_id,
+    description: "",
+    operation: "create",
+    target_skill_name: null,
+    scope: "workspace",
+    submitted_scope: null,
+    status: "pending",
+    workspace_dir: A,
+    created_at: "2026-11-01T09:00:00Z",
+    updated_at: "2026-11-01T09:00:00Z",
+    approved_at: null,
+    approved_by: null,
+    rejected_at: null,
+    approved_skill_path: null,
+    approved_skill_present: null,
+    source_observation_ids: [],
+    skill_md: "",
+    skill_md_truncated: false,
+    rationale_md: "",
+    rationale_md_truncated: false,
+    files: [],
+    install_target: null,
+    install_base: null,
+    install_error: null,
+    ...over,
+  };
+}
+
+function listOf(drafts: Draft[]): DraftList {
+  const counts = { pending: 0, approved: 0, rejected: 0 };
+  for (const d of drafts) counts[d.status] += 1;
+  return { drafts, counts, byProject: {} };
+}
+
+function ready(drafts: Draft[]) {
+  hooks.auto = { status: "ready", list: listOf(drafts) };
+}
+
+function page() {
+  return (
+    <TestProjectsProvider value={mockProjects(readyProjects(A, B))}>
+      <DraftsPage />
+    </TestProjectsProvider>
+  );
+}
+
+const selection = () => screen.queryByRole("region", { name: "Selection" });
+const pick = (name: string) =>
+  fireEvent.click(screen.getByRole("checkbox", { name: `Select ${name}` }));
+
+beforeEach(() => {
+  q.values.clear();
+  q.writes = [];
+  hooks.auto = { status: "loading" };
+  hooks.busy = false;
+  hooks.running = new Set();
+  hooks.settings = {
+    memory_skill_synthesis_enabled: true,
+    memory_skill_synthesis_mode: "review",
+    memory_skill_synthesis_cadence: "weekly",
+    memory_skill_synthesis_time: "03:00",
+  };
+  hooks.access = { writable: true };
+});
+afterEach(() => vi.unstubAllGlobals());
+
+describe("DraftsPage", () => {
+  it("selection drops drafts that left the pending list", () => {
+    const x = draft({ proposal_id: "x" });
+    const y = draft({ proposal_id: "y", created_at: "2026-10-01T09:00:00Z" });
+    const z = draft({ proposal_id: "z", workspace_dir: B });
+    ready([x, y, z]);
+    const view = render(page());
+
+    expect(selection()).toBeNull();
+    pick("x");
+    pick("z");
+    expect(selection()?.textContent).toContain("2 selected");
+
+    // x was approved elsewhere (the CLI, another tab).
+    ready([{ ...x, status: "approved" }, y, z]);
+    view.rerender(page());
+    expect(selection()?.textContent).toContain("1 selected");
+
+    // Back in Pending (an Undo), it comes back unpicked.
+    ready([x, y, z]);
+    view.rerender(page());
+    expect(selection()?.textContent).toContain("1 selected");
+    expect(
+      (screen.getByRole("checkbox", { name: "Select x" }) as HTMLInputElement)
+        .checked
+    ).toBe(false);
+
+    // Bulk Approve passes no scopes: each draft installs where it records.
+    fireEvent.click(
+      within(selection()!).getByRole("button", { name: "Approve" })
+    );
+    expect(hooks.approve).toHaveBeenCalledTimes(1);
+    expect(hooks.approve.mock.calls[0]).toEqual([[z]]);
+
+    // Reject acts at once on the selection.
+    fireEvent.click(
+      within(selection()!).getByRole("button", { name: "Reject" })
+    );
+    expect(hooks.reject.mock.calls[0]).toEqual([[z]]);
+
+    // A tab change clears the selection.
+    fireEvent.click(screen.getByRole("tab", { name: /^Approved/ }));
+    fireEvent.click(screen.getByRole("tab", { name: /^Pending/ }));
+    expect(selection()).toBeNull();
+
+    // Clear empties it too.
+    pick("y");
+    fireEvent.click(
+      within(selection()!).getByRole("button", { name: "Clear" })
+    );
+    expect(selection()).toBeNull();
+  });
+
+  it("an open draft that left the list shows the empty pane", () => {
+    const x = draft({ proposal_id: "x", skill_name: "arxiv-paper-retrieval" });
+    const y = draft({ proposal_id: "y", created_at: "2026-10-01T09:00:00Z" });
+    ready([x, y]);
+    q.values.set("draftId", "x");
+    const view = render(page());
+
+    const row = screen.getByRole("button", { name: "arxiv-paper-retrieval" });
+    expect(row.getAttribute("aria-current")).toBe("true");
+    expect(screen.queryByText("Select a draft to read it.")).toBeNull();
+
+    // On a phone the draft takes the list's place, with a way back.
+    fireEvent.click(screen.getByRole("button", { name: "Back to drafts" }));
+    expect(q.writes).toContainEqual(["draftId", null]);
+    expect(screen.getByText("Select a draft to read it.")).toBeTruthy();
+
+    // Opened again, then decided elsewhere: it leaves Pending.
+    fireEvent.click(row);
+    expect(q.values.get("draftId")).toBe("x");
+    ready([{ ...x, status: "approved" }, y]);
+    view.rerender(page());
+    expect(screen.getByText("Select a draft to read it.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Back to drafts" })).toBeNull();
+
+    // A draftId naming nothing in the list shows the empty pane too.
+    q.set("draftId", "nope");
+    ready([x, y]);
+    view.rerender(page());
+    expect(screen.getByText("Select a draft to read it.")).toBeTruthy();
+
+    // A tab with nothing in it has no pane: its empty state says it all.
+    ready([
+      { ...x, status: "approved" },
+      { ...y, status: "approved" },
+    ]);
+    view.rerender(page());
+    expect(
+      screen.getByText("All caught up — nothing waits for review.")
+    ).toBeTruthy();
+    expect(screen.queryByText("Select a draft to read it.")).toBeNull();
+  });
+
+  it("bulk approve with an update asks first and names it", () => {
+    const u1 = draft({
+      proposal_id: "u1",
+      skill_name: "paper-review-v2",
+      operation: "update",
+      target_skill_name: "paper-review",
+      created_at: "2026-11-03T09:00:00Z",
+    });
+    const u2 = draft({
+      proposal_id: "u2",
+      skill_name: "lit-search",
+      operation: "update",
+      created_at: "2026-11-02T09:00:00Z",
+    });
+    const u3 = draft({
+      proposal_id: "u3",
+      skill_name: "chunk-verifier",
+      operation: "update",
+      workspace_dir: B,
+    });
+    const c = draft({ proposal_id: "c", created_at: "2026-11-01T09:00:00Z" });
+    ready([u1, u2, u3, c]);
+    render(page());
+    const approve = () =>
+      fireEvent.click(
+        within(selection()!).getByRole("button", { name: "Approve" })
+      );
+
+    pick("paper-review-v2");
+    pick("c");
+    approve();
+    const dialog = screen.getByRole("dialog");
+    expect(
+      within(dialog).getByText("This replaces the installed paper-review.")
+    ).toBeTruthy();
+    expect(hooks.approve).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(hooks.approve).not.toHaveBeenCalled();
+
+    pick("lit-search");
+    approve();
+    expect(
+      screen.getByText(
+        "This replaces the installed paper-review and lit-search."
+      )
+    ).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Replace and install" })
+    );
+    expect(hooks.approve).toHaveBeenCalledTimes(1);
+    // One argument: no scopes, each draft keeps its recorded one.
+    expect(hooks.approve.mock.calls[0]).toEqual([[u1, u2, c]]);
+
+    pick("chunk-verifier");
+    approve();
+    expect(
+      screen.getByText(
+        "This replaces the installed paper-review, lit-search and chunk-verifier."
+      )
+    ).toBeTruthy();
+  });
+
+  it("the question goes when its update leaves the selection", () => {
+    const u = draft({
+      proposal_id: "u",
+      operation: "update",
+      target_skill_name: "paper-review",
+    });
+    const c = draft({ proposal_id: "c", created_at: "2026-10-01T09:00:00Z" });
+    ready([u, c]);
+    const view = render(page());
+    pick("u");
+    pick("c");
+    fireEvent.click(
+      within(selection()!).getByRole("button", { name: "Approve" })
+    );
+    expect(screen.getByRole("dialog")).toBeTruthy();
+
+    // u was decided in the CLI meanwhile: nothing to replace any more.
+    ready([{ ...u, status: "rejected" }, c]);
+    view.rerender(page());
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(hooks.approve).not.toHaveBeenCalled();
+
+    // Back and picked again: the question waits for Approve.
+    ready([u, c]);
+    view.rerender(page());
+    pick("u");
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("shows the empty states per tab", () => {
+    ready([]);
+    render(page());
+
+    const tabs = screen.getAllByRole("tab");
+    expect(tabs.map((t) => t.textContent)).toEqual([
+      "Pending 0",
+      "Approved 0",
+      "Rejected 0",
+    ]);
+    expect(tabs[0].getAttribute("aria-selected")).toBe("true");
+    expect(
+      screen.getByText("All caught up — nothing waits for review.")
+    ).toBeTruthy();
+    // Every registered project still has its group on Pending.
+    expect(screen.getAllByText("No drafts waiting.")).toHaveLength(2);
+
+    fireEvent.click(screen.getByRole("tab", { name: "Approved 0" }));
+    expect(q.values.get("draftsTab")).toBe("approved");
+    expect(screen.getByText("Nothing here yet.")).toBeTruthy();
+    expect(screen.queryByText("No drafts waiting.")).toBeNull();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Rejected 0" }));
+    expect(q.values.get("draftsTab")).toBe("rejected");
+    expect(screen.getByText("Nothing here yet.")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Pending 0" }));
+    expect(q.values.get("draftsTab")).toBeNull();
+  });
+
+  it("the tabs move with arrows, Home and End", () => {
+    ready([
+      draft({ proposal_id: "x" }),
+      draft({ proposal_id: "r", status: "rejected" }),
+    ]);
+    render(page());
+    const tab = (name: RegExp) => screen.getByRole("tab", { name });
+
+    expect(tab(/^Pending 1/).tabIndex).toBe(0);
+    expect(tab(/^Approved 0/).tabIndex).toBe(-1);
+    const panel = screen.getByRole("tabpanel");
+    expect(panel.getAttribute("aria-labelledby")).toBe(tab(/^Pending/).id);
+
+    fireEvent.keyDown(tab(/^Pending/), { key: "ArrowRight" });
+    expect(q.values.get("draftsTab")).toBe("approved");
+    expect(document.activeElement).toBe(tab(/^Approved/));
+    fireEvent.keyDown(tab(/^Approved/), { key: "End" });
+    expect(q.values.get("draftsTab")).toBe("rejected");
+    expect(document.activeElement).toBe(tab(/^Rejected 1/));
+    fireEvent.keyDown(tab(/^Rejected/), { key: "ArrowRight" });
+    expect(q.values.get("draftsTab")).toBeNull();
+    fireEvent.keyDown(tab(/^Pending/), { key: "ArrowLeft" });
+    expect(q.values.get("draftsTab")).toBe("rejected");
+    fireEvent.keyDown(tab(/^Rejected/), { key: "Home" });
+    expect(q.values.get("draftsTab")).toBeNull();
+    expect(document.activeElement).toBe(tab(/^Pending/));
+  });
+
+  it("an old core shows only settings and the update notice", () => {
+    hooks.auto = { status: "unsupported" };
+    render(page());
+    expect(
+      screen.getByRole("button", { name: "Research Skills" })
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Every project · runs weekly at 03:00 · you review each draft"
+      )
+    ).toBeTruthy();
+    const settings = screen.getByRole("button", { name: "Settings" });
+    expect(settings.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(settings);
+    expect(settings.getAttribute("aria-expanded")).toBe("true");
+    expect(
+      screen.getByText("Update EvoScientist to review drafts here.")
+    ).toBeTruthy();
+    expect(screen.queryByRole("tablist")).toBeNull();
+    expect(screen.queryByRole("checkbox")).toBeNull();
+  });
+
+  it("a failed read offers Retry", () => {
+    hooks.auto = { status: "error", error: new Error("500") };
+    render(page());
+    expect(screen.getByText("Couldn't read the drafts.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(hooks.refresh).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("tablist")).toBeNull();
+  });
+
+  it("a read-only page says why and disables decisions", () => {
+    hooks.access = { writable: false, reason: "not_loopback" };
+    ready([
+      draft({ proposal_id: "x" }),
+      draft({ proposal_id: "z", workspace_dir: B }),
+    ]);
+    const view = render(page());
+
+    expect(
+      screen.getByText(
+        "This WebUI server listens on the network, not on this machine only, so it doesn't approve or reject drafts. Start it with EvoSci --ui webui, or with npm run dev:local."
+      )
+    ).toBeTruthy();
+    const boxes = screen.getAllByRole("checkbox") as HTMLInputElement[];
+    expect(boxes.length).toBeGreaterThan(0);
+    for (const box of boxes) expect(box.disabled).toBe(true);
+    for (const run of screen.getAllByRole("button", { name: "Run now" })) {
+      expect((run as HTMLButtonElement).disabled).toBe(true);
+    }
+
+    // While the access is still being checked, the page says so and waits.
+    hooks.access = undefined;
+    view.rerender(page());
+    expect(
+      screen.getByText("Checking whether this page can review drafts…")
+    ).toBeTruthy();
+    expect(
+      (screen.getByRole("checkbox", { name: "Select x" }) as HTMLInputElement)
+        .disabled
+    ).toBe(true);
+
+    // A selection made while writable keeps its bar, with the decisions off.
+    hooks.access = { writable: true };
+    view.rerender(page());
+    pick("x");
+    hooks.access = { writable: false, reason: "not_loopback" };
+    view.rerender(page());
+    const bar = selection()!;
+    for (const name of ["Approve", "Reject"]) {
+      expect(
+        (within(bar).getByRole("button", { name }) as HTMLButtonElement)
+          .disabled
+      ).toBe(true);
+    }
+  });
+
+  it("decisions wait while one is under way", () => {
+    ready([draft({ proposal_id: "x" })]);
+    const view = render(page());
+    pick("x");
+    hooks.busy = true;
+    view.rerender(page());
+    for (const name of ["Approve", "Reject"]) {
+      expect(
+        (
+          within(selection()!).getByRole("button", {
+            name,
+          }) as HTMLButtonElement
+        ).disabled
+      ).toBe(true);
+    }
+  });
+
+  it("Run now starts that project's run", () => {
+    ready([]);
+    render(page());
+    const group = screen.getByRole("region", { name: "project_B" });
+    fireEvent.click(within(group).getByRole("button", { name: "Run now" }));
+    expect(hooks.run).toHaveBeenCalledWith(B);
+  });
+
+  it("the breadcrumb returns to Research Skills", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ skills: [] }),
+        })
+      )
+    );
+    ready([draft({ proposal_id: "x", status: "approved" })]);
+    q.values.set("skillsPage", "drafts");
+    q.values.set("draftsTab", "approved");
+    q.values.set("draftId", "x");
+    render(
+      <TestProjectsProvider value={mockProjects(readyProjects(A, B))}>
+        <SkillsMarketplace />
+      </TestProjectsProvider>
+    );
+    expect(screen.getByText("Drafted from memory")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Research Skills" }));
+    expect(q.writes).toEqual(
+      expect.arrayContaining([
+        ["skillsPage", null],
+        ["draftsTab", null],
+        ["draftId", null],
+      ])
+    );
+    expect(
+      await screen.findByRole("heading", { name: "Research Skills" })
+    ).toBeTruthy();
+    expect(screen.queryByText("Drafted from memory")).toBeNull();
+  });
+
+  it("opening the page marks automatic installs seen", () => {
+    ready([]);
+    const before = Date.now();
+    const view = render(page());
+    expect(hooks.mark).toHaveBeenCalledTimes(1);
+    const [url, at] = hooks.mark.mock.calls[0];
+    expect(url).toBe(URL_);
+    expect(new Date(at).toISOString()).toBe(at);
+    expect(Date.parse(at)).toBeGreaterThanOrEqual(before - 1000);
+
+    // Not on every render.
+    ready([draft({ proposal_id: "x" })]);
+    view.rerender(page());
+    fireEvent.click(screen.getByRole("tab", { name: /^Approved/ }));
+    expect(hooks.mark).toHaveBeenCalledTimes(1);
+  });
+});

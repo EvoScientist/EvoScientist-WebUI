@@ -8,6 +8,7 @@ import {
   type SkillDetailTarget,
 } from "@/app/components/SkillDetailDialog";
 import { SkillTile } from "@/app/components/SkillTile";
+import { DraftsPage } from "@/app/components/autoskills/DraftsPage";
 import { notifyTeamsChanged } from "@/app/hooks/useTeams";
 import { Button } from "@/components/ui/button";
 import {
@@ -46,7 +47,14 @@ interface CatalogSkill {
   isSkill?: boolean;
 }
 
+/** Research Skills, or its "Drafted from memory" sub-page. Coming back
+ *  mounts the skills again, so their lists are read anew. */
 export function SkillsMarketplace() {
+  const [skillsPage] = useQueryState("skillsPage");
+  return skillsPage === "drafts" ? <DraftsPage /> : <SkillsHome />;
+}
+
+function SkillsHome() {
   const [, setView] = useQueryState("view");
   const [catalog, setCatalog] = useState<CatalogSkill[]>([]);
   const [other, setOther] = useState<SkillCard[]>([]);
