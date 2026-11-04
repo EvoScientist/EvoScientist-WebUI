@@ -228,12 +228,33 @@ describe("useDraftFile", () => {
     );
   });
 
+  // A tiny retry interval, so SWR's default retry would fire within the wait.
+  const fastRetry = ({ children }: { children: ReactNode }) => (
+    <SWRConfig
+      value={{
+        provider: () => new Map(),
+        dedupingInterval: 0,
+        errorRetryInterval: 10,
+      }}
+    >
+      {children}
+    </SWRConfig>
+  );
+
   it("a 413 is fetched once", async () => {
     const fetchMock = stubFetch(() => new Response("", { status: 413 }));
-    const h = renderHook(() => useDraftFile(d, "x", false), { wrapper });
+    const h = renderHook(() => useDraftFile(d, "x", false), {
+      wrapper: fastRetry,
+    });
     await waitFor(() => expect(h.result.current.error).not.toBeNull());
     await new Promise((r) => setTimeout(r, 300));
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("a 500 is retried", async () => {
+    const fetchMock = stubFetch(() => new Response("", { status: 500 }));
+    renderHook(() => useDraftFile(d, "x", false), { wrapper: fastRetry });
+    await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(1));
   });
 });
 
