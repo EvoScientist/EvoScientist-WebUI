@@ -17,6 +17,12 @@ import {
   TestProjectsProvider,
 } from "@/test/mockProjects";
 
+// jsdom has no scrollIntoView; Radix Select (the pane's "Install into")
+// calls it on the item it focuses when the list opens.
+if (!Element.prototype.scrollIntoView) {
+  Element.prototype.scrollIntoView = function scrollIntoView() {};
+}
+
 // The URL's query state, shared by every useQueryState of a key (the page
 // and SkillsMarketplace both read skillsPage).
 const q = vi.hoisted(() => {
@@ -954,6 +960,121 @@ describe("DraftsPage", () => {
       await screen.findByRole("heading", { name: "Research Skills" })
     ).toBeTruthy();
     expect(screen.queryByText("Drafted from memory")).toBeNull();
+  });
+
+  it("the detail pane decides its draft through the gate, with its scope", () => {
+    const x = draft({ proposal_id: "x", skill_name: "arxiv-paper-retrieval" });
+    const y = draft({ proposal_id: "y", created_at: "2026-10-01T09:00:00Z" });
+    // A draft of a project the backend no longer serves.
+    const g = draft({
+      proposal_id: "g",
+      skill_name: "orphan-skill",
+      workspace_dir: "/work/gone",
+      created_at: "2026-09-01T09:00:00Z",
+    });
+    ready([x, y, g]);
+    q.values.set("draftId", "x");
+    const gate = { open: true };
+    const gated = { isReady: () => gate.open };
+    const view = render(page(readyProjects(A, B), gated));
+    // The open draft's pane: the one level-3 heading's box.
+    const pane = () =>
+      within(screen.getByRole("heading", { level: 3 }).parentElement!);
+    const disabled = (name: string) =>
+      (pane().getByRole("button", { name }) as HTMLButtonElement).disabled;
+
+    expect(pane().getByText("EvoSci_test")).toBeTruthy();
+    fireEvent.click(pane().getByLabelText("Install into"));
+    fireEvent.click(
+      screen.getByRole("option", { name: "All projects (global)" })
+    );
+    // The only decision that sends a scope: the one the pane picked.
+    fireEvent.click(pane().getByRole("button", { name: "Approve" }));
+    expect(hooks.approve.mock.calls).toEqual([[[x], { x: "global" }]]);
+    fireEvent.click(pane().getByRole("button", { name: "Reject" }));
+    expect(hooks.reject.mock.calls).toEqual([[[x]]]);
+
+    // A read that has just started closes the gate before the render that
+    // turns the buttons off.
+    gate.open = false;
+    fireEvent.click(pane().getByRole("button", { name: "Approve" }));
+    fireEvent.click(pane().getByRole("button", { name: "Reject" }));
+    expect(hooks.approve).toHaveBeenCalledTimes(1);
+    expect(hooks.reject).toHaveBeenCalledTimes(1);
+
+    // While the projects are read again: off.
+    view.rerender(
+      page(readyProjects(A, B), { refreshing: true, isReady: () => false })
+    );
+    expect(disabled("Approve")).toBe(true);
+    expect(disabled("Reject")).toBe(true);
+
+    // A draft whose project isn't registered: off, and nothing goes.
+    gate.open = true;
+    q.set("draftId", "g");
+    view.rerender(page(readyProjects(A, B), gated));
+    expect(disabled("Approve")).toBe(true);
+    expect(disabled("Reject")).toBe(true);
+    fireEvent.click(pane().getByRole("button", { name: "Approve" }));
+    fireEvent.click(pane().getByRole("button", { name: "Reject" }));
+    expect(hooks.approve).toHaveBeenCalledTimes(1);
+    expect(hooks.reject).toHaveBeenCalledTimes(1);
+  });
+
+  it("a decision from the detail pane keeps the focus on the page", () => {
+    const x = draft({ proposal_id: "x", skill_name: "arxiv-paper-retrieval" });
+    ready([x]);
+    q.values.set("draftId", "x");
+    const view = render(page());
+    const approve = screen.getByRole("button", {
+      name: "Approve",
+    }) as HTMLButtonElement;
+    approve.focus();
+    fireEvent.click(approve);
+    expect(hooks.approve).toHaveBeenCalledWith([x], { x: "workspace" });
+
+    // Approve turns off while the decision runs. Chrome blurs a button the
+    // moment it turns off: a focusout with no new target, the focus on the
+    // page. jsdom keeps it focused, so the page's view of the focus is
+    // stubbed until something takes it: the focus stays in the pane, on the
+    // draft's heading.
+    approve.disabled = true;
+    fireEvent.focusOut(approve, { relatedTarget: null });
+    const real = Object.getOwnPropertyDescriptor(
+      Document.prototype,
+      "activeElement"
+    )!.get!;
+    let moved = false;
+    const onFocusIn = () => {
+      moved = true;
+    };
+    document.addEventListener("focusin", onFocusIn);
+    const active = vi
+      .spyOn(document, "activeElement", "get")
+      .mockImplementation(() =>
+        moved ? (real.call(document) as Element) : document.body
+      );
+    try {
+      hooks.busy = true;
+      view.rerender(page());
+    } finally {
+      active.mockRestore();
+      document.removeEventListener("focusin", onFocusIn);
+    }
+    expect(document.activeElement).toBe(
+      screen.getByRole("heading", { name: "arxiv-paper-retrieval" })
+    );
+
+    // Approved, it leaves Pending with its pane: the selected tab.
+    hooks.busy = false;
+    ready([{ ...x, status: "approved" }]);
+    view.rerender(page());
+    expect(
+      screen.queryByRole("heading", { name: "arxiv-paper-retrieval" })
+    ).toBeNull();
+    expect(document.activeElement).toBe(
+      screen.getByRole("tab", { selected: true })
+    );
   });
 
   it("opening the page marks automatic installs seen", () => {

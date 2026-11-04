@@ -3,6 +3,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useQueryState } from "nuqs";
 import { ArrowLeft, Loader2, Settings } from "lucide-react";
+import { DraftDetail } from "@/app/components/autoskills/DraftDetail";
 import { DraftList } from "@/app/components/autoskills/DraftList";
 import { decidable, stillPending } from "@/app/components/autoskills/selection";
 import { markAutoSeen, useAutoSkills } from "@/app/hooks/useAutoSkills";
@@ -24,6 +25,7 @@ import {
   labelFor,
   statusLine,
   type Draft,
+  type DraftScope,
   type DraftStatus,
 } from "@/lib/autoskills";
 import type { Project } from "@/lib/projects";
@@ -90,6 +92,62 @@ function focusFirst(targets: ReadonlyArray<HTMLElement | null | undefined>) {
     el.focus({ preventScroll: true });
     if (document.activeElement === el) return;
   }
+}
+
+type BoxState = "usable" | "disabled" | "gone";
+
+/** A box whose buttons can turn off (a decision under way, a re-read) or go
+ *  (the selection emptied, the open draft left the list) under the focus.
+ *  When they do while the focus was in the box and the page lost it, the
+ *  focus moves to the first of `fallback(box)` that takes it. Spread the
+ *  result on the box. */
+function useFocusFallback(
+  state: BoxState,
+  fallback: (
+    box: HTMLDivElement | null
+  ) => ReadonlyArray<HTMLElement | null | undefined>
+) {
+  const ref = useRef<HTMLDivElement>(null);
+  const hadFocus = useRef(false);
+  const last = useRef(state);
+  useEffect(() => {
+    const before = last.current;
+    last.current = state;
+    if (before === state || state === "usable") return;
+    if (!hadFocus.current) return;
+    const active = document.activeElement as HTMLButtonElement | null;
+    const lost =
+      !active ||
+      active === document.body ||
+      (!!ref.current?.contains(active) && active.disabled);
+    if (!lost) {
+      hadFocus.current = !!active && !!ref.current?.contains(active);
+      return;
+    }
+    hadFocus.current = false;
+    focusFirst(fallback(ref.current));
+  });
+  return {
+    ref,
+    onFocus: () => {
+      hadFocus.current = true;
+    },
+    onBlur: (e: React.FocusEvent<HTMLElement>) => {
+      const next = e.relatedTarget as Node | null;
+      if (next && e.currentTarget.contains(next)) return;
+      // Focus left the box, for the page itself too. Only a button that
+      // turned off (a decision under way) or went loses it without the
+      // user; then the box still gives it back.
+      const from = e.target as Element;
+      const off = from instanceof HTMLButtonElement && from.disabled;
+      if (!next && (off || !from.isConnected)) return;
+      hadFocus.current = false;
+    },
+    // Safari doesn't focus a clicked button.
+    onClick: () => {
+      hadFocus.current = true;
+    },
+  };
 }
 
 export function DraftsPage() {
@@ -257,29 +315,44 @@ export function DraftsPage() {
   // selection, Clear) or turn off (a decision under way) while the focus was
   // in it, the focus moves to the selected tab instead of the page.
   const approveRef = useRef<HTMLButtonElement>(null);
-  const barRef = useRef<HTMLDivElement>(null);
-  const barHadFocus = useRef(false);
-  const barState =
+  const bar = useFocusFallback(
     selectedDrafts.length === 0
       ? "gone"
       : !canDecide || busy
       ? "disabled"
-      : "usable";
-  const lastBarState = useRef(barState);
-  useEffect(() => {
-    const before = lastBarState.current;
-    lastBarState.current = barState;
-    if (before === barState || barState === "usable") return;
-    if (!barHadFocus.current) return;
-    const active = document.activeElement as HTMLButtonElement | null;
-    const lost =
-      !active ||
-      active === document.body ||
-      (!!barRef.current?.contains(active) && active.disabled);
-    if (!lost) return;
-    barHadFocus.current = false;
-    focusFirst([selectedTab()]);
-  });
+      : "usable",
+    () => [selectedTab()]
+  );
+
+  // The open draft: decided alone, with the scope its pane picked (the only
+  // decision that sends one), through the same gate as the bar. Its buttons
+  // are off for a draft the core would refuse (its project not served).
+  const openDecidable =
+    !!openDraft && decidable([openDraft], list, registered).length > 0;
+  const canDecideOpen = canDecide && openDecidable;
+  const approveOpen = (d: Draft, scope: DraftScope) => {
+    if (!isReady()) return;
+    const [send] = decidable([d], list, registered);
+    if (send) void approve([send], { [send.proposal_id]: scope });
+  };
+  const rejectOpen = (d: Draft) => {
+    if (!isReady()) return;
+    const [send] = decidable([d], list, registered);
+    if (send) void reject([send]);
+  };
+  // When its buttons turn off under the focus it stays in the pane, on the
+  // draft's heading; when the draft leaves the list, on the selected tab.
+  const pane = useFocusFallback(
+    !openDraft
+      ? "gone"
+      : openDraft.status === "pending" && (!canDecideOpen || busy)
+      ? "disabled"
+      : "usable",
+    (box) => [
+      box?.querySelector<HTMLElement>("[data-draft-heading]"),
+      selectedTab(),
+    ]
+  );
 
   const toggle = (ids: string[], on: boolean) =>
     setSelected((prev) => {
@@ -465,29 +538,9 @@ export function DraftsPage() {
               >
                 {selectedDrafts.length > 0 && (
                   <div
-                    ref={barRef}
+                    {...bar}
                     role="region"
                     aria-label="Selection"
-                    onFocus={() => {
-                      barHadFocus.current = true;
-                    }}
-                    onBlur={(e) => {
-                      const next = e.relatedTarget as Node | null;
-                      if (next && e.currentTarget.contains(next)) return;
-                      // Focus left the bar, for the page itself too. Only a
-                      // button that turned off (a decision under way) or
-                      // went loses it without the user; then the bar still
-                      // gives it back.
-                      const from = e.target as Element;
-                      const off =
-                        from instanceof HTMLButtonElement && from.disabled;
-                      if (!next && (off || !from.isConnected)) return;
-                      barHadFocus.current = false;
-                    }}
-                    // Safari doesn't focus a clicked button.
-                    onClick={() => {
-                      barHadFocus.current = true;
-                    }}
                     className="sticky top-0 z-10 mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-border bg-background px-3 py-2"
                   >
                     <span className="mr-auto text-sm font-medium">
@@ -541,6 +594,7 @@ export function DraftsPage() {
               {/* An empty tab says so on its own: nothing to select. */}
               {shown.length > 0 && (
                 <div
+                  {...pane}
                   className={cn(
                     // Its own scrolling, within the viewport: a long draft
                     // stays reachable while the list scrolls beside it.
@@ -561,7 +615,14 @@ export function DraftsPage() {
                         <ArrowLeft aria-hidden="true" />
                         Back to drafts
                       </Button>
-                      <OpenDraft draft={openDraft} />
+                      <DraftDetail
+                        draft={openDraft}
+                        projectLabel={labelFor(openDraft.workspace_dir, labels)}
+                        canWrite={canDecideOpen}
+                        busy={busy}
+                        onApprove={approveOpen}
+                        onReject={rejectOpen}
+                      />
                     </>
                   ) : (
                     <p className="text-sm text-muted-foreground">
@@ -620,21 +681,6 @@ export function DraftsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
-  );
-}
-
-/** The open draft. Its full detail (the draft's files and the decision)
- *  is drawn here. */
-function OpenDraft({ draft }: { draft: Draft }) {
-  return (
-    <div>
-      <h3 className="break-words text-lg font-semibold">{draft.skill_name}</h3>
-      {draft.description && (
-        <p className="mt-1 text-sm text-muted-foreground">
-          {draft.description}
-        </p>
-      )}
     </div>
   );
 }
