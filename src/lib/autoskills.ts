@@ -1,0 +1,382 @@
+// AutoSkills drafts ("proposals") from the core's
+// GET /api/autoskills/proposals: the wire types, the parser and the words
+// and groupings the review pages use.
+
+import { RELAY_REFUSAL_TEXT } from "@/lib/projectActions";
+import { compareProjects, type Project } from "@/lib/projects";
+import type { SettingsWriteAccess } from "@/lib/settings";
+
+export type DraftStatus = "pending" | "approved" | "rejected";
+export type DraftScope = "workspace" | "global";
+
+export interface DraftFile {
+  path: string;
+  size: number;
+  installed: boolean;
+}
+
+export interface Draft {
+  proposal_id: string;
+  skill_name: string;
+  description: string;
+  operation: "create" | "update";
+  target_skill_name: string | null;
+  scope: DraftScope;
+  submitted_scope: string | null;
+  status: DraftStatus;
+  workspace_dir: string;
+  created_at: string;
+  updated_at: string;
+  approved_at: string | null;
+  approved_by: "user" | "auto" | null;
+  rejected_at: string | null;
+  approved_skill_path: string | null;
+  approved_skill_present: boolean | null;
+  source_observation_ids: string[];
+  skill_md: string;
+  skill_md_truncated: boolean;
+  rationale_md: string;
+  rationale_md_truncated: boolean;
+  files: DraftFile[];
+  install_target: string | null;
+  install_base: string | null;
+  install_error: string | null;
+}
+
+export interface DraftCounts {
+  pending: number;
+  approved: number;
+  rejected: number;
+}
+
+export interface DraftList {
+  drafts: Draft[];
+  counts: DraftCounts;
+  byProject: Record<string, DraftCounts>;
+}
+
+export interface DraftGroup {
+  project: Project;
+  label: string;
+  drafts: Draft[];
+}
+
+/** The settings the AutoSkills status line and sub-page read and save. */
+export const AUTOSKILLS_FIELDS: readonly string[] = [
+  "memory_skill_synthesis_enabled",
+  "memory_skill_synthesis_mode",
+  "memory_skill_synthesis_cadence",
+  "memory_skill_synthesis_time",
+];
+
+const STATUSES: readonly string[] = ["pending", "approved", "rejected"];
+
+function text(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function textOrNull(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+function count(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function parseCounts(value: unknown): DraftCounts {
+  const v = (value ?? {}) as Record<string, unknown>;
+  return {
+    pending: count(v.pending),
+    approved: count(v.approved),
+    rejected: count(v.rejected),
+  };
+}
+
+function parseDraft(row: unknown): Draft | null {
+  if (!row || typeof row !== "object") return null;
+  const r = row as Record<string, unknown>;
+  if (
+    typeof r.proposal_id !== "string" ||
+    typeof r.skill_name !== "string" ||
+    typeof r.workspace_dir !== "string" ||
+    typeof r.status !== "string" ||
+    !STATUSES.includes(r.status)
+  ) {
+    return null;
+  }
+  const files: DraftFile[] = [];
+  if (Array.isArray(r.files)) {
+    for (const f of r.files) {
+      const file = f as Record<string, unknown> | null;
+      if (typeof file?.path !== "string") continue;
+      files.push({
+        path: file.path,
+        size: count(file.size),
+        installed: file.installed === true,
+      });
+    }
+  }
+  return {
+    proposal_id: r.proposal_id,
+    skill_name: r.skill_name,
+    description: text(r.description),
+    operation: r.operation === "update" ? "update" : "create",
+    target_skill_name: textOrNull(r.target_skill_name),
+    scope: r.scope === "global" ? "global" : "workspace",
+    submitted_scope: textOrNull(r.submitted_scope),
+    status: r.status as DraftStatus,
+    workspace_dir: r.workspace_dir,
+    created_at: text(r.created_at),
+    updated_at: text(r.updated_at),
+    approved_at: textOrNull(r.approved_at),
+    approved_by:
+      r.approved_by === "user" || r.approved_by === "auto"
+        ? r.approved_by
+        : null,
+    rejected_at: textOrNull(r.rejected_at),
+    approved_skill_path: textOrNull(r.approved_skill_path),
+    approved_skill_present:
+      typeof r.approved_skill_present === "boolean"
+        ? r.approved_skill_present
+        : null,
+    source_observation_ids: Array.isArray(r.source_observation_ids)
+      ? r.source_observation_ids.filter(
+          (id): id is string => typeof id === "string"
+        )
+      : [],
+    skill_md: text(r.skill_md),
+    skill_md_truncated: r.skill_md_truncated === true,
+    rationale_md: text(r.rationale_md),
+    rationale_md_truncated: r.rationale_md_truncated === true,
+    files,
+    install_target: textOrNull(r.install_target),
+    install_base: textOrNull(r.install_base),
+    install_error: textOrNull(r.install_error),
+  };
+}
+
+/** The drafts in a proposals body, or null when it isn't one. */
+export function parseDraftList(body: unknown): DraftList | null {
+  const b = body as {
+    proposals?: unknown;
+    counts?: unknown;
+    by_project?: unknown;
+  } | null;
+  if (!b || !Array.isArray(b.proposals)) return null;
+  if (!b.counts || typeof b.counts !== "object") return null;
+  const drafts: Draft[] = [];
+  for (const row of b.proposals) {
+    const d = parseDraft(row);
+    if (d) drafts.push(d);
+  }
+  const byProject: Record<string, DraftCounts> = {};
+  if (b.by_project && typeof b.by_project === "object") {
+    for (const [key, value] of Object.entries(b.by_project)) {
+      byProject[key] = parseCounts(value);
+    }
+  }
+  return { drafts, counts: parseCounts(b.counts), byProject };
+}
+
+function segments(path: string): string[] {
+  return path.split(/[\\/]/).filter(Boolean);
+}
+
+function lastSegment(path: string): string {
+  return segments(path).pop() ?? path;
+}
+
+/** Each project's label: its name, with the parent folder added to names two
+ *  or more projects share, and the full key when that still isn't unique. */
+export function projectLabels(
+  projects: readonly Project[]
+): Map<string, string> {
+  const byName = new Map<string, Project[]>();
+  for (const p of projects) {
+    byName.set(p.name, [...(byName.get(p.name) ?? []), p]);
+  }
+  const withParent = new Map<string, number>();
+  const labels = new Map<string, string>();
+  for (const p of projects) {
+    if ((byName.get(p.name)?.length ?? 0) < 2) continue;
+    const parent = segments(p.key).slice(-2, -1)[0];
+    const label = parent ? `${p.name} (${parent})` : p.key;
+    labels.set(p.key, label);
+    withParent.set(label, (withParent.get(label) ?? 0) + 1);
+  }
+  for (const p of projects) {
+    const label = labels.get(p.key);
+    if (label === undefined) labels.set(p.key, p.name);
+    else if ((withParent.get(label) ?? 0) > 1) labels.set(p.key, p.key);
+  }
+  return labels;
+}
+
+/** A project's label, or its folder name for a key the map lacks. */
+export function labelFor(key: string, labels: Map<string, string>): string {
+  return labels.get(key) ?? lastSegment(key);
+}
+
+function newestFirst(a: Draft, b: Draft): number {
+  if (a.created_at !== b.created_at) {
+    return a.created_at < b.created_at ? 1 : -1;
+  }
+  return a.skill_name.localeCompare(b.skill_name);
+}
+
+/** The drafts of one status by project, in project order. Pending lists
+ *  every project; the other two only those with drafts. */
+export function groupDrafts(
+  list: DraftList,
+  projects: readonly Project[],
+  status: DraftStatus
+): DraftGroup[] {
+  const all = [...projects];
+  const known = new Set(all.map((p) => p.key));
+  for (const d of list.drafts) {
+    if (!known.has(d.workspace_dir)) {
+      known.add(d.workspace_dir);
+      all.push({
+        key: d.workspace_dir,
+        name: lastSegment(d.workspace_dir),
+        missing: false,
+      });
+    }
+  }
+  all.sort(compareProjects);
+  const labels = projectLabels(all);
+  const groups: DraftGroup[] = [];
+  for (const project of all) {
+    const drafts = list.drafts
+      .filter((d) => d.status === status && d.workspace_dir === project.key)
+      .sort(newestFirst);
+    if (status !== "pending" && drafts.length === 0) continue;
+    groups.push({ project, label: labelFor(project.key, labels), drafts });
+  }
+  return groups;
+}
+
+/** What the banner above the skills says: the pending total, its split by
+ *  project and when the newest draft came. */
+export function bannerSummary(
+  list: DraftList,
+  projects: readonly Project[]
+): {
+  pending: number;
+  split: Array<{ label: string; count: number }>;
+  latest: string | null;
+} {
+  const keys = new Set(projects.map((p) => p.key));
+  const all = [...projects];
+  for (const key of Object.keys(list.byProject)) {
+    if (!keys.has(key))
+      all.push({ key, name: lastSegment(key), missing: false });
+  }
+  all.sort(compareProjects);
+  const labels = projectLabels(all);
+  const split: Array<{ label: string; count: number }> = [];
+  for (const p of all) {
+    const n = list.byProject[p.key]?.pending ?? 0;
+    if (n > 0) split.push({ label: labelFor(p.key, labels), count: n });
+  }
+  let latest: string | null = null;
+  for (const d of list.drafts) {
+    if (d.status === "pending" && (latest === null || d.created_at > latest)) {
+      latest = d.created_at;
+    }
+  }
+  return { pending: list.counts.pending, split, latest };
+}
+
+/** The line under a decided draft: where it went, or why it didn't. */
+export function installedLabel(
+  draft: Draft,
+  labels: Map<string, string>
+): string {
+  if (draft.status === "rejected") {
+    return "Rejected. EvoMemory won't draft this pattern again.";
+  }
+  if (draft.status !== "approved") return "";
+  if (draft.approved_skill_present === false) return "Uninstalled since";
+  if (draft.scope === "global") return "Installed into all projects (global)";
+  return `Installed into ${labelFor(draft.workspace_dir, labels)}/skills`;
+}
+
+const CADENCE_TEXT: Record<string, string> = {
+  nightly: "runs every night at",
+  weekly: "runs weekly at",
+  monthly: "runs monthly at",
+};
+
+/** The one-line summary of the AutoSkills settings, or null before they
+ *  are read. */
+export function statusLine(
+  settings: Record<string, unknown> | undefined
+): string | null {
+  if (!settings) return null;
+  if (settings.memory_skill_synthesis_enabled === false) {
+    return "AutoSkills is off in every project";
+  }
+  const cadence =
+    CADENCE_TEXT[String(settings.memory_skill_synthesis_cadence)] ??
+    CADENCE_TEXT.nightly;
+  const time = String(settings.memory_skill_synthesis_time ?? "");
+  const mode =
+    settings.memory_skill_synthesis_mode === "auto"
+      ? "drafts install automatically"
+      : "you review each draft";
+  return `Every project · ${cadence} ${time} · ${mode}`;
+}
+
+/** The installed skills that came from approved drafts, by folder name. */
+export function fromMemorySkills(
+  list: DraftList,
+  projectKey: string | null
+): {
+  global: Map<string, "create" | "update">;
+  project: Map<string, "create" | "update">;
+} {
+  const global = new Map<string, "create" | "update">();
+  const project = new Map<string, "create" | "update">();
+  for (const d of list.drafts) {
+    if (d.status !== "approved" || d.approved_skill_present === false) continue;
+    if (!d.approved_skill_path) continue;
+    const name = lastSegment(d.approved_skill_path);
+    if (d.scope === "global") global.set(name, d.operation);
+    else if (projectKey !== null && d.workspace_dir === projectKey) {
+      project.set(name, d.operation);
+    }
+  }
+  return { global, project };
+}
+
+/** Whether Undo can take a decision back: the core keeps no backup of an
+ *  update, so an approved update stays. */
+export function isRevertible(
+  draft: Draft,
+  action: "approve" | "reject"
+): boolean {
+  return action === "reject" || draft.operation === "create";
+}
+
+const AUTOSKILLS_REFUSAL_TEXT = {
+  not_loopback:
+    "This WebUI server listens on the network, not on this machine only, so it doesn't approve or reject drafts. Start it with EvoSci --ui webui, or with npm run dev:local.",
+  host_not_loopback:
+    "This page is open by a network address. Drafts are reviewed from a page open at 127.0.0.1 or localhost on the machine that runs EvoScientist.",
+  other_backend:
+    "The deployment URL is not the EvoScientist that runs next to this WebUI server, so drafts are reviewed on the machine that runs it.",
+  unsupported: "This EvoScientist version cannot review drafts from the WebUI.",
+} as const;
+
+/** Why this page can't approve or reject drafts, or null when it can. */
+export function autoSkillsReadOnlyReason(
+  access: SettingsWriteAccess | undefined
+): string | null {
+  if (!access) return "Checking whether this page can review drafts…";
+  if (access.writable) return null;
+  const reason = access.reason;
+  return reason in AUTOSKILLS_REFUSAL_TEXT
+    ? AUTOSKILLS_REFUSAL_TEXT[reason as keyof typeof AUTOSKILLS_REFUSAL_TEXT]
+    : RELAY_REFUSAL_TEXT[reason as keyof typeof RELAY_REFUSAL_TEXT];
+}
