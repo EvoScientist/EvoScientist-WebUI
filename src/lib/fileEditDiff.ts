@@ -211,3 +211,16 @@ export function clipLine(text: string): { head: string; more: number } | null {
   }
   return { head: text.slice(0, end), more };
 }
+
+/** A line diff of two whole texts (a draft file against the installed one),
+ *  in the same rows the chat shows for an `edit_file` call. */
+export function textFileDiff(
+  oldText: string,
+  newText: string
+): FileEditDiff | null {
+  const diff = fileEditDiff("edit_file", {
+    old_string: oldText,
+    new_string: newText,
+  });
+  return diff && { ...diff, replaces: [] };
+}
