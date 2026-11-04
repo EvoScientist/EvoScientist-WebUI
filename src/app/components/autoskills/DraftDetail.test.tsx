@@ -8,7 +8,8 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Draft, DraftScope } from "@/lib/autoskills";
-import { formatTime } from "@/lib/time";
+import { formatFullTime, formatTime } from "@/lib/time";
+import { SWRConfig } from "swr";
 
 // jsdom has no scrollIntoView; Radix Select calls it on the item it focuses
 // when the list opens.
@@ -50,12 +51,19 @@ vi.mock("nuqs", async () => {
   };
 });
 
+// Every file read, as [path, installed].
+const fileReads = vi.hoisted(() => ({
+  calls: [] as Array<[string | null, boolean]>,
+}));
 vi.mock("@/app/hooks/useAutoSkills", () => ({
-  useDraftFile: (_draft: unknown, path: string | null, installed: boolean) => ({
-    text: installed ? null : `draft text of ${path}`,
-    error: null,
-    loading: false,
-  }),
+  useDraftFile: (_draft: unknown, path: string | null, installed: boolean) => {
+    fileReads.calls.push([path, installed]);
+    return {
+      text: installed ? `installed text of ${path}` : `draft text of ${path}`,
+      error: null,
+      loading: false,
+    };
+  },
 }));
 
 import { DraftDetail } from "./DraftDetail";
@@ -99,19 +107,23 @@ function detail(
   d: Draft,
   over: { canWrite?: boolean; busy?: boolean; projectLabel?: string } = {}
 ) {
+  // Each mount reads with a cache of its own; a rerender keeps it.
   return (
-    <DraftDetail
-      draft={d}
-      projectLabel={over.projectLabel ?? "EvoSci_test"}
-      canWrite={over.canWrite ?? true}
-      busy={over.busy ?? false}
-      onApprove={onApprove}
-      onReject={onReject}
-    />
+    <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+      <DraftDetail
+        draft={d}
+        projectLabel={over.projectLabel ?? "EvoSci_test"}
+        canWrite={over.canWrite ?? true}
+        busy={over.busy ?? false}
+        onApprove={onApprove}
+        onReject={onReject}
+      />
+    </SWRConfig>
   );
 }
 
 const tab = (name: string) => screen.getByRole("tab", { name });
+const fullTime = (iso: string) => formatFullTime(new Date(iso));
 const scopeTrigger = () => screen.getByLabelText("Install into");
 function pickScope(option: string) {
   fireEvent.click(scopeTrigger());
@@ -120,6 +132,7 @@ function pickScope(option: string) {
 
 beforeEach(() => {
   q.values.clear();
+  fileReads.calls = [];
 });
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -369,7 +382,14 @@ describe("DraftDetail", () => {
     const view = render(detail(approved));
     expect(screen.getByText("Installed into EvoSci_test/skills")).toBeTruthy();
     expect(screen.getByText("installed automatically")).toBeTruthy();
-    expect(screen.getByText(formatTime(new Date(at)))).toBeTruthy();
+    // "Approved · Yesterday", the full date and time on the <time>.
+    const when = screen.getByText(formatTime(new Date(at)));
+    expect(when.tagName).toBe("TIME");
+    expect(when.getAttribute("datetime")).toBe(at);
+    expect(when.getAttribute("title")).toBe(fullTime(at));
+    expect(when.parentElement?.textContent).toBe(
+      `Approved · ${formatTime(new Date(at))}`
+    );
     expect(screen.queryByLabelText("Install into")).toBeNull();
     expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Reject" })).toBeNull();
@@ -391,9 +411,12 @@ describe("DraftDetail", () => {
     expect(
       screen.getByText("Rejected. EvoMemory won't draft this pattern again.")
     ).toBeTruthy();
-    expect(
-      screen.getByText(formatTime(new Date("2026-10-20T08:00:00Z")))
-    ).toBeTruthy();
+    const rejectedAt = "2026-10-20T08:00:00Z";
+    const whenRejected = screen.getByText(formatTime(new Date(rejectedAt)));
+    expect(whenRejected.getAttribute("title")).toBe(fullTime(rejectedAt));
+    expect(whenRejected.parentElement?.textContent).toBe(
+      `Rejected · ${formatTime(new Date(rejectedAt))}`
+    );
     expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
   });
 
@@ -423,5 +446,159 @@ describe("DraftDetail", () => {
     expect(screen.getByRole("tabpanel").getAttribute("aria-labelledby")).toBe(
       tab("Why this skill").id
     );
+  });
+  it("files compare with the installed copy only for the recorded place", () => {
+    const note =
+      "Changes against the installed copy are shown for the recorded place only.";
+    const d = draft({
+      proposal_id: "paper-review",
+      operation: "update",
+      target_skill_name: "paper-review",
+      scope: "workspace",
+      install_base: "/home/u/.evoscientist/skills/paper-review",
+      files: [{ path: "SKILL.md", size: 10, installed: true }],
+    });
+    render(detail(d));
+    fireEvent.click(tab("Files"));
+    expect(screen.getByRole("list", { name: "Changes" })).toBeTruthy();
+    expect(screen.queryByText(note)).toBeNull();
+
+    fileReads.calls = [];
+    pickScope("All projects (global)");
+    expect(screen.getByText(note)).toBeTruthy();
+    expect(screen.queryByRole("list", { name: "Changes" })).toBeNull();
+    expect(screen.getByText("draft text of SKILL.md")).toBeTruthy();
+    expect(fileReads.calls.filter(([, installed]) => installed)).toEqual([]);
+
+    pickScope("EvoSci_test/skills (this project)");
+    expect(screen.queryByText(note)).toBeNull();
+    expect(screen.getByRole("list", { name: "Changes" })).toBeTruthy();
+  });
+
+  it("an open question doesn't follow to another draft", () => {
+    const a = draft({
+      proposal_id: "a",
+      operation: "update",
+      target_skill_name: "a",
+    });
+    const b = draft({ proposal_id: "b" });
+    const view = render(detail(a));
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    expect(screen.getByRole("dialog")).toBeTruthy();
+
+    view.rerender(detail(b));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    view.rerender(detail(a));
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("the question's Replace and install waits while it can't decide", () => {
+    const d = draft({
+      proposal_id: "u",
+      operation: "update",
+      target_skill_name: "u",
+    });
+    const view = render(detail(d));
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    const replace = () =>
+      screen.getByRole("button", {
+        name: "Replace and install",
+      }) as HTMLButtonElement;
+
+    view.rerender(detail(d, { busy: true }));
+    expect(replace().disabled).toBe(true);
+    fireEvent.click(replace());
+    view.rerender(detail(d, { canWrite: false }));
+    expect(replace().disabled).toBe(true);
+    fireEvent.click(replace());
+    expect(onApprove).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog")).toBeTruthy();
+  });
+
+  it("after a confirmed update the focus goes to the heading once Approve is off", async () => {
+    const d = draft({
+      proposal_id: "u",
+      skill_name: "paper-review-v2",
+      operation: "update",
+      target_skill_name: "paper-review",
+    });
+    const view = render(detail(d));
+    const approve = screen.getByRole("button", { name: "Approve" });
+    approve.focus();
+    fireEvent.click(approve);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Replace and install" })
+    );
+    expect(onApprove).toHaveBeenCalledWith(d, "workspace");
+    // The decision runs: Approve turns off before the dialog hands the
+    // focus back (on the next tick).
+    view.rerender(detail(d, { busy: true }));
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole("heading", { name: "paper-review-v2" })
+      )
+    );
+  });
+
+  it("only the panels with nothing to focus are a tab stop", () => {
+    const d = draft({
+      proposal_id: "x",
+      rationale_md: "Because.",
+      source_observation_ids: ["O-1"],
+      files: [{ path: "SKILL.md", size: 10, installed: false }],
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.reject(new TypeError("Failed to fetch")))
+    );
+    const view = render(detail(d));
+    const panel = () => screen.getByRole("tabpanel");
+    expect(panel().getAttribute("tabindex")).toBe("0");
+    fireEvent.click(tab("Why this skill"));
+    expect(panel().getAttribute("tabindex")).toBe("0");
+    fireEvent.click(tab("Where it came from"));
+    expect(panel().getAttribute("tabindex")).toBeNull();
+    fireEvent.click(tab("Files"));
+    expect(panel().getAttribute("tabindex")).toBeNull();
+
+    // Their empty states hold nothing to focus either.
+    const empty = { ...d, source_observation_ids: [], files: [] };
+    view.rerender(detail(empty));
+    expect(panel().getAttribute("tabindex")).toBe("0");
+    fireEvent.click(tab("Where it came from"));
+    expect(panel().getAttribute("tabindex")).toBe("0");
+  });
+
+  it("reads the observations once for every draft shown", async () => {
+    const fetchMock = vi.fn((_url: string, _init?: unknown) =>
+      Promise.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            nodes: [
+              { id: "O-1", summary: "First pattern" },
+              { id: "O-2", summary: "Second pattern" },
+            ],
+            edges: [],
+          }),
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const a = draft({ proposal_id: "a", source_observation_ids: ["O-1"] });
+    const b = draft({ proposal_id: "b", source_observation_ids: ["O-2"] });
+    const view = render(detail(a));
+    fireEvent.click(tab("Where it came from"));
+    expect(
+      await screen.findByRole("button", { name: "First pattern" })
+    ).toBeTruthy();
+
+    view.rerender(detail(b));
+    expect(screen.getByRole("button", { name: "Second pattern" })).toBeTruthy();
+    // Away and back again.
+    fireEvent.click(tab("SKILL.md"));
+    fireEvent.click(tab("Where it came from"));
+    expect(screen.getByRole("button", { name: "Second pattern" })).toBeTruthy();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

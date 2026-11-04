@@ -10,6 +10,9 @@ import { cn } from "@/lib/utils";
 // Every file an approval copies, one shown at a time: a pending update's
 // installed file as a diff against the installed copy, any other file as
 // the draft's text. Texts are untrusted: plain text, never markup.
+// The installed copy is the one the core found for the draft's recorded
+// place (install_base); for another place it would start from another
+// folder, so then nothing is compared.
 
 /** A file's text as written: monospace and wrapped, never markup. */
 export function FileText({ text }: { text: string }) {
@@ -22,7 +25,9 @@ export function FileText({ text }: { text: string }) {
 
 function sizeText(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  // MB before the rounded KB would read 1024.0.
+  const kb = (bytes / 1024).toFixed(1);
+  if (Number(kb) < 1024) return `${kb} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
@@ -57,9 +62,20 @@ function FileChange({ draft, path }: { draft: Draft; path: string }) {
         : null,
     [before, after]
   );
-  const error = installed.error ?? proposed.error;
-  if (error) return <ReadError message={error} />;
-  if (before === null || after === null) return <Reading />;
+  if (proposed.error) return <ReadError message={proposed.error} />;
+  if (after === null) return <Reading />;
+  // Without the installed copy the draft's text still shows.
+  if (installed.error) {
+    return (
+      <>
+        <p className="mb-2 text-sm text-muted-foreground">
+          Couldn&apos;t read the installed copy, so only the draft is shown.
+        </p>
+        <FileText text={after} />
+      </>
+    );
+  }
+  if (before === null) return <Reading />;
   if (before === after) {
     return <p className="text-sm text-muted-foreground">Unchanged.</p>;
   }
@@ -81,7 +97,15 @@ function FileChange({ draft, path }: { draft: Draft; path: string }) {
   );
 }
 
-export function DraftFiles({ draft }: { draft: Draft }) {
+export function DraftFiles({
+  draft,
+  compareInstalled = true,
+}: {
+  draft: Draft;
+  /** Whether the draft goes where it records (the place `install_base`
+   *  was found for); false while another place is picked. */
+  compareInstalled?: boolean;
+}) {
   // The file picked, for this draft only: another draft starts on its first.
   const [picked, setPicked] = useState<{ id: string; path: string } | null>(
     null
@@ -94,8 +118,9 @@ export function DraftFiles({ draft }: { draft: Draft }) {
   // The core says what is installed for pending drafts only; a decided
   // draft's files are shown as the draft has them.
   const pending = draft.status === "pending";
-  const isNew = (f: DraftFile) =>
-    pending && draft.operation === "update" && !f.installed;
+  const update = pending && draft.operation === "update";
+  const compare = update && compareInstalled && draft.install_base !== null;
+  const isNew = (f: DraftFile) => compare && !f.installed;
 
   if (!shown) {
     return (
@@ -105,6 +130,12 @@ export function DraftFiles({ draft }: { draft: Draft }) {
 
   return (
     <div className="space-y-3">
+      {update && !compareInstalled && (
+        <p className="text-sm text-muted-foreground">
+          Changes against the installed copy are shown for the recorded place
+          only.
+        </p>
+      )}
       <ul
         aria-label="Files"
         className="m-0 list-none rounded-md border border-border p-0"
@@ -148,7 +179,7 @@ export function DraftFiles({ draft }: { draft: Draft }) {
         <h4 className="mb-2 break-all font-mono text-xs font-medium text-muted-foreground">
           {shown.path}
         </h4>
-        {pending && draft.operation === "update" && shown.installed ? (
+        {compare && shown.installed ? (
           <FileChange
             key={`${draft.proposal_id}\n${shown.path}`}
             draft={draft}

@@ -74,8 +74,11 @@ export function refreshAutoSkills(): Promise<unknown> {
   return globalMutate((key) => Array.isArray(key) && key[0] === "autoskills");
 }
 
+// The draft's updated_at is part of the key: a run that rewrites a pending
+// draft in place keeps its id, and its files must be read again.
 type FileKey = readonly [
   "autoskills-file",
+  string,
   string,
   string,
   string,
@@ -89,6 +92,9 @@ const FILE_ERRORS: Record<number, string> = {
   413: "This file is too large to show here.",
   415: "This file isn't text, so it isn't shown.",
 };
+// Answers that asking again won't change: these, and a 400 (a path the core
+// refuses), which reads as the plain message.
+const FINAL_STATUSES: ReadonlySet<number> = new Set([400, 404, 413, 415]);
 
 class DraftFileError extends Error {
   readonly final: boolean;
@@ -103,6 +109,7 @@ async function fetchDraftFile([
   base,
   apiKey,
   id,
+  ,
   path,
   installed,
 ]: FileKey): Promise<string> {
@@ -115,8 +122,10 @@ async function fetchDraftFile([
       cache: "no-store",
     });
     if (!res.ok) {
-      const known = FILE_ERRORS[res.status];
-      throw new DraftFileError(known ?? FILE_FALLBACK, known !== undefined);
+      throw new DraftFileError(
+        FILE_ERRORS[res.status] ?? FILE_FALLBACK,
+        FINAL_STATUSES.has(res.status)
+      );
     }
     return await res.text();
   } catch (e) {
@@ -135,7 +144,15 @@ export function useDraftFile(
   const base = baseOf(deploymentUrl);
   const key: FileKey | null =
     base && draft && path
-      ? ["autoskills-file", base, apiKey, draft.proposal_id, path, installed]
+      ? [
+          "autoskills-file",
+          base,
+          apiKey,
+          draft.proposal_id,
+          draft.updated_at,
+          path,
+          installed,
+        ]
       : null;
   const { data, error, isLoading } = useSWR(key, fetchDraftFile, {
     // A missing, too large or binary file will not change by asking again.

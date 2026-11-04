@@ -125,8 +125,8 @@ describe("DraftFiles", () => {
     ).toBeTruthy();
     expect(screen.getByText(/new599/).textContent).toBe(lines("new"));
 
-    // A read that failed says so in place.
-    reads.answers.set("scripts/run.py|true", {
+    // A draft read that failed says so in place.
+    reads.answers.set("scripts/run.py|false", {
       text: null,
       error: "This file isn't there any more.",
       loading: false,
@@ -245,5 +245,130 @@ describe("DraftFiles", () => {
     view.rerender(<DraftFiles draft={other} />);
     expect(fileButton("SKILL.md").getAttribute("aria-current")).toBe("true");
     expect(reads.calls.at(-1)).toEqual(["b", "SKILL.md", false]);
+  });
+
+  it("compares with the installed copy only for the recorded place", () => {
+    const note =
+      "Changes against the installed copy are shown for the recorded place only.";
+    const d = draft({
+      proposal_id: "paper-review",
+      operation: "update",
+      install_base: "/home/u/.evoscientist/skills/paper-review",
+      files: [
+        { path: "SKILL.md", size: 10, installed: true },
+        { path: "scripts/new.py", size: 10, installed: false },
+      ],
+    });
+    answer("SKILL.md", true, "old step\n");
+    answer("SKILL.md", false, "new step\n");
+    answer("scripts/new.py", false, "print(1)\n");
+
+    // The other place is picked: the core would start from another folder,
+    // so nothing is compared and nothing is called new.
+    const view = render(
+      <DraftFiles
+        draft={d}
+        compareInstalled={false}
+      />
+    );
+    expect(screen.getByText(note)).toBeTruthy();
+    expect(screen.queryByRole("list", { name: "Changes" })).toBeNull();
+    expect(screen.getByText("new step", { exact: false }).tagName).toBe("PRE");
+    expect(screen.queryByText("New file")).toBeNull();
+    expect(installedReads()).toEqual([]);
+
+    // Back on the recorded place: the diff and the label return.
+    view.rerender(
+      <DraftFiles
+        draft={d}
+        compareInstalled
+      />
+    );
+    expect(screen.queryByText(note)).toBeNull();
+    expect(screen.getByRole("list", { name: "Changes" })).toBeTruthy();
+    expect(fileButton("scripts/new.py").textContent).toContain("New file");
+    expect(installedReads()).toContainEqual(["paper-review", "SKILL.md", true]);
+  });
+
+  it("shows the draft's text when only the installed copy can't be read", () => {
+    const d = draft({
+      proposal_id: "paper-review",
+      operation: "update",
+      install_base: "/home/u/.evoscientist/skills/paper-review",
+      files: [
+        { path: "SKILL.md", size: 10, installed: true },
+        { path: "notes.md", size: 10, installed: true },
+      ],
+    });
+    reads.answers.set("SKILL.md|true", {
+      text: null,
+      error: "This file isn't text, so it isn't shown.",
+      loading: false,
+    });
+    answer("SKILL.md", false, "new step\n");
+    render(<DraftFiles draft={d} />);
+    expect(
+      screen.getByText(
+        "Couldn't read the installed copy, so only the draft is shown."
+      )
+    ).toBeTruthy();
+    expect(screen.getByText("new step", { exact: false }).tagName).toBe("PRE");
+    expect(
+      screen.queryByText("This file isn't text, so it isn't shown.")
+    ).toBeNull();
+
+    // The draft's own read failing still says so in place of the file.
+    answer("notes.md", true, "old\n");
+    reads.answers.set("notes.md|false", {
+      text: null,
+      error: "This file isn't there any more.",
+      loading: false,
+    });
+    fireEvent.click(fileButton("notes.md"));
+    expect(screen.getByText("This file isn't there any more.")).toBeTruthy();
+    expect(
+      screen.queryByText(
+        "Couldn't read the installed copy, so only the draft is shown."
+      )
+    ).toBeNull();
+  });
+
+  it("reads no installed copy without an install base", () => {
+    const d = draft({
+      proposal_id: "paper-review",
+      operation: "update",
+      install_base: null,
+      files: [{ path: "SKILL.md", size: 10, installed: true }],
+    });
+    answer("SKILL.md", false, "new step\n");
+    answer("SKILL.md", true, "old step\n");
+    render(<DraftFiles draft={d} />);
+    expect(screen.getByText("new step", { exact: false }).tagName).toBe("PRE");
+    expect(screen.queryByRole("list", { name: "Changes" })).toBeNull();
+    expect(installedReads()).toEqual([]);
+  });
+
+  it("shows sizes in B, KB and MB without a 1024.0 KB", () => {
+    const sizes = [0, 1023, 1024, 1_048_524, 1_048_575, 1_048_576];
+    const d = draft({
+      proposal_id: "x",
+      files: sizes.map((size, i) => ({
+        path: `f${i}.txt`,
+        size,
+        installed: false,
+      })),
+    });
+    render(<DraftFiles draft={d} />);
+    const shown = sizes.map((_, i) =>
+      fileButton(`f${i}.txt`).textContent?.replace(`f${i}.txt`, "")
+    );
+    expect(shown).toEqual([
+      "0 B",
+      "1023 B",
+      "1.0 KB",
+      "1023.9 KB",
+      "1.0 MB",
+      "1.0 MB",
+    ]);
   });
 });

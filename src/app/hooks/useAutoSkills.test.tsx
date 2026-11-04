@@ -251,6 +251,36 @@ describe("useDraftFile", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("a 400 is fetched once and reads as the plain message", async () => {
+    // The core's answer to a path it refuses ("../x", an absolute path, none).
+    const fetchMock = stubFetch(() => json({ error: "invalid_path" }, 400));
+    const h = renderHook(() => useDraftFile(d, "../x", false), {
+      wrapper: fastRetry,
+    });
+    await waitFor(() =>
+      expect(h.result.current.error).toBe("Couldn't read this file.")
+    );
+    await new Promise((r) => setTimeout(r, 300));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads again when the draft is rewritten", async () => {
+    let n = 0;
+    const fetchMock = stubFetch(() => new Response(`v${++n}`, { status: 200 }));
+    const h = renderHook(
+      ({ dr }: { dr: Draft }) => useDraftFile(dr, "SKILL.md", false),
+      { wrapper, initialProps: { dr: d } }
+    );
+    await waitFor(() => expect(h.result.current.text).toBe("v1"));
+    // The same draft, unchanged: the text read is kept.
+    h.rerender({ dr: { ...d } });
+    expect(h.result.current.text).toBe("v1");
+    // A run rewrote it in place (same id, new updated_at).
+    h.rerender({ dr: { ...d, updated_at: "2026-11-02T00:00:00Z" } });
+    await waitFor(() => expect(h.result.current.text).toBe("v2"));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("a 500 is retried", async () => {
     const fetchMock = stubFetch(() => new Response("", { status: 500 }));
     renderHook(() => useDraftFile(d, "x", false), { wrapper: fastRetry });

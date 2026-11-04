@@ -1077,6 +1077,71 @@ describe("DraftsPage", () => {
     );
   });
 
+  it("a click on the pane's text doesn't pull the focus there later", () => {
+    const x = draft({
+      proposal_id: "x",
+      skill_name: "arxiv-paper-retrieval",
+      description: "Find papers on arXiv.",
+    });
+    ready([x]);
+    q.values.set("draftId", "x");
+    const view = render(page());
+    const pane = () =>
+      within(screen.getByRole("heading", { level: 3 }).parentElement!);
+
+    // Plain text takes no focus: the page keeps it.
+    fireEvent.click(pane().getByText("Find papers on arXiv."));
+    expect(document.activeElement).toBe(document.body);
+    // A decision elsewhere turns the pane's buttons off: nothing moves.
+    hooks.busy = true;
+    view.rerender(page());
+    expect(document.activeElement).toBe(document.body);
+
+    // A click on a button counts even where it takes no focus (Safari).
+    hooks.busy = false;
+    view.rerender(page());
+    fireEvent.click(pane().getByRole("button", { name: "Approve" }));
+    expect(document.activeElement).toBe(document.body);
+    hooks.busy = true;
+    view.rerender(page());
+    expect(document.activeElement).toBe(
+      screen.getByRole("heading", { name: "arxiv-paper-retrieval" })
+    );
+  });
+
+  it("a draft that leaves the list under its question gives the focus to the selected tab", async () => {
+    const u = draft({
+      proposal_id: "u",
+      skill_name: "paper-review-v2",
+      operation: "update",
+      target_skill_name: "paper-review",
+    });
+    const c = draft({ proposal_id: "c", created_at: "2026-10-01T09:00:00Z" });
+    ready([u, c]);
+    q.values.set("draftId", "u");
+    const view = render(page());
+    const approve = within(
+      screen.getByRole("heading", { level: 3 }).parentElement!
+    ).getByRole("button", { name: "Approve" });
+    approve.focus();
+    fireEvent.click(approve);
+    expect(screen.getByRole("dialog")).toBeTruthy();
+
+    // Another decision runs meanwhile (the question's buttons turn off),
+    // and u is decided elsewhere before the question closes: its pane and
+    // the question go together.
+    hooks.busy = true;
+    view.rerender(page());
+    ready([{ ...u, status: "approved" }, c]);
+    view.rerender(page());
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole("tab", { selected: true })
+      )
+    );
+  });
+
   it("opening the page marks automatic installs seen", () => {
     ready([]);
     const before = Date.now();

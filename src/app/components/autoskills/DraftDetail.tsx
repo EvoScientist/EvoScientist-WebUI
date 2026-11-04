@@ -1,8 +1,10 @@
 "use client";
 
-import { useEffect, useId, useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { useQueryState } from "nuqs";
+import useSWR from "swr";
 import { DraftFiles, FileText } from "@/app/components/autoskills/DraftFiles";
+import { focusFirst } from "@/app/components/autoskills/focus";
 import { MarkdownContent } from "@/app/components/MarkdownContent";
 import { Button } from "@/components/ui/button";
 import {
@@ -23,7 +25,7 @@ import {
 } from "@/components/ui/select";
 import { installedLabel, type Draft, type DraftScope } from "@/lib/autoskills";
 import { INPUT_LIKE_TRIGGER, LIST_MAX_HEIGHT } from "@/lib/fieldStyles";
-import { formatTime } from "@/lib/time";
+import { formatFullTime, formatTime } from "@/lib/time";
 import { cn } from "@/lib/utils";
 
 // The open draft: what it is, its files as written, why EvoMemory drafted
@@ -52,54 +54,57 @@ export interface DraftDetailProps {
   busy: boolean;
   onApprove(draft: Draft, scope: DraftScope): void;
   onReject(draft: Draft): void;
+  /** Where the focus goes when the question closes and neither its Approve
+   *  nor this pane is left to take it (the draft left the list meanwhile). */
+  focusFallback?: () => HTMLElement | null | undefined;
 }
 
-/** The summaries of this machine's observations by id, read for each draft
- *  shown; null until read (or when the read failed). */
-function useObservationSummaries(
-  wanted: boolean,
-  draftId: string
-): Map<string, string> | null {
-  const [summaries, setSummaries] = useState<Map<string, string> | null>(null);
-  useEffect(() => {
-    if (!wanted) return;
-    let cancelled = false;
-    void (async () => {
-      try {
-        const res = await fetch("/api/memory/observations", {
-          cache: "no-store",
-        });
-        if (!res.ok) return;
-        const body = (await res.json()) as { nodes?: unknown };
-        if (cancelled || !Array.isArray(body.nodes)) return;
-        const next = new Map<string, string>();
-        for (const node of body.nodes as Array<Record<string, unknown>>) {
-          if (
-            node &&
-            typeof node.id === "string" &&
-            typeof node.summary === "string" &&
-            node.summary.trim()
-          ) {
-            next.set(node.id, node.summary);
-          }
-        }
-        setSummaries(next);
-      } catch {
-        // Named by id instead.
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [wanted, draftId]);
+/** This machine's observations' summaries by id. */
+async function fetchObservationSummaries(): Promise<Map<string, string>> {
+  const res = await fetch("/api/memory/observations", { cache: "no-store" });
+  if (!res.ok) {
+    throw new Error(`GET /api/memory/observations answered ${res.status}`);
+  }
+  const body = (await res.json()) as { nodes?: unknown };
+  const summaries = new Map<string, string>();
+  if (!Array.isArray(body.nodes)) return summaries;
+  for (const node of body.nodes as Array<Record<string, unknown> | null>) {
+    if (
+      node &&
+      typeof node.id === "string" &&
+      typeof node.summary === "string" &&
+      node.summary.trim()
+    ) {
+      summaries.set(node.id, node.summary);
+    }
+  }
   return summaries;
+}
+
+/** The summaries, read once per page (and again after a failed read, the
+ *  next time they are wanted); undefined until read or when it failed, and
+ *  the ids are shown instead. */
+function useObservationSummaries(
+  wanted: boolean
+): Map<string, string> | undefined {
+  const { data } = useSWR(
+    wanted ? "memory-observations" : null,
+    fetchObservationSummaries,
+    {
+      revalidateIfStale: false,
+      revalidateOnFocus: false,
+      revalidateOnReconnect: false,
+      shouldRetryOnError: false,
+    }
+  );
+  return data;
 }
 
 /** "Where it came from": one button per source observation, which opens
  *  it in Memory › Knowledge. */
 function Sources({ draft }: { draft: Draft }) {
   const ids = draft.source_observation_ids;
-  const summaries = useObservationSummaries(ids.length > 0, draft.proposal_id);
+  const summaries = useObservationSummaries(ids.length > 0);
   const [, setView] = useQueryState("view");
   const [, setMemoryTab] = useQueryState("memoryTab");
   const [, setMemoryObs] = useQueryState("memoryObs");
@@ -147,6 +152,7 @@ export function DraftDetail({
   busy,
   onApprove,
   onReject,
+  focusFallback,
 }: DraftDetailProps) {
   const pending = draft.status === "pending";
   const [tab, setTab] = useState<TabKey>("skill");
@@ -156,14 +162,15 @@ export function DraftDetail({
     id: draft.proposal_id,
     scope: draft.scope,
   });
+  // The question before an update replaces the installed skill, for this
+  // draft only: it doesn't come back when the draft is opened again.
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
   if (pick.id !== draft.proposal_id) {
     setPick({ id: draft.proposal_id, scope: draft.scope });
+    setConfirmingId(null);
   }
   const scope = pick.id === draft.proposal_id ? pick.scope : draft.scope;
 
-  // The question before an update replaces the installed skill, for this
-  // draft only.
-  const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const confirming = pending && confirmingId === draft.proposal_id;
 
   const baseId = useId();
@@ -223,6 +230,13 @@ export function DraftDetail({
     pending && scope === draft.scope && draft.install_error
       ? draft.install_error
       : null;
+
+  // The sources and the files are buttons, unless there are none.
+  const panelHoldsNoButtons =
+    tab === "skill" ||
+    tab === "why" ||
+    (tab === "sources" && draft.source_observation_ids.length === 0) ||
+    (tab === "files" && draft.files.length === 0);
 
   const decidedAt =
     draft.status === "approved"
@@ -335,8 +349,11 @@ export function DraftDetail({
           </p>
           {decidedAt && (
             <p className="text-xs text-muted-foreground">
-              {draft.status === "approved" ? "Approved" : "Rejected"}{" "}
-              <time dateTime={decidedAt}>
+              {draft.status === "approved" ? "Approved" : "Rejected"} ·{" "}
+              <time
+                dateTime={decidedAt}
+                title={formatFullTime(new Date(decidedAt))}
+              >
                 {formatTime(new Date(decidedAt))}
               </time>
             </p>
@@ -382,7 +399,8 @@ export function DraftDetail({
         role="tabpanel"
         id={panelId}
         aria-labelledby={tabId(tab)}
-        tabIndex={0}
+        // A tab stop only where the panel holds nothing to focus.
+        tabIndex={panelHoldsNoButtons ? 0 : undefined}
         className="mt-3 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         {tab === "skill" && (
@@ -409,7 +427,12 @@ export function DraftDetail({
             </p>
           ))}
         {tab === "sources" && <Sources draft={draft} />}
-        {tab === "files" && <DraftFiles draft={draft} />}
+        {tab === "files" && (
+          <DraftFiles
+            draft={draft}
+            compareInstalled={scope === draft.scope}
+          />
+        )}
       </div>
 
       <Dialog
@@ -421,16 +444,13 @@ export function DraftDetail({
         <DialogContent
           className="sm:max-w-md"
           // No trigger for Radix to give the focus back to: Approve opened
-          // it, or the draft's heading once Approve is off.
+          // it, or the draft's heading once Approve is off, or the page's
+          // fallback once this pane is gone too.
           onCloseAutoFocus={(e) => {
             e.preventDefault();
-            const invoker = invokerRef.current as HTMLButtonElement | null;
+            const invoker = invokerRef.current;
             invokerRef.current = null;
-            const target =
-              invoker?.isConnected && !invoker.disabled
-                ? invoker
-                : headingRef.current;
-            target?.focus({ preventScroll: true });
+            focusFirst([invoker, headingRef.current, focusFallback?.()]);
           }}
         >
           <DialogHeader>

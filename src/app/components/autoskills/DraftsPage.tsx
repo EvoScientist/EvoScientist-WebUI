@@ -5,6 +5,10 @@ import { useQueryState } from "nuqs";
 import { ArrowLeft, Loader2, Settings } from "lucide-react";
 import { DraftDetail } from "@/app/components/autoskills/DraftDetail";
 import { DraftList } from "@/app/components/autoskills/DraftList";
+import {
+  focusFirst,
+  useFocusFallback,
+} from "@/app/components/autoskills/focus";
 import { decidable, stillPending } from "@/app/components/autoskills/selection";
 import { markAutoSeen, useAutoSkills } from "@/app/hooks/useAutoSkills";
 import { useDraftActions } from "@/app/hooks/useDraftActions";
@@ -83,71 +87,6 @@ function isPhone(): boolean {
     typeof window.matchMedia === "function" &&
     !window.matchMedia("(min-width: 768px)").matches
   );
-}
-
-/** Focus the first of `targets` that takes it, without scrolling. */
-function focusFirst(targets: ReadonlyArray<HTMLElement | null | undefined>) {
-  for (const el of targets) {
-    if (!el?.isConnected || (el as HTMLButtonElement).disabled) continue;
-    el.focus({ preventScroll: true });
-    if (document.activeElement === el) return;
-  }
-}
-
-type BoxState = "usable" | "disabled" | "gone";
-
-/** A box whose buttons can turn off (a decision under way, a re-read) or go
- *  (the selection emptied, the open draft left the list) under the focus.
- *  When they do while the focus was in the box and the page lost it, the
- *  focus moves to the first of `fallback(box)` that takes it. Spread the
- *  result on the box. */
-function useFocusFallback(
-  state: BoxState,
-  fallback: (
-    box: HTMLDivElement | null
-  ) => ReadonlyArray<HTMLElement | null | undefined>
-) {
-  const ref = useRef<HTMLDivElement>(null);
-  const hadFocus = useRef(false);
-  const last = useRef(state);
-  useEffect(() => {
-    const before = last.current;
-    last.current = state;
-    if (before === state || state === "usable") return;
-    if (!hadFocus.current) return;
-    const active = document.activeElement as HTMLButtonElement | null;
-    const lost =
-      !active ||
-      active === document.body ||
-      (!!ref.current?.contains(active) && active.disabled);
-    if (!lost) {
-      hadFocus.current = !!active && !!ref.current?.contains(active);
-      return;
-    }
-    hadFocus.current = false;
-    focusFirst(fallback(ref.current));
-  });
-  return {
-    ref,
-    onFocus: () => {
-      hadFocus.current = true;
-    },
-    onBlur: (e: React.FocusEvent<HTMLElement>) => {
-      const next = e.relatedTarget as Node | null;
-      if (next && e.currentTarget.contains(next)) return;
-      // Focus left the box, for the page itself too. Only a button that
-      // turned off (a decision under way) or went loses it without the
-      // user; then the box still gives it back.
-      const from = e.target as Element;
-      const off = from instanceof HTMLButtonElement && from.disabled;
-      if (!next && (off || !from.isConnected)) return;
-      hadFocus.current = false;
-    },
-    // Safari doesn't focus a clicked button.
-    onClick: () => {
-      hadFocus.current = true;
-    },
-  };
 }
 
 export function DraftsPage() {
@@ -622,6 +561,7 @@ export function DraftsPage() {
                         busy={busy}
                         onApprove={approveOpen}
                         onReject={rejectOpen}
+                        focusFallback={selectedTab}
                       />
                     </>
                   ) : (
