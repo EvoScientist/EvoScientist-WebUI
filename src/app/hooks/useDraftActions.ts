@@ -174,7 +174,10 @@ async function reread(): Promise<void> {
   }
 }
 
-function toastErrors(failed: DecisionResult["failed"]): void {
+function toastErrors(
+  failed: DecisionResult["failed"],
+  options?: Parameters<typeof toast.error>[1]
+): void {
   if (failed.length > 0) {
     const lines = [...new Set(failed.map((f) => f.message))];
     toast.error(
@@ -182,7 +185,8 @@ function toastErrors(failed: DecisionResult["failed"]): void {
         "div",
         null,
         lines.map((line) => createElement("div", { key: line }, line))
-      )
+      ),
+      ...(options ? [options] : [])
     );
   }
 }
@@ -210,12 +214,16 @@ export function useDraftActions(projects: readonly Project[]): {
   }, []);
 
   const undoer = useCallback(
-    (revertible: Draft[], labels: Map<string, string>) => {
+    (
+      revertible: Draft[],
+      labels: Map<string, string>
+    ): (() => Promise<void>) => {
       let used = false;
       return () => {
         if (used) return Promise.resolve();
         used = true;
         return track(async () => {
+          const inUse: Draft[] = [];
           const { done, failed } = await decideAll(
             revertible,
             (d) => ({ action: "revert", proposal_id: d.proposal_id }),
@@ -231,6 +239,10 @@ export function useDraftActions(projects: readonly Project[]): {
               if (code === "not_decided") {
                 return `${d.skill_name} is already back in Pending.`;
               }
+              if (code === "revert_failed") {
+                inUse.push(d);
+                return `${d.skill_name} couldn't be moved back to Pending: a file is in use. Try Undo again in a moment.`;
+              }
               return decisionError(answer, d, labels);
             }
           );
@@ -242,7 +254,15 @@ export function useDraftActions(projects: readonly Project[]): {
                 : `Moved ${skills(done.length)} back to Pending.`
             );
           }
-          toastErrors(failed);
+          toastErrors(
+            failed,
+            inUse.length > 0
+              ? {
+                  duration: UNDO_MS,
+                  action: { label: "Undo", onClick: undoer(inUse, labels) },
+                }
+              : undefined
+          );
         });
       };
     },

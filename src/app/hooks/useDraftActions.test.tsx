@@ -495,6 +495,95 @@ describe("useDraftActions fixes", () => {
   });
 });
 
+describe("Undo after revert_failed", () => {
+  async function approved() {
+    stubFetch([
+      [200, okApprove],
+      [200, okApprove],
+    ]);
+    const { result } = setup();
+    await act(async () => {
+      await result.current.approve([
+        draft({ proposal_id: "a" }),
+        draft({ proposal_id: "b" }),
+      ]);
+    });
+    return toast.success.mock.calls[0][1].action.onClick as () => Promise<void>;
+  }
+  const LINE =
+    "a couldn't be moved back to Pending: a file is in use. Try Undo again in a moment.";
+
+  it("offers Undo again for the draft that was in use", async () => {
+    const undo = await approved();
+    stubFetch([
+      [409, { error: "revert_failed", detail: "busy" }],
+      [200, okRevert],
+    ]);
+    await act(async () => {
+      await undo();
+    });
+    expect(toast.success).toHaveBeenLastCalledWith("Moved b back to Pending.");
+    expect(errorLines()).toEqual([LINE]);
+    expect(toast.error.mock.calls[0][1]).toEqual({
+      duration: 10_000,
+      action: expect.objectContaining({ label: "Undo" }),
+    });
+  });
+
+  it("the retry reverts only that draft, once", async () => {
+    const undo = await approved();
+    stubFetch([
+      [409, { error: "revert_failed", detail: "busy" }],
+      [200, okRevert],
+    ]);
+    await act(async () => {
+      await undo();
+    });
+    const retry = toast.error.mock.calls[0][1].action.onClick;
+    stubFetch([[200, okRevert]]);
+    await act(async () => {
+      await retry();
+    });
+    expect(calls).toEqual([{ action: "revert", proposal_id: "a" }]);
+    expect(toast.success).toHaveBeenLastCalledWith("Moved a back to Pending.");
+    stubFetch([]);
+    await act(async () => {
+      await retry();
+    });
+    expect(calls).toEqual([]);
+  });
+
+  it("a second revert_failed offers Undo again", async () => {
+    const undo = await approved();
+    stubFetch([
+      [409, { error: "revert_failed" }],
+      [200, okRevert],
+    ]);
+    await act(async () => {
+      await undo();
+    });
+    stubFetch([[409, { error: "revert_failed" }]]);
+    await act(async () => {
+      await toast.error.mock.calls[0][1].action.onClick();
+    });
+    expect(toast.error).toHaveBeenCalledTimes(2);
+    expect(toast.error.mock.calls[1][1].action.label).toBe("Undo");
+  });
+
+  it("an undo error without revert_failed has no action", async () => {
+    const undo = await approved();
+    stubFetch([
+      [409, { error: "skill_changed" }],
+      [409, { error: "not_decided" }],
+    ]);
+    await act(async () => {
+      await undo();
+    });
+    expect(toast.error).toHaveBeenCalledTimes(1);
+    expect(toast.error.mock.calls[0]).toHaveLength(1);
+  });
+});
+
 describe("decisionToast", () => {
   const w = (id: string, dir = A) =>
     draft({ proposal_id: id, workspace_dir: dir });
