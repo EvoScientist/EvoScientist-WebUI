@@ -9,6 +9,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Draft, DraftList } from "@/lib/autoskills";
 import type { ProjectsState } from "@/lib/projects";
+import type { ProjectsContextValue } from "@/providers/ProjectsProvider";
 import type { SettingsWriteAccess } from "@/lib/settings";
 import {
   mockProjects,
@@ -142,9 +143,12 @@ function ready(drafts: Draft[]) {
   hooks.auto = { status: "ready", list: listOf(drafts) };
 }
 
-function page(projects: ProjectsState = readyProjects(A, B)) {
+function page(
+  projects: ProjectsState = readyProjects(A, B),
+  over: Partial<ProjectsContextValue> = {}
+) {
   return (
-    <TestProjectsProvider value={mockProjects(projects)}>
+    <TestProjectsProvider value={{ ...mockProjects(projects), ...over }}>
       <DraftsPage />
     </TestProjectsProvider>
   );
@@ -605,6 +609,99 @@ describe("DraftsPage", () => {
       expect(disabled(run)).toBe(true);
     }
     expect(hooks.reject).not.toHaveBeenCalled();
+  });
+
+  it("no decision while the projects are being read again", () => {
+    const u = draft({
+      proposal_id: "u",
+      operation: "update",
+      target_skill_name: "paper-review",
+    });
+    const z = draft({ proposal_id: "z", workspace_dir: B });
+    ready([u, z]);
+    // The last list stays "ready" while it is read again.
+    const reading = { refreshing: true, isReady: () => false };
+    const view = render(page(readyProjects(A, B), reading));
+    const disabled = (el: HTMLElement) =>
+      (el as HTMLButtonElement | HTMLInputElement).disabled;
+
+    for (const box of screen.getAllByRole("checkbox")) {
+      expect(disabled(box)).toBe(true);
+    }
+    for (const run of screen.getAllByRole("button", { name: "Run now" })) {
+      expect(disabled(run)).toBe(true);
+    }
+
+    // A selection and a question from before the read wait for its answer.
+    view.rerender(page());
+    pick("u");
+    pick("z");
+    fireEvent.click(
+      within(selection()!).getByRole("button", { name: "Approve" })
+    );
+    view.rerender(page(readyProjects(A, B), reading));
+    expect(
+      disabled(screen.getByRole("button", { name: "Replace and install" }))
+    ).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    for (const name of ["Approve", "Reject"]) {
+      expect(disabled(within(selection()!).getByRole("button", { name }))).toBe(
+        true
+      );
+    }
+
+    // The answer keeps both projects: the selection is still there.
+    view.rerender(page());
+    expect(selection()?.textContent).toContain("2 selected");
+    expect(
+      disabled(within(selection()!).getByRole("button", { name: "Approve" }))
+    ).toBe(false);
+  });
+
+  it("a click while the projects gate is closed sends nothing", () => {
+    const u = draft({
+      proposal_id: "u",
+      operation: "update",
+      target_skill_name: "paper-review",
+    });
+    const c = draft({ proposal_id: "c", created_at: "2026-10-01T09:00:00Z" });
+    ready([u, c]);
+    // A read has just started: the gate is closed, the render that says so
+    // hasn't come yet.
+    const gate = { open: true };
+    render(page(readyProjects(A, B), { isReady: () => gate.open }));
+    const bar = () => within(selection()!);
+
+    pick("c");
+    gate.open = false;
+    fireEvent.click(bar().getByRole("button", { name: "Approve" }));
+    fireEvent.click(bar().getByRole("button", { name: "Reject" }));
+    fireEvent.click(
+      within(screen.getByRole("group", { name: "project_B" })).getByRole(
+        "button",
+        { name: "Run now" }
+      )
+    );
+    expect(hooks.approve).not.toHaveBeenCalled();
+    expect(hooks.reject).not.toHaveBeenCalled();
+    expect(hooks.run).not.toHaveBeenCalled();
+
+    // The question: asked while open, answered while closed.
+    gate.open = true;
+    pick("u");
+    fireEvent.click(bar().getByRole("button", { name: "Approve" }));
+    gate.open = false;
+    fireEvent.click(
+      screen.getByRole("button", { name: "Replace and install" })
+    );
+    expect(hooks.approve).not.toHaveBeenCalled();
+    // It stays, to be answered once the read is done.
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    gate.open = true;
+    fireEvent.click(
+      screen.getByRole("button", { name: "Replace and install" })
+    );
+    expect(hooks.approve.mock.calls).toEqual([[[u, c]]]);
   });
 
   it("a decision under way keeps the focus with the bar", () => {

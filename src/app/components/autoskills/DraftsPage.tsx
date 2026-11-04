@@ -99,15 +99,18 @@ export function DraftsPage() {
   const status = statusOf(tabParam);
 
   const auto = useAutoSkills();
-  const { projects } = useProjects();
+  const { projects, refreshing, isReady } = useProjects();
   const projectList =
     projects.status === "ready" ? projects.projects : NO_PROJECTS;
+  // The registered projects' keys, or null while they aren't known: not
+  // read yet, or being read again (the last list stays "ready" meanwhile,
+  // and nothing runs). Every decision and Run now waits for it.
   const registered = useMemo(
     () =>
-      projects.status === "ready"
+      projects.status === "ready" && !refreshing
         ? new Set(projects.projects.map((p) => p.key))
         : null,
-    [projects]
+    [projects, refreshing]
   );
   const { payload } = useSettings();
   const { access } = useSettingsAccess();
@@ -168,8 +171,8 @@ export function DraftsPage() {
   if (confirming && updates.length === 0) setConfirming(false);
 
   const canWrite = access?.writable === true;
-  // A decision also waits for the projects: until they are known the
-  // selection can't be checked against them.
+  // A decision also waits for the projects: until they are known (read
+  // again) the selection can't be checked against them.
   const canDecide = canWrite && registered !== null;
   // Said only once known: while access is being checked every decision
   // waits, without a box that goes again a moment later.
@@ -291,21 +294,30 @@ export function DraftsPage() {
   // No scopes: in bulk every draft installs where it records (its own
   // project, or global); only the detail pane picks a scope per draft.
   // What is sent is checked once more against the list and the projects
-  // (the selection is pruned by the same rule on every change).
+  // (the selection is pruned by the same rule on every change), and only
+  // while the projects' gate is open: a read that has just started closes
+  // it before the render that disables the buttons.
   const approveSelection = () => {
+    if (!isReady()) return;
     const send = decidable(selectedDrafts, list, registered);
     if (send.length === 0) return;
     if (send.some((d) => d.operation === "update")) setConfirming(true);
     else void approve(send);
   };
+  // A closed gate leaves the question open, to be answered after the read.
   const confirmReplace = () => {
+    if (!isReady()) return;
     setConfirming(false);
     const send = decidable(selectedDrafts, list, registered);
     if (send.length > 0) void approve(send);
   };
   const rejectSelection = () => {
+    if (!isReady()) return;
     const send = decidable(selectedDrafts, list, registered);
     if (send.length > 0) void reject(send);
+  };
+  const runNow = (key: string) => {
+    if (isReady()) void run(key);
   };
 
   return (
@@ -520,7 +532,7 @@ export function DraftsPage() {
                   openId={openDraft?.proposal_id ?? null}
                   onOpen={openRow}
                   running={running}
-                  onRun={(key) => void run(key)}
+                  onRun={runNow}
                   canWrite={canWrite}
                   registered={registered}
                 />
