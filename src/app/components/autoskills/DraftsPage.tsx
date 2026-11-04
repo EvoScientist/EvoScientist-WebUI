@@ -4,6 +4,7 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useQueryState } from "nuqs";
 import { ArrowLeft, Loader2, Settings } from "lucide-react";
 import { DraftList } from "@/app/components/autoskills/DraftList";
+import { decidable, stillPending } from "@/app/components/autoskills/selection";
 import { markAutoSeen, useAutoSkills } from "@/app/hooks/useAutoSkills";
 import { useDraftActions } from "@/app/hooks/useDraftActions";
 import { useRunNow } from "@/app/hooks/useRunNow";
@@ -23,7 +24,6 @@ import {
   labelFor,
   statusLine,
   type Draft,
-  type DraftList as Drafts,
   type DraftStatus,
 } from "@/lib/autoskills";
 import type { Project } from "@/lib/projects";
@@ -72,26 +72,6 @@ function replacedNames(
       ? `${n} (${labelFor(updates[i].workspace_dir, labels)})`
       : n
   );
-}
-
-/** The ids of `selected` still pending in `list`, and, once the projects
- *  are known, still in a registered project. */
-function stillPending(
-  selected: ReadonlySet<string>,
-  list: Drafts,
-  registered: ReadonlySet<string> | null
-): ReadonlySet<string> {
-  const pending = new Set(
-    list.drafts
-      .filter(
-        (d) =>
-          d.status === "pending" &&
-          (registered === null || registered.has(d.workspace_dir))
-      )
-      .map((d) => d.proposal_id)
-  );
-  const kept = [...selected].filter((id) => pending.has(id));
-  return kept.length === selected.size ? selected : new Set(kept);
 }
 
 /** Below 768 px, where the open draft takes the list's place (max-md:). */
@@ -188,6 +168,9 @@ export function DraftsPage() {
   if (confirming && updates.length === 0) setConfirming(false);
 
   const canWrite = access?.writable === true;
+  // A decision also waits for the projects: until they are known the
+  // selection can't be checked against them.
+  const canDecide = canWrite && registered !== null;
   // Said only once known: while access is being checked every decision
   // waits, without a box that goes again a moment later.
   const readOnlyReason =
@@ -276,7 +259,7 @@ export function DraftsPage() {
   const barState =
     selectedDrafts.length === 0
       ? "gone"
-      : !canWrite || busy
+      : !canDecide || busy
       ? "disabled"
       : "usable";
   const lastBarState = useRef(barState);
@@ -307,13 +290,22 @@ export function DraftsPage() {
 
   // No scopes: in bulk every draft installs where it records (its own
   // project, or global); only the detail pane picks a scope per draft.
+  // What is sent is checked once more against the list and the projects
+  // (the selection is pruned by the same rule on every change).
   const approveSelection = () => {
-    if (updates.length > 0) setConfirming(true);
-    else void approve(selectedDrafts);
+    const send = decidable(selectedDrafts, list, registered);
+    if (send.length === 0) return;
+    if (send.some((d) => d.operation === "update")) setConfirming(true);
+    else void approve(send);
   };
   const confirmReplace = () => {
     setConfirming(false);
-    void approve(selectedDrafts);
+    const send = decidable(selectedDrafts, list, registered);
+    if (send.length > 0) void approve(send);
+  };
+  const rejectSelection = () => {
+    const send = decidable(selectedDrafts, list, registered);
+    if (send.length > 0) void reject(send);
   };
 
   return (
@@ -468,12 +460,17 @@ export function DraftsPage() {
                       barHadFocus.current = true;
                     }}
                     onBlur={(e) => {
-                      // Focus moved elsewhere on purpose; with no new target
-                      // (a button turned off, or gone) it was lost here.
                       const next = e.relatedTarget as Node | null;
-                      if (next && !e.currentTarget.contains(next)) {
-                        barHadFocus.current = false;
-                      }
+                      if (next && e.currentTarget.contains(next)) return;
+                      // Focus left the bar, for the page itself too. Only a
+                      // button that turned off (a decision under way) or
+                      // went loses it without the user; then the bar still
+                      // gives it back.
+                      const from = e.target as Element;
+                      const off =
+                        from instanceof HTMLButtonElement && from.disabled;
+                      if (!next && (off || !from.isConnected)) return;
+                      barHadFocus.current = false;
                     }}
                     // Safari doesn't focus a clicked button.
                     onClick={() => {
@@ -488,7 +485,7 @@ export function DraftsPage() {
                       ref={approveRef}
                       type="button"
                       size="sm"
-                      disabled={!canWrite || busy}
+                      disabled={!canDecide || busy}
                       onClick={approveSelection}
                       className="max-md:min-h-11"
                     >
@@ -498,8 +495,8 @@ export function DraftsPage() {
                       type="button"
                       variant="outline"
                       size="sm"
-                      disabled={!canWrite || busy}
-                      onClick={() => void reject(selectedDrafts)}
+                      disabled={!canDecide || busy}
+                      onClick={rejectSelection}
                       className="border-solid max-md:min-h-11"
                     >
                       Reject
@@ -603,7 +600,7 @@ export function DraftsPage() {
             <Button
               type="button"
               onClick={confirmReplace}
-              disabled={!canWrite || busy}
+              disabled={!canDecide || busy}
               className="max-md:min-h-11"
             >
               Replace and install

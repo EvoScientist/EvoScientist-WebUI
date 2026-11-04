@@ -303,7 +303,7 @@ describe("DraftList", () => {
       ).disabled
     ).toBe(false);
 
-    // Before the projects are known no project runs; picking stays open.
+    // Before the projects are known nothing runs and nothing is picked.
     rerender(
       <DraftList
         {...props}
@@ -314,7 +314,7 @@ describe("DraftList", () => {
       expect((run as HTMLButtonElement).disabled).toBe(true);
     }
     for (const box of screen.getAllByRole("checkbox")) {
-      expect((box as HTMLInputElement).disabled).toBe(false);
+      expect((box as HTMLInputElement).disabled).toBe(true);
     }
   });
 

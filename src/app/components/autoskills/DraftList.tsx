@@ -32,9 +32,9 @@ export interface DraftListProps {
   running: ReadonlySet<string>;
   onRun(projectKey: string): void;
   canWrite: boolean;
-  /** The registered projects' keys; null while they are not known. A group
-   *  of a project the backend doesn't serve (any more) can't run, and its
-   *  drafts can't be picked: the core would refuse them. */
+  /** The registered projects' keys; null while they are not known. Until
+   *  they are, nothing runs and nothing is picked; then a group of a project
+   *  the backend doesn't serve (any more) neither: the core would refuse. */
   registered: ReadonlySet<string> | null;
 }
 
@@ -136,7 +136,7 @@ function Group({
 }) {
   const id = useId();
   const labelId = `${id}-label`;
-  const canPick = canWrite && served !== false;
+  const canPick = canWrite && served === true;
   const bodyId = `${id}-drafts`;
   const ids = group.drafts.map((d) => d.proposal_id);
   const picked = ids.filter((d) => selected.has(d)).length;

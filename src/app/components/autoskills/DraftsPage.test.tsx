@@ -168,7 +168,13 @@ beforeEach(() => {
   };
   hooks.access = { writable: true };
 });
-afterEach(() => vi.unstubAllGlobals());
+// Restored here, so a failing assertion can't leak them into other tests.
+let focusSpy: { mockRestore(): void } | undefined;
+afterEach(() => {
+  vi.unstubAllGlobals();
+  focusSpy?.mockRestore();
+  focusSpy = undefined;
+});
 
 describe("DraftsPage", () => {
   it("selection drops drafts that left the pending list", () => {
@@ -512,8 +518,9 @@ describe("DraftsPage", () => {
   });
 
   it("on a phone the open draft takes the focus and Back returns it", () => {
+    // Narrower than 768 px: no query matches, "(min-width: 768px)" included.
     vi.stubGlobal("matchMedia", (query: string) => ({
-      matches: query === "(max-width: 767px)",
+      matches: false,
       media: query,
       onchange: null,
       addEventListener: () => undefined,
@@ -523,6 +530,7 @@ describe("DraftsPage", () => {
       dispatchEvent: () => false,
     }));
     const focus = vi.spyOn(HTMLElement.prototype, "focus");
+    focusSpy = focus;
     ready([
       draft({ proposal_id: "x", skill_name: "arxiv-paper-retrieval" }),
       draft({ proposal_id: "y", created_at: "2026-10-01T09:00:00Z" }),
@@ -545,7 +553,110 @@ describe("DraftsPage", () => {
     for (const call of focus.mock.calls) {
       expect(call[0]).toEqual({ preventScroll: true });
     }
-    focus.mockRestore();
+  });
+
+  it("no decision before the projects are known", () => {
+    const u = draft({
+      proposal_id: "u",
+      operation: "update",
+      target_skill_name: "paper-review",
+    });
+    const z = draft({ proposal_id: "z", workspace_dir: B });
+    ready([u, z]);
+    const view = render(page({ status: "pending" }));
+    const disabled = (el: HTMLElement) =>
+      (el as HTMLButtonElement | HTMLInputElement).disabled;
+
+    // Not known yet: nothing to pick, nothing runs.
+    for (const box of screen.getAllByRole("checkbox")) {
+      expect(disabled(box)).toBe(true);
+    }
+    for (const run of screen.getAllByRole("button", { name: "Run now" })) {
+      expect(disabled(run)).toBe(true);
+    }
+
+    // A selection (and a question) made while they were known waits once
+    // they are being read again.
+    view.rerender(page());
+    pick("u");
+    pick("z");
+    fireEvent.click(
+      within(selection()!).getByRole("button", { name: "Approve" })
+    );
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    view.rerender(page({ status: "pending" }));
+    expect(
+      disabled(screen.getByRole("button", { name: "Replace and install" }))
+    ).toBe(true);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Replace and install" })
+    );
+    expect(hooks.approve).not.toHaveBeenCalled();
+
+    // Behind the question (aria-hidden by the modal), the bar waits too.
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(selection()?.textContent).toContain("2 selected");
+    for (const name of ["Approve", "Reject"]) {
+      expect(disabled(within(selection()!).getByRole("button", { name }))).toBe(
+        true
+      );
+    }
+    for (const run of screen.getAllByRole("button", { name: "Run now" })) {
+      expect(disabled(run)).toBe(true);
+    }
+    expect(hooks.reject).not.toHaveBeenCalled();
+  });
+
+  it("a decision under way keeps the focus with the bar", () => {
+    const x = draft({ proposal_id: "x" });
+    ready([x]);
+    const view = render(page());
+    pick("x");
+    const approve = within(selection()!).getByRole("button", {
+      name: "Approve",
+    }) as HTMLButtonElement;
+    approve.focus();
+    fireEvent.click(approve);
+
+    // The decision runs and Approve turns off. Chrome blurs a button the
+    // moment it turns off: a focusout with no new target, the focus on the
+    // page. jsdom keeps it focused, so the page's view of the focus is
+    // stubbed until the render is done.
+    approve.disabled = true;
+    fireEvent.focusOut(approve, { relatedTarget: null });
+    const active = vi
+      .spyOn(document, "activeElement", "get")
+      .mockReturnValue(document.body);
+    try {
+      hooks.busy = true;
+      view.rerender(page());
+    } finally {
+      active.mockRestore();
+    }
+    expect(document.activeElement).toBe(
+      screen.getByRole("tab", { selected: true })
+    );
+  });
+
+  it("focus the user moved away stays there when the selection empties", () => {
+    const x = draft({ proposal_id: "x" });
+    ready([x]);
+    const view = render(page());
+    pick("x");
+    const approve = within(selection()!).getByRole("button", {
+      name: "Approve",
+    });
+    approve.focus();
+    // Focus left for the page itself (a click on plain text).
+    approve.blur();
+    expect(document.activeElement).toBe(document.body);
+
+    // A background re-read decides x elsewhere: the bar goes, the focus
+    // isn't pulled to the tab.
+    ready([{ ...x, status: "rejected" }]);
+    view.rerender(page());
+    expect(selection()).toBeNull();
+    expect(document.activeElement).toBe(document.body);
   });
 
   it("shows the empty states per tab", () => {
