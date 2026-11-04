@@ -13,7 +13,11 @@ import {
   type DraftScope,
 } from "@/lib/autoskills";
 import type { Project } from "@/lib/projects";
-import type { RelayRefusal } from "@/lib/settings";
+import {
+  isRelayRefusal,
+  postRelay,
+  type RelayReply,
+} from "@/lib/autoskillsRelay";
 
 export interface DecisionResult {
   done: Draft[];
@@ -23,18 +27,6 @@ export interface DecisionResult {
 type Answer = { status: number; error?: string; detail?: string } | "network";
 
 const UNDO_MS = 10_000;
-
-const RELAY_REFUSALS: Record<RelayRefusal, true> = {
-  not_loopback: true,
-  host_not_loopback: true,
-  cross_origin: true,
-  json_required: true,
-  secret_missing: true,
-  secret_rejected: true,
-  backend_unreachable: true,
-  backend_timeout: true,
-  unsupported: true,
-};
 
 function skills(n: number): string {
   return `${n} skills`;
@@ -113,11 +105,11 @@ export function decisionError(
         }) ?? ""
       );
     default:
-      if (Object.hasOwn(RELAY_REFUSALS, code)) {
+      if (isRelayRefusal(code)) {
         return (
           autoSkillsReadOnlyReason({
             writable: false,
-            reason: code as RelayRefusal,
+            reason: code,
           }) ?? ""
         );
       }
@@ -134,29 +126,16 @@ const SUCCESS_FLAG = {
 async function post(
   body: Record<string, unknown> & { action: keyof typeof SUCCESS_FLAG }
 ): Promise<{ ok: true } | { ok: false; answer: Answer }> {
-  let res: Response;
-  try {
-    res = await fetch("/api/autoskills", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-      cache: "no-store",
-    });
-  } catch {
-    return { ok: false, answer: "network" };
-  }
-  const parsed: unknown = await res.json().catch(() => null);
-  const data: Record<string, unknown> =
-    typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : {};
-  if (res.ok && data[SUCCESS_FLAG[body.action]] === true) {
+  const reply: RelayReply = await postRelay(body);
+  if (reply === "network") return { ok: false, answer: "network" };
+  const data = reply.data;
+  if (reply.ok && data[SUCCESS_FLAG[body.action]] === true) {
     return { ok: true };
   }
   return {
     ok: false,
     answer: {
-      status: res.status,
+      status: reply.status,
       error: typeof data.error === "string" ? data.error : undefined,
       detail: typeof data.detail === "string" ? data.detail : undefined,
     },
