@@ -36,6 +36,7 @@ beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "evo home-"));
   vi.stubEnv("XDG_CONFIG_HOME", xdg);
   vi.stubEnv("HOME", home);
+  vi.stubEnv("USERPROFILE", home);
   vi.stubEnv("EVOSCIENTIST_DATA_DIR", "");
   vi.stubEnv("EVOSCIENTIST_LANGGRAPH_DEV_PORT", "");
   resetCoreConfigCache();
