@@ -1,5 +1,6 @@
 "use client";
 
+import type React from "react";
 import { useState, useRef, useMemo, useCallback, useId } from "react";
 import { cn } from "@/lib/utils";
 import {
@@ -136,29 +137,41 @@ function FoldLine({
   );
 }
 
+export interface LineDiffOpened {
+  diff: FileEditDiff;
+  all: boolean;
+  lines: ReadonlySet<number>;
+}
+export type LineDiffOpenedState = readonly [
+  LineDiffOpened | null,
+  React.Dispatch<React.SetStateAction<LineDiffOpened | null>>
+];
+
+// What the reader opened is per diff object. A caller whose LineDiff unmounts
+// (a collapsed tool call) owns this state (useState<LineDiffOpened | null>)
+// and passes it in, so the rows stay open; otherwise LineDiff keeps it itself.
+
 export function LineDiff({
   diff,
   heading,
   compact = false,
+  openedState,
 }: {
   diff: FileEditDiff;
   heading: string;
   compact?: boolean;
+  openedState?: LineDiffOpenedState;
 }) {
+  const own = useState<LineDiffOpened | null>(null);
   // What the reader opened, for this diff only: the same call shown with
   // other args (a sub-agent's restored steps replaced by live ones) starts
   // folded again.
-  const [opened, setOpened] = useState<{
-    diff: FileEditDiff;
-    all: boolean;
-    lines: ReadonlySet<number>;
-  } | null>(null);
+  const [opened, setOpened] = openedState ?? own;
   const openedHere = opened && opened.diff === diff ? opened : null;
   const diffListRef = useRef<HTMLUListElement>(null);
   const diffHeadingId = useId();
   const reveal = useCallback(
     (change: { all: true } | { line: number }) => {
-      if (!diff) return;
       setOpened((prev) => {
         const here = prev?.diff === diff ? prev : null;
         const lines = new Set(here?.lines);
@@ -168,11 +181,10 @@ export function LineDiff({
       // The "Show more" button goes away; keep focus in the diff.
       diffListRef.current?.focus({ preventScroll: true });
     },
-    [diff]
+    [diff, setOpened]
   );
   // Built once per change, not on each streamed token.
   const diffItems = useMemo(() => {
-    if (!diff) return null;
     const shown: ShownRow[] = openedHere?.all
       ? diff.rows.map((row, key) => ({ key, row }))
       : foldRows(diff.rows);

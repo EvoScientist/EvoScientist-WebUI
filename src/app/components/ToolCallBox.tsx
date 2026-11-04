@@ -27,7 +27,11 @@ import { stringifyUnknown } from "@/app/utils/utils";
 import { autoApproveDecisions } from "@/lib/hitlPolicy";
 import type { ActionRequest as HitlActionRequest } from "@/lib/hitl";
 import { fileEditDiff } from "@/lib/fileEditDiff";
-import { DiffCounts, LineDiff } from "@/app/components/LineDiff";
+import {
+  DiffCounts,
+  LineDiff,
+  type LineDiffOpened,
+} from "@/app/components/LineDiff";
 
 // One-line preview of a tool-call argument value, shown next to the key in
 // the collapsed args row. Strings have newlines collapsed; non-strings are
@@ -173,6 +177,8 @@ export const ToolCallBox = React.memo<ToolCallBoxProps>(
       [done, toolCall.name, oldText, newText, content]
     );
     const perMatch = toolCall.name === "edit_file" && args.replace_all === true;
+    // Owned here: the diff unmounts with a collapsed call, its opened rows stay.
+    const diffOpened = useState<LineDiffOpened | null>(null);
     const argEntries = Object.entries(args).filter(
       ([key]) => !diff?.replaces.includes(key)
     );
@@ -402,6 +408,7 @@ export const ToolCallBox = React.memo<ToolCallBoxProps>(
                     diff={diff}
                     heading="Changes"
                     compact={compact}
+                    openedState={diffOpened}
                   />
                 )}
                 {hasResult && (
