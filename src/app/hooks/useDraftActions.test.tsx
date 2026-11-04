@@ -332,6 +332,44 @@ describe("useDraftActions fixes", () => {
     ]);
   });
 
+  it("a JSON null answer is a failure and the next draft still goes", async () => {
+    calls = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          calls.push({}) === 1
+            ? new Response("null", { status: 200 })
+            : new Response(JSON.stringify({ approved: true }), { status: 200 })
+        )
+      )
+    );
+    const { result } = setup();
+    const a = draft({ proposal_id: "a" });
+    const b = draft({ proposal_id: "b" });
+    let out: DecisionResult | undefined;
+    await act(async () => {
+      out = await result.current.approve([a, b]);
+    });
+    expect(calls).toHaveLength(2);
+    expect(out).toEqual({
+      done: [b],
+      failed: [{ draft: a, message: "a couldn't be changed (HTTP 200)." }],
+    });
+  });
+
+  it("a non-2xx null body gives the generic line", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(new Response("null", { status: 409 })))
+    );
+    const { result } = setup();
+    await act(async () => {
+      await result.current.approve([draft({ proposal_id: "a" })]);
+    });
+    expect(errorLines()).toEqual(["a couldn't be changed (HTTP 409)."]);
+  });
+
   it("each action needs its own flag", async () => {
     stubFetch([[200, { approved: true }]]);
     const { result } = setup();

@@ -145,7 +145,11 @@ async function post(
   } catch {
     return { ok: false, answer: "network" };
   }
-  const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  const parsed: unknown = await res.json().catch(() => null);
+  const data: Record<string, unknown> =
+    typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
   if (res.ok && data[SUCCESS_FLAG[body.action]] === true) {
     return { ok: true };
   }
