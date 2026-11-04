@@ -509,4 +509,42 @@ describe("textFileDiff", () => {
     expect(diff!.added).toBe(0);
     expect(diff!.removed).toBe(0);
   });
+
+  it("textFileDiff diffs texts that end with the truncation suffix", () => {
+    const diff = textFileDiff(
+      "old line" + TRUNCATION_SUFFIX,
+      "new line" + TRUNCATION_SUFFIX
+    );
+    expect(diff).not.toBeNull();
+    expect(diff!.removed).toBe(1);
+    expect(diff!.added).toBe(1);
+  });
+
+  it("textFileDiff shows an empty old text as all added, and the reverse", () => {
+    expect(textFileDiff("", "a\nb\n")).toMatchObject({
+      added: 2,
+      removed: 0,
+      replaces: [],
+    });
+    expect(textFileDiff("a\nb\n", "")).toMatchObject({
+      added: 0,
+      removed: 2,
+      replaces: [],
+    });
+  });
+
+  it("textFileDiff drops the carriage returns of CRLF texts", () => {
+    const diff = textFileDiff("a\r\nb\r\n", "a\r\nB\r\n");
+    expect(diff!.rows).toEqual([
+      { kind: "context", text: "a" },
+      { kind: "removed", text: "b" },
+      { kind: "added", text: "B" },
+    ]);
+  });
+
+  it("textFileDiff is null past the size limits", () => {
+    const lines = (prefix: string) =>
+      Array.from({ length: 3000 }, (_, i) => `${prefix}${i}`).join("\n");
+    expect(textFileDiff(lines("a"), lines("b"))).toBeNull();
+  });
 });

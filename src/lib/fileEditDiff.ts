@@ -96,6 +96,15 @@ export function fileEditDiff(
   // Sub-agent steps restored after a reload keep only the start of long args.
   if (before.endsWith(TRUNCATION_SUFFIX) || after.endsWith(TRUNCATION_SUFFIX))
     return null;
+  return diffTexts(before, after, ["old_string", "new_string"]);
+}
+
+// The line diff of two texts, shared by tool calls and whole files.
+function diffTexts(
+  before: string,
+  after: string,
+  replaces: string[]
+): FileEditDiff | null {
   // An edit's text usually stops mid-file, without a final line break:
   // compared as is, "a" against "a\nb" reads as "a" replaced. Diff whole
   // lines: a text without one gets the break the other text has at that point
@@ -122,7 +131,6 @@ export function fileEditDiff(
       text: newEnd ? ADDS_BREAK_NOTE : DROPS_BREAK_NOTE,
     });
   }
-  const replaces = ["old_string", "new_string"];
   if (oldText === newText) {
     if (notes.length === 0) return null;
     const lastLines = splitLines(oldText).slice(-CONTEXT_LINES);
@@ -213,14 +221,12 @@ export function clipLine(text: string): { head: string; more: number } | null {
 }
 
 /** A line diff of two whole texts (a draft file against the installed one),
- *  in the same rows the chat shows for an `edit_file` call. */
+ *  in the same rows the chat shows for an `edit_file` call. Null when the
+ *  texts are identical or too large to diff. Unlike a tool call's args, the
+ *  texts are never "cut off", so the truncation check doesn't apply. */
 export function textFileDiff(
   oldText: string,
   newText: string
 ): FileEditDiff | null {
-  const diff = fileEditDiff("edit_file", {
-    old_string: oldText,
-    new_string: newText,
-  });
-  return diff && { ...diff, replaces: [] };
+  return diffTexts(oldText, newText, []);
 }
