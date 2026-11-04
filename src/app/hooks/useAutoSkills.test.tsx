@@ -95,6 +95,27 @@ describe("useAutoSkills", () => {
     await waitFor(() => expect(result.current.status).toBe("unsupported"));
   });
 
+  it("a 405 reads as unsupported", async () => {
+    stubFetch(() => json({}, 405));
+    const { result } = renderHook(() => useAutoSkills(), { wrapper });
+    await waitFor(() => expect(result.current.status).toBe("unsupported"));
+  });
+
+  it("a failed re-read shows the error, not the old list", async () => {
+    const answers = [json(list(["a"])), json({}, 500), json(list(["b"]))];
+    stubFetch(() => answers.shift()!);
+    const { result } = renderHook(() => useAutoSkills(), { wrapper });
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+    await act(async () => {
+      await result.current.refresh().catch(() => {});
+    });
+    await waitFor(() => expect(result.current.status).toBe("error"));
+    await act(async () => {
+      await result.current.refresh();
+    });
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+  });
+
   it("a body without proposals is an error", async () => {
     stubFetch(() => json({ counts: {} }));
     const { result } = renderHook(() => useAutoSkills(), { wrapper });
@@ -166,21 +187,53 @@ describe("useDraftFile", () => {
     );
   });
 
-  it("maps 413 and 415 to their messages", async () => {
-    stubFetch(() => new Response("", { status: 413 }));
-    const a = renderHook(() => useDraftFile(d, "x", false), { wrapper });
+  it("maps 404, 413 and 415 to their messages, and anything else to the plain one", async () => {
+    stubFetch((url) => {
+      const status = Number(new URL(url).searchParams.get("path"));
+      if (status === 500) return new Response("", { status });
+      if (status === 1) throw new TypeError("Failed to fetch");
+      return new Response("", { status });
+    });
+    const expected: Record<string, string> = {
+      "404": "This file isn't there any more.",
+      "413": "This file is too large to show here.",
+      "415": "This file isn't text, so it isn't shown.",
+    };
+    for (const [status, message] of Object.entries(expected)) {
+      const h = renderHook(() => useDraftFile(d, status, false), { wrapper });
+      await waitFor(() => expect(h.result.current.error).toBe(message));
+      h.unmount();
+    }
+  });
+
+  it("a rejected fetch reads as the plain message", async () => {
+    stubFetch(() => {
+      throw new TypeError("Failed to fetch");
+    });
+    const h = renderHook(() => useDraftFile(d, "x", false), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <SWRConfig
+          value={{
+            provider: () => new Map(),
+            dedupingInterval: 0,
+            shouldRetryOnError: false,
+          }}
+        >
+          {children}
+        </SWRConfig>
+      ),
+    });
     await waitFor(() =>
-      expect(a.result.current.error).toBe(
-        "This file is too large to show here."
-      )
+      expect(h.result.current.error).toBe("Couldn't read this file.")
     );
-    stubFetch(() => new Response("", { status: 415 }));
-    const b = renderHook(() => useDraftFile(d, "y", false), { wrapper });
-    await waitFor(() =>
-      expect(b.result.current.error).toBe(
-        "This file isn't text, so it isn't shown."
-      )
-    );
+  });
+
+  it("a 413 is fetched once", async () => {
+    const fetchMock = stubFetch(() => new Response("", { status: 413 }));
+    const h = renderHook(() => useDraftFile(d, "x", false), { wrapper });
+    await waitFor(() => expect(h.result.current.error).not.toBeNull());
+    await new Promise((r) => setTimeout(r, 300));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -198,6 +251,8 @@ describe("seen-at", () => {
     expect(readAutoSeenAt("u2")).toBe("2026-11-02T00:00:00Z");
     store.set("evoscientist-autoskills-seen-at", "{not json");
     expect(readAutoSeenAt("u1")).toBeNull();
+    markAutoSeen("http://h:1/", "slash");
+    expect(readAutoSeenAt("http://h:1")).toBe("slash");
     markAutoSeen("u3", "t");
     expect(readAutoSeenAt("u3")).toBe("t");
     vi.stubGlobal("localStorage", {

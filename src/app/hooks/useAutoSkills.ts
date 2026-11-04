@@ -59,10 +59,12 @@ export function useAutoSkills(): AutoSkillsState & {
     refreshInterval: AUTOSKILLS_REFRESH_MS,
     revalidateOnFocus: true,
   });
+  // The latest read decides: a failed re-read shows the error, not the old
+  // list (SWR keeps `data` next to `error`; a later success clears the error).
   let state: AutoSkillsState;
-  if (data === "unsupported") state = { status: "unsupported" };
+  if (error) state = { status: "error", error: error as Error };
+  else if (data === "unsupported") state = { status: "unsupported" };
   else if (data) state = { status: "ready", list: data };
-  else if (error) state = { status: "error", error: error as Error };
   else state = { status: "loading" };
   return { ...state, refresh: mutate };
 }
@@ -81,11 +83,20 @@ type FileKey = readonly [
   boolean
 ];
 
+const FILE_FALLBACK = "Couldn't read this file.";
 const FILE_ERRORS: Record<number, string> = {
   404: "This file isn't there any more.",
   413: "This file is too large to show here.",
   415: "This file isn't text, so it isn't shown.",
 };
+
+class DraftFileError extends Error {
+  readonly final: boolean;
+  constructor(message: string, final: boolean) {
+    super(message);
+    this.final = final;
+  }
+}
 
 async function fetchDraftFile([
   ,
@@ -98,13 +109,20 @@ async function fetchDraftFile([
   const url =
     `${base}/api/autoskills/proposals/${encodeURIComponent(id)}/file` +
     `?path=${encodeURIComponent(path)}${installed ? "&installed=1" : ""}`;
-  const res = await fetch(url, {
-    headers: headersFor(apiKey),
-    cache: "no-store",
-  });
-  if (!res.ok)
-    throw new Error(FILE_ERRORS[res.status] ?? "Couldn't read this file.");
-  return res.text();
+  try {
+    const res = await fetch(url, {
+      headers: headersFor(apiKey),
+      cache: "no-store",
+    });
+    if (!res.ok) {
+      const known = FILE_ERRORS[res.status];
+      throw new DraftFileError(known ?? FILE_FALLBACK, known !== undefined);
+    }
+    return await res.text();
+  } catch (e) {
+    if (e instanceof DraftFileError) throw e;
+    throw new DraftFileError(FILE_FALLBACK, false);
+  }
 }
 
 /** One file of a draft (or its installed copy), read on demand. */
@@ -119,7 +137,10 @@ export function useDraftFile(
     base && draft && path
       ? ["autoskills-file", base, apiKey, draft.proposal_id, path, installed]
       : null;
-  const { data, error, isLoading } = useSWR(key, fetchDraftFile);
+  const { data, error, isLoading } = useSWR(key, fetchDraftFile, {
+    // A missing, too large or binary file will not change by asking again.
+    shouldRetryOnError: (e) => !(e instanceof DraftFileError && e.final),
+  });
   return {
     text: data ?? null,
     error: error ? (error as Error).message : null,
@@ -143,7 +164,7 @@ function readSeen(): Record<string, string> {
 }
 
 export function readAutoSeenAt(deploymentUrl: string): string | null {
-  const at = readSeen()[deploymentUrl];
+  const at = readSeen()[baseOf(deploymentUrl) ?? deploymentUrl];
   return typeof at === "string" ? at : null;
 }
 
@@ -151,7 +172,10 @@ export function markAutoSeen(deploymentUrl: string, at: string): void {
   try {
     localStorage.setItem(
       SEEN_KEY,
-      JSON.stringify({ ...readSeen(), [deploymentUrl]: at })
+      JSON.stringify({
+        ...readSeen(),
+        [baseOf(deploymentUrl) ?? deploymentUrl]: at,
+      })
     );
   } catch {
     // Storage can be blocked or full; the mark is a convenience.
