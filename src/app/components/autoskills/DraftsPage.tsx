@@ -20,6 +20,7 @@ import {
 import {
   autoSkillsReadOnlyReason,
   groupDrafts,
+  labelFor,
   statusLine,
   type Draft,
   type DraftList as Drafts,
@@ -57,16 +58,58 @@ function joinNames(names: string[]): string {
   return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
 
-/** The ids of `selected` that are still pending in `list`. */
+/** The skills an approval replaces, by name; a name that repeats (the same
+ *  skill in two projects) carries its project. */
+function replacedNames(
+  updates: readonly Draft[],
+  labels: Map<string, string>
+): string[] {
+  const names = updates.map((d) => d.target_skill_name ?? d.skill_name);
+  const seen = new Map<string, number>();
+  for (const n of names) seen.set(n, (seen.get(n) ?? 0) + 1);
+  return names.map((n, i) =>
+    (seen.get(n) ?? 0) > 1
+      ? `${n} (${labelFor(updates[i].workspace_dir, labels)})`
+      : n
+  );
+}
+
+/** The ids of `selected` still pending in `list`, and, once the projects
+ *  are known, still in a registered project. */
 function stillPending(
   selected: ReadonlySet<string>,
-  list: Drafts
+  list: Drafts,
+  registered: ReadonlySet<string> | null
 ): ReadonlySet<string> {
   const pending = new Set(
-    list.drafts.filter((d) => d.status === "pending").map((d) => d.proposal_id)
+    list.drafts
+      .filter(
+        (d) =>
+          d.status === "pending" &&
+          (registered === null || registered.has(d.workspace_dir))
+      )
+      .map((d) => d.proposal_id)
   );
   const kept = [...selected].filter((id) => pending.has(id));
   return kept.length === selected.size ? selected : new Set(kept);
+}
+
+/** Below 768 px, where the open draft takes the list's place (max-md:). */
+function isPhone(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    !window.matchMedia("(min-width: 768px)").matches
+  );
+}
+
+/** Focus the first of `targets` that takes it, without scrolling. */
+function focusFirst(targets: ReadonlyArray<HTMLElement | null | undefined>) {
+  for (const el of targets) {
+    if (!el?.isConnected || (el as HTMLButtonElement).disabled) continue;
+    el.focus({ preventScroll: true });
+    if (document.activeElement === el) return;
+  }
 }
 
 export function DraftsPage() {
@@ -79,6 +122,13 @@ export function DraftsPage() {
   const { projects } = useProjects();
   const projectList =
     projects.status === "ready" ? projects.projects : NO_PROJECTS;
+  const registered = useMemo(
+    () =>
+      projects.status === "ready"
+        ? new Set(projects.projects.map((p) => p.key))
+        : null,
+    [projects]
+  );
   const { payload } = useSettings();
   const { access } = useSettingsAccess();
   const { approve, reject, busy } = useDraftActions(projectList);
@@ -94,12 +144,20 @@ export function DraftsPage() {
 
   // A new list keeps only the picks still pending in it (a draft decided in
   // the CLI or another tab drops out, and so do the ones just decided here
-  // once the list is read again); another tab starts with none.
-  const [basis, setBasis] = useState({ list, status });
-  if (basis.list !== list || basis.status !== status) {
-    setBasis({ list, status });
+  // once the list is read again), and new projects only the picks of a
+  // project still registered (a bulk decision never sends a stale id);
+  // another tab starts with none.
+  const [basis, setBasis] = useState({ list, status, registered });
+  if (
+    basis.list !== list ||
+    basis.status !== status ||
+    basis.registered !== registered
+  ) {
+    setBasis({ list, status, registered });
     if (basis.status !== status) setSelected(NO_SELECTION);
-    else if (list) setSelected((prev) => stillPending(prev, list));
+    else if (list) {
+      setSelected((prev) => stillPending(prev, list, registered));
+    }
   }
 
   // Opening this page counts as having seen the automatic installs.
@@ -117,21 +175,31 @@ export function DraftsPage() {
   const shown = useMemo(() => groups.flatMap((g) => g.drafts), [groups]);
   const openDraft = shown.find((d) => d.proposal_id === draftId) ?? null;
   const selectedDrafts = shown.filter((d) => selected.has(d.proposal_id));
-  const updates = selectedDrafts
-    .filter((d) => d.operation === "update")
-    .map((d) => d.target_skill_name ?? d.skill_name);
+  const labels = useMemo(
+    () => new Map(groups.map((g) => [g.project.key, g.label])),
+    [groups]
+  );
+  const updates = replacedNames(
+    selectedDrafts.filter((d) => d.operation === "update"),
+    labels
+  );
 
   // The question only stands while the selection still holds an update.
   if (confirming && updates.length === 0) setConfirming(false);
 
   const canWrite = access?.writable === true;
-  const readOnlyReason = autoSkillsReadOnlyReason(access);
+  // Said only once known: while access is being checked every decision
+  // waits, without a box that goes again a moment later.
+  const readOnlyReason =
+    access && !access.writable ? autoSkillsReadOnlyReason(access) : null;
   const line = statusLine(payload?.settings);
 
   const baseId = useId();
   const tabId = (s: DraftStatus) => `${baseId}-tab-${s}`;
   const panelId = `${baseId}-panel`;
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const selectedTab = () =>
+    tabRefs.current[TABS.findIndex((t) => t.status === status)];
 
   const showTab = (index: number) => void setTabParam(TABS[index].param);
   // The tabs pattern: one tab stop; arrows (wrapping), Home and End move
@@ -165,6 +233,67 @@ export function DraftsPage() {
     void setTabParam(null);
     void setDraftId(null);
   };
+
+  // Focus. Below 768 px opening a draft hides the list (and the row that
+  // had the focus), and Back hides itself: the focus follows to the pane's
+  // Back button, and back to the row (or the selected tab).
+  const listRef = useRef<HTMLDivElement>(null);
+  const backRef = useRef<HTMLButtonElement>(null);
+  const focusRequest = useRef<{ to: "pane" | "row"; id: string } | null>(null);
+  const openRow = (id: string) => {
+    focusRequest.current = isPhone() ? { to: "pane", id } : null;
+    void setDraftId(id);
+  };
+  const closeDraft = () => {
+    focusRequest.current =
+      openDraft && isPhone() ? { to: "row", id: openDraft.proposal_id } : null;
+    void setDraftId(null);
+  };
+  useEffect(() => {
+    const want = focusRequest.current;
+    if (!want) return;
+    if (want.to === "pane") {
+      if (draftId !== want.id) return;
+      focusRequest.current = null;
+      focusFirst([backRef.current]);
+    } else {
+      if (draftId !== null) return;
+      focusRequest.current = null;
+      const row = [
+        ...(listRef.current?.querySelectorAll<HTMLElement>("[data-draft-id]") ??
+          []),
+      ].find((el) => el.dataset.draftId === want.id);
+      focusFirst([row, selectedTab()]);
+    }
+  });
+
+  // The selection bar: when its buttons go (the re-read emptied the
+  // selection, Clear) or turn off (a decision under way) while the focus was
+  // in it, the focus moves to the selected tab instead of the page.
+  const approveRef = useRef<HTMLButtonElement>(null);
+  const barRef = useRef<HTMLDivElement>(null);
+  const barHadFocus = useRef(false);
+  const barState =
+    selectedDrafts.length === 0
+      ? "gone"
+      : !canWrite || busy
+      ? "disabled"
+      : "usable";
+  const lastBarState = useRef(barState);
+  useEffect(() => {
+    const before = lastBarState.current;
+    lastBarState.current = barState;
+    if (before === barState || barState === "usable") return;
+    if (!barHadFocus.current) return;
+    const active = document.activeElement as HTMLButtonElement | null;
+    const lost =
+      !active ||
+      active === document.body ||
+      (!!barRef.current?.contains(active) && active.disabled);
+    if (!lost) return;
+    barHadFocus.current = false;
+    focusFirst([selectedTab()]);
+  });
 
   const toggle = (ids: string[], on: boolean) =>
     setSelected((prev) => {
@@ -326,17 +455,37 @@ export function DraftsPage() {
                   "md:grid md:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] md:items-start md:gap-4"
               )}
             >
-              <div className={cn("min-w-0", openDraft && "max-md:hidden")}>
+              <div
+                ref={listRef}
+                className={cn("min-w-0", openDraft && "max-md:hidden")}
+              >
                 {selectedDrafts.length > 0 && (
                   <div
+                    ref={barRef}
                     role="region"
                     aria-label="Selection"
+                    onFocus={() => {
+                      barHadFocus.current = true;
+                    }}
+                    onBlur={(e) => {
+                      // Focus moved elsewhere on purpose; with no new target
+                      // (a button turned off, or gone) it was lost here.
+                      const next = e.relatedTarget as Node | null;
+                      if (next && !e.currentTarget.contains(next)) {
+                        barHadFocus.current = false;
+                      }
+                    }}
+                    // Safari doesn't focus a clicked button.
+                    onClick={() => {
+                      barHadFocus.current = true;
+                    }}
                     className="sticky top-0 z-10 mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-border bg-background px-3 py-2"
                   >
                     <span className="mr-auto text-sm font-medium">
                       {selectedDrafts.length} selected
                     </span>
                     <Button
+                      ref={approveRef}
                       type="button"
                       size="sm"
                       disabled={!canWrite || busy}
@@ -372,10 +521,11 @@ export function DraftsPage() {
                   selected={selected}
                   onToggle={toggle}
                   openId={openDraft?.proposal_id ?? null}
-                  onOpen={(id) => void setDraftId(id)}
+                  onOpen={openRow}
                   running={running}
                   onRun={(key) => void run(key)}
                   canWrite={canWrite}
+                  registered={registered}
                 />
               </div>
 
@@ -383,17 +533,20 @@ export function DraftsPage() {
               {shown.length > 0 && (
                 <div
                   className={cn(
-                    "min-w-0 rounded-lg border border-border bg-card p-4 md:sticky md:top-0",
+                    // Its own scrolling, within the viewport: a long draft
+                    // stays reachable while the list scrolls beside it.
+                    "scrollbar-pretty min-w-0 rounded-lg border border-border bg-card p-4 md:sticky md:top-4 md:max-h-[calc(100dvh-6rem)] md:overflow-y-auto",
                     !openDraft && "max-md:hidden"
                   )}
                 >
                   {openDraft ? (
                     <>
                       <Button
+                        ref={backRef}
                         type="button"
                         variant="ghost"
                         size="sm"
-                        onClick={() => void setDraftId(null)}
+                        onClick={closeDraft}
                         className="-ml-2 mb-2 min-h-11 md:hidden"
                       >
                         <ArrowLeft aria-hidden="true" />
@@ -419,7 +572,15 @@ export function DraftsPage() {
           if (!open) setConfirming(false);
         }}
       >
-        <DialogContent className="sm:max-w-md">
+        <DialogContent
+          className="sm:max-w-md"
+          // No trigger for Radix to give the focus back to: Approve opened
+          // it, or the selected tab once Approve is gone or off.
+          onCloseAutoFocus={(e) => {
+            e.preventDefault();
+            focusFirst([approveRef.current, selectedTab()]);
+          }}
+        >
           <DialogHeader>
             <DialogTitle>
               {updates.length === 1
@@ -435,7 +596,7 @@ export function DraftsPage() {
               type="button"
               variant="outline"
               onClick={() => setConfirming(false)}
-              className="border-solid"
+              className="border-solid max-md:min-h-11"
             >
               Cancel
             </Button>
@@ -443,6 +604,7 @@ export function DraftsPage() {
               type="button"
               onClick={confirmReplace}
               disabled={!canWrite || busy}
+              className="max-md:min-h-11"
             >
               Replace and install
             </Button>

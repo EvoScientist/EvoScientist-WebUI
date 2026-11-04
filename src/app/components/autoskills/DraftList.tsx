@@ -32,6 +32,10 @@ export interface DraftListProps {
   running: ReadonlySet<string>;
   onRun(projectKey: string): void;
   canWrite: boolean;
+  /** The registered projects' keys; null while they are not known. A group
+   *  of a project the backend doesn't serve (any more) can't run, and its
+   *  drafts can't be picked: the core would refuse them. */
+  registered: ReadonlySet<string> | null;
 }
 
 export function DraftList({
@@ -44,6 +48,7 @@ export function DraftList({
   running,
   onRun,
   canWrite,
+  registered,
 }: DraftListProps) {
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   // The groups already carry the page's labels: installedLabel reads them.
@@ -89,6 +94,9 @@ export function DraftList({
           running={running.has(group.project.key)}
           onRun={() => onRun(group.project.key)}
           canWrite={canWrite}
+          served={
+            registered === null ? null : registered.has(group.project.key)
+          }
           labels={labels}
         />
       ))}
@@ -108,6 +116,7 @@ function Group({
   running,
   onRun,
   canWrite,
+  served,
   labels,
 }: {
   group: DraftGroup;
@@ -121,10 +130,13 @@ function Group({
   running: boolean;
   onRun(): void;
   canWrite: boolean;
+  /** Whether the backend serves this project; null while not known. */
+  served: boolean | null;
   labels: Map<string, string>;
 }) {
   const id = useId();
   const labelId = `${id}-label`;
+  const canPick = canWrite && served !== false;
   const bodyId = `${id}-drafts`;
   const ids = group.drafts.map((d) => d.proposal_id);
   const picked = ids.filter((d) => selected.has(d)).length;
@@ -133,7 +145,8 @@ function Group({
   const Chevron = collapsed ? ChevronRight : ChevronDown;
 
   return (
-    <section
+    <div
+      role="group"
       aria-labelledby={labelId}
       className="rounded-lg border border-border bg-card"
     >
@@ -143,7 +156,7 @@ function Group({
             <GroupCheckbox
               checked={all}
               indeterminate={some}
-              disabled={!canWrite}
+              disabled={!canPick}
               label={`Select all drafts in ${group.label}`}
               onChange={(on) => onToggle(ids, on)}
             />
@@ -177,7 +190,9 @@ function Group({
             variant="outline"
             size="sm"
             onClick={onRun}
-            disabled={!canWrite || running || group.project.missing}
+            disabled={
+              !canWrite || running || served !== true || group.project.missing
+            }
             className="border-solid max-md:min-h-11"
           >
             {running ? "Running…" : "Run now"}
@@ -203,14 +218,14 @@ function Group({
                 onCheck={(on) => onToggle([draft.proposal_id], on)}
                 open={draft.proposal_id === openId}
                 onOpen={() => onOpen(draft.proposal_id)}
-                canWrite={canWrite}
+                canPick={canPick}
                 labels={labels}
               />
             ))}
           </ul>
         )}
       </div>
-    </section>
+    </div>
   );
 }
 
@@ -253,7 +268,7 @@ function Row({
   onCheck,
   open,
   onOpen,
-  canWrite,
+  canPick,
   labels,
 }: {
   draft: Draft;
@@ -262,7 +277,7 @@ function Row({
   onCheck(on: boolean): void;
   open: boolean;
   onOpen(): void;
-  canWrite: boolean;
+  canPick: boolean;
   labels: Map<string, string>;
 }) {
   const id = useId();
@@ -282,7 +297,7 @@ function Row({
           <input
             type="checkbox"
             checked={checked}
-            disabled={!canWrite}
+            disabled={!canPick}
             aria-label={`Select ${draft.skill_name}`}
             onChange={(e) => onCheck(e.target.checked)}
             className={CHECKBOX}
@@ -292,6 +307,7 @@ function Row({
       <button
         type="button"
         onClick={onOpen}
+        data-draft-id={draft.proposal_id}
         aria-current={open ? "true" : undefined}
         aria-labelledby={nameId}
         aria-describedby={detailsId}

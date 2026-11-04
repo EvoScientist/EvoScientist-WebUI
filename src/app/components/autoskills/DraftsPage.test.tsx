@@ -1,7 +1,14 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Draft, DraftList } from "@/lib/autoskills";
+import type { ProjectsState } from "@/lib/projects";
 import type { SettingsWriteAccess } from "@/lib/settings";
 import {
   mockProjects,
@@ -135,9 +142,9 @@ function ready(drafts: Draft[]) {
   hooks.auto = { status: "ready", list: listOf(drafts) };
 }
 
-function page() {
+function page(projects: ProjectsState = readyProjects(A, B)) {
   return (
-    <TestProjectsProvider value={mockProjects(readyProjects(A, B))}>
+    <TestProjectsProvider value={mockProjects(projects)}>
       <DraftsPage />
     </TestProjectsProvider>
   );
@@ -216,6 +223,32 @@ describe("DraftsPage", () => {
     expect(selection()).toBeNull();
   });
 
+  it("selection drops drafts whose project was removed", () => {
+    const x = draft({ proposal_id: "x" });
+    const z = draft({ proposal_id: "z", workspace_dir: B });
+    ready([x, z]);
+    const view = render(page());
+    pick("x");
+    pick("z");
+    expect(selection()?.textContent).toContain("2 selected");
+
+    // While the projects are being read again nothing is dropped for them.
+    view.rerender(page({ status: "pending" }));
+    expect(selection()?.textContent).toContain("2 selected");
+
+    // EvoSci_test was removed; its drafts are not re-read yet.
+    view.rerender(page(readyProjects(B)));
+    expect(selection()?.textContent).toContain("1 selected");
+    expect(
+      (screen.getByRole("checkbox", { name: "Select x" }) as HTMLInputElement)
+        .checked
+    ).toBe(false);
+    fireEvent.click(
+      within(selection()!).getByRole("button", { name: "Approve" })
+    );
+    expect(hooks.approve.mock.calls[0]).toEqual([[z]]);
+  });
+
   it("an open draft that left the list shows the empty pane", () => {
     const x = draft({ proposal_id: "x", skill_name: "arxiv-paper-retrieval" });
     const y = draft({ proposal_id: "y", created_at: "2026-10-01T09:00:00Z" });
@@ -225,6 +258,8 @@ describe("DraftsPage", () => {
 
     const row = screen.getByRole("button", { name: "arxiv-paper-retrieval" });
     expect(row.getAttribute("aria-current")).toBe("true");
+    // Beside the list (no phone), opening leaves the focus where it was.
+    expect(document.activeElement).toBe(document.body);
     expect(screen.queryByText("Select a draft to read it.")).toBeNull();
 
     // On a phone the draft takes the list's place, with a way back.
@@ -233,8 +268,11 @@ describe("DraftsPage", () => {
     expect(screen.getByText("Select a draft to read it.")).toBeTruthy();
 
     // Opened again, then decided elsewhere: it leaves Pending.
+    row.focus();
     fireEvent.click(row);
     expect(q.values.get("draftId")).toBe("x");
+    // Beside the list the row keeps the focus (the phone moves it).
+    expect(document.activeElement).toBe(row);
     ready([{ ...x, status: "approved" }, y]);
     view.rerender(page());
     expect(screen.getByText("Select a draft to read it.")).toBeTruthy();
@@ -350,6 +388,166 @@ describe("DraftsPage", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
+  it("an open question follows the re-read and approves only what is left", () => {
+    const u1 = draft({
+      proposal_id: "u1",
+      operation: "update",
+      target_skill_name: "paper-review",
+    });
+    const u2 = draft({
+      proposal_id: "u2",
+      skill_name: "lit-search",
+      operation: "update",
+      created_at: "2026-10-30T09:00:00Z",
+    });
+    const c = draft({ proposal_id: "c", created_at: "2026-10-01T09:00:00Z" });
+    ready([u1, u2, c]);
+    const view = render(page());
+    pick("u1");
+    pick("lit-search");
+    pick("c");
+    fireEvent.click(
+      within(selection()!).getByRole("button", { name: "Approve" })
+    );
+    expect(
+      screen.getByText(
+        "This replaces the installed paper-review and lit-search."
+      )
+    ).toBeTruthy();
+
+    // lit-search was rejected in the CLI while the question was open.
+    ready([u1, { ...u2, status: "rejected" }, c]);
+    view.rerender(page());
+    expect(
+      screen.getByText("This replaces the installed paper-review.")
+    ).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Replace and install" })
+    );
+    expect(hooks.approve.mock.calls).toEqual([[[u1, c]]]);
+  });
+
+  it("names a repeated skill with its project", () => {
+    const a = draft({
+      proposal_id: "a",
+      operation: "update",
+      target_skill_name: "paper-review",
+    });
+    const b = draft({
+      proposal_id: "b",
+      operation: "update",
+      target_skill_name: "paper-review",
+      workspace_dir: B,
+    });
+    const l = draft({
+      proposal_id: "l",
+      operation: "update",
+      target_skill_name: "lit-search",
+      workspace_dir: B,
+      created_at: "2026-10-01T09:00:00Z",
+    });
+    ready([a, b, l]);
+    render(page());
+    pick("a");
+    pick("b");
+    pick("l");
+    fireEvent.click(
+      within(selection()!).getByRole("button", { name: "Approve" })
+    );
+    expect(
+      screen.getByText(
+        "This replaces the installed paper-review (EvoSci_test), paper-review (project_B) and lit-search."
+      )
+    ).toBeTruthy();
+  });
+
+  it("focus comes back after the question and after a bulk decision", async () => {
+    const u = draft({
+      proposal_id: "u",
+      operation: "update",
+      target_skill_name: "paper-review",
+    });
+    const c = draft({ proposal_id: "c", created_at: "2026-10-01T09:00:00Z" });
+    ready([u, c]);
+    const view = render(page());
+    const approveButton = () =>
+      within(selection()!).getByRole("button", { name: "Approve" });
+
+    // Cancel gives the focus back to Approve (the dialog has no trigger).
+    pick("u");
+    approveButton().focus();
+    fireEvent.click(approveButton());
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    // Radix gives the focus on the next tick.
+    await waitFor(() => expect(document.activeElement).toBe(approveButton()));
+
+    // Replace and install: back to Approve, and once the re-read empties the
+    // selection (the bar goes), to the selected tab.
+    fireEvent.click(approveButton());
+    fireEvent.click(
+      screen.getByRole("button", { name: "Replace and install" })
+    );
+    await waitFor(() => expect(document.activeElement).toBe(approveButton()));
+    ready([{ ...u, status: "approved" }, c]);
+    view.rerender(page());
+    expect(selection()).toBeNull();
+    expect(document.activeElement).toBe(
+      screen.getByRole("tab", { selected: true })
+    );
+
+    // A bulk Approve without a question, the same way.
+    pick("c");
+    approveButton().focus();
+    fireEvent.click(approveButton());
+    expect(hooks.approve).toHaveBeenLastCalledWith([c]);
+    ready([
+      { ...u, status: "approved" },
+      { ...c, status: "approved" },
+    ]);
+    view.rerender(page());
+    expect(document.activeElement).toBe(
+      screen.getByRole("tab", { selected: true })
+    );
+  });
+
+  it("on a phone the open draft takes the focus and Back returns it", () => {
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: query === "(max-width: 767px)",
+      media: query,
+      onchange: null,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+      addListener: () => undefined,
+      removeListener: () => undefined,
+      dispatchEvent: () => false,
+    }));
+    const focus = vi.spyOn(HTMLElement.prototype, "focus");
+    ready([
+      draft({ proposal_id: "x", skill_name: "arxiv-paper-retrieval" }),
+      draft({ proposal_id: "y", created_at: "2026-10-01T09:00:00Z" }),
+    ]);
+    render(page());
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "arxiv-paper-retrieval" })
+    );
+    const back = screen.getByRole("button", { name: "Back to drafts" });
+    expect(document.activeElement).toBe(back);
+
+    fireEvent.click(back);
+    expect(screen.queryByRole("button", { name: "Back to drafts" })).toBeNull();
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "arxiv-paper-retrieval" })
+    );
+    // Never scrolled there.
+    expect(focus.mock.calls.length).toBeGreaterThan(0);
+    for (const call of focus.mock.calls) {
+      expect(call[0]).toEqual({ preventScroll: true });
+    }
+    focus.mockRestore();
+  });
+
   it("shows the empty states per tab", () => {
     ready([]);
     render(page());
@@ -459,16 +657,21 @@ describe("DraftsPage", () => {
       expect((run as HTMLButtonElement).disabled).toBe(true);
     }
 
-    // While the access is still being checked, the page says so and waits.
+    // While the access is still being checked nothing is said (no box that
+    // goes again a moment later), and every decision waits.
     hooks.access = undefined;
     view.rerender(page());
     expect(
-      screen.getByText("Checking whether this page can review drafts…")
-    ).toBeTruthy();
+      screen.queryByText("Checking whether this page can review drafts…")
+    ).toBeNull();
+    expect(screen.queryByText(/listens on the network/)).toBeNull();
     expect(
       (screen.getByRole("checkbox", { name: "Select x" }) as HTMLInputElement)
         .disabled
     ).toBe(true);
+    for (const run of screen.getAllByRole("button", { name: "Run now" })) {
+      expect((run as HTMLButtonElement).disabled).toBe(true);
+    }
 
     // A selection made while writable keeps its bar, with the decisions off.
     hooks.access = { writable: true };
@@ -505,7 +708,7 @@ describe("DraftsPage", () => {
   it("Run now starts that project's run", () => {
     ready([]);
     render(page());
-    const group = screen.getByRole("region", { name: "project_B" });
+    const group = screen.getByRole("group", { name: "project_B" });
     fireEvent.click(within(group).getByRole("button", { name: "Run now" }));
     expect(hooks.run).toHaveBeenCalledWith(B);
   });

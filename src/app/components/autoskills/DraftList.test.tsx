@@ -70,6 +70,8 @@ function twoProjects(
   ];
 }
 
+const GONE = "/work/gone";
+
 function renderList(
   over: Partial<{
     groups: DraftGroup[];
@@ -78,6 +80,7 @@ function renderList(
     openId: string | null;
     running: ReadonlySet<string>;
     canWrite: boolean;
+    registered: ReadonlySet<string> | null;
   }> = {}
 ) {
   const props = {
@@ -90,19 +93,25 @@ function renderList(
     running: new Set<string>(),
     onRun: vi.fn(),
     canWrite: true,
+    registered: new Set([A, B, GONE]) as ReadonlySet<string> | null,
     ...over,
   };
-  const view = render(<DraftList {...props} />);
-  return { ...props, ...view };
+  const { rerender } = render(<DraftList {...props} />);
+  return { props, rerender };
 }
 
-const group = (label: string) => screen.getByRole("region", { name: label });
+const group = (label: string) => screen.getByRole("group", { name: label });
+
+/** A row button's accessible name: the element its aria-labelledby names. */
+const nameOf = (button: HTMLElement) =>
+  document.getElementById(button.getAttribute("aria-labelledby") ?? "")
+    ?.textContent;
 
 describe("DraftList", () => {
   it("groups drafts by project with counts and Run now", () => {
-    const props = renderList({
+    const { props } = renderList({
       groups: twoProjects({ b: [] }).concat({
-        project: { key: "/work/gone", name: "gone", missing: true },
+        project: { key: GONE, name: "gone", missing: true },
         label: "gone",
         drafts: [],
       }),
@@ -114,9 +123,9 @@ describe("DraftList", () => {
     expect(toggle.textContent).toContain("2");
     // Newest first, as the groups come.
     const rows = within(a).getAllByRole("listitem");
-    expect(rows.map((r) => within(r).getAllByRole("button")[0].id)).toEqual([
-      within(a).getByRole("button", { name: "arxiv-paper-retrieval" }).id,
-      within(a).getByRole("button", { name: "chunk-verifier" }).id,
+    expect(rows.map((r) => nameOf(within(r).getByRole("button")))).toEqual([
+      "arxiv-paper-retrieval",
+      "chunk-verifier",
     ]);
 
     // An empty group still shows, says so and can be run.
@@ -148,7 +157,7 @@ describe("DraftList", () => {
   });
 
   it("a group checkbox selects that group's drafts and shows partial selection", () => {
-    const props = renderList({ selected: new Set(["x"]) });
+    const { props, rerender } = renderList({ selected: new Set(["x"]) });
 
     const all = within(group("EvoSci_test")).getByRole("checkbox", {
       name: "Select all drafts in EvoSci_test",
@@ -170,7 +179,7 @@ describe("DraftList", () => {
     ).toBe(true);
 
     // Every draft of the group picked: checked, not partial; a click clears it.
-    props.rerender(
+    rerender(
       <DraftList
         {...props}
         selected={new Set(["x", "y"])}
@@ -182,7 +191,7 @@ describe("DraftList", () => {
     expect(props.onToggle).toHaveBeenLastCalledWith(["x", "y"], false);
 
     // Other tabs have no checkboxes.
-    props.rerender(
+    rerender(
       <DraftList
         {...props}
         status="approved"
@@ -205,7 +214,7 @@ describe("DraftList", () => {
   });
 
   it("rows show the draft, open it and mark the open one", () => {
-    const props = renderList({ openId: "y" });
+    const { props } = renderList({ openId: "y" });
     const row = screen.getByRole("button", {
       name: "arxiv-paper-retrieval",
     });
@@ -244,16 +253,16 @@ describe("DraftList", () => {
   });
 
   it("shows the empty states", () => {
-    const view = renderList({
+    const { props, rerender } = renderList({
       groups: twoProjects({ a: [], b: [] }),
     });
     expect(
       screen.getByText("All caught up — nothing waits for review.")
     ).toBeTruthy();
     expect(screen.getAllByText("No drafts waiting.")).toHaveLength(2);
-    view.rerender(
+    rerender(
       <DraftList
-        {...view}
+        {...props}
         groups={[]}
         status="rejected"
       />
@@ -262,6 +271,51 @@ describe("DraftList", () => {
     expect(
       screen.queryByText("All caught up — nothing waits for review.")
     ).toBeNull();
+  });
+
+  it("Run now and selecting wait for the project to be registered", () => {
+    const unknown = draft({ proposal_id: "u", workspace_dir: "/work/unknown" });
+    const { props, rerender } = renderList({
+      groups: twoProjects().concat({
+        project: { key: "/work/unknown", name: "unknown", missing: false },
+        label: "unknown",
+        drafts: [unknown],
+      }),
+    });
+
+    // A project the backend no longer serves: nothing can be sent for it.
+    const gone = group("unknown");
+    expect(
+      (
+        within(gone).getByRole("button", {
+          name: "Run now",
+        }) as HTMLButtonElement
+      ).disabled
+    ).toBe(true);
+    for (const box of within(gone).getAllByRole("checkbox")) {
+      expect((box as HTMLInputElement).disabled).toBe(true);
+    }
+    expect(
+      (
+        within(group("project_B")).getByRole("button", {
+          name: "Run now",
+        }) as HTMLButtonElement
+      ).disabled
+    ).toBe(false);
+
+    // Before the projects are known no project runs; picking stays open.
+    rerender(
+      <DraftList
+        {...props}
+        registered={null}
+      />
+    );
+    for (const run of screen.getAllByRole("button", { name: "Run now" })) {
+      expect((run as HTMLButtonElement).disabled).toBe(true);
+    }
+    for (const box of screen.getAllByRole("checkbox")) {
+      expect((box as HTMLInputElement).disabled).toBe(false);
+    }
   });
 
   it("disables every write control while the page can't write", () => {
