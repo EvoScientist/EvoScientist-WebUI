@@ -52,7 +52,8 @@ export function useRunNow(projects: readonly Project[]): {
   const refreshRef = useRef(auto.refresh);
   refreshRef.current = auto.refresh;
 
-  const activeRef = useRef(new Set<string>());
+  // The token of the run that holds each project key.
+  const activeRef = useRef(new Map<string, object>());
   // Bumped on every cleanup: a run that started before it is cancelled.
   const epochRef = useRef(0);
   const mountedRef = useRef(false);
@@ -62,17 +63,21 @@ export function useRunNow(projects: readonly Project[]): {
 
   useEffect(() => {
     mountedRef.current = true;
+    // A re-run of this effect follows a cleanup that released every key.
+    setRunning((prev) => (prev.size > 0 ? new Set() : prev));
     const sleepers = sleepersRef.current;
+    const active = activeRef.current;
     return () => {
       mountedRef.current = false;
       epochRef.current += 1;
+      active.clear();
       for (const s of sleepers) {
         clearTimeout(s.timer);
         s.resolve();
       }
       sleepers.clear();
     };
-  }, []);
+  }, [client]);
 
   const sleep = useCallback(
     (ms: number) =>
@@ -92,8 +97,9 @@ export function useRunNow(projects: readonly Project[]): {
   const run = useCallback(
     async (key: string): Promise<void> => {
       if (activeRef.current.has(key)) return;
-      activeRef.current.add(key);
-      setRunning(new Set(activeRef.current));
+      const token = {};
+      activeRef.current.set(key, token);
+      setRunning(new Set(activeRef.current.keys()));
       const epoch = epochRef.current;
       const cancelled = () => epochRef.current !== epoch;
       const label = labelFor(key, projectLabels(projectsRef.current));
@@ -172,8 +178,11 @@ export function useRunNow(projects: readonly Project[]): {
             : `AutoSkills finished in ${label}: ${n} new drafts.`
         );
       } finally {
-        activeRef.current.delete(key);
-        if (mountedRef.current) setRunning(new Set(activeRef.current));
+        // Only the run that holds the key may release it.
+        if (activeRef.current.get(key) === token) {
+          activeRef.current.delete(key);
+          if (mountedRef.current) setRunning(new Set(activeRef.current.keys()));
+        }
       }
     },
     [sleep]

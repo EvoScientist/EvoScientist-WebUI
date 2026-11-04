@@ -9,8 +9,9 @@ const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 vi.mock("sonner", () => ({ toast }));
 
 const runsGet = vi.hoisted(() => vi.fn());
+const clientBox = vi.hoisted(() => ({ current: null as unknown }));
 vi.mock("@/providers/ClientProvider", () => ({
-  useClient: () => ({ runs: { get: runsGet } }),
+  useClient: () => clientBox.current,
 }));
 
 const state = vi.hoisted(() => ({
@@ -72,6 +73,7 @@ async function tick() {
 }
 
 beforeEach(() => {
+  clientBox.current = { runs: { get: runsGet } };
   vi.useFakeTimers();
   toast.success.mockClear();
   toast.error.mockClear();
@@ -310,6 +312,46 @@ describe("useRunNow", () => {
     expect(runsGet).toHaveBeenCalledTimes(1);
     expect(toast.success).not.toHaveBeenCalled();
     expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("a cleanup frees the keys of a run waiting on the relay, and the old run never touches the new one", async () => {
+    const resolvers: Array<(r: Response) => void> = [];
+    const fetchMock = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolvers.push(resolve);
+        })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    runsGet.mockResolvedValue({ status: "running" });
+    const { result, rerender } = renderHook(() => useRunNow(projects));
+    await act(async () => {
+      void result.current.run(B);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // The effect's cleanup and re-run on the same instance (the client
+    // changed, as a deployment switch does).
+    clientBox.current = { runs: { get: runsGet } };
+    rerender();
+    expect(result.current.running.size).toBe(0);
+    await act(async () => {
+      void result.current.run(B);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.current.running.has(B)).toBe(true);
+    // The old request answers: nothing is toasted, the new key stays.
+    await act(async () => {
+      resolvers[0](
+        new Response(JSON.stringify({ error: "autoskills_off" }), {
+          status: 409,
+          headers: { "Content-Type": "application/json" },
+        })
+      );
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(result.current.running.has(B)).toBe(true);
   });
 
   it("unmount while the relay start is in flight toasts nothing", async () => {
