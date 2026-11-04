@@ -40,8 +40,8 @@ export function globalDataDir(): string {
 }
 
 /** EvoScientist's config folder: `$XDG_CONFIG_HOME/evoscientist`, by default
- *  `~/.config/evoscientist` (config.yaml, mcp.yaml). The backend's runtime
- *  files (log, pid, workspace sidecar) do not move with it. */
+ *  `~/.config/evoscientist` (config.yaml, mcp.yaml). The running backend
+ *  keeps its record of itself in the data folder's server home instead. */
 export function configDir(): string {
   return join(
     sharedDirFromEnv("XDG_CONFIG_HOME") ?? join(homedir(), ".config"),

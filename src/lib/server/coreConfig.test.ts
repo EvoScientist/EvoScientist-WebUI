@@ -11,15 +11,32 @@ import {
 } from "@/lib/server/coreConfig";
 
 let xdg: string;
+let home: string;
 
 function writeConfig(text: string) {
   mkdirSync(join(xdg, "evoscientist"), { recursive: true });
   writeFileSync(join(xdg, "evoscientist", "config.yaml"), text);
 }
 
+/** A record of a running backend of this config folder, in `dir`. */
+function writeRecord(dir: string, port: number) {
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, "langgraph_dev.workspace.json"),
+    JSON.stringify({
+      pid: process.pid,
+      port,
+      config_dir: join(xdg, "evoscientist"),
+    })
+  );
+}
+
 beforeEach(() => {
   xdg = mkdtempSync(join(tmpdir(), "evo xdg ą-"));
+  home = mkdtempSync(join(tmpdir(), "evo home-"));
   vi.stubEnv("XDG_CONFIG_HOME", xdg);
+  vi.stubEnv("HOME", home);
+  vi.stubEnv("EVOSCIENTIST_DATA_DIR", "");
   vi.stubEnv("EVOSCIENTIST_LANGGRAPH_DEV_PORT", "");
   resetCoreConfigCache();
 });
@@ -27,6 +44,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllEnvs();
   rmSync(xdg, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
 });
 
 describe("readCoreConfig", () => {
@@ -71,6 +89,42 @@ describe("readCoreConfig", () => {
     writeConfig("langgraph_dev_port: 7003\n");
     expect(readCoreConfig(1500).port).toBe(7001);
     expect(readCoreConfig(2100).port).toBe(7003);
+  });
+});
+
+describe("readCoreConfig with a running backend's record", () => {
+  const serverHome = () => join(home, ".evoscientist", "server");
+  const oldRecordDir = () => join(home, ".config", "evoscientist");
+
+  it("reads the port from the record in the server home", () => {
+    writeConfig("langgraph_dev_port: 7001\n");
+    writeRecord(serverHome(), 7010);
+    expect(readCoreConfig().port).toBe(7010);
+  });
+
+  it("prefers the server home record over the old location", () => {
+    writeRecord(serverHome(), 7010);
+    writeRecord(oldRecordDir(), 7020);
+    expect(readCoreConfig().port).toBe(7010);
+  });
+
+  it("falls back to the old location when the server home has no record", () => {
+    writeRecord(oldRecordDir(), 7020);
+    expect(readCoreConfig().port).toBe(7020);
+  });
+
+  it("falls back to the old location when the server home record is invalid", () => {
+    writeRecord(serverHome(), 70000);
+    writeRecord(oldRecordDir(), 7020);
+    expect(readCoreConfig().port).toBe(7020);
+  });
+
+  it("finds the server home under EVOSCIENTIST_DATA_DIR", () => {
+    const dataDir = join(home, "elsewhere");
+    vi.stubEnv("EVOSCIENTIST_DATA_DIR", dataDir);
+    writeRecord(serverHome(), 7010);
+    writeRecord(join(dataDir, "server"), 7030);
+    expect(readCoreConfig().port).toBe(7030);
   });
 });
 

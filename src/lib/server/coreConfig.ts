@@ -9,7 +9,7 @@ import { homedir } from "os";
 import { join, resolve } from "path";
 import { CORE_SCHEMA, load as loadYaml } from "js-yaml";
 import { pyStrip } from "@/lib/pythonWhitespace";
-import { configDir } from "@/lib/server/paths";
+import { configDir, globalDataDir } from "@/lib/server/paths";
 
 /** The backend's default port (`langgraph_dev_port` in settings.py). */
 export const DEFAULT_PORT = 6174;
@@ -56,16 +56,15 @@ export function readCoreConfig(now: number = Date.now()): CoreConfig {
   return value;
 }
 
-/** The record the running backend keeps of itself (`DEFAULT_PID_DIR` in
- *  langgraph_dev/manager.py): always ~/.config/evoscientist, whatever
- *  XDG_CONFIG_HOME says. */
-function serverRecordPath(): string {
-  return join(
-    homedir(),
-    ".config",
-    "evoscientist",
-    "langgraph_dev.workspace.json"
-  );
+/** Where the running backend keeps its record of itself, newest first: the
+ *  server home in the data folder, then ~/.config/evoscientist (whatever
+ *  XDG_CONFIG_HOME says), where older cores keep it. */
+function serverRecordPaths(): string[] {
+  const name = "langgraph_dev.workspace.json";
+  return [
+    join(globalDataDir(), "server", name),
+    join(homedir(), ".config", "evoscientist", name),
+  ];
 }
 
 function isAlive(pid: number): boolean {
@@ -84,8 +83,16 @@ function isAlive(pid: number): boolean {
  *  `EvoSci deploy --port X` and a WebUI started apart from it only agree
  *  through it. */
 function recordedPort(): number | null {
+  for (const path of serverRecordPaths()) {
+    const port = portFromRecord(path);
+    if (port !== null) return port;
+  }
+  return null;
+}
+
+function portFromRecord(path: string): number | null {
   try {
-    const record = JSON.parse(readFileSync(serverRecordPath(), "utf8")) as {
+    const record = JSON.parse(readFileSync(path, "utf8")) as {
       pid?: unknown;
       port?: unknown;
       config_dir?: unknown;
