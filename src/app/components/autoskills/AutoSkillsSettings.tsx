@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/select";
 import { autoSkillsReadOnlyReason } from "@/lib/autoskills";
 import { INPUT_LIKE_TRIGGER, LIST_MAX_HEIGHT } from "@/lib/fieldStyles";
+import { isSettingsPayload } from "@/lib/settings";
 import { saveErrorText } from "@/lib/settingsForm";
 import { cn } from "@/lib/utils";
 
@@ -119,14 +120,36 @@ export function AutoSkillsSettings({
     }
   }
 
+  // When the saved values change under the panel (a re-read), an edit that
+  // now equals its saved value is no longer an edit; with none left the base
+  // revision is forgotten, so the next edit starts from the current one.
+  const savedKey = JSON.stringify(saved);
+  const [seenSaved, setSeenSaved] = useState(savedKey);
+  if (seenSaved !== savedKey) {
+    setSeenSaved(savedKey);
+    const kept: Partial<Values> = {};
+    for (const f of FIELDS) {
+      if (f in edits && edits[f] !== saved[f]) {
+        (kept as Record<string, unknown>)[f] = edits[f];
+      }
+    }
+    if (Object.keys(kept).length !== Object.keys(edits).length) {
+      setEdits(kept);
+      if (Object.keys(kept).length === 0) setBaseRevision(null);
+    }
+  }
+
   const values: Values = { ...saved, ...edits };
   const changed = FIELDS.filter((f) => values[f] !== saved[f]);
   const off = !values[F_ENABLED];
-  // With drafting off the time field is disabled and can't be fixed, so it
-  // doesn't block Save, and a changed time goes out only when it is valid.
+  // With drafting on a bad time blocks Save. With it off the time field is
+  // disabled and can't be fixed, so it doesn't, and a changed time goes out
+  // only when it is valid.
   const timeBad = !validTime(values[F_TIME]);
-  const timeError =
-    timeBad && !off ? "Enter a time like 03:00." : serverErrors[F_TIME];
+  const timeBlocks = timeBad && !off;
+  const timeError = timeBlocks
+    ? "Enter a time like 03:00."
+    : serverErrors[F_TIME];
   const sendable = changed.filter((f) => f !== F_TIME || !timeBad);
 
   const writable = access?.writable === true;
@@ -150,7 +173,7 @@ export function AutoSkillsSettings({
     });
   };
 
-  const canSave = writable && !saving && sendable.length > 0;
+  const canSave = writable && !saving && sendable.length > 0 && !timeBlocks;
 
   const save = async () => {
     if (!canSave) return;
@@ -176,7 +199,12 @@ export function AutoSkillsSettings({
       if (res.ok) {
         setEdits({});
         setBaseRevision(null);
-        await refresh();
+        // The save happened whatever the re-read does.
+        try {
+          await refresh();
+        } catch {
+          // The page keeps the old cached values until the next read.
+        }
         onOpenChange(false);
         toast.success("AutoSkills settings saved.");
         return;
@@ -192,7 +220,7 @@ export function AutoSkillsSettings({
         } catch {
           fresh = undefined;
         }
-        if (fresh) {
+        if (isSettingsPayload(fresh)) {
           setEdits({});
           setBaseRevision(null);
           setMessage(

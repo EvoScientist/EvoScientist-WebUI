@@ -199,7 +199,14 @@ describe("AutoSkillsSettings", () => {
     hooks.refresh = vi.fn(async () => {
       hooks.settings = { ...SAVED, memory_skill_synthesis_cadence: "monthly" };
       hooks.revision = "rev2";
-      return { settings: hooks.settings, revision: "rev2" };
+      return {
+        settings: hooks.settings,
+        sources: {},
+        providers: {},
+        read_only: [],
+        setup_needed: false,
+        revision: "rev2",
+      };
     });
     fireEvent.click(
       screen.getByLabelText("Auto — install drafts without asking")
@@ -357,6 +364,77 @@ describe("AutoSkillsSettings", () => {
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
       memory_skill_synthesis_enabled: false,
       revision: "rev1",
+    });
+  });
+
+  it("drafting on: an invalid time blocks Save even with another change", () => {
+    panel();
+    fireEvent.change(screen.getByLabelText("At (local time)"), {
+      target: { value: "" },
+    });
+    fireEvent.click(
+      screen.getByLabelText("Auto — install drafts without asking")
+    );
+    expect((save() as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("a re-read that answers unsupported keeps the edits", async () => {
+    panel();
+    hooks.refresh = vi.fn().mockResolvedValue("unsupported");
+    fireEvent.click(
+      screen.getByLabelText("Auto — install drafts without asking")
+    );
+    respond(409, { error: "revision_mismatch" });
+    fireEvent.click(save());
+    expect(await screen.findByText(/reading them again failed/)).toBeTruthy();
+    expect(
+      (
+        screen.getByLabelText(
+          "Auto — install drafts without asking"
+        ) as HTMLInputElement
+      ).checked
+    ).toBe(true);
+  });
+
+  it("a saved 200 closes and toasts even when the re-read throws", async () => {
+    const onOpenChange = vi.fn();
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+    panel(onOpenChange);
+    hooks.refresh = vi.fn().mockRejectedValue(new Error("down"));
+    fireEvent.click(
+      screen.getByLabelText("Auto — install drafts without asking")
+    );
+    respond(200, {});
+    fireEvent.click(save());
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(toast.success).toHaveBeenCalledWith("AutoSkills settings saved.");
+    await new Promise((r) => setTimeout(r, 10));
+    expect(unhandled).not.toHaveBeenCalled();
+    process.off("unhandledRejection", unhandled);
+  });
+
+  it("an edit a re-read made equal to the saved value is dropped, and the next edit takes the new revision", async () => {
+    const { rerender } = panel();
+    fireEvent.click(
+      screen.getByLabelText("Auto — install drafts without asking")
+    );
+    hooks.settings = { ...SAVED, memory_skill_synthesis_mode: "auto" };
+    hooks.revision = "rev2";
+    rerender(
+      <AutoSkillsSettings
+        open
+        onOpenChange={vi.fn()}
+      />
+    );
+    fireEvent.click(screen.getByLabelText("How often"));
+    fireEvent.click(await screen.findByRole("option", { name: "Nightly" }));
+    respond(200, {});
+    fireEvent.click(save());
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      memory_skill_synthesis_cadence: "nightly",
+      revision: "rev2",
     });
   });
 
