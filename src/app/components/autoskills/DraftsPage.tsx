@@ -12,7 +12,10 @@ import {
 } from "@/app/components/autoskills/focus";
 import { decidable, stillPending } from "@/app/components/autoskills/selection";
 import { markAutoSeen, useAutoSkills } from "@/app/hooks/useAutoSkills";
-import { useDraftActions } from "@/app/hooks/useDraftActions";
+import {
+  useDraftActions,
+  type DecisionResult,
+} from "@/app/hooks/useDraftActions";
 import { useSettings, useSettingsAccess } from "@/app/hooks/useSettings";
 import { Button } from "@/components/ui/button";
 import {
@@ -57,6 +60,17 @@ const TABS: ReadonlyArray<{
 
 function statusOf(param: string | null): DraftStatus {
   return param === "approved" || param === "rejected" ? param : "pending";
+}
+
+/** `set` without `ids`; the same set when none of them is in it. */
+function without(
+  set: ReadonlySet<string>,
+  ids: readonly string[]
+): ReadonlySet<string> {
+  if (!ids.some((id) => set.has(id))) return set;
+  const next = new Set(set);
+  for (const id of ids) next.delete(id);
+  return next;
 }
 
 /** "a", "a and b", "a, b and c". */
@@ -112,7 +126,20 @@ export function DraftsPage() {
   );
   const { payload } = useSettings();
   const { access } = useSettingsAccess();
-  const { approve, reject, busy } = useDraftActions(projectList);
+  // Drafts decided here that the list still reads as Pending: the core has
+  // decided them, but the re-read hasn't landed (or stalls). They leave the
+  // selection at once and can't be decided again until a list no longer
+  // lists them as pending, or an Undo takes them back.
+  const [decided, setDecided] = useState<ReadonlySet<string>>(NO_SELECTION);
+  const { approve, reject, busy } = useDraftActions(projectList, {
+    onReverted: (drafts) =>
+      setDecided((prev) =>
+        without(
+          prev,
+          drafts.map((d) => d.proposal_id)
+        )
+      ),
+  });
   // Kept above the views: a run goes on, and is reported, after this page
   // is left.
   const { run } = useRunNowState();
@@ -140,6 +167,10 @@ export function DraftsPage() {
     if (basis.status !== status) setSelected(NO_SELECTION);
     else if (list) {
       setSelected((prev) => stillPending(prev, list, registered));
+    }
+    // A newer list that no longer has them Pending has caught up.
+    if (list && basis.list !== list) {
+      setDecided((prev) => stillPending(prev, list, null));
     }
   }
 
@@ -269,21 +300,36 @@ export function DraftsPage() {
     () => [selectedTab()]
   );
 
+  // What a decision may send: still pending in the list, in a registered
+  // project, and not decided here already (the list may not show it yet).
+  const sendable = (drafts: readonly Draft[]) =>
+    decidable(drafts, list, registered).filter(
+      (d) => !decided.has(d.proposal_id)
+    );
+  // A decision's answers are in: what went through leaves the selection
+  // and waits for the list.
+  const settle = ({ done }: DecisionResult) => {
+    const ids = done.map((d) => d.proposal_id);
+    if (ids.length === 0) return;
+    setSelected((prev) => without(prev, ids));
+    setDecided((prev) => new Set([...prev, ...ids]));
+  };
+
   // The open draft: decided alone, with the scope its pane picked (the only
   // decision that sends one), through the same gate as the bar. Its buttons
-  // are off for a draft the core would refuse (its project not served).
-  const openDecidable =
-    !!openDraft && decidable([openDraft], list, registered).length > 0;
+  // are off for a draft the core would refuse (its project not served) or
+  // that was just decided here.
+  const openDecidable = !!openDraft && sendable([openDraft]).length > 0;
   const canDecideOpen = canDecide && openDecidable;
   const approveOpen = (d: Draft, scope: DraftScope) => {
     if (!isReady()) return;
-    const [send] = decidable([d], list, registered);
-    if (send) void approve([send], { [send.proposal_id]: scope });
+    const [send] = sendable([d]);
+    if (send) void approve([send], { [send.proposal_id]: scope }).then(settle);
   };
   const rejectOpen = (d: Draft) => {
     if (!isReady()) return;
-    const [send] = decidable([d], list, registered);
-    if (send) void reject([send]);
+    const [send] = sendable([d]);
+    if (send) void reject([send]).then(settle);
   };
   // When its buttons turn off under the focus it stays in the pane, on the
   // draft's heading; when the draft leaves the list, on the selected tab.
@@ -317,22 +363,22 @@ export function DraftsPage() {
   // it before the render that disables the buttons.
   const approveSelection = () => {
     if (!isReady()) return;
-    const send = decidable(selectedDrafts, list, registered);
+    const send = sendable(selectedDrafts);
     if (send.length === 0) return;
     if (send.some((d) => d.operation === "update")) setConfirming(true);
-    else void approve(send);
+    else void approve(send).then(settle);
   };
   // A closed gate leaves the question open, to be answered after the read.
   const confirmReplace = () => {
     if (!isReady()) return;
     setConfirming(false);
-    const send = decidable(selectedDrafts, list, registered);
-    if (send.length > 0) void approve(send);
+    const send = sendable(selectedDrafts);
+    if (send.length > 0) void approve(send).then(settle);
   };
   const rejectSelection = () => {
     if (!isReady()) return;
-    const send = decidable(selectedDrafts, list, registered);
-    if (send.length > 0) void reject(send);
+    const send = sendable(selectedDrafts);
+    if (send.length > 0) void reject(send).then(settle);
   };
   const runNow = (key: string) => {
     if (isReady()) void run(key);
@@ -539,6 +585,7 @@ export function DraftsPage() {
                   canWrite={canWrite}
                   registered={registered}
                   autoSkillsOff={autoSkillsOff}
+                  decided={decided}
                 />
               </div>
 

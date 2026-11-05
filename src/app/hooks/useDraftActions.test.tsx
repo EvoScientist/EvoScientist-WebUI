@@ -662,6 +662,49 @@ describe("useDraftActions fixes", () => {
   });
 });
 
+describe("Undo tells the page", () => {
+  it("which drafts a successful Undo moved back", async () => {
+    const onReverted = vi.fn();
+    stubFetch([
+      [200, okApprove],
+      [200, okApprove],
+    ]);
+    const { result } = renderHook(() =>
+      useDraftActions(projects, { onReverted })
+    );
+    const a = draft({ proposal_id: "a" });
+    const b = draft({ proposal_id: "b" });
+    await act(async () => {
+      await result.current.approve([a, b]);
+    });
+    expect(onReverted).not.toHaveBeenCalled();
+    stubFetch([
+      [409, { error: "skill_changed" }],
+      [200, okRevert],
+    ]);
+    await act(async () => {
+      await toast.success.mock.calls[0][1].action.onClick();
+    });
+    expect(onReverted.mock.calls).toEqual([[[b]]]);
+  });
+
+  it("nothing when no Undo succeeded", async () => {
+    const onReverted = vi.fn();
+    stubFetch([[200, okApprove]]);
+    const { result } = renderHook(() =>
+      useDraftActions(projects, { onReverted })
+    );
+    await act(async () => {
+      await result.current.approve([draft({ proposal_id: "a" })]);
+    });
+    stubFetch([[409, { error: "not_decided" }]]);
+    await act(async () => {
+      await toast.success.mock.calls[0][1].action.onClick();
+    });
+    expect(onReverted).not.toHaveBeenCalled();
+  });
+});
+
 describe("Undo after revert_failed", () => {
   async function approved() {
     stubFetch([

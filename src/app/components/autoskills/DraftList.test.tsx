@@ -85,6 +85,7 @@ function renderList(
     canWrite: boolean;
     registered: ReadonlySet<string> | null;
     autoSkillsOff: boolean;
+    decided: ReadonlySet<string>;
   }> = {}
 ) {
   const { running = new Set<string>(), ...rest } = over;
@@ -99,6 +100,7 @@ function renderList(
     canWrite: true,
     registered: new Set([A, B, GONE]) as ReadonlySet<string> | null,
     autoSkillsOff: false,
+    decided: new Set<string>() as ReadonlySet<string>,
     ...rest,
   };
   const runNow = { running, run: vi.fn(async () => undefined) };
@@ -209,6 +211,29 @@ describe("DraftList", () => {
     );
     expect(screen.queryByRole("checkbox")).toBeNull();
     expect(screen.queryByRole("button", { name: "Run now" })).toBeNull();
+  });
+
+  it("a draft decided here can't be picked until the list catches up", () => {
+    const { props } = renderList({ decided: new Set(["x"]) });
+    expect(
+      (
+        screen.getByRole("checkbox", {
+          name: "Select arxiv-paper-retrieval",
+        }) as HTMLInputElement
+      ).disabled
+    ).toBe(true);
+    expect(
+      (
+        screen.getByRole("checkbox", {
+          name: "Select chunk-verifier",
+        }) as HTMLInputElement
+      ).disabled
+    ).toBe(false);
+    // Select-all takes the rest of the group.
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select all drafts in EvoSci_test" })
+    );
+    expect(props.onToggle).toHaveBeenCalledWith(["y"], true);
   });
 
   it("Run now reads Running… while its project runs", () => {

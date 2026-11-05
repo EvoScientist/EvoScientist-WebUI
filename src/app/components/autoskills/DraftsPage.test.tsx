@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -67,8 +68,24 @@ const hooks = vi.hoisted(() => ({
   auto: { status: "loading" } as Record<string, unknown>,
   refresh: vi.fn(async () => undefined),
   mark: vi.fn((_url: string, _at: string) => undefined),
-  approve: vi.fn(async (_drafts: Draft[], _scopes?: unknown) => ({})),
-  reject: vi.fn(async (_drafts: Draft[]) => ({})),
+  approve: vi.fn(
+    async (
+      _drafts: Draft[],
+      _scopes?: unknown
+    ): Promise<{ done: Draft[]; failed: unknown[] }> => ({
+      done: [],
+      failed: [],
+    })
+  ),
+  reject: vi.fn(
+    async (
+      _drafts: Draft[]
+    ): Promise<{ done: Draft[]; failed: unknown[] }> => ({
+      done: [],
+      failed: [],
+    })
+  ),
+  onReverted: undefined as ((drafts: Draft[]) => void) | undefined,
   busy: false,
   running: new Set<string>() as ReadonlySet<string>,
   run: vi.fn(async (_key: string) => undefined),
@@ -81,11 +98,17 @@ vi.mock("@/app/hooks/useAutoSkills", () => ({
   markAutoSeen: hooks.mark,
 }));
 vi.mock("@/app/hooks/useDraftActions", () => ({
-  useDraftActions: () => ({
-    approve: hooks.approve,
-    reject: hooks.reject,
-    busy: hooks.busy,
-  }),
+  useDraftActions: (
+    _projects: unknown,
+    options?: { onReverted?: (drafts: Draft[]) => void }
+  ) => {
+    hooks.onReverted = options?.onReverted;
+    return {
+      approve: hooks.approve,
+      reject: hooks.reject,
+      busy: hooks.busy,
+    };
+  },
 }));
 vi.mock("@/app/hooks/useSettings", () => ({
   useSettings: () => ({
@@ -1182,6 +1205,74 @@ describe("DraftsPage", () => {
         screen.getByRole("tab", { selected: true })
       )
     );
+  });
+
+  it("drafts decided here leave the selection and wait for the list to catch up", async () => {
+    const x = draft({ proposal_id: "x" });
+    const y = draft({ proposal_id: "y", created_at: "2026-10-01T09:00:00Z" });
+    ready([x, y]);
+    hooks.approve.mockResolvedValueOnce({ done: [x], failed: [] });
+    const view = render(page());
+    pick("x");
+    fireEvent.click(
+      within(selection()!).getByRole("button", { name: "Approve" })
+    );
+    // The answers are in: x leaves the selection at once, though the list
+    // (its re-read stalled) still reads it as Pending.
+    await waitFor(() => expect(selection()).toBeNull());
+    const box = () =>
+      screen.getByRole("checkbox", { name: "Select x" }) as HTMLInputElement;
+    expect(box().disabled).toBe(true);
+
+    // Nothing can send it again: select-all takes y alone, and the open
+    // draft's own buttons are off.
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select all drafts in EvoSci_test" })
+    );
+    expect(selection()?.textContent).toContain("1 selected");
+    fireEvent.click(
+      within(selection()!).getByRole("button", { name: "Approve" })
+    );
+    expect(hooks.approve).toHaveBeenLastCalledWith([y]);
+    q.set("draftId", "x");
+    view.rerender(page());
+    const pane = within(
+      screen.getByRole("heading", { level: 3 }).parentElement!
+    );
+    const approve = pane.getByRole("button", {
+      name: "Approve",
+    }) as HTMLButtonElement;
+    expect(approve.disabled).toBe(true);
+    fireEvent.click(approve);
+    expect(hooks.approve).toHaveBeenCalledTimes(2);
+
+    // A list read before the decision still has it Pending: still waits.
+    ready([x, y]);
+    view.rerender(page());
+    expect(box().disabled).toBe(true);
+    // The list that shows it decided clears it; back in Pending later (an
+    // Undo elsewhere), it is decidable again.
+    ready([{ ...x, status: "approved" }, y]);
+    view.rerender(page());
+    ready([x, y]);
+    view.rerender(page());
+    expect(box().disabled).toBe(false);
+  });
+
+  it("an Undo that succeeds makes its drafts decidable again", async () => {
+    const x = draft({ proposal_id: "x" });
+    ready([x]);
+    hooks.reject.mockResolvedValueOnce({ done: [x], failed: [] });
+    render(page());
+    pick("x");
+    fireEvent.click(
+      within(selection()!).getByRole("button", { name: "Reject" })
+    );
+    const box = () =>
+      screen.getByRole("checkbox", { name: "Select x" }) as HTMLInputElement;
+    await waitFor(() => expect(box().disabled).toBe(true));
+    act(() => hooks.onReverted?.([x]));
+    expect(box().disabled).toBe(false);
   });
 
   it("opening the page marks automatic installs seen", () => {

@@ -40,6 +40,9 @@ export interface DraftListProps {
   /** The settings say AutoSkills is off: Run now waits (unknown settings
    *  don't count; the core says so then). */
   autoSkillsOff: boolean;
+  /** Drafts decided here that the list still reads as Pending (its re-read
+   *  hasn't landed): not picked again. */
+  decided: ReadonlySet<string>;
 }
 
 const RUN_OFF = "AutoSkills is off. Turn it on in Settings first.";
@@ -55,6 +58,7 @@ export function DraftList({
   canWrite,
   registered,
   autoSkillsOff,
+  decided,
 }: DraftListProps) {
   const { running } = useRunNowState();
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
@@ -105,6 +109,7 @@ export function DraftList({
             registered === null ? null : registered.has(group.project.key)
           }
           autoSkillsOff={autoSkillsOff}
+          decided={decided}
           labels={labels}
         />
       ))}
@@ -126,6 +131,7 @@ function Group({
   canWrite,
   served,
   autoSkillsOff,
+  decided,
   labels,
 }: {
   group: DraftGroup;
@@ -142,13 +148,17 @@ function Group({
   /** Whether the backend serves this project; null while not known. */
   served: boolean | null;
   autoSkillsOff: boolean;
+  decided: ReadonlySet<string>;
   labels: Map<string, string>;
 }) {
   const id = useId();
   const labelId = `${id}-label`;
   const canPick = canWrite && served === true;
   const bodyId = `${id}-drafts`;
-  const ids = group.drafts.map((d) => d.proposal_id);
+  // The drafts that can be picked: not the ones just decided here.
+  const ids = group.drafts
+    .map((d) => d.proposal_id)
+    .filter((id) => !decided.has(id));
   const picked = ids.filter((d) => selected.has(d)).length;
   const all = ids.length > 0 && picked === ids.length;
   const some = picked > 0 && !all;
@@ -161,12 +171,12 @@ function Group({
       className="rounded-lg border border-border bg-card"
     >
       <div className="flex items-center gap-1 px-2 py-1">
-        {pending && ids.length > 0 && (
+        {pending && group.drafts.length > 0 && (
           <label className={CHECKBOX_TARGET}>
             <GroupCheckbox
               checked={all}
               indeterminate={some}
-              disabled={!canPick}
+              disabled={!canPick || ids.length === 0}
               label={`Select all drafts in ${group.label}`}
               onChange={(on) => onToggle(ids, on)}
             />
@@ -233,7 +243,7 @@ function Group({
                 onCheck={(on) => onToggle([draft.proposal_id], on)}
                 open={draft.proposal_id === openId}
                 onOpen={() => onOpen(draft.proposal_id)}
-                canPick={canPick}
+                canPick={canPick && !decided.has(draft.proposal_id)}
                 labels={labels}
               />
             ))}

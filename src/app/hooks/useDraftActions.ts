@@ -227,8 +227,12 @@ function toastErrors(
   }
 }
 
-/** Approve and reject drafts through the relay, with the toasts and Undo. */
-export function useDraftActions(projects: readonly Project[]): {
+/** Approve and reject drafts through the relay, with the toasts and Undo.
+ *  `onReverted` hears which drafts an Undo moved back to Pending. */
+export function useDraftActions(
+  projects: readonly Project[],
+  options: { onReverted?(drafts: Draft[]): void } = {}
+): {
   approve(
     drafts: Draft[],
     scopes?: Record<string, DraftScope>
@@ -239,6 +243,8 @@ export function useDraftActions(projects: readonly Project[]): {
   const [running, setRunning] = useState(0);
   const projectsRef = useRef(projects);
   projectsRef.current = projects;
+  const onRevertedRef = useRef(options.onReverted);
+  onRevertedRef.current = options.onReverted;
 
   const track = useCallback(async <T>(run: () => Promise<T>): Promise<T> => {
     setRunning((n) => n + 1);
@@ -284,6 +290,11 @@ export function useDraftActions(projects: readonly Project[]): {
           );
           reread();
           if (done.length > 0) {
+            try {
+              onRevertedRef.current?.(done);
+            } catch {
+              // The toasts below still say what happened.
+            }
             toast.success(
               done.length === 1
                 ? `Moved ${done[0].skill_name} back to Pending.`
