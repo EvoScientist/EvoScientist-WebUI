@@ -385,6 +385,20 @@ export function fromMemorySkills(
   return { global, project };
 }
 
+/** Whether approving an update at its recorded scope gives a project its
+ *  own copy of a global skill: the core writes it to another folder
+ *  (`install_target`) than the one it starts from (`install_base`), and the
+ *  global skill stays. Any other update replaces the installed skill (in
+ *  place, or not known: decided, or the approval would fail). */
+export function isProjectCopy(draft: Draft): boolean {
+  return (
+    draft.operation === "update" &&
+    draft.install_target !== null &&
+    draft.install_base !== null &&
+    draft.install_target !== draft.install_base
+  );
+}
+
 /** Whether Undo can take a decision back: the core keeps no backup of an
  *  update, so an approved update stays. */
 export function isRevertible(

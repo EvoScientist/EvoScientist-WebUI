@@ -7,6 +7,7 @@ import {
   fromMemorySkills,
   groupDrafts,
   installedLabel,
+  isProjectCopy,
   isRevertible,
   labelFor,
   parseDraftList,
@@ -469,6 +470,47 @@ describe("fromMemorySkills", () => {
     expect([...out.global]).toEqual([["g-skill", "update"]]);
     expect([...out.project]).toEqual([["p-skill", "create"]]);
     expect(fromMemorySkills(l, null).project.size).toBe(0);
+  });
+});
+
+describe("isProjectCopy", () => {
+  const global = "/home/u/.evoscientist/skills/data-cleaning";
+  const project = "/work/A/skills/data-cleaning";
+  const update = (over: Partial<Draft>) =>
+    draft({ operation: "update", target_skill_name: "data-cleaning", ...over });
+
+  it("is an update written to another folder than the one it starts from", () => {
+    // A project's own copy of a global skill: the global one stays.
+    expect(
+      isProjectCopy(update({ install_target: project, install_base: global }))
+    ).toBe(true);
+    // In place.
+    expect(
+      isProjectCopy(update({ install_target: global, install_base: global }))
+    ).toBe(false);
+    expect(
+      isProjectCopy(update({ install_target: project, install_base: project }))
+    ).toBe(false);
+  });
+
+  it("counts an update the core can't place as a replace, and a new skill as neither", () => {
+    // Decided, or the approval would fail: both null.
+    expect(isProjectCopy(update({}))).toBe(false);
+    expect(
+      isProjectCopy(update({ install_target: project, install_base: null }))
+    ).toBe(false);
+    expect(
+      isProjectCopy(update({ install_target: null, install_base: global }))
+    ).toBe(false);
+    expect(
+      isProjectCopy(
+        draft({
+          operation: "create",
+          install_target: project,
+          install_base: global,
+        })
+      )
+    ).toBe(false);
   });
 });
 

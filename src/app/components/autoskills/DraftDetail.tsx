@@ -23,7 +23,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { installedLabel, type Draft, type DraftScope } from "@/lib/autoskills";
+import {
+  installedLabel,
+  isProjectCopy,
+  type Draft,
+  type DraftScope,
+} from "@/lib/autoskills";
 import { INPUT_LIKE_TRIGGER, LIST_MAX_HEIGHT } from "@/lib/fieldStyles";
 import { formatFullTime, formatTime } from "@/lib/time";
 import { cn } from "@/lib/utils";
@@ -167,6 +172,38 @@ function Sources({ draft, here }: { draft: Draft; here: boolean }) {
   );
 }
 
+/** The question before an update is installed where `scope` says. The core
+ *  tells the recorded place apart (a project's own copy of a global skill,
+ *  or a replace); what is installed at another place isn't known. */
+function updateQuestion(
+  draft: Draft,
+  scope: DraftScope,
+  projectLabel: string
+): { title: string; description: string; action: string } {
+  const name = draft.target_skill_name ?? draft.skill_name;
+  if (scope !== draft.scope) {
+    const place =
+      scope === "global" ? "all projects (global)" : `${projectLabel}/skills`;
+    return {
+      title: "Install an updated skill?",
+      description: `This installs the updated ${name} into ${place}, in place of any copy already there.`,
+      action: "Install",
+    };
+  }
+  if (isProjectCopy(draft)) {
+    return {
+      title: "Install a project copy?",
+      description: `${projectLabel} gets its own ${name} with these changes. The global ${name} stays as it is.`,
+      action: "Install",
+    };
+  }
+  return {
+    title: "Replace an installed skill?",
+    description: `This replaces the installed ${name}.`,
+    action: "Replace and install",
+  };
+}
+
 export function DraftDetail({
   draft,
   projectLabel,
@@ -190,9 +227,9 @@ export function DraftDetail({
     version,
     scope: draft.scope,
   });
-  // The question before an update replaces the installed skill, for this
-  // version only: it doesn't come back when the draft is opened again, and
-  // a rewrite takes it away.
+  // The question before an update is installed, for this version only: it
+  // doesn't come back when the draft is opened again, and a rewrite takes it
+  // away.
   const [confirmingVersion, setConfirmingVersion] = useState<string | null>(
     null
   );
@@ -240,7 +277,7 @@ export function DraftDetail({
   };
 
   const off = !canWrite || busy;
-  const replaces = draft.target_skill_name ?? draft.skill_name;
+  const question = updateQuestion(draft, scope, projectLabel);
   const approve = (e: React.MouseEvent<HTMLButtonElement>) => {
     if (off) return;
     if (draft.operation === "update") {
@@ -250,7 +287,7 @@ export function DraftDetail({
       onApprove(draft, scope);
     }
   };
-  const confirmReplace = () => {
+  const confirmUpdate = () => {
     if (off) return;
     setConfirmingVersion(null);
     onApprove(draft, scope);
@@ -497,10 +534,8 @@ export function DraftDetail({
           }}
         >
           <DialogHeader>
-            <DialogTitle>Replace an installed skill?</DialogTitle>
-            <DialogDescription>
-              This replaces the installed {replaces}.
-            </DialogDescription>
+            <DialogTitle>{question.title}</DialogTitle>
+            <DialogDescription>{question.description}</DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button
@@ -513,11 +548,11 @@ export function DraftDetail({
             </Button>
             <Button
               type="button"
-              onClick={confirmReplace}
+              onClick={confirmUpdate}
               disabled={off}
               className="max-md:min-h-11"
             >
-              Replace and install
+              {question.action}
             </Button>
           </DialogFooter>
         </DialogContent>
