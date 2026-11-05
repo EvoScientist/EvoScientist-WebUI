@@ -588,6 +588,20 @@ describe("AutoSkillsSettings", () => {
     });
   });
 
+  it("Save is the default button, readable in both themes", () => {
+    panel();
+    const classes = save().className.split(/\s+/);
+    expect(classes).toEqual(
+      expect.arrayContaining([
+        "bg-[var(--brand-solid)]",
+        "text-[var(--brand-foreground)]",
+      ])
+    );
+    // White on the hover colour was about 2.7:1 in dark mode.
+    expect(classes).not.toContain("text-white");
+    expect(classes).not.toContain("hover:bg-[var(--brand-hover)]");
+  });
+
   it("sends the revision of the oldest edit still pending", async () => {
     const { rerender } = panel();
     fireEvent.click(

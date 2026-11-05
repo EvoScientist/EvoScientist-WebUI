@@ -448,7 +448,7 @@ export function AutoSkillsSettings({
             type="button"
             disabled={!canSave}
             onClick={() => void save()}
-            className="bg-[var(--brand-solid)] text-white hover:bg-[var(--brand-hover)] max-md:min-h-11"
+            className="max-md:min-h-11"
           >
             Save
           </Button>
