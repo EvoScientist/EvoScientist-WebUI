@@ -60,8 +60,14 @@ function refreshEvery(latest: DraftList | "unsupported" | undefined): number {
   return latest === "unsupported" ? 0 : AUTOSKILLS_REFRESH_MS;
 }
 
-/** The current deployment's drafts. */
-export function useAutoSkills(): AutoSkillsState & {
+/** The current deployment's drafts. `poll: false` is for a reader that only
+ *  needs the list the others keep fresh (Run now's, mounted for the whole
+ *  page): SWR runs an interval per reader and dedupes only reads a moment
+ *  apart, so its own would double the reads. Focus and reconnect reads stay
+ *  on: SWR sends them to a key's first reader only, which may be this one. */
+export function useAutoSkills(
+  options: { poll?: boolean } = {}
+): AutoSkillsState & {
   /** Read again for every reader. Its answer is SWR's cache, which keeps
    *  the last good list when a read fails: never count on it as fresh. */
   refresh: () => Promise<DraftList | "unsupported" | undefined>;
@@ -74,7 +80,7 @@ export function useAutoSkills(): AutoSkillsState & {
   const base = baseOf(deploymentUrl);
   const key: ListKey | null = base ? ["autoskills", base, apiKey] : null;
   const { data, error, mutate } = useSWR(key, fetchDrafts, {
-    refreshInterval: refreshEvery,
+    refreshInterval: options.poll === false ? 0 : refreshEvery,
     revalidateOnFocus: true,
   });
   const { mutate: mutateCache } = useSWRConfig();

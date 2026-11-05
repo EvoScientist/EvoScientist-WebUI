@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, render, renderHook, waitFor } from "@testing-library/react";
 import { SWRConfig } from "swr";
 import {
   AUTOSKILLS_REFRESH_MS,
@@ -141,6 +141,36 @@ describe("useAutoSkills", () => {
       const asked = fetchMock.mock.calls.length;
       await settle(AUTOSKILLS_REFRESH_MS + 10);
       expect(fetchMock.mock.calls.length).toBe(asked + 1);
+    });
+
+    it("a reader that doesn't poll adds no reads to the one that does", async () => {
+      vi.useFakeTimers();
+      const fetchMock = stubFetch(() => json(list()));
+      function Quiet() {
+        useAutoSkills({ poll: false });
+        return null;
+      }
+      function Rail() {
+        useAutoSkills();
+        return null;
+      }
+      const tree = (rail: boolean) => (
+        <SWRConfig value={{ provider: () => new Map() }}>
+          <Quiet />
+          {rail && <Rail />}
+        </SWRConfig>
+      );
+      // The Run-now provider's reader from the start; the rail 20 s later.
+      const view = render(tree(false));
+      await settle(20_000);
+      view.rerender(tree(true));
+      // The rail's own first read (on its mount) lands first.
+      await settle(1_000);
+      const asked = fetchMock.mock.calls.length;
+      // Five minutes: the rail's own minute only.
+      await settle(AUTOSKILLS_REFRESH_MS * 5);
+      expect(fetchMock.mock.calls.length).toBe(asked + 5);
+      view.unmount();
     });
 
     // The rail re-renders on its own 60 s clock: a render must not start the

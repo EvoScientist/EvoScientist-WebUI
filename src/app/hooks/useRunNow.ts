@@ -27,6 +27,8 @@ export const RUN_CEILING_MS = 30 * 60_000;
 export const REREAD_WAIT_MS = 10_000;
 
 const MAX_FAILED_POLLS = 3;
+/** The page's readers keep the drafts fresh; this one adds no interval. */
+const NO_POLL = { poll: false } as const;
 const END_STATES = new Set(["success", "error", "timeout", "interrupted"]);
 
 type Drafts = Pick<DraftList, "drafts">;
@@ -96,7 +98,7 @@ export function useRunNow(projects: readonly Project[]): {
   run(projectKey: string): Promise<void>;
 } {
   const client = useClient();
-  const auto = useAutoSkills();
+  const auto = useAutoSkills(NO_POLL);
   const [running, setRunning] = useState<ReadonlySet<string>>(new Set());
 
   const clientRef = useRef(client);
