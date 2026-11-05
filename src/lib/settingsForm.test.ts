@@ -9,6 +9,7 @@ import {
   modelForProvider,
   patchBody,
   readOnlyReason,
+  restartFieldsShown,
   saveErrorText,
   sendableEdits,
   sourceNote,
@@ -365,5 +366,21 @@ describe("testKeyErrorText", () => {
     expect(testKeyErrorText({ base_url: "must be an http or https URL" })).toBe(
       "Address: must be an http or https URL"
     );
+  });
+});
+
+describe("restartFieldsShown", () => {
+  it("restartFieldsShown drops the AutoSkills fields", () => {
+    expect(
+      restartFieldsShown([
+        "model",
+        "memory_skill_synthesis_enabled",
+        "memory_skill_synthesis_mode",
+        "tavily_api_key",
+        "memory_skill_synthesis_cadence",
+        "memory_skill_synthesis_time",
+        "scheduler_default_timezone",
+      ])
+    ).toEqual(["model", "tavily_api_key", "scheduler_default_timezone"]);
   });
 });

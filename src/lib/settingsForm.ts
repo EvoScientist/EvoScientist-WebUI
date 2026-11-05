@@ -9,6 +9,7 @@ import type {
   SettingsPayload,
   SettingsWriteAccess,
 } from "@/lib/settings";
+import { AUTOSKILLS_FIELDS } from "@/lib/autoskills";
 
 /** Unsaved changes, by field: a string is the new value, `null` removes the
  *  field (a secret, or a value going back to its default). A field that is
@@ -238,6 +239,11 @@ const FIELD_LABELS: Record<string, string> = {
   subagents: "Built-in sub-agents",
   version: "EvoScientist version",
 };
+
+/** `restart_fields` without the AutoSkills settings, which apply at once. */
+export function restartFieldsShown(fields: readonly string[]): string[] {
+  return fields.filter((f) => !AUTOSKILLS_FIELDS.includes(f));
+}
 
 /** A readable name for a field, or for an entry of `restart_fields`. */
 export function fieldLabel(
