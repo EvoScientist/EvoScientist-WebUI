@@ -107,15 +107,29 @@ describe("useAutoSkills", () => {
         await vi.advanceTimersByTimeAsync(ms);
       });
 
-    it("stops asking once the answer is unsupported", async () => {
+    it("asks an old core at most once more, then never", async () => {
       vi.useFakeTimers();
       const fetchMock = stubFetch(() => json({}, 404));
-      const { result } = renderHook(() => useAutoSkills(), { wrapper });
+      const { result, rerender } = renderHook(() => useAutoSkills(), {
+        wrapper,
+      });
       await settle(10);
       expect(result.current.status).toBe("unsupported");
       const asked = fetchMock.mock.calls.length;
-      await settle(AUTOSKILLS_REFRESH_MS * 3);
-      expect(fetchMock.mock.calls.length).toBe(asked);
+      // The interval that started with the page may ask once more; a
+      // caller's renders don't start it again.
+      for (let i = 0; i < 6; i++) {
+        await settle(AUTOSKILLS_REFRESH_MS / 2);
+        rerender();
+      }
+      const later = fetchMock.mock.calls.length;
+      expect(later).toBeLessThanOrEqual(asked + 1);
+      for (let i = 0; i < 6; i++) {
+        await settle(AUTOSKILLS_REFRESH_MS / 2);
+        rerender();
+      }
+      expect(fetchMock.mock.calls.length).toBe(later);
+      expect(result.current.status).toBe("unsupported");
     });
 
     it("keeps reading a list", async () => {
@@ -127,6 +141,25 @@ describe("useAutoSkills", () => {
       const asked = fetchMock.mock.calls.length;
       await settle(AUTOSKILLS_REFRESH_MS + 10);
       expect(fetchMock.mock.calls.length).toBe(asked + 1);
+    });
+
+    // The rail re-renders on its own 60 s clock: a render must not start the
+    // interval over, or it never comes round.
+    it("keeps its rhythm while the caller re-renders every 30 s", async () => {
+      vi.useFakeTimers();
+      const fetchMock = stubFetch(() => json(list()));
+      const { result, rerender } = renderHook(() => useAutoSkills(), {
+        wrapper,
+      });
+      await settle(10);
+      expect(result.current.status).toBe("ready");
+      const asked = fetchMock.mock.calls.length;
+      // Five minutes.
+      for (let i = 0; i < 10; i++) {
+        await settle(AUTOSKILLS_REFRESH_MS / 2);
+        rerender();
+      }
+      expect(fetchMock.mock.calls.length).toBe(asked + 5);
     });
   });
 

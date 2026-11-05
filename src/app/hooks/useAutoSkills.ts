@@ -48,6 +48,15 @@ function baseOf(deploymentUrl: string): string | null {
   return deploymentUrl ? deploymentUrl.replace(/\/$/, "") : null;
 }
 
+/** An EvoScientist without the route isn't asked again on the interval:
+ *  every page mounts the rail's count. The one that started with the page
+ *  may ask once more; focus still reads again, so an updated core is found.
+ *  Module scope on purpose: SWR starts its timer over whenever this
+ *  function changes, and the rail re-renders on its own clock. */
+function refreshEvery(latest: DraftList | "unsupported" | undefined): number {
+  return latest === "unsupported" ? 0 : AUTOSKILLS_REFRESH_MS;
+}
+
 /** The current deployment's drafts. */
 export function useAutoSkills(): AutoSkillsState & {
   refresh: () => Promise<DraftList | "unsupported" | undefined>;
@@ -56,11 +65,7 @@ export function useAutoSkills(): AutoSkillsState & {
   const base = baseOf(deploymentUrl);
   const key: ListKey | null = base ? ["autoskills", base, apiKey] : null;
   const { data, error, mutate } = useSWR(key, fetchDrafts, {
-    // An EvoScientist without the route isn't asked again on the interval:
-    // every page mounts the rail's count. Focus still reads again, so an
-    // updated core is found.
-    refreshInterval: (latest) =>
-      latest === "unsupported" ? 0 : AUTOSKILLS_REFRESH_MS,
+    refreshInterval: refreshEvery,
     revalidateOnFocus: true,
   });
   // The latest read decides: a failed re-read shows the error, not the old
