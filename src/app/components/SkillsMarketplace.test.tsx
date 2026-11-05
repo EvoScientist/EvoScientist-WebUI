@@ -589,9 +589,10 @@ describe("SkillsMarketplace skills from memory", () => {
   });
 });
 
-// The lists are read once it is known whether the current project's
-// skills/ can be read here: an open while that is still asked read twice.
-describe("SkillsMarketplace first read", () => {
+// The page never waits for the project check: the catalog and the global
+// lists are read at once, and "This project's skills" follows on its own
+// read once the project is known here (and again on a project switch).
+describe("SkillsMarketplace reads", () => {
   const page = (value: ProjectsContextValue) => (
     <TestProjectsProvider value={value}>
       <SkillsMarketplace />
@@ -606,30 +607,108 @@ describe("SkillsMarketplace first read", () => {
   const catalogReads = (fetchMock: ReturnType<typeof mockApi>) =>
     fetchMock.mock.calls.filter(([url]) => String(url).includes("catalog"));
 
-  it("reads once on a cold open that resolves to here", async () => {
-    const fetchMock = mockApi([], [], [card("mine")]);
-    // Nothing known yet, then the projects, then whether files are here.
+  it("shows the global lists while the project check never answers", async () => {
+    // The projects are known, but whether this page reads their files never
+    // is (the check failed and gave up).
+    const fetchMock = mockApi([row({ installed: false })], [card("plain")]);
+    render(
+      page(mockProjects(readyProjects(TEST_PROJECT), { files: "pending" }))
+    );
+
+    expect(await screen.findByText("Paper Review")).toBeTruthy();
+    expect(await screen.findByText("plain")).toBeTruthy();
+    expect(skillReads(fetchMock)).toEqual(["/api/skills"]);
+    expect(
+      screen.queryByRole("heading", { name: "This project's skills" })
+    ).toBeNull();
+  });
+
+  it("adds the project's skills once the project is known, loading the page once", async () => {
+    const fetchMock = mockApi(
+      [row({ installed: false })],
+      [card("plain")],
+      [card("mine")]
+    );
+    // Nothing known yet: the global lists come at once.
     const view = render(
       page(mockProjects({ status: "pending" }, { files: "pending" }))
     );
+    expect(screen.getByText("Loading skills…")).toBeTruthy();
+    expect(await screen.findByText("plain")).toBeTruthy();
+    expect(screen.getByText("Paper Review")).toBeTruthy();
+
+    // Then the projects, then the files are here: only the section is read.
     view.rerender(
       page(mockProjects(readyProjects(TEST_PROJECT), { files: "pending" }))
     );
-    expect(screen.getByText("Loading skills…")).toBeTruthy();
     view.rerender(
       page(mockProjects(readyProjects(TEST_PROJECT), { files: "here" }))
     );
-
+    expect(screen.queryByText("Loading skills…")).toBeNull();
     await screen.findByRole("heading", { name: "This project's skills" });
+    expect(screen.getByText("mine")).toBeTruthy();
+    expect(screen.getByText("plain")).toBeTruthy();
+    expect(screen.queryByText("Loading skills…")).toBeNull();
+    expect(skillReads(fetchMock)).toEqual([
+      "/api/skills",
+      `/api/skills?project=${projectHandle(TEST_PROJECT)}`,
+    ]);
+    expect(catalogReads(fetchMock)).toHaveLength(1);
+  });
+
+  it("reads once when the project is known at once", async () => {
+    const fetchMock = mockApi([], [card("plain")], [card("mine")]);
+    render(page(mockProjects()));
+    await screen.findByRole("heading", { name: "This project's skills" });
+    expect(screen.getByText("plain")).toBeTruthy();
     expect(skillReads(fetchMock)).toEqual([
       `/api/skills?project=${projectHandle(TEST_PROJECT)}`,
     ]);
     expect(catalogReads(fetchMock)).toHaveLength(1);
   });
 
+  it("a project switch reads only the new project's section", async () => {
+    const B = "/srv/projB";
+    const fetchMock = vi.fn((input: string, _init?: RequestInit) => {
+      const url = String(input);
+      const own = url.includes(`project=${projectHandle(B)}`)
+        ? [card("b-skill")]
+        : [card("a-skill")];
+      return Promise.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve(
+            url.includes("catalog")
+              ? { skills: [row({ installed: false })] }
+              : {
+                  skills: [card("plain")],
+                  projectSkills: url.includes("project=") ? own : null,
+                }
+          ),
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const at = (current: string) =>
+      page(mockProjects(readyProjects(TEST_PROJECT, B), { current }));
+    const view = render(at(TEST_PROJECT));
+    await screen.findByText("a-skill");
+    const before = fetchMock.mock.calls.length;
+
+    view.rerender(at(B));
+    // The page stays as it is: no loading, the global lists still shown.
+    expect(screen.queryByText("Loading skills…")).toBeNull();
+    expect(screen.getByText("plain")).toBeTruthy();
+    expect(screen.getByText("Paper Review")).toBeTruthy();
+    await screen.findByText("b-skill");
+    expect(screen.queryByText("a-skill")).toBeNull();
+    expect(
+      fetchMock.mock.calls.slice(before).map(([url]) => String(url))
+    ).toEqual([`/api/skills?project=${projectHandle(B)}`]);
+  });
+
   it("reads the global lists once when there is no project to ask about", async () => {
     // A core without projects, a backend with none, or a project list that
-    // can't be read: files may never decide, the global lists still show.
+    // can't be read: one read of the global lists, no project read.
     for (const value of [
       mockProjects({ status: "unsupported" }, { files: "pending" }),
       mockProjects(readyProjects(), { files: "pending" }),

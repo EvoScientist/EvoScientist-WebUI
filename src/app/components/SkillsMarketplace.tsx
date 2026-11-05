@@ -73,6 +73,37 @@ const projectBusyKey = (key: string, name: string) =>
 
 const NO_PROJECTS: readonly Project[] = [];
 
+/** An entry whose `metadata.type` omits `skill` is an actor, not a tool: it
+ *  belongs under Experts only. Absence of the field means yes, so nothing
+ *  disappears just because an author never wrote it. */
+const belongsHere = (s: { isSkill?: boolean }) => s.isSkill !== false;
+
+async function readCatalog(refresh: boolean): Promise<CatalogSkill[]> {
+  const r = await fetch(`/api/skills/catalog${refresh ? "?refresh=1" : ""}`);
+  const d = await r.json();
+  if (!r.ok) throw new Error(d.error || "Failed to load catalog");
+  return (d.skills ?? []) as CatalogSkill[];
+}
+
+/** The global tiers' skills, and the project `key`'s own (null when the
+ *  route doesn't serve that project's folder). */
+async function readInstalled(key: string | null): Promise<{
+  skills: SkillCard[];
+  projectSkills: SkillCard[] | null;
+}> {
+  const r = await fetch(
+    key ? `/api/skills?project=${projectHandle(key)}` : "/api/skills"
+  );
+  const d = await r.json();
+  if (!r.ok) throw new Error(d.error || "Failed to load skills");
+  return {
+    skills: (d.skills ?? []) as SkillCard[],
+    projectSkills: Array.isArray(d.projectSkills)
+      ? (d.projectSkills as SkillCard[])
+      : null,
+  };
+}
+
 /** Research Skills, or its "Drafted from memory" sub-page. Coming back
  *  mounts the skills again, so their lists are read anew. */
 export function SkillsMarketplace() {
@@ -82,19 +113,14 @@ export function SkillsMarketplace() {
 
 function SkillsHome() {
   const [, setView] = useQueryState("view");
-  const { projects, current, files, error: projectsError } = useProjects();
+  const { projects, current, files } = useProjects();
   // The current project's own skills/ show where this page reads its files.
   const projectKey = current && files === "here" ? current.key : null;
-  // The lists are read once it is known which to read: an open while that
-  // is still being asked read them twice. With no project to ask about (a
-  // core without projects, none registered, a list that can't be read
-  // while the backend is down) the global lists are read at once.
-  const decided =
-    projectKey !== null ||
-    files === "elsewhere" ||
-    projects.status === "unsupported" ||
-    (projects.status === "ready" && current === null) ||
-    (projects.status === "pending" && projectsError !== null);
+  // A read takes the project known when it starts.
+  const projectKeyRef = useRef(projectKey);
+  useEffect(() => {
+    projectKeyRef.current = projectKey;
+  }, [projectKey]);
   const auto = useAutoSkills();
   const drafts = auto.status === "ready" ? auto.list : null;
   const currentKey = current?.key ?? null;
@@ -142,95 +168,93 @@ function SkillsHome() {
       ),
     [projects]
   );
-  // Only the newest read may show: one settling late (the project changed
-  // meanwhile, or an uninstall read again) would bring back what is gone.
-  const loadSeq = useRef(0);
+  // The newest read wins, one count for the page (catalog, global lists,
+  // loading) and one for this project's skills: a read settling late would
+  // bring back what is gone.
+  const pageSeq = useRef(0);
+  const projectSeq = useRef(0);
+  // The project the newest read of a project's skills asked for.
+  const projectAsked = useRef<string | null>(null);
 
-  const load = useCallback(
-    async (refresh = false, quiet = false) => {
-      const seq = ++loadSeq.current;
-      if (!quiet) setLoading(true);
-      setError(null);
-      setCatalogError(null);
-      const [catRes, instRes] = await Promise.allSettled([
-        fetch(`/api/skills/catalog${refresh ? "?refresh=1" : ""}`).then(
-          async (r) => {
-            const d = await r.json();
-            if (!r.ok) throw new Error(d.error || "Failed to load catalog");
-            return (d.skills ?? []) as CatalogSkill[];
-          }
-        ),
-        fetch(
-          projectKey
-            ? `/api/skills?project=${projectHandle(projectKey)}`
-            : "/api/skills"
-        ).then(async (r) => {
-          const d = await r.json();
-          if (!r.ok) throw new Error(d.error || "Failed to load skills");
-          return {
-            skills: (d.skills ?? []) as SkillCard[],
-            projectSkills: Array.isArray(d.projectSkills)
-              ? (d.projectSkills as SkillCard[])
-              : null,
-          };
-        }),
-      ]);
-      if (seq !== loadSeq.current) return;
+  // The page: the catalog and the global lists, with the project's skills
+  // when the project is already known here. It never waits for that check,
+  // which may never answer.
+  const load = useCallback(async (refresh = false, quiet = false) => {
+    const page = ++pageSeq.current;
+    const key = projectKeyRef.current;
+    const projectRead = key === null ? null : ++projectSeq.current;
+    if (key !== null) projectAsked.current = key;
+    if (!quiet) setLoading(true);
+    setError(null);
+    setCatalogError(null);
+    const [catRes, instRes] = await Promise.allSettled([
+      readCatalog(refresh),
+      readInstalled(key),
+    ]);
+    if (key !== null && projectRead === projectSeq.current) {
+      const own =
+        instRes.status === "fulfilled" ? instRes.value.projectSkills : null;
+      setProjectSkills(own ? { key, skills: own.filter(belongsHere) } : null);
+    }
+    if (page !== pageSeq.current) return;
 
-      // An entry whose `metadata.type` omits `skill` is an actor, not a tool:
-      // it belongs under Experts only. Absence of the field means yes, so
-      // nothing disappears just because an author never wrote it.
-      const belongsHere = (s: { isSkill?: boolean }) => s.isSkill !== false;
-      const cat = (catRes.status === "fulfilled" ? catRes.value : []).filter(
-        belongsHere
+    const cat = (catRes.status === "fulfilled" ? catRes.value : []).filter(
+      belongsHere
+    );
+    if (catRes.status === "rejected") {
+      setCatalogError(
+        catRes.reason instanceof Error
+          ? catRes.reason.message
+          : "Failed to load the official catalog."
       );
-      if (catRes.status === "rejected") {
-        setCatalogError(
-          catRes.reason instanceof Error
-            ? catRes.reason.message
-            : "Failed to load the official catalog."
-        );
-      }
-      setCatalog(cat);
+    }
+    setCatalog(cat);
 
-      // Installed skills that aren't in the official catalog (custom/local ones).
-      if (instRes.status === "fulfilled") {
-        const catNames = new Set(cat.map((c) => c.name));
-        setOther(
-          instRes.value.skills.filter(
-            (s) => !catNames.has(s.name) && belongsHere(s)
-          )
-        );
-        const own = instRes.value.projectSkills;
-        setProjectSkills(
-          projectKey && own
-            ? { key: projectKey, skills: own.filter(belongsHere) }
-            : null
-        );
-      } else {
-        setOther([]);
-        setProjectSkills(null);
-        setError(
-          instRes.reason instanceof Error
-            ? instRes.reason.message
-            : "Failed to load installed skills."
-        );
-      }
-      setLoading(false);
-    },
-    [projectKey]
-  );
+    // Installed skills that aren't in the official catalog (custom/local ones).
+    if (instRes.status === "fulfilled") {
+      const catNames = new Set(cat.map((c) => c.name));
+      setOther(
+        instRes.value.skills.filter(
+          (s) => !catNames.has(s.name) && belongsHere(s)
+        )
+      );
+    } else {
+      setOther([]);
+      setError(
+        instRes.reason instanceof Error
+          ? instRes.reason.message
+          : "Failed to load installed skills."
+      );
+    }
+    setLoading(false);
+  }, []);
+
+  // "This project's skills" alone: read once the project is known here and
+  // on a project switch, without loading the page again.
+  const loadProject = useCallback(async (key: string) => {
+    const mine = ++projectSeq.current;
+    projectAsked.current = key;
+    try {
+      const { projectSkills: own } = await readInstalled(key);
+      if (mine !== projectSeq.current) return;
+      setProjectSkills(own ? { key, skills: own.filter(belongsHere) } : null);
+    } catch (e) {
+      if (mine !== projectSeq.current) return;
+      setError(e instanceof Error ? e.message : "Failed to load skills");
+    }
+  }, []);
 
   useEffect(() => {
-    if (decided) load();
-  }, [load, decided]);
-
-  // The read after a removal is the current project's: a project chosen
-  // while the removal ran must not lose its list to the old one's.
-  const loadLatest = useRef(load);
-  useEffect(() => {
-    loadLatest.current = load;
+    void load();
   }, [load]);
+
+  useEffect(() => {
+    if (projectKey === null) {
+      projectAsked.current = null;
+    } else if (projectAsked.current !== projectKey) {
+      void loadProject(projectKey);
+    }
+  }, [projectKey, loadProject]);
 
   // Install and update hit the same endpoint (it overwrites + re-records the
   // manifest commit); the mode only changes the busy label and success state.
@@ -328,7 +352,7 @@ function SkillsHome() {
           ? { key, skills: prev.skills.filter((s) => s.name !== name) }
           : prev
       );
-      void loadLatest.current(false, true);
+      void load(false, true);
       void refreshAutoSkills();
       notifyTeamsChanged();
     } catch (e) {
