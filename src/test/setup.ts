@@ -18,8 +18,10 @@ process.env.XDG_CONFIG_HOME = join(
   tmpdir(),
   "evoscientist-webui-tests-no-config"
 );
-// The running backend's record lives under the home folder
-// (~/.config/evoscientist), whatever XDG_CONFIG_HOME says: move home too.
+// The running backend's record lives in the data folder's server home, and an
+// older core's under the home folder (~/.config/evoscientist), whatever
+// XDG_CONFIG_HOME says: clear the data folder and move home too.
+delete process.env.EVOSCIENTIST_DATA_DIR;
 process.env.HOME = join(tmpdir(), "evoscientist-webui-tests-no-home");
 process.env.USERPROFILE = process.env.HOME;
 

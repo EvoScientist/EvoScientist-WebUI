@@ -13,7 +13,12 @@ function record(body: Record<string, unknown>) {
   mkdirSync(dir, { recursive: true });
   writeFileSync(
     join(dir, "langgraph_dev.workspace.json"),
-    JSON.stringify({ workspace: "/w", config_dir: configDir(), ...body })
+    JSON.stringify({
+      workspace: "/w",
+      config_dir: configDir(),
+      data_dir: join(home, ".evoscientist"),
+      ...body,
+    })
   );
 }
 

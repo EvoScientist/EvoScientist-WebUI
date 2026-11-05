@@ -4,12 +4,12 @@
 // every other field in config.yaml are never read or returned; the settings
 // page gets them from the backend's own GET /api/settings.
 
-import { readFileSync } from "fs";
+import { readFileSync, realpathSync } from "fs";
 import { homedir } from "os";
 import { join, resolve } from "path";
 import { CORE_SCHEMA, load as loadYaml } from "js-yaml";
 import { pyStrip } from "@/lib/pythonWhitespace";
-import { configDir } from "@/lib/server/paths";
+import { configDir, globalDataDir } from "@/lib/server/paths";
 
 /** The backend's default port (`langgraph_dev_port` in settings.py). */
 export const DEFAULT_PORT = 6174;
@@ -56,16 +56,31 @@ export function readCoreConfig(now: number = Date.now()): CoreConfig {
   return value;
 }
 
-/** The record the running backend keeps of itself (`DEFAULT_PID_DIR` in
- *  langgraph_dev/manager.py): always ~/.config/evoscientist, whatever
- *  XDG_CONFIG_HOME says. */
-function serverRecordPath(): string {
-  return join(
-    homedir(),
-    ".config",
-    "evoscientist",
-    "langgraph_dev.workspace.json"
-  );
+/** Where the running backend keeps its record of itself, newest first: the
+ *  server home in the data folder, then ~/.config/evoscientist (whatever
+ *  XDG_CONFIG_HOME says), where older cores keep it. */
+function serverRecordPaths(): string[] {
+  const name = "langgraph_dev.workspace.json";
+  return [
+    join(globalDataDir(), "server", name),
+    join(homedir(), ".config", "evoscientist", name),
+  ];
+}
+
+/** Whether two folders are the same, as the backend compares them: through
+ *  symlinks, and ignoring case on Windows. */
+function sameFolder(recorded: unknown, folder: string): boolean {
+  if (typeof recorded !== "string" || !recorded) return false;
+  const canonical = (path: string) => {
+    let real: string;
+    try {
+      real = realpathSync.native(path);
+    } catch {
+      real = resolve(path);
+    }
+    return process.platform === "win32" ? real.toLowerCase() : real;
+  };
+  return canonical(recorded) === canonical(folder);
 }
 
 function isAlive(pid: number): boolean {
@@ -78,24 +93,33 @@ function isAlive(pid: number): boolean {
   }
 }
 
-/** The port the running backend recorded, while that server runs and
- *  it reads this config folder; null otherwise (an older core,
- *  none running, or one of another configuration). A backend started with
- *  `EvoSci deploy --port X` and a WebUI started apart from it only agree
- *  through it. */
+/** The port the running backend recorded, while that server runs and it
+ *  reads this config folder and this data folder; null otherwise (a core that
+ *  records no folders, none running, or one of another configuration or data
+ *  folder). A backend started with `EvoSci deploy --port X` and a WebUI
+ *  started apart from it only agree through it. */
 function recordedPort(): number | null {
+  for (const path of serverRecordPaths()) {
+    const port = portFromRecord(path);
+    if (port !== null) return port;
+  }
+  return null;
+}
+
+function portFromRecord(path: string): number | null {
   try {
-    const record = JSON.parse(readFileSync(serverRecordPath(), "utf8")) as {
+    const record = JSON.parse(readFileSync(path, "utf8")) as {
       pid?: unknown;
       port?: unknown;
       config_dir?: unknown;
+      data_dir?: unknown;
     };
     const port =
       typeof record.port === "number" ? validPort(record.port) : null;
     if (port === null) return null;
     if (
-      typeof record.config_dir !== "string" ||
-      resolve(record.config_dir) !== resolve(configDir())
+      !sameFolder(record.config_dir, configDir()) ||
+      !sameFolder(record.data_dir, globalDataDir())
     ) {
       return null;
     }
