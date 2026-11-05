@@ -589,10 +589,19 @@ describe("the Setup form", () => {
       ],
     });
     renderView();
-    await screen.findByRole("button", { name: /Provider/ }).catch(() => null);
-    await new Promise((r) => setTimeout(r, 50));
+    await screen.findByLabelText("Provider");
     expect(screen.queryByText(/after EvoScientist restarts/)).toBeNull();
     expect(screen.queryByText(/quit EvoSci/)).toBeNull();
+  });
+
+  it("the restart notice appears once the page has loaded with a model change", async () => {
+    server.settings = settings({
+      restart_required: true,
+      restart_fields: ["model"],
+    });
+    renderView();
+    await screen.findByLabelText("Provider");
+    expect(screen.queryByText(/New chats in the WebUI/)).not.toBeNull();
   });
 
   it("the restart notice still names a model change next to an AutoSkills change", async () => {
