@@ -34,6 +34,7 @@ vi.mock("@/app/hooks/useAutoSkills", () => ({
 import {
   REREAD_WAIT_MS,
   RUN_CEILING_MS,
+  RUN_GET_TIMEOUT_MS,
   RUN_POLL_MS,
   useRunNow,
 } from "./useRunNow";
@@ -122,7 +123,10 @@ describe("useRunNow", () => {
     expect(bodies).toEqual([{ action: "run", workspace_dir: B }]);
     expect(result.current.running.has(B)).toBe(true);
     await tick();
-    expect(runsGet).toHaveBeenCalledWith("t1", "r1");
+    // Each poll can be cut short.
+    expect(runsGet).toHaveBeenCalledWith("t1", "r1", {
+      signal: expect.any(AbortSignal),
+    });
     expect(result.current.running.has(B)).toBe(true);
     expect(toast.success).not.toHaveBeenCalled();
     await tick();
@@ -555,6 +559,92 @@ describe("useRunNow", () => {
     expect(runsGet).toHaveBeenCalledTimes(polls);
   });
 
+  it("a poll that never answers counts as a failed one, and three end the run", async () => {
+    stubRelay(200, started);
+    // The SDK sets no timeout on runs.get.
+    runsGet.mockReturnValue(new Promise(() => {}));
+    const { result } = renderHook(() => useRunNow(projects));
+    await act(async () => {
+      void result.current.run(B);
+    });
+    await flush();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(RUN_POLL_MS + RUN_GET_TIMEOUT_MS);
+    });
+    // The hung request was given up on, and the next poll went out.
+    const first = runsGet.mock.calls[0][2] as { signal: AbortSignal };
+    expect(first.signal.aborted).toBe(true);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(RUN_POLL_MS);
+    });
+    expect(runsGet).toHaveBeenCalledTimes(2);
+    expect(result.current.running.has(B)).toBe(true);
+    expect(toast.error).not.toHaveBeenCalled();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(
+        RUN_GET_TIMEOUT_MS + RUN_POLL_MS + RUN_GET_TIMEOUT_MS
+      );
+    });
+    expect(runsGet).toHaveBeenCalledTimes(3);
+    expect(toast.error).toHaveBeenCalledWith(
+      "AutoSkills didn't finish in project_B. Try Run now again later."
+    );
+    expect(result.current.running.has(B)).toBe(false);
+  });
+
+  it("a poll that hangs at the end of the 30 minutes still ends at the ceiling", async () => {
+    stubRelay(200, started);
+    const t0 = Date.now();
+    runsGet.mockImplementation(() =>
+      Date.now() - t0 < RUN_CEILING_MS - 10_000
+        ? Promise.resolve({ status: "running" })
+        : new Promise(() => {})
+    );
+    const { result } = renderHook(() => useRunNow(projects));
+    await act(async () => {
+      void result.current.run(B);
+    });
+    await flush();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(RUN_CEILING_MS + RUN_GET_TIMEOUT_MS);
+    });
+    expect(toast.info).toHaveBeenCalledWith(
+      "AutoSkills is still running in project_B. The drafts update when it finishes."
+    );
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(result.current.running.has(B)).toBe(false);
+  });
+
+  it("slow but answering polls still reach the ceiling", async () => {
+    stubRelay(200, started);
+    runsGet.mockImplementation(
+      () =>
+        new Promise((resolve) =>
+          setTimeout(
+            () => resolve({ status: "running" }),
+            RUN_GET_TIMEOUT_MS - 1_000
+          )
+        )
+    );
+    const { result } = renderHook(() => useRunNow(projects));
+    await act(async () => {
+      void result.current.run(B);
+    });
+    await flush();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(RUN_CEILING_MS - RUN_GET_TIMEOUT_MS);
+    });
+    expect(toast.info).not.toHaveBeenCalled();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(RUN_GET_TIMEOUT_MS * 2);
+    });
+    expect(toast.info).toHaveBeenCalledWith(
+      "AutoSkills is still running in project_B. The drafts update when it finishes."
+    );
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(result.current.running.has(B)).toBe(false);
+  });
+
   it("a re-read that never answers doesn't hold the end of a run", async () => {
     stubRelay(200, started);
     runsGet.mockResolvedValue({ status: "success" });
@@ -599,7 +689,9 @@ describe("useRunNow", () => {
     expect(toast.error).not.toHaveBeenCalled();
     expect(result.current.running.has(B)).toBe(true);
     await tick();
-    expect(runsGet).toHaveBeenCalledWith("t9", "r9");
+    expect(runsGet).toHaveBeenCalledWith("t9", "r9", {
+      signal: expect.any(AbortSignal),
+    });
     expect(result.current.running.has(B)).toBe(true);
     await tick();
     expect(toast.success).toHaveBeenCalledWith(

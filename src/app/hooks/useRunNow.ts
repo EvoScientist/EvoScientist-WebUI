@@ -15,6 +15,10 @@ import type { Project } from "@/lib/projects";
 import { useClient } from "@/providers/ClientProvider";
 
 export const RUN_POLL_MS = 3_000;
+/** How long one poll may take: the SDK sets no timeout, and a request that
+ *  never answers would hold the run, and its ceiling, for good. A poll that
+ *  takes longer counts as a failed one. */
+export const RUN_GET_TIMEOUT_MS = 15_000;
 /** How long a run is followed; then the page stops asking (the run goes on,
  *  and the drafts update when it finishes). */
 export const RUN_CEILING_MS = 30 * 60_000;
@@ -131,19 +135,61 @@ export function useRunNow(projects: readonly Project[]): {
     };
   }, [client]);
 
-  const sleep = useCallback(
-    (ms: number) =>
-      new Promise<void>((resolve) => {
-        const sleeper = {
-          timer: setTimeout(() => {
-            sleepersRef.current.delete(sleeper);
-            resolve();
-          }, ms),
-          resolve,
-        };
-        sleepersRef.current.add(sleeper);
+  /** A wait that a cleanup ends at once; `cancel` drops it unended. */
+  const pause = useCallback((ms: number) => {
+    let sleeper!: {
+      timer: ReturnType<typeof setTimeout>;
+      resolve: () => void;
+    };
+    const promise = new Promise<void>((resolve) => {
+      sleeper = {
+        timer: setTimeout(() => {
+          sleepersRef.current.delete(sleeper);
+          resolve();
+        }, ms),
+        resolve,
+      };
+      sleepersRef.current.add(sleeper);
+    });
+    const cancel = () => {
+      clearTimeout(sleeper.timer);
+      sleepersRef.current.delete(sleeper);
+    };
+    return { promise, cancel };
+  }, []);
+
+  const sleep = useCallback((ms: number) => pause(ms).promise, [pause]);
+
+  /** One poll of the run: given up on (and aborted) after
+   *  RUN_GET_TIMEOUT_MS, and at once on a cleanup. */
+  const getRun = useCallback(
+    (threadId: string, runId: string) =>
+      new Promise<{ status: string }>((resolve, reject) => {
+        const controller = new AbortController();
+        const limit = pause(RUN_GET_TIMEOUT_MS);
+        void limit.promise.then(() => {
+          controller.abort();
+          reject(new Error("The run's status didn't come in time."));
+        });
+        try {
+          clientRef.current.runs
+            .get(threadId, runId, { signal: controller.signal })
+            .then(
+              (r) => {
+                limit.cancel();
+                resolve(r);
+              },
+              (e: unknown) => {
+                limit.cancel();
+                reject(e);
+              }
+            );
+        } catch (e) {
+          limit.cancel();
+          reject(e);
+        }
       }),
-    []
+    [pause]
   );
 
   /** Read the drafts again without waiting for the answer; a failure is
@@ -187,20 +233,22 @@ export function useRunNow(projects: readonly Project[]): {
         listRef.current ? snapshotOf(listRef.current, key) : null;
       let before = snapshot();
 
-      /** How the run ended for this page: its own end, three failed polls
-       *  in a row, the ceiling, or a cleanup. */
+      /** How the run ended for this page: its own end, three failed (or
+       *  timed-out) polls in a row, the ceiling, or a cleanup. */
       async function poll(
         threadId: string,
         runId: string
       ): Promise<"success" | "failed" | "ceiling" | "cancelled"> {
         const since = Date.now();
+        // By the clock, before and after each poll: a slow one can cross it.
+        const late = () => Date.now() - since >= RUN_CEILING_MS;
         let failed = 0;
         for (;;) {
           await sleep(RUN_POLL_MS);
           if (cancelled()) return "cancelled";
-          if (Date.now() - since >= RUN_CEILING_MS) return "ceiling";
+          if (late()) return "ceiling";
           try {
-            const r = await clientRef.current.runs.get(threadId, runId);
+            const r = await getRun(threadId, runId);
             if (cancelled()) return "cancelled";
             failed = 0;
             if (END_STATES.has(r.status)) {
@@ -210,6 +258,7 @@ export function useRunNow(projects: readonly Project[]): {
             if (cancelled()) return "cancelled";
             if (++failed >= MAX_FAILED_POLLS) return "failed";
           }
+          if (late()) return "ceiling";
         }
       }
 
@@ -277,7 +326,7 @@ export function useRunNow(projects: readonly Project[]): {
         }
       }
     },
-    [sleep, rereadInBackground, rereadWithin]
+    [sleep, getRun, rereadInBackground, rereadWithin]
   );
 
   return { running, run };
