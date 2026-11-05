@@ -3,6 +3,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useQueryState } from "nuqs";
 import { ArrowLeft, Loader2, Settings } from "lucide-react";
+import { AutoSkillsSettings } from "@/app/components/autoskills/AutoSkillsSettings";
 import { DraftDetail } from "@/app/components/autoskills/DraftDetail";
 import { DraftList } from "@/app/components/autoskills/DraftList";
 import {
@@ -115,8 +116,8 @@ export function DraftsPage() {
   const { running, run } = useRunNow(projectList);
   const { deploymentUrl } = useDeployment();
 
-  // The panel itself comes with the AutoSkills settings.
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const settingsButtonRef = useRef<HTMLButtonElement>(null);
   const [confirming, setConfirming] = useState(false);
   const [selected, setSelected] = useState<ReadonlySet<string>>(NO_SELECTION);
 
@@ -374,6 +375,7 @@ export function DraftsPage() {
             variant="outline"
             size="sm"
             aria-haspopup="dialog"
+            ref={settingsButtonRef}
             aria-expanded={settingsOpen}
             onClick={() => setSettingsOpen(true)}
             className="ml-auto border-solid max-md:min-h-11"
@@ -382,6 +384,11 @@ export function DraftsPage() {
             Settings
           </Button>
         </div>
+        <AutoSkillsSettings
+          open={settingsOpen}
+          onOpenChange={setSettingsOpen}
+          returnFocusTo={settingsButtonRef}
+        />
 
         {auto.status === "unsupported" ? (
           <p className="mt-6 text-sm">

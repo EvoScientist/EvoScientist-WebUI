@@ -820,7 +820,7 @@ describe("DraftsPage", () => {
     expect(document.activeElement).toBe(tab(/^Pending/));
   });
 
-  it("an old core shows only settings and the update notice", () => {
+  it("an old core shows only settings and the update notice", async () => {
     hooks.auto = { status: "unsupported" };
     render(page());
     expect(
@@ -831,15 +831,20 @@ describe("DraftsPage", () => {
         "Every project · runs weekly at 03:00 · you review each draft"
       )
     ).toBeTruthy();
-    const settings = screen.getByRole("button", { name: "Settings" });
-    expect(settings.getAttribute("aria-expanded")).toBe("false");
-    fireEvent.click(settings);
-    expect(settings.getAttribute("aria-expanded")).toBe("true");
     expect(
       screen.getByText("Update EvoScientist to review drafts here.")
     ).toBeTruthy();
     expect(screen.queryByRole("tablist")).toBeNull();
     expect(screen.queryByRole("checkbox")).toBeNull();
+    const settings = screen.getByRole("button", { name: "Settings" });
+    expect(settings.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(settings);
+    expect(settings.getAttribute("aria-expanded")).toBe("true");
+    // The panel only needs /api/settings, so it opens on an old core too.
+    expect(screen.getByText("AutoSkills settings")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(settings.getAttribute("aria-expanded")).toBe("false");
+    await waitFor(() => expect(document.activeElement).toBe(settings));
   });
 
   it("a failed read offers Retry", () => {
