@@ -212,7 +212,8 @@ export function AutoSkillsSettings({
     const first = (Object.keys(revs) as Field[]).find((f) =>
       sendable.includes(f)
     );
-    body.revision = first === undefined ? null : revs[first] ?? null;
+    const sentRevision = first === undefined ? null : revs[first] ?? null;
+    body.revision = sentRevision;
     setSaving(true);
     setMessage(null);
     setServerErrors({});
@@ -248,13 +249,30 @@ export function AutoSkillsSettings({
           ? (answer as { error?: unknown }).error
           : undefined;
       if (res.status === 409 && code === "revision_mismatch") {
+        // The revision saved now, as the conflict names it (the core's 409
+        // carries it, a string or null).
+        const named =
+          typeof answer === "object" &&
+          answer !== null &&
+          "revision" in answer &&
+          (typeof answer.revision === "string" || answer.revision === null)
+            ? { revision: answer.revision }
+            : null;
         let fresh: unknown;
         try {
           fresh = await refresh();
         } catch {
           fresh = undefined;
         }
-        if (withRevision(fresh)) {
+        // SWR's mutate answers with the cached payload when the read fails:
+        // only an answer with the named revision (without one, any other
+        // than the one sent) is a new read.
+        const reread =
+          withRevision(fresh) &&
+          (named
+            ? fresh.revision === named.revision
+            : fresh.revision !== sentRevision);
+        if (reread) {
           setEdits({});
           setRevs({});
           setMessage(

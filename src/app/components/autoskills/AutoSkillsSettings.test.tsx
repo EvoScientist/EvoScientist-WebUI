@@ -565,6 +565,76 @@ describe("AutoSkillsSettings", () => {
     expect((save() as HTMLButtonElement).disabled).toBe(true);
   });
 
+  // SWR's mutate answers with the cached payload when the re-read fails: a
+  // re-read is new only with the revision the conflict named (or, without
+  // one, another revision than the one sent).
+  const oldPayload = () => ({
+    settings: SAVED,
+    sources: {},
+    providers: {},
+    read_only: [],
+    setup_needed: false,
+    revision: "rev1",
+  });
+
+  it("a conflict re-read that hands back the old answer keeps the edits", async () => {
+    panel();
+    hooks.refresh = vi.fn().mockResolvedValue(oldPayload());
+    fireEvent.click(
+      screen.getByLabelText("Auto — install drafts without asking")
+    );
+    respond(409, { error: "revision_mismatch", revision: "rev2" });
+    fireEvent.click(save());
+    expect(await screen.findByText(/reading them again failed/)).toBeTruthy();
+    expect(screen.queryByText(/Showing what is saved now/)).toBeNull();
+    expect(
+      (
+        screen.getByLabelText(
+          "Auto — install drafts without asking"
+        ) as HTMLInputElement
+      ).checked
+    ).toBe(true);
+    expect((save() as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("without the conflict's revision, an answer with the revision sent is the old one", async () => {
+    panel();
+    hooks.refresh = vi.fn().mockResolvedValue(oldPayload());
+    fireEvent.click(
+      screen.getByLabelText("Auto — install drafts without asking")
+    );
+    respond(409, { error: "revision_mismatch" });
+    fireEvent.click(save());
+    expect(await screen.findByText(/reading them again failed/)).toBeTruthy();
+    expect(
+      (
+        screen.getByLabelText(
+          "Auto — install drafts without asking"
+        ) as HTMLInputElement
+      ).checked
+    ).toBe(true);
+  });
+
+  it("a conflict re-read with the conflict's revision shows what is saved now", async () => {
+    panel();
+    hooks.refresh = vi.fn(async () => {
+      hooks.settings = { ...SAVED, memory_skill_synthesis_cadence: "monthly" };
+      hooks.revision = "rev2";
+      return { ...oldPayload(), settings: hooks.settings, revision: "rev2" };
+    });
+    fireEvent.click(
+      screen.getByLabelText("Auto — install drafts without asking")
+    );
+    respond(409, { error: "revision_mismatch", revision: "rev2" });
+    fireEvent.click(save());
+    expect(
+      await screen.findByText(
+        "These settings changed elsewhere. Showing what is saved now."
+      )
+    ).toBeTruthy();
+    expect(screen.getByLabelText("How often").textContent).toContain("Monthly");
+  });
+
   it("the revision sent comes only from the edits sent", async () => {
     const { rerender } = panel();
     // A bad time, started at rev1: not sent while drafting is off.
