@@ -5,6 +5,7 @@ import { act, render, renderHook, waitFor } from "@testing-library/react";
 import { SWRConfig } from "swr";
 import {
   AUTOSKILLS_REFRESH_MS,
+  READ_TIMEOUT_MS,
   markAutoSeen,
   readAutoSeenAt,
   refreshAutoSkills,
@@ -141,6 +142,51 @@ describe("useAutoSkills", () => {
       const asked = fetchMock.mock.calls.length;
       await settle(AUTOSKILLS_REFRESH_MS + 10);
       expect(fetchMock.mock.calls.length).toBe(asked + 1);
+    });
+
+    // SWR keeps a request in flight for its key, and every later read of the
+    // key waits for it: one that never answered stopped the list for good.
+    it("a read that never answers gives up after 15 s, and the list reads again", async () => {
+      vi.useFakeTimers();
+      let calls = 0;
+      const fetchMock = stubFetch(() => {
+        calls += 1;
+        return calls === 1 ? new Promise<Response>(() => {}) : json(list());
+      });
+      const { result } = renderHook(() => useAutoSkills(), { wrapper });
+      await settle(READ_TIMEOUT_MS - 10);
+      expect(result.current.status).toBe("loading");
+      const first = fetchMock.mock.calls[0][1] as RequestInit;
+      expect(first.signal?.aborted).toBe(false);
+      await settle(10);
+      // Given up on: aborted, and read like any failed read.
+      expect(first.signal?.aborted).toBe(true);
+      expect(result.current.status).toBe("error");
+      // SWR's own retry starts a new request, which answers.
+      await settle(10_000);
+      expect(fetchMock.mock.calls.length).toBeGreaterThan(1);
+      expect(result.current.status).toBe("ready");
+    });
+
+    it("a draft file that never answers reads as a failed read, then reads again", async () => {
+      vi.useFakeTimers();
+      let calls = 0;
+      stubFetch(() => {
+        calls += 1;
+        return calls === 1
+          ? new Promise<Response>(() => {})
+          : new Response("hello", { status: 200 });
+      });
+      const d = draft("p") as unknown as Draft;
+      const { result } = renderHook(() => useDraftFile(d, "SKILL.md", false), {
+        wrapper,
+      });
+      await settle(READ_TIMEOUT_MS);
+      expect(result.current.error).toBe("Couldn't read this file.");
+      // Not a final answer: asked again.
+      await settle(10_000);
+      expect(result.current.text).toBe("hello");
+      expect(result.current.error).toBeNull();
     });
 
     it("a reader that doesn't poll adds no reads to the one that does", async () => {
@@ -352,7 +398,8 @@ describe("useAutoSkills", () => {
       });
       controller.abort();
       await expect(outcome).rejects.toThrow();
-      expect(aborting.mock.calls[0][1]?.signal).toBe(controller.signal);
+      // The caller's abort reaches the request (through the 15 s bound).
+      expect(aborting.mock.calls[0][1]?.signal?.aborted).toBe(true);
     });
 
     it("an answer for a deployment left meanwhile stays that deployment's", async () => {

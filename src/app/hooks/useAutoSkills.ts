@@ -9,6 +9,10 @@ import { parseDraftList, type Draft, type DraftList } from "@/lib/autoskills";
 // page and the detail pane.
 
 export const AUTOSKILLS_REFRESH_MS = 60_000;
+/** How long one read of the drafts or of a draft's file may take. SWR keeps
+ *  a request in flight for its key, and every later read of the key waits
+ *  for it: one that never answered stopped the list for good. */
+export const READ_TIMEOUT_MS = 15_000;
 
 export type AutoSkillsState =
   | { status: "loading" }
@@ -17,6 +21,36 @@ export type AutoSkillsState =
   | { status: "ready"; list: DraftList };
 
 type ListKey = readonly ["autoskills", string, string];
+
+/** `run(signal)`, given up on (aborted, rejecting) after READ_TIMEOUT_MS or
+ *  when `outer` aborts. It rejects even when the request ignores the abort. */
+async function bounded<T>(
+  run: (signal: AbortSignal) => Promise<T>,
+  outer?: AbortSignal
+): Promise<T> {
+  const controller = new AbortController();
+  const stop = () => controller.abort();
+  if (outer?.aborted) stop();
+  else outer?.addEventListener("abort", stop, { once: true });
+  const timer = setTimeout(stop, READ_TIMEOUT_MS);
+  try {
+    return await new Promise<T>((resolve, reject) => {
+      const aborted = () =>
+        reject(
+          controller.signal.reason ?? new DOMException("Aborted", "AbortError")
+        );
+      if (controller.signal.aborted) {
+        aborted();
+        return;
+      }
+      controller.signal.addEventListener("abort", aborted, { once: true });
+      run(controller.signal).then(resolve, reject);
+    });
+  } finally {
+    clearTimeout(timer);
+    outer?.removeEventListener("abort", stop);
+  }
+}
 
 function headersFor(apiKey: string): Record<string, string> {
   const headers: Record<string, string> = {};
@@ -28,23 +62,25 @@ async function fetchDrafts(
   [, base, apiKey]: ListKey,
   signal?: AbortSignal
 ): Promise<DraftList | "unsupported"> {
-  const res = await fetch(`${base}/api/autoskills/proposals`, {
-    headers: headersFor(apiKey),
-    cache: "no-store",
-    signal,
-  });
-  // Deployments without the routes (EvoScientist before AutoSkills review).
-  if (res.status === 404 || res.status === 405) return "unsupported";
-  if (!res.ok) {
-    throw new Error(`GET /api/autoskills/proposals answered ${res.status}`);
-  }
-  const list = parseDraftList(await res.json());
-  if (!list) {
-    throw new Error(
-      "GET /api/autoskills/proposals answered an unexpected body"
-    );
-  }
-  return list;
+  return bounded(async (bound) => {
+    const res = await fetch(`${base}/api/autoskills/proposals`, {
+      headers: headersFor(apiKey),
+      cache: "no-store",
+      signal: bound,
+    });
+    // Deployments without the routes (EvoScientist before AutoSkills review).
+    if (res.status === 404 || res.status === 405) return "unsupported";
+    if (!res.ok) {
+      throw new Error(`GET /api/autoskills/proposals answered ${res.status}`);
+    }
+    const list = parseDraftList(await res.json());
+    if (!list) {
+      throw new Error(
+        "GET /api/autoskills/proposals answered an unexpected body"
+      );
+    }
+    return list;
+  }, signal);
 }
 
 function baseOf(deploymentUrl: string): string | null {
@@ -163,17 +199,21 @@ async function fetchDraftFile([
     `${base}/api/autoskills/proposals/${encodeURIComponent(id)}/file` +
     `?path=${encodeURIComponent(path)}${installed ? "&installed=1" : ""}`;
   try {
-    const res = await fetch(url, {
-      headers: headersFor(apiKey),
-      cache: "no-store",
+    // A read that times out is a failed one, asked again.
+    return await bounded(async (signal) => {
+      const res = await fetch(url, {
+        headers: headersFor(apiKey),
+        cache: "no-store",
+        signal,
+      });
+      if (!res.ok) {
+        throw new DraftFileError(
+          FILE_ERRORS[res.status] ?? FILE_FALLBACK,
+          FINAL_STATUSES.has(res.status)
+        );
+      }
+      return await res.text();
     });
-    if (!res.ok) {
-      throw new DraftFileError(
-        FILE_ERRORS[res.status] ?? FILE_FALLBACK,
-        FINAL_STATUSES.has(res.status)
-      );
-    }
-    return await res.text();
   } catch (e) {
     if (e instanceof DraftFileError) throw e;
     throw new DraftFileError(FILE_FALLBACK, false);
