@@ -23,6 +23,10 @@ export function FileText({ text }: { text: string }) {
   );
 }
 
+/** The largest file the core shows (its MAX_FILE_BYTES): a larger one
+ *  answers 413, so it is marked before it is opened. */
+const MAX_SHOWN_BYTES = 1_048_576;
+
 function sizeText(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   // MB before the rounded KB would read 1024.0.
@@ -164,6 +168,11 @@ export function DraftFiles({
                 {isNew(f) && (
                   <span className="shrink-0 text-xs text-[var(--brand)]">
                     New file
+                  </span>
+                )}
+                {f.size > MAX_SHOWN_BYTES && (
+                  <span className="shrink-0 text-xs text-muted-foreground">
+                    too large to show here
                   </span>
                 )}
                 <span className="shrink-0 text-xs tabular-nums text-muted-foreground">

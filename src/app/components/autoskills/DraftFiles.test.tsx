@@ -348,6 +348,24 @@ describe("DraftFiles", () => {
     expect(installedReads()).toEqual([]);
   });
 
+  it("marks a file too large to show here before it is opened", () => {
+    const d = draft({
+      proposal_id: "x",
+      files: [
+        { path: "SKILL.md", size: 10, installed: false },
+        { path: "edge.txt", size: 1_048_576, installed: false },
+        { path: "data.bin", size: 1_048_577, installed: false },
+      ],
+    });
+    render(<DraftFiles draft={d} />);
+    expect(fileButton("data.bin").textContent).toContain(
+      "too large to show here"
+    );
+    // The core shows a file of up to 1,048,576 bytes.
+    expect(fileButton("edge.txt").textContent).not.toContain("too large");
+    expect(fileButton("SKILL.md").textContent).not.toContain("too large");
+  });
+
   it("shows sizes in B, KB and MB without a 1024.0 KB", () => {
     const sizes = [0, 1023, 1024, 1_048_524, 1_048_575, 1_048_576];
     const d = draft({
