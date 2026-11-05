@@ -82,7 +82,9 @@ function stubFetch(answers: Array<[number, Record<string, unknown>]>) {
   );
 }
 
-const okApprove = { approved: true };
+// The core's answer names where it installed the skill.
+const okApprove = { approved: true, scope: "workspace" };
+const okGlobal = { approved: true, scope: "global" };
 const okRevert = { reverted: true, status: "pending" };
 
 /** The lines of the last error toast's title node. */
@@ -102,10 +104,10 @@ beforeEach(() => {
 });
 
 describe("useDraftActions", () => {
-  it("approves each draft with its own scope", async () => {
+  it("sends a picked scope, and null for a draft without one", async () => {
     stubFetch([
-      [200, okApprove],
-      [200, okApprove],
+      [200, okGlobal],
+      [200, okGlobal],
     ]);
     const { result } = setup();
     const a = draft({ proposal_id: "a", scope: "workspace" });
@@ -113,18 +115,104 @@ describe("useDraftActions", () => {
     await act(async () => {
       await result.current.approve([a, b], { a: "global" });
     });
+    // The list's recorded scope may be stale (a draft resubmitted with
+    // another one): without a pick the core installs where it records now.
     expect(calls).toEqual([
       { action: "approve", proposal_id: "a", scope: "global" },
-      { action: "approve", proposal_id: "b", scope: "global" },
+      { action: "approve", proposal_id: "b", scope: null },
     ]);
-    // Without a pick, the recorded scope goes out.
-    stubFetch([[200, okApprove]]);
+  });
+
+  it("a bulk approve sends no scope at all", async () => {
+    stubFetch([
+      [200, okApprove],
+      [200, okGlobal],
+      [200, okApprove],
+    ]);
+    const { result } = setup();
     await act(async () => {
-      await result.current.approve([a]);
+      await result.current.approve([
+        draft({ proposal_id: "a", scope: "workspace" }),
+        draft({ proposal_id: "b", scope: "global" }),
+        // A valid skill name that is also an Object.prototype key.
+        draft({ proposal_id: "constructor", scope: "workspace" }),
+      ]);
     });
     expect(calls).toEqual([
-      { action: "approve", proposal_id: "a", scope: "workspace" },
+      { action: "approve", proposal_id: "a", scope: null },
+      { action: "approve", proposal_id: "b", scope: null },
+      { action: "approve", proposal_id: "constructor", scope: null },
     ]);
+  });
+
+  it("the toast names where the core installed it, not the list's scope", async () => {
+    const { result } = setup();
+    stubFetch([[200, okGlobal]]);
+    await act(async () => {
+      await result.current.approve([
+        draft({ proposal_id: "a", scope: "workspace" }),
+      ]);
+    });
+    expect(toast.success.mock.calls[0][0]).toBe(
+      "Installed a into all projects (global)."
+    );
+
+    stubFetch([[200, okApprove]]);
+    await act(async () => {
+      await result.current.approve([
+        draft({ proposal_id: "b", scope: "global" }),
+      ]);
+    });
+    expect(toast.success.mock.calls[1][0]).toBe(
+      "Installed b into EvoSci_test/skills."
+    );
+
+    // Several: by their answers.
+    stubFetch([
+      [200, okGlobal],
+      [200, okGlobal],
+    ]);
+    await act(async () => {
+      await result.current.approve([
+        draft({ proposal_id: "c", scope: "workspace" }),
+        draft({ proposal_id: "d", scope: "workspace", workspace_dir: B }),
+      ]);
+    });
+    expect(toast.success.mock.calls[2][0]).toBe(
+      "Installed 2 skills into all projects (global)."
+    );
+    stubFetch([
+      [200, okApprove],
+      [200, okApprove],
+    ]);
+    await act(async () => {
+      await result.current.approve([
+        draft({ proposal_id: "e", scope: "global", workspace_dir: B }),
+        draft({ proposal_id: "f", scope: "global", workspace_dir: B }),
+      ]);
+    });
+    expect(toast.success.mock.calls[3][0]).toBe(
+      "Installed 2 skills into project_B/skills."
+    );
+  });
+
+  it("an answer without a scope names the place only when it was picked", async () => {
+    const { result } = setup();
+    stubFetch([[200, { approved: true }]]);
+    await act(async () => {
+      await result.current.approve([draft({ proposal_id: "a" })]);
+    });
+    expect(toast.success.mock.calls[0][0]).toBe("Installed a.");
+
+    stubFetch([[200, { approved: true }]]);
+    await act(async () => {
+      await result.current.approve([draft({ proposal_id: "b" })], {
+        b: "global",
+      });
+    });
+    expect(toast.success.mock.calls[1][0]).toBe(
+      "Installed b into all projects (global)."
+    );
   });
 
   it("a single approval toasts where it went with Undo", async () => {
@@ -632,16 +720,24 @@ describe("Undo after revert_failed", () => {
 describe("decisionToast", () => {
   const w = (id: string, dir = A) =>
     draft({ proposal_id: id, workspace_dir: dir });
+  // The places come from the core's answers; the drafts' recorded scopes
+  // ("workspace" here) don't count.
   it("words each case", () => {
-    expect(decisionToast("approve", [w("a")], {}, labels)).toBe(
+    expect(decisionToast("approve", [w("a")], { a: "workspace" }, labels)).toBe(
       "Installed a into EvoSci_test/skills."
     );
     expect(decisionToast("approve", [w("a")], { a: "global" }, labels)).toBe(
       "Installed a into all projects (global)."
     );
-    expect(decisionToast("approve", [w("a", B), w("b", B)], {}, labels)).toBe(
-      "Installed 2 skills into project_B/skills."
-    );
+    expect(decisionToast("approve", [w("a")], {}, labels)).toBe("Installed a.");
+    expect(
+      decisionToast(
+        "approve",
+        [w("a", B), w("b", B)],
+        { a: "workspace", b: "workspace" },
+        labels
+      )
+    ).toBe("Installed 2 skills into project_B/skills.");
     expect(
       decisionToast(
         "approve",
@@ -650,9 +746,17 @@ describe("decisionToast", () => {
         labels
       )
     ).toBe("Installed 2 skills into all projects (global).");
-    expect(decisionToast("approve", [w("a"), w("b", B)], {}, labels)).toBe(
-      "Installed 2 skills."
-    );
+    expect(
+      decisionToast(
+        "approve",
+        [w("a"), w("b", B)],
+        { a: "workspace", b: "workspace" },
+        labels
+      )
+    ).toBe("Installed 2 skills.");
+    expect(
+      decisionToast("approve", [w("a"), w("b")], { a: "workspace" }, labels)
+    ).toBe("Installed 2 skills.");
     expect(decisionToast("reject", [w("a")], {}, labels)).toBe("Rejected a.");
     expect(decisionToast("reject", [w("a"), w("b")], {}, labels)).toBe(
       "Rejected 2 skills."

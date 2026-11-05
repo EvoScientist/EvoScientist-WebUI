@@ -32,11 +32,13 @@ function skills(n: number): string {
   return `${n} skills`;
 }
 
-/** The success line of a decision. */
+/** The success line of a decision. `placed` holds where each approved
+ *  draft went as the core answered it (never the list's recorded scope,
+ *  which may be stale); a draft without an entry is named without a place. */
 export function decisionToast(
   action: "approve" | "reject",
   done: Draft[],
-  scopes: Record<string, DraftScope>,
+  placed: Record<string, DraftScope>,
   labels: Map<string, string>
 ): string {
   const n = done.length;
@@ -45,15 +47,21 @@ export function decisionToast(
       ? `Rejected ${done[0].skill_name}.`
       : `Rejected ${skills(n)}.`;
   }
-  const scopeOf = (d: Draft) => scopes[d.proposal_id] ?? d.scope;
+  const scopeOf = (d: Draft): DraftScope | undefined =>
+    Object.hasOwn(placed, d.proposal_id) ? placed[d.proposal_id] : undefined;
   if (n === 1) {
     const d = done[0];
-    return scopeOf(d) === "global"
-      ? `Installed ${d.skill_name} into all projects (global).`
-      : `Installed ${d.skill_name} into ${labelFor(
-          d.workspace_dir,
-          labels
-        )}/skills.`;
+    const scope = scopeOf(d);
+    if (scope === "global") {
+      return `Installed ${d.skill_name} into all projects (global).`;
+    }
+    if (scope === "workspace") {
+      return `Installed ${d.skill_name} into ${labelFor(
+        d.workspace_dir,
+        labels
+      )}/skills.`;
+    }
+    return `Installed ${d.skill_name}.`;
   }
   if (done.every((d) => scopeOf(d) === "global")) {
     return `Installed ${skills(n)} into all projects (global).`;
@@ -125,12 +133,14 @@ const SUCCESS_FLAG = {
 
 async function post(
   body: Record<string, unknown> & { action: keyof typeof SUCCESS_FLAG }
-): Promise<{ ok: true } | { ok: false; answer: Answer }> {
+): Promise<
+  { ok: true; data: Record<string, unknown> } | { ok: false; answer: Answer }
+> {
   const reply: RelayReply = await postRelay(body);
   if (reply === "network") return { ok: false, answer: "network" };
   const data = reply.data;
   if (reply.ok && data[SUCCESS_FLAG[body.action]] === true) {
-    return { ok: true };
+    return { ok: true, data };
   }
   return {
     ok: false,
@@ -142,21 +152,32 @@ async function post(
   };
 }
 
+function isScope(value: unknown): value is DraftScope {
+  return value === "workspace" || value === "global";
+}
+
 async function decideAll(
   drafts: Draft[],
   bodyOf: (d: Draft) => Parameters<typeof post>[0],
   labels: Map<string, string>,
   failure: (answer: Answer, d: Draft) => string
-): Promise<DecisionResult> {
+): Promise<DecisionResult & { placed: Record<string, DraftScope> }> {
   const result: DecisionResult = { done: [], failed: [] };
+  // Where each approval went: the core's answer, else the scope picked for
+  // it (the core installs where it is told).
+  const placed: Record<string, DraftScope> = {};
   for (const draft of drafts) {
-    const out = await post(bodyOf(draft));
-    if (out.ok) result.done.push(draft);
-    else {
+    const body = bodyOf(draft);
+    const out = await post(body);
+    if (out.ok) {
+      result.done.push(draft);
+      const scope = isScope(out.data.scope) ? out.data.scope : body.scope;
+      if (isScope(scope)) placed[draft.proposal_id] = scope;
+    } else {
       result.failed.push({ draft, message: failure(out.answer, draft) });
     }
   }
-  return result;
+  return { ...result, placed };
 }
 
 /** Read the drafts and experts again, in the background: the drafts GET has
@@ -280,14 +301,19 @@ export function useDraftActions(projects: readonly Project[]): {
     ) =>
       track(async () => {
         const labels = projectLabels(projectsRef.current);
-        const result = await decideAll(
+        const { placed, ...result } = await decideAll(
           drafts,
           (d) =>
             action === "approve"
               ? {
                   action,
                   proposal_id: d.proposal_id,
-                  scope: scopes[d.proposal_id] ?? d.scope,
+                  // Only a scope picked for this draft: the list's recorded
+                  // one may be stale (a draft resubmitted with another), and
+                  // without one the core installs where it records now.
+                  scope: Object.hasOwn(scopes, d.proposal_id)
+                    ? scopes[d.proposal_id]
+                    : null,
                 }
               : { action, proposal_id: d.proposal_id },
           labels,
@@ -296,7 +322,7 @@ export function useDraftActions(projects: readonly Project[]): {
         reread();
         if (result.done.length > 0) {
           const revertible = result.done.filter((d) => isRevertible(d, action));
-          const text = decisionToast(action, result.done, scopes, labels);
+          const text = decisionToast(action, result.done, placed, labels);
           if (revertible.length > 0) {
             toast.success(text, {
               duration: UNDO_MS,
