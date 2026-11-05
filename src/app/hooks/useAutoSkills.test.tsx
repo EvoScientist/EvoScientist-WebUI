@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { SWRConfig } from "swr";
 import {
+  AUTOSKILLS_REFRESH_MS,
   markAutoSeen,
   readAutoSeenAt,
   refreshAutoSkills,
@@ -93,6 +94,40 @@ describe("useAutoSkills", () => {
     stubFetch(() => json({}, 404));
     const { result } = renderHook(() => useAutoSkills(), { wrapper });
     await waitFor(() => expect(result.current.status).toBe("unsupported"));
+  });
+
+  // Every page mounts the rail's count: an EvoScientist without the route
+  // isn't asked again every minute from every tab.
+  describe("on the interval", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+    const settle = (ms: number) =>
+      act(async () => {
+        await vi.advanceTimersByTimeAsync(ms);
+      });
+
+    it("stops asking once the answer is unsupported", async () => {
+      vi.useFakeTimers();
+      const fetchMock = stubFetch(() => json({}, 404));
+      const { result } = renderHook(() => useAutoSkills(), { wrapper });
+      await settle(10);
+      expect(result.current.status).toBe("unsupported");
+      const asked = fetchMock.mock.calls.length;
+      await settle(AUTOSKILLS_REFRESH_MS * 3);
+      expect(fetchMock.mock.calls.length).toBe(asked);
+    });
+
+    it("keeps reading a list", async () => {
+      vi.useFakeTimers();
+      const fetchMock = stubFetch(() => json(list()));
+      const { result } = renderHook(() => useAutoSkills(), { wrapper });
+      await settle(10);
+      expect(result.current.status).toBe("ready");
+      const asked = fetchMock.mock.calls.length;
+      await settle(AUTOSKILLS_REFRESH_MS + 10);
+      expect(fetchMock.mock.calls.length).toBe(asked + 1);
+    });
   });
 
   it("a 405 reads as unsupported", async () => {

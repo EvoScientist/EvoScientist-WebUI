@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  promises as fsPromises,
   readdirSync,
   realpathSync,
   rmSync,
@@ -214,6 +215,72 @@ describe("/api/skills for a project", () => {
     expect((await listProject()).projectSkills?.map((s) => s.name)).toEqual([
       "own-skill",
     ]);
+  });
+
+  // A SKILL.md is read only from inside its tier: one linked out of it
+  // would put another file's name and description into the list.
+  it("leaves out a project skill whose SKILL.md links out of the project", async () => {
+    skill(join(project, "skills"), "own-skill");
+    writeFileSync(
+      join(outside, "SECRET.md"),
+      "---\nname: secret-name\ndescription: secret-text\n---\n"
+    );
+    mkdirSync(join(project, "skills", "linked-file"), { recursive: true });
+    symlinkSync(
+      join(outside, "SECRET.md"),
+      join(project, "skills", "linked-file", "SKILL.md")
+    );
+    const body = await listProject();
+    expect(body.projectSkills?.map((s) => s.name)).toEqual(["own-skill"]);
+    expect(JSON.stringify(body)).not.toContain("secret-");
+  });
+
+  it("leaves out a global skill whose SKILL.md links out of its tier", async () => {
+    writeFileSync(
+      join(outside, "SECRET.md"),
+      "---\nname: secret-name\ndescription: secret-text\n---\n"
+    );
+    mkdirSync(join(root, "linked-file"));
+    symlinkSync(
+      join(outside, "SECRET.md"),
+      join(root, "linked-file", "SKILL.md")
+    );
+    const body = await listProject("");
+    expect(body.skills.map((s) => s.name)).toEqual(["victim"]);
+    expect(JSON.stringify(body)).not.toContain("secret-");
+  });
+
+  it("reads the global tiers and the project at once", async () => {
+    // The global tier's listing is held: the project's folder is still
+    // asked for meanwhile (the registry can take its timeout).
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const readdir = fsPromises.readdir.bind(fsPromises);
+    const spy = vi.spyOn(fsPromises, "readdir").mockImplementation((async (
+      path: unknown,
+      ...rest: unknown[]
+    ) => {
+      if (path === root) await gate;
+      return (readdir as (...args: unknown[]) => Promise<unknown>)(
+        path,
+        ...rest
+      );
+    }) as never);
+    try {
+      const answer = GET(request("GET", SAME_ORIGIN, `?project=${HANDLE}`));
+      await vi.waitFor(() => expect(projectDir).toHaveBeenCalled());
+      release();
+      const res = await answer;
+      expect(res.status).toBe(200);
+      expect(
+        ((await res.json()) as { skills: Array<{ name: string }> }).skills.map(
+          (s) => s.name
+        )
+      ).toEqual(["victim"]);
+    } finally {
+      release();
+      spy.mockRestore();
+    }
   });
 
   it("uninstalls from the project tier only", async () => {

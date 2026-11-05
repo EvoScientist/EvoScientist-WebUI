@@ -66,7 +66,7 @@ export function SkillTile({
             {title}
           </h3>
           {tag && (
-            <span className="shrink-0 rounded-full border border-solid border-[var(--brand)] bg-[var(--brand-soft)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--brand)]">
+            <span className="shrink-0 rounded-full border border-solid border-[var(--brand)] bg-[var(--brand-soft)] px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-[var(--brand)]">
               {tag}
             </span>
           )}

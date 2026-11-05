@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import { fireEvent, render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Draft, DraftList } from "@/lib/autoskills";
-import { formatTime } from "@/lib/time";
+import { formatFullTime } from "@/lib/time";
 import {
   mockProjects,
   readyProjects,
@@ -115,7 +115,22 @@ beforeEach(() => {
   hooks.auto = { status: "loading" };
   hooks.seenAt = null;
   hooks.seenFor = [];
+  // "Now" for the latest draft's date: only Date is faked.
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-11-05T12:00:00Z"));
 });
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+/** The latest draft's date as the banner writes it: month and day, and the
+ *  year only for another year. */
+const shortDate = (iso: string, withYear: boolean) =>
+  new Date(iso).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    ...(withYear ? { year: "numeric" } : {}),
+  });
 
 describe("DraftsBanner", () => {
   it("shows the count, the split by project and Review", () => {
@@ -142,13 +157,17 @@ describe("DraftsBanner", () => {
     expect(screen.getByText("3 skills drafted from your memory")).toBeTruthy();
     expectNoParagraphGaps(view.container);
     expect(screen.getByText("EvoSci_test 2 · project_B 1")).toBeTruthy();
-    expect(
-      screen.getByText(
-        `Latest ${formatTime(
-          new Date("2026-11-03T15:30:00Z")
-        )} · waiting for your review`
-      )
-    ).toBeTruthy();
+    // The latest draft's date (the spec's), its full time on hover.
+    const latest = screen.getByText(
+      `Latest ${shortDate(
+        "2026-11-03T15:30:00Z",
+        false
+      )} · waiting for your review`
+    );
+    expect(latest.textContent).not.toContain("2026");
+    expect(latest.getAttribute("title")).toBe(
+      formatFullTime(new Date("2026-11-03T15:30:00Z"))
+    );
     // Pending wins over the automatic installs.
     expect(screen.queryByText(/installed .* automatically/)).toBeNull();
 
@@ -165,8 +184,14 @@ describe("DraftsBanner", () => {
       ])
     );
 
-    // One draft reads as one.
-    ready([draft({ proposal_id: "b1", workspace_dir: B })]);
+    // One draft reads as one; a draft from another year shows its year.
+    ready([
+      draft({
+        proposal_id: "b1",
+        workspace_dir: B,
+        created_at: "2025-12-30T10:00:00Z",
+      }),
+    ]);
     view.rerender(
       <TestProjectsProvider value={mockProjects(readyProjects(A, B))}>
         <DraftsBanner />
@@ -174,6 +199,13 @@ describe("DraftsBanner", () => {
     );
     expect(screen.getByText("1 skill drafted from your memory")).toBeTruthy();
     expect(screen.getByText("project_B 1")).toBeTruthy();
+    const older = screen.getByText(
+      `Latest ${shortDate(
+        "2025-12-30T10:00:00Z",
+        true
+      )} · waiting for your review`
+    );
+    expect(older.textContent).toContain("2025");
   });
 
   it("shows the automatic-install banner only for automatic approvals since last seen", () => {

@@ -366,11 +366,20 @@ describe("SkillsMarketplace skills from memory", () => {
         name: "Uninstall",
       })
     );
-    // The page's own question first.
-    expect(screen.getByText("Uninstall skill?")).toBeTruthy();
+    // The page's own question first, saying what goes: the folder, for good.
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText("Uninstall skill?")).toBeTruthy();
+    expect(
+      within(dialog).getByText(
+        "This deletes the folder projA/skills/arxiv-paper-retrieval. It can't be undone."
+      )
+    ).toBeTruthy();
+    expect(within(dialog).queryByText(/install it again/)).toBeNull();
+    expect(
+      within(dialog).queryByRole("button", { name: "Uninstall" })
+    ).toBeNull();
     const reads = fetchMock.mock.calls.length;
-    const buttons = screen.getAllByRole("button", { name: /^uninstall$/i });
-    fireEvent.click(buttons[buttons.length - 1]);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
 
     await waitFor(() => expect(onTeams).toHaveBeenCalled());
     window.removeEventListener("evo-teams-change", onTeams);
@@ -508,8 +517,7 @@ describe("SkillsMarketplace skills from memory", () => {
 
     await screen.findByText("a-skill");
     fireEvent.click(screen.getByRole("button", { name: "Uninstall" }));
-    const buttons = screen.getAllByRole("button", { name: /^uninstall$/i });
-    fireEvent.click(buttons[buttons.length - 1]);
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     await waitFor(() => expect(finishDelete).toBeDefined());
 
     // Another project becomes current before the removal answers.
@@ -532,5 +540,127 @@ describe("SkillsMarketplace skills from memory", () => {
     expect(
       screen.getByRole("heading", { name: "This project's skills" })
     ).toBeTruthy();
+  });
+
+  it("a same-named skill of the next project doesn't spin while the last one's is deleted", async () => {
+    const B = "/srv/projB";
+    let finishDelete: (() => void) | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: string, init?: RequestInit) => {
+        if (init?.method === "DELETE") {
+          return new Promise((resolve) => {
+            finishDelete = () =>
+              resolve({ ok: true, json: () => Promise.resolve({ ok: true }) });
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve(
+              String(input).includes("catalog")
+                ? { skills: [] }
+                : { skills: [], projectSkills: [card("shared-name")] }
+            ),
+        });
+      })
+    );
+    const page = (current: string) => (
+      <TestProjectsProvider
+        value={mockProjects(readyProjects(TEST_PROJECT, B), { current })}
+      >
+        <SkillsMarketplace />
+      </TestProjectsProvider>
+    );
+    const view = render(page(TEST_PROJECT));
+
+    await screen.findByText("shared-name");
+    fireEvent.click(screen.getByRole("button", { name: "Uninstall" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await screen.findByRole("button", { name: "Removing…" });
+
+    view.rerender(page(B));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Uninstall" })).toBeTruthy()
+    );
+    expect(screen.queryByRole("button", { name: "Removing…" })).toBeNull();
+    finishDelete?.();
+    await waitFor(() => expect(hooks.refresh).toHaveBeenCalled());
+  });
+});
+
+// The lists are read once it is known whether the current project's
+// skills/ can be read here: an open while that is still asked read twice.
+describe("SkillsMarketplace first read", () => {
+  const page = (value: ProjectsContextValue) => (
+    <TestProjectsProvider value={value}>
+      <SkillsMarketplace />
+    </TestProjectsProvider>
+  );
+  const skillReads = (fetchMock: ReturnType<typeof mockApi>) =>
+    fetchMock.mock.calls
+      .map(([url]) => String(url))
+      .filter(
+        (url) => url.startsWith("/api/skills") && !url.includes("catalog")
+      );
+  const catalogReads = (fetchMock: ReturnType<typeof mockApi>) =>
+    fetchMock.mock.calls.filter(([url]) => String(url).includes("catalog"));
+
+  it("reads once on a cold open that resolves to here", async () => {
+    const fetchMock = mockApi([], [], [card("mine")]);
+    // Nothing known yet, then the projects, then whether files are here.
+    const view = render(
+      page(mockProjects({ status: "pending" }, { files: "pending" }))
+    );
+    view.rerender(
+      page(mockProjects(readyProjects(TEST_PROJECT), { files: "pending" }))
+    );
+    expect(screen.getByText("Loading skills…")).toBeTruthy();
+    view.rerender(
+      page(mockProjects(readyProjects(TEST_PROJECT), { files: "here" }))
+    );
+
+    await screen.findByRole("heading", { name: "This project's skills" });
+    expect(skillReads(fetchMock)).toEqual([
+      `/api/skills?project=${projectHandle(TEST_PROJECT)}`,
+    ]);
+    expect(catalogReads(fetchMock)).toHaveLength(1);
+  });
+
+  it("reads the global lists once when there is no project to ask about", async () => {
+    // A core without projects, a backend with none, or a project list that
+    // can't be read: files may never decide, the global lists still show.
+    for (const value of [
+      mockProjects({ status: "unsupported" }, { files: "pending" }),
+      mockProjects(readyProjects(), { files: "pending" }),
+      {
+        ...mockProjects({ status: "pending" }, { files: "pending" }),
+        error: "Failed to fetch",
+      },
+    ]) {
+      const fetchMock = mockApi([], [card("plain")]);
+      const view = render(page(value));
+      await screen.findByRole("heading", { name: "Other installed skills" });
+      expect(skillReads(fetchMock)).toEqual(["/api/skills"]);
+      view.unmount();
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe("SkillsMarketplace global uninstall", () => {
+  it("keeps the global confirm and reads the drafts again", async () => {
+    mockApi([row({ installed: true })]);
+    renderPage();
+    fireEvent.click(
+      await screen.findByRole("button", { name: /^uninstall$/i })
+    );
+    const dialog = screen.getByRole("dialog");
+    expect(
+      within(dialog).getByText(/will be removed from this Web UI/)
+    ).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Uninstall" }));
+    // A from-memory global skill's draft says it's gone at once.
+    await waitFor(() => expect(hooks.refresh).toHaveBeenCalled());
   });
 });

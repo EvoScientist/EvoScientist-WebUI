@@ -56,7 +56,11 @@ export function useAutoSkills(): AutoSkillsState & {
   const base = baseOf(deploymentUrl);
   const key: ListKey | null = base ? ["autoskills", base, apiKey] : null;
   const { data, error, mutate } = useSWR(key, fetchDrafts, {
-    refreshInterval: AUTOSKILLS_REFRESH_MS,
+    // An EvoScientist without the route isn't asked again on the interval:
+    // every page mounts the rail's count. Focus still reads again, so an
+    // updated core is found.
+    refreshInterval: (latest) =>
+      latest === "unsupported" ? 0 : AUTOSKILLS_REFRESH_MS,
     revalidateOnFocus: true,
   });
   // The latest read decides: a failed re-read shows the error, not the old

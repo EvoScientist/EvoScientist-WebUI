@@ -5,9 +5,9 @@ import { useQueryState } from "nuqs";
 import { Sparkles } from "lucide-react";
 import { readAutoSeenAt, useAutoSkills } from "@/app/hooks/useAutoSkills";
 import { Button } from "@/components/ui/button";
-import { bannerSummary, type Draft } from "@/lib/autoskills";
+import { bannerSummary, timeOf, type Draft } from "@/lib/autoskills";
 import type { Project } from "@/lib/projects";
-import { formatTime } from "@/lib/time";
+import { formatFullTime } from "@/lib/time";
 import { useDeployment } from "@/providers/ClientProvider";
 import { useProjects } from "@/providers/ProjectsProvider";
 
@@ -24,20 +24,24 @@ const BOX =
 const LINK =
   "rounded-sm text-sm text-[var(--brand)] underline-offset-4 transition-colors hover:text-[var(--brand-hover)] hover:underline focus-visible:ring-2 focus-visible:ring-ring max-md:min-h-11";
 
-function timeOf(value: string | null): number | null {
-  if (value === null) return null;
-  const t = Date.parse(value);
-  return Number.isNaN(t) ? null : t;
-}
-
 /** How many of the automatic approvals came after `seenAt` (all of them
  *  when nothing was seen); one without a time that parses doesn't count. */
 function since(automatic: readonly Draft[], seenAt: string | null): number {
-  const seen = timeOf(seenAt);
+  const seen = seenAt === null ? null : timeOf(seenAt);
   return automatic.filter((d) => {
-    const at = timeOf(d.approved_at);
+    const at = d.approved_at === null ? null : timeOf(d.approved_at);
     return at !== null && (seen === null || at > seen);
   }).length;
+}
+
+/** A draft's date: month and day, and the year only for another year. */
+function shortDate(date: Date): string {
+  const otherYear = date.getFullYear() !== new Date().getFullYear();
+  return date.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    ...(otherYear ? { year: "numeric" } : {}),
+  });
 }
 
 export function DraftsBanner(): JSX.Element | null {
@@ -102,9 +106,12 @@ export function DraftsBanner(): JSX.Element | null {
               {split.map((s) => `${s.label} ${s.count}`).join(" · ")}
             </p>
           )}
-          <p className="text-muted-foreground">
+          <p
+            className="text-muted-foreground"
+            title={latest ? formatFullTime(new Date(latest)) : undefined}
+          >
             {latest
-              ? `Latest ${formatTime(new Date(latest))} · ${waiting}`
+              ? `Latest ${shortDate(new Date(latest))} · ${waiting}`
               : waiting}
           </p>
         </div>

@@ -7,6 +7,7 @@ import {
   isValidSkillName,
   isInstalledExpert,
   declaresSkillType,
+  readSkillFileIn,
 } from "@/lib/server/skills";
 import { ProjectRefusedError, projectDir } from "@/lib/server/projects";
 import { isCrossOrigin } from "@/lib/server/workspace";
@@ -70,14 +71,16 @@ async function readTier(
     const skillDir = join(dir, entry);
     try {
       // Canonicalize so a symlinked skill dir / SKILL.md can't read outside
-      // the tier (consistent with getSkillDetail's guard).
+      // the tier (consistent with getSkillDetail's guard): the folder here,
+      // the file itself in readSkillFileIn.
       const realDir = await fs.realpath(skillDir);
       if (realDir !== realRoot && !realDir.startsWith(realRoot + sep)) {
         continue;
       }
       const stat = await fs.stat(realDir);
       if (!stat.isDirectory()) continue;
-      const md = await fs.readFile(join(realDir, "SKILL.md"), "utf-8");
+      const md = await readSkillFileIn(dir, entry, "SKILL.md");
+      if (md === null) continue;
       const { name, description } = parseFrontmatter(md);
       // Identity is the DIRECTORY name (what install/uninstall/dedup key on);
       // the frontmatter name is display-only.
@@ -130,8 +133,12 @@ export async function GET(request: NextRequest) {
     );
   }
   try {
-    const skills = await readSkills();
-    const projectSkills = await readProjectSkills(request);
+    // At once: the project's read asks the backend's registry, which can
+    // take its timeout.
+    const [skills, projectSkills] = await Promise.all([
+      readSkills(),
+      readProjectSkills(request),
+    ]);
     return NextResponse.json({ skills, projectSkills });
   } catch (e) {
     return NextResponse.json(

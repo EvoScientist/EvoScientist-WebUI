@@ -21,8 +21,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { fromMemorySkills } from "@/lib/autoskills";
-import { projectHandle } from "@/lib/projects";
+import { fromMemorySkills, labelFor, projectLabels } from "@/lib/autoskills";
+import { projectHandle, type Project } from "@/lib/projects";
 import { useProjects } from "@/providers/ProjectsProvider";
 
 interface SkillCard {
@@ -66,9 +66,12 @@ function memoryTag(
   return operation ? MEMORY_TAGS[operation] : undefined;
 }
 
-/** A project skill's busy key, apart from a global skill of the same name
- *  (a skill name holds no "/"). */
-const projectBusyKey = (name: string) => `project/${name}`;
+/** A project skill's busy key: apart from a global skill and from another
+ *  project's skill of the same name. */
+const projectBusyKey = (key: string, name: string) =>
+  JSON.stringify(["project", key, name]);
+
+const NO_PROJECTS: readonly Project[] = [];
 
 /** Research Skills, or its "Drafted from memory" sub-page. Coming back
  *  mounts the skills again, so their lists are read anew. */
@@ -79,9 +82,19 @@ export function SkillsMarketplace() {
 
 function SkillsHome() {
   const [, setView] = useQueryState("view");
-  const { current, files } = useProjects();
+  const { projects, current, files, error: projectsError } = useProjects();
   // The current project's own skills/ show where this page reads its files.
   const projectKey = current && files === "here" ? current.key : null;
+  // The lists are read once it is known which to read: an open while that
+  // is still being asked read them twice. With no project to ask about (a
+  // core without projects, none registered, a list that can't be read
+  // while the backend is down) the global lists are read at once.
+  const decided =
+    projectKey !== null ||
+    files === "elsewhere" ||
+    projects.status === "unsupported" ||
+    (projects.status === "ready" && current === null) ||
+    (projects.status === "pending" && projectsError !== null);
   const auto = useAutoSkills();
   const drafts = auto.status === "ready" ? auto.list : null;
   const currentKey = current?.key ?? null;
@@ -115,6 +128,20 @@ function SkillsHome() {
     /** The project whose skills/ holds it; absent for the global tier. */
     project?: string;
   } | null>(null);
+  // The dialog keeps the last skill's words while it fades out.
+  const [shownTarget, setShownTarget] = useState(uninstallTarget);
+  if (uninstallTarget !== null && uninstallTarget !== shownTarget) {
+    setShownTarget(uninstallTarget);
+  }
+  const dialogTarget = uninstallTarget ?? shownTarget;
+  // Projects as the drafts pages and their toasts name them.
+  const labels = useMemo(
+    () =>
+      projectLabels(
+        projects.status === "ready" ? projects.projects : NO_PROJECTS
+      ),
+    [projects]
+  );
   // Only the newest read may show: one settling late (the project changed
   // meanwhile, or an uninstall read again) would bring back what is gone.
   const loadSeq = useRef(0);
@@ -195,8 +222,8 @@ function SkillsHome() {
   );
 
   useEffect(() => {
-    load();
-  }, [load]);
+    if (decided) load();
+  }, [load, decided]);
 
   // The read after a removal is the current project's: a project chosen
   // while the removal ran must not lose its list to the old one's.
@@ -266,6 +293,8 @@ function SkillsHome() {
         setOther((prev) => prev.filter((s) => s.name !== name));
       }
       notifyTeamsChanged();
+      // A from-memory skill's draft says at once that it is gone.
+      void refreshAutoSkills();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to uninstall");
     } finally {
@@ -280,7 +309,7 @@ function SkillsHome() {
   // A project's own skill: removed from its skills/ alone. The drafts read
   // again too (an approved draft's skill is gone), and so do the experts.
   const uninstallFromProject = async (key: string, name: string) => {
-    const busyKey = projectBusyKey(name);
+    const busyKey = projectBusyKey(key, name);
     setBusy((b) => ({ ...b, [busyKey]: "uninstall" }));
     setError(null);
     try {
@@ -454,7 +483,7 @@ function SkillsHome() {
                       description={s.description}
                       installed
                       tag={memoryTag(fromMemory?.project, s.name)}
-                      busy={busy[projectBusyKey(s.name)]}
+                      busy={busy[projectBusyKey(own.key, s.name)]}
                       actions={expertBadge(s.isExpert, setView)}
                       onUninstall={() =>
                         setUninstallTarget({
@@ -523,8 +552,19 @@ function SkillsHome() {
           <DialogHeader>
             <DialogTitle>Uninstall skill?</DialogTitle>
             <DialogDescription>
-              “{uninstallTarget?.title ?? uninstallTarget?.name}” will be
-              removed from this Web UI. You can install it again later.
+              {dialogTarget?.project !== undefined ? (
+                // A project's own folder: deleted, with nothing to install
+                // it again from.
+                `This deletes the folder ${labelFor(
+                  dialogTarget.project,
+                  labels
+                )}/skills/${dialogTarget.name}. It can't be undone.`
+              ) : (
+                <>
+                  “{dialogTarget?.title ?? dialogTarget?.name}” will be removed
+                  from this Web UI. You can install it again later.
+                </>
+              )}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -538,7 +578,7 @@ function SkillsHome() {
               onClick={confirmUninstall}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              Uninstall
+              {dialogTarget?.project !== undefined ? "Delete" : "Uninstall"}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -238,7 +238,7 @@ export function labelFor(key: string, labels: Map<string, string>): string {
 }
 
 /** A timestamp's milliseconds, or null when it doesn't parse. */
-function timeOf(value: string): number | null {
+export function timeOf(value: string): number | null {
   const t = Date.parse(value);
   return Number.isNaN(t) ? null : t;
 }

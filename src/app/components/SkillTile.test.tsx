@@ -146,6 +146,8 @@ describe("SkillTile tag", () => {
         "text-[var(--brand)]",
       ])
     );
+    // Lowercase as written ("from memory"), unlike the EXPERT marker.
+    expect(tag.className.split(/\s+/)).not.toContain("uppercase");
   });
 
   it("has no tag unless given one", () => {
