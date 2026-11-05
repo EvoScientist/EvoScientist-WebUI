@@ -492,6 +492,48 @@ describe("DraftDetail", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
+  it("a draft rewritten in place starts at its new recorded scope, without the question", () => {
+    const a = draft({
+      proposal_id: "a",
+      scope: "workspace",
+      operation: "update",
+      target_skill_name: "a",
+    });
+    const view = render(detail(a));
+    pickScope("All projects (global)");
+    // The same draft read again keeps the pick.
+    view.rerender(detail({ ...a }));
+    expect(scopeTrigger().textContent).toBe("All projects (global)");
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    expect(screen.getByRole("dialog")).toBeTruthy();
+
+    // A run rewrote it (same id, new updated_at): the question and the old
+    // pick go, and it starts where it records now.
+    const rewritten = { ...a, updated_at: "2026-11-02T09:00:00Z" };
+    view.rerender(detail(rewritten));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(scopeTrigger().textContent).toBe(
+      "EvoSci_test/skills (this project)"
+    );
+    // The scope it shows is the one sent.
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    fireEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: "Replace and install",
+      })
+    );
+    expect(onApprove).toHaveBeenCalledWith(rewritten, "workspace");
+
+    // Resubmitted with another scope: that one shows.
+    const moved = {
+      ...rewritten,
+      scope: "global" as const,
+      updated_at: "2026-11-03T09:00:00Z",
+    };
+    view.rerender(detail(moved));
+    expect(scopeTrigger().textContent).toBe("All projects (global)");
+  });
+
   it("the question's Replace and install waits while it can't decide", () => {
     const d = draft({
       proposal_id: "u",

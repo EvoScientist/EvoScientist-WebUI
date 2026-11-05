@@ -157,21 +157,28 @@ export function DraftDetail({
   const pending = draft.status === "pending";
   const [tab, setTab] = useState<TabKey>("skill");
 
-  // Where to install: each draft opened starts at the scope it records.
-  const [pick, setPick] = useState<{ id: string; scope: DraftScope }>({
-    id: draft.proposal_id,
+  // This version of the draft: a run that rewrites a pending draft in place
+  // keeps its id and gives it a new updated_at (and maybe another scope).
+  const version = JSON.stringify([draft.proposal_id, draft.updated_at]);
+  // Where to install: each draft opened, and each rewrite, starts at the
+  // scope it records.
+  const [pick, setPick] = useState<{ version: string; scope: DraftScope }>({
+    version,
     scope: draft.scope,
   });
   // The question before an update replaces the installed skill, for this
-  // draft only: it doesn't come back when the draft is opened again.
-  const [confirmingId, setConfirmingId] = useState<string | null>(null);
-  if (pick.id !== draft.proposal_id) {
-    setPick({ id: draft.proposal_id, scope: draft.scope });
-    setConfirmingId(null);
+  // version only: it doesn't come back when the draft is opened again, and
+  // a rewrite takes it away.
+  const [confirmingVersion, setConfirmingVersion] = useState<string | null>(
+    null
+  );
+  if (pick.version !== version) {
+    setPick({ version, scope: draft.scope });
+    setConfirmingVersion(null);
   }
-  const scope = pick.id === draft.proposal_id ? pick.scope : draft.scope;
+  const scope = pick.version === version ? pick.scope : draft.scope;
 
-  const confirming = pending && confirmingId === draft.proposal_id;
+  const confirming = pending && confirmingVersion === version;
 
   const baseId = useId();
   const tabId = (key: TabKey) => `${baseId}-tab-${key}`;
@@ -214,14 +221,14 @@ export function DraftDetail({
     if (off) return;
     if (draft.operation === "update") {
       invokerRef.current = e.currentTarget;
-      setConfirmingId(draft.proposal_id);
+      setConfirmingVersion(version);
     } else {
       onApprove(draft, scope);
     }
   };
   const confirmReplace = () => {
     if (off) return;
-    setConfirmingId(null);
+    setConfirmingVersion(null);
     onApprove(draft, scope);
   };
 
@@ -285,7 +292,7 @@ export function DraftDetail({
               value={scope}
               onValueChange={(next) => {
                 if (next === "workspace" || next === "global") {
-                  setPick({ id: draft.proposal_id, scope: next });
+                  setPick({ version, scope: next });
                 }
               }}
             >
@@ -438,7 +445,7 @@ export function DraftDetail({
       <Dialog
         open={confirming}
         onOpenChange={(open) => {
-          if (!open) setConfirmingId(null);
+          if (!open) setConfirmingVersion(null);
         }}
       >
         <DialogContent
@@ -463,7 +470,7 @@ export function DraftDetail({
             <Button
               type="button"
               variant="outline"
-              onClick={() => setConfirmingId(null)}
+              onClick={() => setConfirmingVersion(null)}
               className="border-solid max-md:min-h-11"
             >
               Cancel
