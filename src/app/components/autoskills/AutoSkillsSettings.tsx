@@ -103,6 +103,9 @@ export function AutoSkillsSettings({
   const [message, setMessage] = useState<string | null>(null);
   const [serverErrors, setServerErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
+  // The revision the edits started from: a re-read in between must not let
+  // the save overwrite what changed elsewhere.
+  const [baseRevision, setBaseRevision] = useState<string | null>(null);
 
   // Each opening starts from what is saved.
   const [wasOpen, setWasOpen] = useState(open);
@@ -110,6 +113,7 @@ export function AutoSkillsSettings({
     setWasOpen(open);
     if (open) {
       setEdits({});
+      setBaseRevision(null);
       setMessage(null);
       setServerErrors({});
     }
@@ -117,16 +121,27 @@ export function AutoSkillsSettings({
 
   const values: Values = { ...saved, ...edits };
   const changed = FIELDS.filter((f) => values[f] !== saved[f]);
+  const off = !values[F_ENABLED];
+  // With drafting off the time field is disabled and can't be fixed, so it
+  // doesn't block Save, and a changed time goes out only when it is valid.
   const timeBad = !validTime(values[F_TIME]);
-  const timeError = timeBad ? "Enter a time like 03:00." : serverErrors[F_TIME];
+  const timeError =
+    timeBad && !off ? "Enter a time like 03:00." : serverErrors[F_TIME];
+  const sendable = changed.filter((f) => f !== F_TIME || !timeBad);
 
   const writable = access?.writable === true;
   const reason = autoSkillsReadOnlyReason(access);
   const locked = !writable || saving;
-  const off = !values[F_ENABLED];
 
   const edit = <K extends Field>(field: K, value: Values[K]) => {
-    setEdits((prev) => ({ ...prev, [field]: value }));
+    const next: Partial<Values> = { ...edits, [field]: value };
+    // Changed back to the saved value: not an edit.
+    if (value === saved[field]) delete next[field];
+    if (Object.keys(next).length === 0) setBaseRevision(null);
+    else if (Object.keys(edits).length === 0) {
+      setBaseRevision(payload?.revision ?? null);
+    }
+    setEdits(next);
     setServerErrors((prev) => {
       if (!(field in prev)) return prev;
       const { [field]: _gone, ...rest } = prev;
@@ -135,13 +150,13 @@ export function AutoSkillsSettings({
     });
   };
 
-  const canSave = writable && !saving && changed.length > 0 && !timeBad;
+  const canSave = writable && !saving && sendable.length > 0;
 
   const save = async () => {
     if (!canSave) return;
     const body: Record<string, unknown> = {};
-    for (const f of changed) body[f] = values[f];
-    body.revision = payload?.revision ?? null;
+    for (const f of sendable) body[f] = values[f];
+    body.revision = baseRevision;
     setSaving(true);
     setMessage(null);
     setServerErrors({});
@@ -159,6 +174,8 @@ export function AutoSkillsSettings({
       }
       const answer: unknown = await res.json().catch(() => null);
       if (res.ok) {
+        setEdits({});
+        setBaseRevision(null);
         await refresh();
         onOpenChange(false);
         toast.success("AutoSkills settings saved.");
@@ -169,11 +186,23 @@ export function AutoSkillsSettings({
           ? (answer as { error?: unknown }).error
           : undefined;
       if (res.status === 409 && code === "revision_mismatch") {
-        setEdits({});
-        await refresh();
-        setMessage(
-          "These settings changed elsewhere. Showing what is saved now."
-        );
+        let fresh: unknown;
+        try {
+          fresh = await refresh();
+        } catch {
+          fresh = undefined;
+        }
+        if (fresh) {
+          setEdits({});
+          setBaseRevision(null);
+          setMessage(
+            "These settings changed elsewhere. Showing what is saved now."
+          );
+        } else {
+          setMessage(
+            "These settings changed elsewhere, and reading them again failed. Your changes are kept; try again."
+          );
+        }
         return;
       }
       const errors =
@@ -181,7 +210,13 @@ export function AutoSkillsSettings({
           ? (answer as { errors?: unknown }).errors
           : undefined;
       if (res.status === 400 && typeof errors === "object" && errors) {
-        setServerErrors(errors as Record<string, string>);
+        const byField = errors as Record<string, string>;
+        const shown = new Set<string>([F_MODE, F_CADENCE, F_TIME]);
+        setServerErrors(byField);
+        const other = Object.entries(byField)
+          .filter(([k]) => !shown.has(k))
+          .map(([, m]) => String(m));
+        if (other.length > 0) setMessage(other.join("\n"));
         return;
       }
       setMessage(saveErrorText(answer, res.status));
@@ -193,7 +228,9 @@ export function AutoSkillsSettings({
   return (
     <Dialog
       open={open}
-      onOpenChange={onOpenChange}
+      onOpenChange={(next) => {
+        if (!saving) onOpenChange(next);
+      }}
     >
       <DialogContent
         onCloseAutoFocus={(e) => {
@@ -202,7 +239,7 @@ export function AutoSkillsSettings({
           focusFirst([returnFocusTo.current]);
         }}
         className={cn(
-          "left-auto right-0 top-0 h-dvh max-h-dvh w-full translate-x-0 translate-y-0 content-start rounded-none border-y-0 border-r-0 border-solid max-md:max-w-full sm:max-w-sm",
+          "left-auto right-0 top-0 h-dvh max-h-dvh w-full max-w-full translate-x-0 translate-y-0 content-start rounded-none border-y-0 border-r-0 border-solid sm:max-w-full md:max-w-sm",
           "data-[state=closed]:zoom-out-100 data-[state=open]:zoom-in-100 data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right"
         )}
       >
@@ -308,10 +345,12 @@ export function AutoSkillsSettings({
               disabled={locked || off}
               onChange={(e) => edit(F_TIME, e.target.value)}
               aria-invalid={timeError ? true : undefined}
+              aria-describedby={timeError ? "autoskills-time-error" : undefined}
               className="h-9 w-full rounded-md border border-solid border-input bg-transparent px-3 py-1 text-base shadow-xs focus:ring-0 focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-60 max-md:min-h-11 md:text-sm"
             />
             {timeError && (
               <p
+                id="autoskills-time-error"
                 role="alert"
                 className="text-sm text-destructive"
               >
@@ -326,7 +365,7 @@ export function AutoSkillsSettings({
           {message && (
             <p
               role="status"
-              className="text-sm text-muted-foreground"
+              className="whitespace-pre-line text-sm text-muted-foreground"
             >
               {message}
             </p>
@@ -337,6 +376,7 @@ export function AutoSkillsSettings({
           <Button
             type="button"
             variant="outline"
+            disabled={saving}
             onClick={() => onOpenChange(false)}
             className="border-solid max-md:min-h-11"
           >

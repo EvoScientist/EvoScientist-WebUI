@@ -193,9 +193,14 @@ describe("AutoSkillsSettings", () => {
     ).toBe(true);
   });
 
-  it("a stale revision re-reads and says so", async () => {
+  it("a stale revision re-reads, takes the new values and says so", async () => {
     const onOpenChange = vi.fn();
     panel(onOpenChange);
+    hooks.refresh = vi.fn(async () => {
+      hooks.settings = { ...SAVED, memory_skill_synthesis_cadence: "monthly" };
+      hooks.revision = "rev2";
+      return { settings: hooks.settings, revision: "rev2" };
+    });
     fireEvent.click(
       screen.getByLabelText("Auto — install drafts without asking")
     );
@@ -215,7 +220,203 @@ describe("AutoSkillsSettings", () => {
         ) as HTMLInputElement
       ).checked
     ).toBe(true);
+    expect(screen.getByLabelText("How often").textContent).toContain("Monthly");
     expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it("keeps the edits when the re-read after a conflict fails", async () => {
+    panel();
+    hooks.refresh = vi.fn().mockRejectedValue(new Error("down"));
+    fireEvent.click(
+      screen.getByLabelText("Auto — install drafts without asking")
+    );
+    respond(409, { error: "revision_mismatch" });
+    fireEvent.click(save());
+    expect(
+      await screen.findByText(
+        "These settings changed elsewhere, and reading them again failed. Your changes are kept; try again."
+      )
+    ).toBeTruthy();
+    expect(
+      (
+        screen.getByLabelText(
+          "Auto — install drafts without asking"
+        ) as HTMLInputElement
+      ).checked
+    ).toBe(true);
+    expect((save() as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("keeps the edits when the re-read answers nothing", async () => {
+    panel();
+    fireEvent.click(
+      screen.getByLabelText("Auto — install drafts without asking")
+    );
+    hooks.refresh = vi.fn().mockResolvedValue(undefined);
+    respond(409, { error: "revision_mismatch" });
+    fireEvent.click(save());
+    expect(await screen.findByText(/reading them again failed/)).toBeTruthy();
+    expect(
+      (
+        screen.getByLabelText(
+          "Auto — install drafts without asking"
+        ) as HTMLInputElement
+      ).checked
+    ).toBe(true);
+  });
+
+  it("sends the revision the edits started from, not a later one", async () => {
+    const { rerender } = panel();
+    fireEvent.click(
+      screen.getByLabelText("Auto — install drafts without asking")
+    );
+    hooks.revision = "rev2";
+    rerender(
+      <AutoSkillsSettings
+        open
+        onOpenChange={vi.fn()}
+      />
+    );
+    respond(409, { error: "revision_mismatch" });
+    fireEvent.click(save());
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).revision).toBe("rev1");
+    expect(
+      await screen.findByText(/reading them again failed|Showing what/)
+    ).toBeTruthy();
+  });
+
+  it("a field changed back is not kept as an edit after a re-read", () => {
+    const { rerender } = panel();
+    fireEvent.click(screen.getByLabelText("How often"));
+    fireEvent.click(
+      screen.getByRole("option", { name: "Monthly (on the 1st)" })
+    );
+    fireEvent.click(screen.getByLabelText("How often"));
+    fireEvent.click(screen.getByRole("option", { name: "Weekly (Sundays)" }));
+    hooks.settings = { ...SAVED, memory_skill_synthesis_cadence: "nightly" };
+    rerender(
+      <AutoSkillsSettings
+        open
+        onOpenChange={vi.fn()}
+      />
+    );
+    expect(screen.getByLabelText("How often").textContent).toContain("Nightly");
+    expect((save() as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("shows an error for a field with no place in the panel", async () => {
+    panel();
+    fireEvent.click(
+      screen.getByLabelText("Auto — install drafts without asking")
+    );
+    respond(400, {
+      errors: { memory_skill_synthesis_enabled: "unknown setting" },
+    });
+    fireEvent.click(save());
+    expect(await screen.findByText("unknown setting")).toBeTruthy();
+  });
+
+  it("ignores close requests and disables Cancel while saving", async () => {
+    const onOpenChange = vi.fn();
+    panel(onOpenChange);
+    fireEvent.click(
+      screen.getByLabelText("Auto — install drafts without asking")
+    );
+    let answer!: (v: unknown) => void;
+    fetchMock.mockReturnValueOnce(
+      new Promise((r) => {
+        answer = r;
+      })
+    );
+    fireEvent.click(save());
+    await waitFor(() =>
+      expect(
+        (screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement)
+          .disabled
+      ).toBe(true)
+    );
+    fireEvent.keyDown(document.activeElement ?? document.body, {
+      key: "Escape",
+    });
+    expect(onOpenChange).not.toHaveBeenCalled();
+    answer({ ok: true, status: 200, json: async () => ({}) });
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+  });
+
+  it("drafting off: an invalid time does not block Save and is not sent", async () => {
+    panel();
+    fireEvent.change(screen.getByLabelText("At (local time)"), {
+      target: { value: "" },
+    });
+    fireEvent.click(screen.getByLabelText("Draft skills from memory"));
+    expect((save() as HTMLButtonElement).disabled).toBe(false);
+    respond(200, {});
+    fireEvent.click(save());
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      memory_skill_synthesis_enabled: false,
+      revision: "rev1",
+    });
+  });
+
+  it("links the time error to the time field", () => {
+    panel();
+    fireEvent.change(screen.getByLabelText("At (local time)"), {
+      target: { value: "" },
+    });
+    const input = screen.getByLabelText("At (local time)");
+    const id = input.getAttribute("aria-describedby");
+    expect(id).toBeTruthy();
+    expect(document.getElementById(id as string)?.textContent).toBe(
+      "Enter a time like 03:00."
+    );
+  });
+
+  it("returns the focus to the given element on Cancel and after a save", async () => {
+    const target = document.createElement("button");
+    document.body.appendChild(target);
+    const ref = { current: target };
+    const onOpenChange = vi.fn();
+    const { rerender } = render(
+      <AutoSkillsSettings
+        open
+        onOpenChange={onOpenChange}
+        returnFocusTo={ref}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    rerender(
+      <AutoSkillsSettings
+        open={false}
+        onOpenChange={onOpenChange}
+        returnFocusTo={ref}
+      />
+    );
+    await waitFor(() => expect(document.activeElement).toBe(target));
+    target.blur();
+    rerender(
+      <AutoSkillsSettings
+        open
+        onOpenChange={onOpenChange}
+        returnFocusTo={ref}
+      />
+    );
+    fireEvent.click(
+      screen.getByLabelText("Auto — install drafts without asking")
+    );
+    respond(200, {});
+    fireEvent.click(save());
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledTimes(2));
+    rerender(
+      <AutoSkillsSettings
+        open={false}
+        onOpenChange={onOpenChange}
+        returnFocusTo={ref}
+      />
+    );
+    await waitFor(() => expect(document.activeElement).toBe(target));
+    target.remove();
   });
 
   it("shows server errors under their field", async () => {
