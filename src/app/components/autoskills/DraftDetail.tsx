@@ -27,6 +27,7 @@ import { installedLabel, type Draft, type DraftScope } from "@/lib/autoskills";
 import { INPUT_LIKE_TRIGGER, LIST_MAX_HEIGHT } from "@/lib/fieldStyles";
 import { formatFullTime, formatTime } from "@/lib/time";
 import { cn } from "@/lib/utils";
+import { useProjects } from "@/providers/ProjectsProvider";
 
 // The open draft: what it is, its files as written, why EvoMemory drafted
 // it and from what, and for a pending one where to install it and the
@@ -101,10 +102,12 @@ function useObservationSummaries(
 }
 
 /** "Where it came from": one button per source observation, which opens
- *  it in Memory › Knowledge. */
-function Sources({ draft }: { draft: Draft }) {
+ *  it in Memory › Knowledge. The summaries and the Memory view are this
+ *  machine's, so only while the page and the backend share it; otherwise
+ *  (another machine, or not known yet) the ids alone. */
+function Sources({ draft, here }: { draft: Draft; here: boolean }) {
   const ids = draft.source_observation_ids;
-  const summaries = useObservationSummaries(ids.length > 0);
+  const summaries = useObservationSummaries(here && ids.length > 0);
   const [, setView] = useQueryState("view");
   const [, setMemoryTab] = useQueryState("memoryTab");
   const [, setMemoryObs] = useQueryState("memoryObs");
@@ -115,6 +118,25 @@ function Sources({ draft }: { draft: Draft }) {
       <p className="text-sm text-muted-foreground">
         No source observations were recorded.
       </p>
+    );
+  }
+  if (!here) {
+    return (
+      <>
+        <p className="mb-2 text-sm text-muted-foreground">
+          These observations are on the machine that runs EvoScientist.
+        </p>
+        <ul className="m-0 list-none p-0">
+          {ids.map((id) => (
+            <li
+              key={id}
+              className="mb-0 break-all px-2 py-1.5 font-mono text-xs"
+            >
+              {id}
+            </li>
+          ))}
+        </ul>
+      </>
     );
   }
   const open = (id: string) => {
@@ -156,6 +178,8 @@ export function DraftDetail({
 }: DraftDetailProps) {
   const pending = draft.status === "pending";
   const [tab, setTab] = useState<TabKey>("skill");
+  // Whether the page and the backend share this machine.
+  const here = useProjects().files === "here";
 
   // This version of the draft: a run that rewrites a pending draft in place
   // keeps its id and gives it a new updated_at (and maybe another scope).
@@ -238,11 +262,13 @@ export function DraftDetail({
       ? draft.install_error
       : null;
 
-  // The sources and the files are buttons, unless there are none.
+  // The sources and the files are buttons, unless there are none (or the
+  // sources are another machine's: then they are plain ids).
   const panelHoldsNoButtons =
     tab === "skill" ||
     tab === "why" ||
-    (tab === "sources" && draft.source_observation_ids.length === 0) ||
+    (tab === "sources" &&
+      (draft.source_observation_ids.length === 0 || !here)) ||
     (tab === "files" && draft.files.length === 0);
 
   const decidedAt =
@@ -433,7 +459,12 @@ export function DraftDetail({
               No rationale was written.
             </p>
           ))}
-        {tab === "sources" && <Sources draft={draft} />}
+        {tab === "sources" && (
+          <Sources
+            draft={draft}
+            here={here}
+          />
+        )}
         {tab === "files" && (
           <DraftFiles
             draft={draft}

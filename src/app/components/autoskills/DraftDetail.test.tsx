@@ -9,6 +9,12 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Draft, DraftScope } from "@/lib/autoskills";
 import { formatFullTime, formatTime } from "@/lib/time";
+import type { FilesAccess } from "@/providers/ProjectsProvider";
+import {
+  mockProjects,
+  readyProjects,
+  TestProjectsProvider,
+} from "@/test/mockProjects";
 import { SWRConfig } from "swr";
 
 // jsdom has no scrollIntoView; Radix Select calls it on the item it focuses
@@ -105,20 +111,30 @@ const onReject = vi.fn((_d: Draft) => undefined);
 
 function detail(
   d: Draft,
-  over: { canWrite?: boolean; busy?: boolean; projectLabel?: string } = {}
+  over: {
+    canWrite?: boolean;
+    busy?: boolean;
+    projectLabel?: string;
+    /** Whether the page and the backend share this machine. */
+    files?: FilesAccess;
+  } = {}
 ) {
   // Each mount reads with a cache of its own; a rerender keeps it.
   return (
-    <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
-      <DraftDetail
-        draft={d}
-        projectLabel={over.projectLabel ?? "EvoSci_test"}
-        canWrite={over.canWrite ?? true}
-        busy={over.busy ?? false}
-        onApprove={onApprove}
-        onReject={onReject}
-      />
-    </SWRConfig>
+    <TestProjectsProvider
+      value={mockProjects(readyProjects(A), { files: over.files ?? "here" })}
+    >
+      <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+        <DraftDetail
+          draft={d}
+          projectLabel={over.projectLabel ?? "EvoSci_test"}
+          canWrite={over.canWrite ?? true}
+          busy={over.busy ?? false}
+          onApprove={onApprove}
+          onReject={onReject}
+        />
+      </SWRConfig>
+    </TestProjectsProvider>
   );
 }
 
@@ -249,6 +265,51 @@ describe("DraftDetail", () => {
     await waitFor(() => expect(fetch).toHaveBeenCalled());
     expect(screen.getByRole("button", { name: "O-1" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "O-2" })).toBeTruthy();
+  });
+
+  it("names the sources by id where the backend is on another machine", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const d = draft({
+      proposal_id: "x",
+      source_observation_ids: ["O-1", "O-2"],
+    });
+    const LINE =
+      "These observations are on the machine that runs EvoScientist.";
+    for (const files of ["elsewhere", "pending"] as const) {
+      const view = render(detail(d, { files }));
+      fireEvent.click(tab("Where it came from"));
+      const panel = screen.getByRole("tabpanel");
+      expect(within(panel).getByText(LINE)).toBeTruthy();
+      expect(within(panel).getByText("O-1")).toBeTruthy();
+      expect(within(panel).getByText("O-2")).toBeTruthy();
+      // Neither this machine's summaries nor its Memory view.
+      expect(within(panel).queryByRole("button")).toBeNull();
+      // Nothing in it to focus: the panel is the tab stop.
+      expect(panel.getAttribute("tabindex")).toBe("0");
+      await new Promise((r) => setTimeout(r, 10));
+      expect(fetchMock).not.toHaveBeenCalled();
+      view.unmount();
+    }
+
+    // Once the page knows the backend is here, the summaries come.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({ nodes: [{ id: "O-1", summary: "Seen here" }] }),
+        })
+      )
+    );
+    const view = render(detail(d, { files: "pending" }));
+    fireEvent.click(tab("Where it came from"));
+    view.rerender(detail(d, { files: "here" }));
+    expect(
+      await screen.findByRole("button", { name: "Seen here" })
+    ).toBeTruthy();
+    expect(screen.queryByText(LINE)).toBeNull();
   });
 
   it("says when no source observations were recorded", () => {
