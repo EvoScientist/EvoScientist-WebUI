@@ -294,14 +294,19 @@ export function DraftDetail({
         </p>
       )}
       <div className="mt-2 flex flex-wrap gap-1.5">
+        {/* The project it came from, always (a phone hides the list's group
+            heading); a global draft installs into every project too. */}
         <span
           className={cn(
             CHIP,
             "border-[var(--brand)] bg-[var(--brand-soft)] text-[var(--brand)]"
           )}
         >
-          {draft.scope === "global" ? "all projects" : projectLabel}
+          {projectLabel}
         </span>
+        {draft.scope === "global" && (
+          <span className={PLAIN_CHIP}>all projects</span>
+        )}
         <span className={PLAIN_CHIP}>
           {draft.operation === "update" ? "updates a skill" : "new skill"}
         </span>

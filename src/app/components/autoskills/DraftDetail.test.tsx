@@ -323,6 +323,26 @@ describe("DraftDetail", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("the header names the draft's project, and all projects for a global one", () => {
+    const view = render(
+      detail(draft({ proposal_id: "w", scope: "workspace" }), {
+        projectLabel: "project_B",
+      })
+    );
+    expect(screen.getByText("project_B")).toBeTruthy();
+    expect(screen.queryByText("all projects")).toBeNull();
+
+    // A global draft still came from a project (the phone layout hides the
+    // list's group heading): both.
+    view.rerender(
+      detail(draft({ proposal_id: "g", scope: "global" }), {
+        projectLabel: "project_B",
+      })
+    );
+    expect(screen.getByText("project_B")).toBeTruthy();
+    expect(screen.getByText("all projects")).toBeTruthy();
+  });
+
   it("install scope starts at the draft's own and is sent with Approve", () => {
     const a = draft({ proposal_id: "a", scope: "global" });
     const view = render(detail(a));
