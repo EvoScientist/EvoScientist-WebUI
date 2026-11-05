@@ -159,13 +159,16 @@ async function decideAll(
   return result;
 }
 
-/** Read the drafts and experts again; a failure here must not hide the
- *  toasts of a decision that was made. */
-async function reread(): Promise<void> {
+/** Read the drafts and experts again, in the background: the drafts GET has
+ *  no timeout, and a re-read that fails or never answers must hold neither
+ *  the toasts of a decision that was made nor the controls. */
+function reread(): void {
   try {
-    await refreshAutoSkills();
+    void Promise.resolve(refreshAutoSkills()).catch(() => {
+      // The next poll reads again.
+    });
   } catch {
-    // The next poll reads again.
+    // Same.
   }
   try {
     notifyTeamsChanged();
@@ -246,7 +249,7 @@ export function useDraftActions(projects: readonly Project[]): {
               return decisionError(answer, d, labels);
             }
           );
-          await reread();
+          reread();
           if (done.length > 0) {
             toast.success(
               done.length === 1
@@ -290,7 +293,7 @@ export function useDraftActions(projects: readonly Project[]): {
           labels,
           (answer, d) => decisionError(answer, d, labels)
         );
-        await reread();
+        reread();
         if (result.done.length > 0) {
           const revertible = result.done.filter((d) => isRevertible(d, action));
           const text = decisionToast(action, result.done, scopes, labels);

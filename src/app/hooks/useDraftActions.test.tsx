@@ -423,6 +423,51 @@ describe("useDraftActions fixes", () => {
     expect(toast.success).toHaveBeenLastCalledWith("Moved a back to Pending.");
   });
 
+  it("a re-read that never answers holds neither the toast nor busy", async () => {
+    // The drafts GET has no timeout: a stalled one must not lock every
+    // decision control or hold back the toast and its Undo.
+    refresh.mockImplementation(() => new Promise<undefined>(() => {}));
+    try {
+      stubFetch([[200, okApprove]]);
+      const { result } = setup();
+      let settled = false;
+      await act(async () => {
+        void result.current
+          .approve([draft({ proposal_id: "a" })])
+          .then(() => (settled = true));
+      });
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 0));
+      });
+      expect(settled).toBe(true);
+      expect(toast.success).toHaveBeenCalledTimes(1);
+      expect(result.current.busy).toBe(false);
+      expect(refresh).toHaveBeenCalledTimes(1);
+      expect(notify).toHaveBeenCalledTimes(1);
+
+      // Undo the same way.
+      stubFetch([[200, okRevert]]);
+      let undone = false;
+      await act(async () => {
+        void toast.success.mock.calls[0][1].action
+          .onClick()
+          .then(() => (undone = true));
+      });
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 0));
+      });
+      expect(undone).toBe(true);
+      expect(toast.success).toHaveBeenLastCalledWith(
+        "Moved a back to Pending."
+      );
+      expect(result.current.busy).toBe(false);
+      expect(refresh).toHaveBeenCalledTimes(2);
+      expect(notify).toHaveBeenCalledTimes(2);
+    } finally {
+      refresh.mockImplementation(async () => undefined);
+    }
+  });
+
   it("a failure without detail says the generic line", () => {
     const d = draft({ proposal_id: "n" });
     for (const detail of [undefined, "  "]) {
