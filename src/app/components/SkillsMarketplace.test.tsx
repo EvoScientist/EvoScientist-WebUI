@@ -451,6 +451,32 @@ describe("SkillsMarketplace skills from memory", () => {
     expect(screen.queryByText("from memory")).toBeNull();
   });
 
+  it("tags catalog skills a global draft updated", async () => {
+    mockApi(
+      [
+        row({ isExpert: false }),
+        row({ name: "paper-writing", title: "Paper Writing", isExpert: false }),
+      ],
+      [card("paper-review"), card("paper-writing")],
+      []
+    );
+    readyDrafts([
+      approved({
+        proposal_id: "u1",
+        scope: "global",
+        operation: "update",
+        target_skill_name: "paper-review",
+        approved_skill_path: "/home/you/.evoscientist/skills/paper-review",
+      }),
+    ]);
+    renderPage();
+    await screen.findByText("Paper Review");
+    expect(
+      within(titleRow("Paper Review")).getByText("updated from memory")
+    ).toBeTruthy();
+    expect(within(titleRow("Paper Writing")).queryByText(/memory/)).toBeNull();
+  });
+
   it("hides This project's skills when files are elsewhere", async () => {
     // Even an answer that carried some isn't shown for a project whose
     // folder this page can't read.

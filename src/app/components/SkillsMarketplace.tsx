@@ -482,6 +482,7 @@ function SkillsHome() {
                       installedVersion={s.installedVersion}
                       latestVersion={s.latestVersion}
                       updateAvailable={s.updateAvailable}
+                      tag={memoryTag(fromMemory?.global, s.name)}
                       busy={busy[s.name]}
                       actions={expertBadge(s.isExpert, setView)}
                       onOpen={() =>
