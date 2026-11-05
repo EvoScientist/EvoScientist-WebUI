@@ -18,13 +18,23 @@ if (!Element.prototype.scrollIntoView) {
 const hooks = vi.hoisted(() => ({
   settings: {} as Record<string, unknown>,
   revision: "rev1" as string | null,
+  noPayload: false,
   access: { writable: true } as SettingsWriteAccess | undefined,
   refresh: vi.fn(),
 }));
 
 vi.mock("@/app/hooks/useSettings", () => ({
   useSettings: () => ({
-    payload: { settings: hooks.settings, revision: hooks.revision },
+    payload: hooks.noPayload
+      ? undefined
+      : {
+          settings: hooks.settings,
+          sources: {},
+          providers: {},
+          read_only: [],
+          setup_needed: false,
+          revision: hooks.revision,
+        },
     refresh: hooks.refresh,
   }),
   useSettingsAccess: () => ({ access: hooks.access, refresh: vi.fn() }),
@@ -67,6 +77,7 @@ const save = () => screen.getByRole("button", { name: "Save" });
 beforeEach(() => {
   hooks.settings = { ...SAVED };
   hooks.revision = "rev1";
+  hooks.noPayload = false;
   hooks.access = { writable: true };
   hooks.refresh = vi.fn().mockResolvedValue(undefined);
   fetchMock = vi.fn();
@@ -436,6 +447,89 @@ describe("AutoSkillsSettings", () => {
       memory_skill_synthesis_cadence: "nightly",
       revision: "rev2",
     });
+  });
+
+  it("a 404 re-read keeps an edit that equals the defaults", async () => {
+    hooks.settings = { ...SAVED, memory_skill_synthesis_mode: "auto" };
+    panel();
+    hooks.refresh = vi.fn(async () => {
+      hooks.noPayload = true;
+      return "unsupported";
+    });
+    fireEvent.click(screen.getByLabelText("Review — I approve each skill"));
+    respond(409, { error: "revision_mismatch" });
+    fireEvent.click(save());
+    expect(await screen.findByText(/reading them again failed/)).toBeTruthy();
+    expect(
+      (
+        screen.getByLabelText(
+          "Review — I approve each skill"
+        ) as HTMLInputElement
+      ).checked
+    ).toBe(true);
+    expect((save() as HTMLButtonElement).disabled).toBe(false);
+    respond(200, {});
+    fireEvent.click(save());
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({
+      memory_skill_synthesis_mode: "review",
+      revision: "rev1",
+    });
+  });
+
+  it("a re-read payload without a revision keeps the edits", async () => {
+    panel();
+    hooks.refresh = vi.fn().mockResolvedValue({
+      settings: SAVED,
+      sources: {},
+      providers: {},
+      read_only: [],
+      setup_needed: false,
+    });
+    fireEvent.click(
+      screen.getByLabelText("Auto — install drafts without asking")
+    );
+    respond(409, { error: "revision_mismatch" });
+    fireEvent.click(save());
+    expect(await screen.findByText(/reading them again failed/)).toBeTruthy();
+  });
+
+  it("sends the revision of the oldest edit still pending", async () => {
+    const { rerender } = panel();
+    fireEvent.click(
+      screen.getByLabelText("Auto — install drafts without asking")
+    );
+    hooks.settings = { ...SAVED, memory_skill_synthesis_time: "04:00" };
+    hooks.revision = "rev2";
+    rerender(
+      <AutoSkillsSettings
+        open
+        onOpenChange={vi.fn()}
+      />
+    );
+    fireEvent.click(screen.getByLabelText("How often"));
+    fireEvent.click(await screen.findByRole("option", { name: "Nightly" }));
+    fireEvent.click(screen.getByLabelText("Review — I approve each skill"));
+    respond(200, {});
+    fireEvent.click(save());
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      memory_skill_synthesis_cadence: "nightly",
+      revision: "rev2",
+    });
+  });
+
+  it("closes and toasts at once when the re-read never settles", async () => {
+    const onOpenChange = vi.fn();
+    panel(onOpenChange);
+    hooks.refresh = vi.fn(() => new Promise(() => {}));
+    fireEvent.click(
+      screen.getByLabelText("Auto — install drafts without asking")
+    );
+    respond(200, {});
+    fireEvent.click(save());
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(toast.success).toHaveBeenCalledWith("AutoSkills settings saved.");
   });
 
   it("links the time error to the time field", () => {

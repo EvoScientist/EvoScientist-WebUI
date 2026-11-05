@@ -96,17 +96,25 @@ export function AutoSkillsSettings({
 }) {
   const { payload, refresh } = useSettings();
   const { access } = useSettingsAccess();
-  const saved = savedValues(payload?.settings);
-  const tz = payload?.settings?.scheduler_default_timezone;
+  // The saved snapshot is the last real settings payload seen: a re-read
+  // that answers nothing (404, an error) must not swap it for defaults.
+  const real = isSettingsPayload(payload) ? payload : null;
+  const realKey = real ? JSON.stringify([real.settings, real.revision]) : null;
+  const [snap, setSnap] = useState({ key: realKey, payload: real });
+  if (real && realKey !== snap.key) setSnap({ key: realKey, payload: real });
+  const current = real ?? snap.payload;
+  const saved = savedValues(current?.settings);
+  const tz = current?.settings?.scheduler_default_timezone;
   const timezone = typeof tz === "string" ? tz.trim() : "";
 
   const [edits, setEdits] = useState<Partial<Values>>({});
   const [message, setMessage] = useState<string | null>(null);
   const [serverErrors, setServerErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
-  // The revision the edits started from: a re-read in between must not let
-  // the save overwrite what changed elsewhere.
-  const [baseRevision, setBaseRevision] = useState<string | null>(null);
+  // The revision each pending edit started from, in the order they began: a
+  // re-read in between must not let the save overwrite what changed
+  // elsewhere. The save sends the earliest still-pending one.
+  const [revs, setRevs] = useState<Partial<Record<Field, string | null>>>({});
 
   // Each opening starts from what is saved.
   const [wasOpen, setWasOpen] = useState(open);
@@ -114,7 +122,7 @@ export function AutoSkillsSettings({
     setWasOpen(open);
     if (open) {
       setEdits({});
-      setBaseRevision(null);
+      setRevs({});
       setMessage(null);
       setServerErrors({});
     }
@@ -128,14 +136,18 @@ export function AutoSkillsSettings({
   if (seenSaved !== savedKey) {
     setSeenSaved(savedKey);
     const kept: Partial<Values> = {};
+    const keptRevs: Partial<Record<Field, string | null>> = {};
     for (const f of FIELDS) {
       if (f in edits && edits[f] !== saved[f]) {
         (kept as Record<string, unknown>)[f] = edits[f];
       }
     }
+    for (const f of Object.keys(revs) as Field[]) {
+      if (f in kept) keptRevs[f] = revs[f];
+    }
     if (Object.keys(kept).length !== Object.keys(edits).length) {
       setEdits(kept);
-      if (Object.keys(kept).length === 0) setBaseRevision(null);
+      setRevs(keptRevs);
     }
   }
 
@@ -160,10 +172,13 @@ export function AutoSkillsSettings({
     const next: Partial<Values> = { ...edits, [field]: value };
     // Changed back to the saved value: not an edit.
     if (value === saved[field]) delete next[field];
-    if (Object.keys(next).length === 0) setBaseRevision(null);
-    else if (Object.keys(edits).length === 0) {
-      setBaseRevision(payload?.revision ?? null);
+    const nextRevs = { ...revs };
+    if (field in next) {
+      if (!(field in edits)) nextRevs[field] = current?.revision ?? null;
+    } else {
+      delete nextRevs[field];
     }
+    setRevs(nextRevs);
     setEdits(next);
     setServerErrors((prev) => {
       if (!(field in prev)) return prev;
@@ -179,7 +194,8 @@ export function AutoSkillsSettings({
     if (!canSave) return;
     const body: Record<string, unknown> = {};
     for (const f of sendable) body[f] = values[f];
-    body.revision = baseRevision;
+    const first = (Object.keys(revs) as Field[]).find((f) => f in edits);
+    body.revision = first === undefined ? null : revs[first] ?? null;
     setSaving(true);
     setMessage(null);
     setServerErrors({});
@@ -198,15 +214,16 @@ export function AutoSkillsSettings({
       const answer: unknown = await res.json().catch(() => null);
       if (res.ok) {
         setEdits({});
-        setBaseRevision(null);
-        // The save happened whatever the re-read does.
-        try {
-          await refresh();
-        } catch {
-          // The page keeps the old cached values until the next read.
-        }
+        setRevs({});
+        // The save happened: close and say so now; the re-read runs on its
+        // own, and neither a failure nor a hang touches the panel.
         onOpenChange(false);
         toast.success("AutoSkills settings saved.");
+        try {
+          void Promise.resolve(refresh()).catch(() => {});
+        } catch {
+          // ignore
+        }
         return;
       }
       const code =
@@ -220,9 +237,9 @@ export function AutoSkillsSettings({
         } catch {
           fresh = undefined;
         }
-        if (isSettingsPayload(fresh)) {
+        if (isSettingsPayload(fresh) && typeof fresh.revision === "string") {
           setEdits({});
-          setBaseRevision(null);
+          setRevs({});
           setMessage(
             "These settings changed elsewhere. Showing what is saved now."
           );
