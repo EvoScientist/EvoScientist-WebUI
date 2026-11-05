@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Draft, DraftScope } from "@/lib/autoskills";
 import { formatFullTime, formatTime } from "@/lib/time";
 import type { FilesAccess } from "@/providers/ProjectsProvider";
+import { animateDialogs, dialogWords } from "@/test/animateDialogs";
 import {
   mockProjects,
   readyProjects,
@@ -513,6 +514,73 @@ describe("DraftDetail", () => {
     ).toBeTruthy();
     fireEvent.click(within(dialog).getByRole("button", { name: "Install" }));
     expect(onApprove).toHaveBeenLastCalledWith(replace, "workspace");
+  });
+
+  /** An update's question asked, with dialogs that fade out as in a
+   *  browser. */
+  function askAboutUpdate() {
+    animateDialogs();
+    const d = draft({
+      proposal_id: "paper-review-v2",
+      operation: "update",
+      target_skill_name: "paper-review",
+    });
+    const view = render(detail(d));
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    const dialog = screen.getByRole("dialog", {
+      name: "Replace an installed skill?",
+    });
+    const confirm = within(dialog).getByRole("button", {
+      name: "Replace and install",
+    });
+    return { d, view, dialog, confirm };
+  }
+
+  it("the question keeps its words while it fades out", () => {
+    const { view, dialog } = askAboutUpdate();
+    const asked = dialogWords(dialog);
+    expect(asked).toEqual({
+      title: "Replace an installed skill?",
+      description: "This replaces the installed paper-review.",
+      buttons: ["Cancel", "Replace and install"],
+    });
+
+    // Closed, it fades out (200 ms in a browser) while the pane goes on:
+    // here it shows another draft.
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    view.rerender(
+      detail(
+        draft({
+          proposal_id: "data-cleaning",
+          operation: "update",
+          target_skill_name: "data-cleaning",
+          install_target: "/work/EvoSci_test/skills/data-cleaning",
+          install_base: "/home/u/.evoscientist/skills/data-cleaning",
+        })
+      )
+    );
+    expect(dialog.isConnected).toBe(true);
+    expect(dialog.getAttribute("data-state")).toBe("closed");
+    expect(dialogWords(dialog)).toEqual(asked);
+  });
+
+  it("a click on the question while it fades out after Cancel doesn't approve", () => {
+    const { dialog, confirm } = askAboutUpdate();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(dialog.isConnected).toBe(true);
+    expect(dialog.getAttribute("data-state")).toBe("closed");
+    fireEvent.click(confirm);
+    expect(onApprove).not.toHaveBeenCalled();
+  });
+
+  it("a second click on the question while it fades out doesn't approve again", () => {
+    const { d, dialog, confirm } = askAboutUpdate();
+    fireEvent.click(confirm);
+    expect(dialog.isConnected).toBe(true);
+    expect(dialog.getAttribute("data-state")).toBe("closed");
+    fireEvent.click(confirm);
+    expect(onApprove).toHaveBeenCalledTimes(1);
+    expect(onApprove).toHaveBeenCalledWith(d, "workspace");
   });
 
   it("shows the install error for the recorded scope only", () => {

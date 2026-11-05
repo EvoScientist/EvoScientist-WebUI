@@ -13,6 +13,7 @@ import type { Draft, DraftList } from "@/lib/autoskills";
 import type { ProjectsState } from "@/lib/projects";
 import type { ProjectsContextValue } from "@/providers/ProjectsProvider";
 import type { SettingsWriteAccess } from "@/lib/settings";
+import { animateDialogs, dialogWords } from "@/test/animateDialogs";
 import {
   mockProjects,
   readyProjects,
@@ -513,6 +514,70 @@ describe("DraftsPage", () => {
       within(dialog).getByRole("button", { name: "Replace and install" })
     );
     expect(hooks.approve.mock.calls).toEqual([[[r, n, c1, c2]]]);
+  });
+
+  /** One update selected and its question asked, with dialogs that fade
+   *  out as in a browser. */
+  function askAboutOneUpdate() {
+    animateDialogs();
+    const u = draft({
+      proposal_id: "u",
+      operation: "update",
+      target_skill_name: "paper-review",
+    });
+    ready([u]);
+    render(page());
+    pick("u");
+    approveSelected();
+    const dialog = screen.getByRole("dialog", {
+      name: "Replace an installed skill?",
+    });
+    const confirm = within(dialog).getByRole("button", {
+      name: "Replace and install",
+    });
+    return { u, dialog, confirm };
+  }
+
+  it("the question keeps its words while it fades out", async () => {
+    const { u, dialog, confirm } = askAboutOneUpdate();
+    const asked = dialogWords(dialog);
+    expect(asked).toEqual({
+      title: "Replace an installed skill?",
+      description: "This replaces the installed paper-review.",
+      buttons: ["Cancel", "Replace and install"],
+    });
+
+    // The decision's answers empty the selection while the dialog is still
+    // fading out (200 ms in a browser).
+    hooks.approve.mockResolvedValueOnce({ done: [u], failed: [] });
+    fireEvent.click(confirm);
+    // The modal hides the page from role queries until it is gone.
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("region", { name: "Selection", hidden: true })
+      ).toBeNull()
+    );
+    expect(dialog.isConnected).toBe(true);
+    expect(dialog.getAttribute("data-state")).toBe("closed");
+    expect(dialogWords(dialog)).toEqual(asked);
+  });
+
+  it("a click on the question while it fades out after Cancel sends nothing", () => {
+    const { dialog, confirm } = askAboutOneUpdate();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(dialog.isConnected).toBe(true);
+    expect(dialog.getAttribute("data-state")).toBe("closed");
+    fireEvent.click(confirm);
+    expect(hooks.approve).not.toHaveBeenCalled();
+  });
+
+  it("a second click on the question while it fades out doesn't approve again", () => {
+    const { u, dialog, confirm } = askAboutOneUpdate();
+    fireEvent.click(confirm);
+    expect(dialog.isConnected).toBe(true);
+    expect(dialog.getAttribute("data-state")).toBe("closed");
+    fireEvent.click(confirm);
+    expect(hooks.approve.mock.calls).toEqual([[[u]]]);
   });
 
   it("the question goes when its update leaves the selection", () => {

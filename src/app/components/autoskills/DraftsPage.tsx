@@ -10,6 +10,10 @@ import {
   focusFirst,
   useFocusFallback,
 } from "@/app/components/autoskills/focus";
+import {
+  useShownQuestion,
+  type Question,
+} from "@/app/components/autoskills/question";
 import { decidable, stillPending } from "@/app/components/autoskills/selection";
 import { markAutoSeen, useAutoSkills } from "@/app/hooks/useAutoSkills";
 import {
@@ -102,7 +106,7 @@ function replacedNames(
 function updatesQuestion(
   updates: readonly Draft[],
   labels: Map<string, string>
-): { title: string; description: string; action: string } {
+): Question {
   const names = replacedNames(updates, labels);
   const replaces: string[] = [];
   const copies: Array<{ draft: Draft; name: string }> = [];
@@ -252,10 +256,13 @@ export function DraftsPage() {
     [groups]
   );
   const updates = selectedDrafts.filter((d) => d.operation === "update");
-  const question = updatesQuestion(updates, labels);
 
   // The question only stands while the selection still holds an update.
   if (confirming && updates.length === 0) setConfirming(false);
+  const asking = confirming && updates.length > 0;
+  // While it fades out the question keeps the words it had open: a
+  // decision's answers prune the selection meanwhile.
+  const question = useShownQuestion(asking, updatesQuestion(updates, labels));
 
   const canWrite = access?.writable === true;
   // A decision also waits for the projects: until they are known (read
@@ -425,8 +432,10 @@ export function DraftsPage() {
     else void approve(send).then(settle);
   };
   // A closed gate leaves the question open, to be answered after the read.
+  // The question still takes clicks while it fades out: after Cancel,
+  // Escape or a first click, it sends nothing.
   const confirmUpdates = () => {
-    if (!isReady()) return;
+    if (!asking || !isReady()) return;
     setConfirming(false);
     const send = sendable(selectedDrafts);
     if (send.length > 0) void approve(send).then(settle);
@@ -692,7 +701,7 @@ export function DraftsPage() {
       </div>
 
       <Dialog
-        open={confirming && updates.length > 0}
+        open={asking}
         onOpenChange={(open) => {
           if (!open) setConfirming(false);
         }}

@@ -5,6 +5,10 @@ import { useQueryState } from "nuqs";
 import useSWR from "swr";
 import { DraftFiles, FileText } from "@/app/components/autoskills/DraftFiles";
 import { focusFirst } from "@/app/components/autoskills/focus";
+import {
+  useShownQuestion,
+  type Question,
+} from "@/app/components/autoskills/question";
 import { MarkdownContent } from "@/app/components/MarkdownContent";
 import { Button } from "@/components/ui/button";
 import {
@@ -179,7 +183,7 @@ function updateQuestion(
   draft: Draft,
   scope: DraftScope,
   projectLabel: string
-): { title: string; description: string; action: string } {
+): Question {
   const name = draft.target_skill_name ?? draft.skill_name;
   if (scope !== draft.scope) {
     const place =
@@ -277,7 +281,12 @@ export function DraftDetail({
   };
 
   const off = !canWrite || busy;
-  const question = updateQuestion(draft, scope, projectLabel);
+  // While it fades out the question keeps the words it had open: the pane
+  // may show another draft or place meanwhile.
+  const question = useShownQuestion(
+    confirming,
+    updateQuestion(draft, scope, projectLabel)
+  );
   const approve = (e: React.MouseEvent<HTMLButtonElement>) => {
     if (off) return;
     if (draft.operation === "update") {
@@ -288,7 +297,9 @@ export function DraftDetail({
     }
   };
   const confirmUpdate = () => {
-    if (off) return;
+    // The question still takes clicks while it fades out: after Cancel,
+    // Escape or a first click, it approves nothing.
+    if (off || !confirming) return;
     setConfirmingVersion(null);
     onApprove(draft, scope);
   };
