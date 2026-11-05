@@ -178,23 +178,23 @@ function Sources({ draft, here }: { draft: Draft; here: boolean }) {
 
 /** The question before an update is installed where `scope` says. The core
  *  tells the recorded place apart (a project's own copy of a global skill,
- *  or a replace); what is installed at another place isn't known. */
+ *  or a replace). A global update put into this project instead is the
+ *  project's own copy too: the core refuses rather than replace a copy the
+ *  project has. What is installed for all projects isn't known. */
 function updateQuestion(
   draft: Draft,
   scope: DraftScope,
   projectLabel: string
 ): Question {
   const name = draft.target_skill_name ?? draft.skill_name;
-  if (scope !== draft.scope) {
-    const place =
-      scope === "global" ? "all projects (global)" : `${projectLabel}/skills`;
+  if (scope !== draft.scope && scope === "global") {
     return {
       title: "Install an updated skill?",
-      description: `This installs the updated ${name} into ${place}, in place of any copy already there.`,
+      description: `This installs the updated ${name} into all projects (global), in place of any copy already there.`,
       action: "Install",
     };
   }
-  if (isProjectCopy(draft)) {
+  if (scope !== draft.scope || isProjectCopy(draft)) {
     return {
       title: "Install a project copy?",
       description: `${projectLabel} gets its own ${name} with these changes. The global ${name} stays as it is.`,

@@ -469,7 +469,7 @@ describe("DraftDetail", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
 
-  it("an update going elsewhere than it records says what it installs there", async () => {
+  it("an update installed into all projects instead of its own says what it installs there", async () => {
     const copy = draft({
       proposal_id: "data-cleaning",
       operation: "update",
@@ -477,11 +477,11 @@ describe("DraftDetail", () => {
       install_target: "/work/EvoSci_test/skills/data-cleaning",
       install_base: "/home/u/.evoscientist/skills/data-cleaning",
     });
-    const view = render(detail(copy));
+    render(detail(copy));
     // What is installed at the place picked isn't known.
     pickScope("All projects (global)");
     fireEvent.click(screen.getByRole("button", { name: "Approve" }));
-    let dialog = screen.getByRole("dialog", {
+    const dialog = screen.getByRole("dialog", {
       name: "Install an updated skill?",
     });
     expect(
@@ -492,8 +492,11 @@ describe("DraftDetail", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Install" }));
     expect(onApprove).toHaveBeenCalledWith(copy, "global");
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
 
-    // A global update installed into this project instead.
+  it("a global update installed into this project instead is a project copy", () => {
+    // The core never replaces a copy the project has in this direction: it
+    // makes the project's own copy, or refuses.
     const global = "/home/u/.evoscientist/skills/paper-review";
     const replace = draft({
       proposal_id: "paper-review-v2",
@@ -503,17 +506,22 @@ describe("DraftDetail", () => {
       install_target: global,
       install_base: global,
     });
-    view.rerender(detail(replace));
+    render(detail(replace));
     pickScope("EvoSci_test/skills (this project)");
     fireEvent.click(screen.getByRole("button", { name: "Approve" }));
-    dialog = screen.getByRole("dialog", { name: "Install an updated skill?" });
+    const dialog = screen.getByRole("dialog", {
+      name: "Install a project copy?",
+    });
     expect(
       within(dialog).getByText(
-        "This installs the updated paper-review into EvoSci_test/skills, in place of any copy already there."
+        "EvoSci_test gets its own paper-review with these changes. The global paper-review stays as it is."
       )
     ).toBeTruthy();
+    expect(
+      within(dialog).queryByRole("button", { name: "Replace and install" })
+    ).toBeNull();
     fireEvent.click(within(dialog).getByRole("button", { name: "Install" }));
-    expect(onApprove).toHaveBeenLastCalledWith(replace, "workspace");
+    expect(onApprove).toHaveBeenCalledWith(replace, "workspace");
   });
 
   /** An update's question asked, with dialogs that fade out as in a
