@@ -161,11 +161,19 @@ async function decideAll(
   bodyOf: (d: Draft) => Parameters<typeof post>[0],
   labels: Map<string, string>,
   failure: (answer: Answer, d: Draft) => string
-): Promise<DecisionResult & { placed: Record<string, DraftScope> }> {
+): Promise<
+  DecisionResult & {
+    placed: Record<string, DraftScope>;
+    operations: Record<string, Draft["operation"]>;
+  }
+> {
   const result: DecisionResult = { done: [], failed: [] };
   // Where each approval went: the core's answer, else the scope picked for
   // it (the core installs where it is told).
   const placed: Record<string, DraftScope> = {};
+  // What each approval did, as the core answered: a draft rewritten after
+  // the list was read may have become an update, or stopped being one.
+  const operations: Record<string, Draft["operation"]> = {};
   for (const draft of drafts) {
     const body = bodyOf(draft);
     const out = await post(body);
@@ -173,11 +181,15 @@ async function decideAll(
       result.done.push(draft);
       const scope = isScope(out.data.scope) ? out.data.scope : body.scope;
       if (isScope(scope)) placed[draft.proposal_id] = scope;
+      const operation = out.data.operation;
+      if (operation === "create" || operation === "update") {
+        operations[draft.proposal_id] = operation;
+      }
     } else {
       result.failed.push({ draft, message: failure(out.answer, draft) });
     }
   }
-  return { ...result, placed };
+  return { ...result, placed, operations };
 }
 
 /** Read the drafts and experts again, in the background: the drafts GET has
@@ -301,7 +313,7 @@ export function useDraftActions(projects: readonly Project[]): {
     ) =>
       track(async () => {
         const labels = projectLabels(projectsRef.current);
-        const { placed, ...result } = await decideAll(
+        const { placed, operations, ...result } = await decideAll(
           drafts,
           (d) =>
             action === "approve"
@@ -321,7 +333,16 @@ export function useDraftActions(projects: readonly Project[]): {
         );
         reread();
         if (result.done.length > 0) {
-          const revertible = result.done.filter((d) => isRevertible(d, action));
+          // Undo needs a backup the core keeps for a create only: as the core
+          // answered, else as the list read it.
+          const revertible = result.done.filter((d) =>
+            isRevertible(
+              Object.hasOwn(operations, d.proposal_id)
+                ? { ...d, operation: operations[d.proposal_id] }
+                : d,
+              action
+            )
+          );
           const text = decisionToast(action, result.done, placed, labels);
           if (revertible.length > 0) {
             toast.success(text, {

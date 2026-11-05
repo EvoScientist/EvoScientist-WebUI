@@ -247,6 +247,40 @@ describe("useDraftActions", () => {
     ]);
   });
 
+  it("Undo follows the operation the core answered, not the list's", async () => {
+    const { result } = setup();
+    // Read as a new skill, approved as an update (rewritten meanwhile): the
+    // core keeps no backup, so no Undo.
+    stubFetch([[200, { ...okApprove, operation: "update" }]]);
+    await act(async () => {
+      await result.current.approve([
+        draft({ proposal_id: "a", operation: "create" }),
+      ]);
+    });
+    expect(toast.success.mock.calls[0]).toEqual([
+      "Installed a into EvoSci_test/skills.",
+    ]);
+
+    // The other way round: Undo is offered, and reverts it.
+    stubFetch([[200, { ...okApprove, operation: "create" }]]);
+    await act(async () => {
+      await result.current.approve([
+        draft({ proposal_id: "b", operation: "update" }),
+      ]);
+    });
+    const options = toast.success.mock.calls[1][1];
+    expect(options).toEqual(
+      expect.objectContaining({
+        action: expect.objectContaining({ label: "Undo" }),
+      })
+    );
+    stubFetch([[200, okRevert]]);
+    await act(async () => {
+      await options.action.onClick();
+    });
+    expect(calls).toEqual([{ action: "revert", proposal_id: "b" }]);
+  });
+
   it("not_pending is reported per draft and gets no Undo", async () => {
     stubFetch([[409, { error: "not_pending", status: "approved" }]]);
     const { result } = setup();
