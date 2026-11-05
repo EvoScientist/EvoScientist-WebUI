@@ -29,6 +29,7 @@ import {
 import {
   autoSkillsReadOnlyReason,
   groupDrafts,
+  isProjectCopy,
   labelFor,
   statusLine,
   type Draft,
@@ -93,6 +94,61 @@ function replacedNames(
       ? `${n} (${labelFor(updates[i].workspace_dir, labels)})`
       : n
   );
+}
+
+/** The question before a bulk approval that holds updates: what each
+ *  replaces, and which projects get their own copy of a global skill (the
+ *  global one stays). Every approval goes where its draft records. */
+function updatesQuestion(
+  updates: readonly Draft[],
+  labels: Map<string, string>
+): { title: string; description: string; action: string } {
+  const names = replacedNames(updates, labels);
+  const replaces: string[] = [];
+  const copies: Array<{ draft: Draft; name: string }> = [];
+  updates.forEach((draft, i) => {
+    if (isProjectCopy(draft)) copies.push({ draft, name: names[i] });
+    else replaces.push(names[i]);
+  });
+
+  let title: string;
+  if (copies.length === 0) {
+    title =
+      replaces.length === 1
+        ? "Replace an installed skill?"
+        : "Replace installed skills?";
+  } else if (replaces.length === 0) {
+    title =
+      copies.length === 1
+        ? "Install a project copy?"
+        : "Install project copies?";
+  } else {
+    title = "Install updated skills?";
+  }
+
+  const sentences: string[] = [];
+  if (replaces.length > 0) {
+    sentences.push(`This replaces the installed ${joinNames(replaces)}.`);
+  }
+  if (copies.length === 1) {
+    const { draft } = copies[0];
+    const name = draft.target_skill_name ?? draft.skill_name;
+    const project = labelFor(draft.workspace_dir, labels);
+    sentences.push(
+      `${project} gets its own ${name} with these changes; the global ${name} stays as it is.`
+    );
+  } else if (copies.length > 1) {
+    const copied = joinNames(copies.map((c) => c.name));
+    sentences.push(
+      `${copied} get their own copies in their projects; the global skills stay as they are.`
+    );
+  }
+
+  return {
+    title,
+    description: sentences.join(" "),
+    action: replaces.length > 0 ? "Replace and install" : "Install",
+  };
 }
 
 /** Below 768 px, where the open draft takes the list's place (max-md:). */
@@ -195,10 +251,8 @@ export function DraftsPage() {
     () => new Map(groups.map((g) => [g.project.key, g.label])),
     [groups]
   );
-  const updates = replacedNames(
-    selectedDrafts.filter((d) => d.operation === "update"),
-    labels
-  );
+  const updates = selectedDrafts.filter((d) => d.operation === "update");
+  const question = updatesQuestion(updates, labels);
 
   // The question only stands while the selection still holds an update.
   if (confirming && updates.length === 0) setConfirming(false);
@@ -371,7 +425,7 @@ export function DraftsPage() {
     else void approve(send).then(settle);
   };
   // A closed gate leaves the question open, to be answered after the read.
-  const confirmReplace = () => {
+  const confirmUpdates = () => {
     if (!isReady()) return;
     setConfirming(false);
     const send = sendable(selectedDrafts);
@@ -653,14 +707,8 @@ export function DraftsPage() {
           }}
         >
           <DialogHeader>
-            <DialogTitle>
-              {updates.length === 1
-                ? "Replace an installed skill?"
-                : "Replace installed skills?"}
-            </DialogTitle>
-            <DialogDescription>
-              This replaces the installed {joinNames(updates)}.
-            </DialogDescription>
+            <DialogTitle>{question.title}</DialogTitle>
+            <DialogDescription>{question.description}</DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button
@@ -673,11 +721,11 @@ export function DraftsPage() {
             </Button>
             <Button
               type="button"
-              onClick={confirmReplace}
+              onClick={confirmUpdates}
               disabled={!canDecide || busy}
               className="max-md:min-h-11"
             >
-              Replace and install
+              {question.action}
             </Button>
           </DialogFooter>
         </DialogContent>

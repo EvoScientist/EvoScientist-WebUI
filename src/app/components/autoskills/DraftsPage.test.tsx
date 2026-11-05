@@ -408,6 +408,113 @@ describe("DraftsPage", () => {
     ).toBeTruthy();
   });
 
+  // Updates recorded for a project whose skill is installed only globally:
+  // the approval copies it into the project, and the global one stays.
+  const G = "/home/u/.evoscientist/skills";
+  const projectCopy = (
+    id: string,
+    name: string,
+    project: string,
+    created_at = "2026-11-01T09:00:00Z"
+  ) =>
+    draft({
+      proposal_id: id,
+      skill_name: name,
+      operation: "update",
+      target_skill_name: name,
+      workspace_dir: project,
+      created_at,
+      install_target: `${project}/skills/${name}`,
+      install_base: `${G}/${name}`,
+    });
+  const approveSelected = () =>
+    fireEvent.click(
+      within(selection()!).getByRole("button", { name: "Approve" })
+    );
+
+  it("bulk approve of project copies says the global skills stay", () => {
+    const c1 = projectCopy("c1", "data-cleaning", B);
+    const c2 = projectCopy("c2", "lit-search", A);
+    ready([c1, c2]);
+    render(page());
+
+    pick("data-cleaning");
+    approveSelected();
+    let dialog = screen.getByRole("dialog", {
+      name: "Install a project copy?",
+    });
+    expect(
+      within(dialog).getByText(
+        "project_B gets its own data-cleaning with these changes; the global data-cleaning stays as it is."
+      )
+    ).toBeTruthy();
+    expect(
+      within(dialog).queryByRole("button", { name: "Replace and install" })
+    ).toBeNull();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(hooks.approve).not.toHaveBeenCalled();
+
+    pick("lit-search");
+    approveSelected();
+    dialog = screen.getByRole("dialog", { name: "Install project copies?" });
+    expect(
+      within(dialog).getByText(
+        "lit-search and data-cleaning get their own copies in their projects; the global skills stay as they are."
+      )
+    ).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Install" }));
+    // One argument: no scopes, each draft keeps its recorded one.
+    expect(hooks.approve.mock.calls).toEqual([[[c2, c1]]]);
+  });
+
+  it("bulk approve of replaces and project copies says both, the replace first", () => {
+    // In place: the folder written is the one the result starts from.
+    const r = draft({
+      proposal_id: "r",
+      skill_name: "paper-review-v2",
+      operation: "update",
+      target_skill_name: "paper-review",
+      created_at: "2026-11-03T09:00:00Z",
+      install_target: `${A}/skills/paper-review`,
+      install_base: `${A}/skills/paper-review`,
+    });
+    const c1 = projectCopy("c1", "data-cleaning", B, "2026-11-02T09:00:00Z");
+    const c2 = projectCopy("c2", "lit-search", B);
+    const n = draft({ proposal_id: "n" });
+    ready([r, c1, c2, n]);
+    render(page());
+
+    pick("paper-review-v2");
+    pick("data-cleaning");
+    pick("n");
+    approveSelected();
+    let dialog = screen.getByRole("dialog", {
+      name: "Install updated skills?",
+    });
+    expect(
+      within(dialog).getByText(
+        "This replaces the installed paper-review. project_B gets its own data-cleaning with these changes; the global data-cleaning stays as it is."
+      )
+    ).toBeTruthy();
+    expect(
+      within(dialog).queryByRole("button", { name: "Install" })
+    ).toBeNull();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+    pick("lit-search");
+    approveSelected();
+    dialog = screen.getByRole("dialog", { name: "Install updated skills?" });
+    expect(
+      within(dialog).getByText(
+        "This replaces the installed paper-review. data-cleaning and lit-search get their own copies in their projects; the global skills stay as they are."
+      )
+    ).toBeTruthy();
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Replace and install" })
+    );
+    expect(hooks.approve.mock.calls).toEqual([[[r, n, c1, c2]]]);
+  });
+
   it("the question goes when its update leaves the selection", () => {
     const u = draft({
       proposal_id: "u",
