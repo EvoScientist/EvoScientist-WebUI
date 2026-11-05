@@ -483,7 +483,7 @@ describe("useDraftFile", () => {
       return new Response("", { status });
     });
     const expected: Record<string, string> = {
-      "404": "This file isn't there any more.",
+      "404": "This file is gone or can't be read.",
       "413": "This file is too large to show here.",
       "415": "This file isn't text, so it isn't shown.",
     };
@@ -528,6 +528,20 @@ describe("useDraftFile", () => {
       {children}
     </SWRConfig>
   );
+
+  it("a 404 is fetched once: the file is gone or can't be read", async () => {
+    // The core answers 404 for no such file or draft, no installed copy, and
+    // a file it can't read.
+    const fetchMock = stubFetch(() => json({ error: "not_found" }, 404));
+    const h = renderHook(() => useDraftFile(d, "x", false), {
+      wrapper: fastRetry,
+    });
+    await waitFor(() =>
+      expect(h.result.current.error).toBe("This file is gone or can't be read.")
+    );
+    await new Promise((r) => setTimeout(r, 300));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 
   it("a 413 is fetched once", async () => {
     const fetchMock = stubFetch(() => new Response("", { status: 413 }));

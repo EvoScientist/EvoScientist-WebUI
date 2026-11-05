@@ -128,12 +128,14 @@ describe("DraftFiles", () => {
     // A draft read that failed says so in place.
     reads.answers.set("scripts/run.py|false", {
       text: null,
-      error: "This file isn't there any more.",
+      error: "This file is gone or can't be read.",
       loading: false,
     });
     fireEvent.click(fileButton("SKILL.md"));
     fireEvent.click(fileButton("scripts/run.py"));
-    expect(screen.getByText("This file isn't there any more.")).toBeTruthy();
+    expect(
+      screen.getByText("This file is gone or can't be read.")
+    ).toBeTruthy();
     expect(
       screen.queryByText("Too many changes to show as a diff.")
     ).toBeNull();
@@ -321,11 +323,13 @@ describe("DraftFiles", () => {
     answer("notes.md", true, "old\n");
     reads.answers.set("notes.md|false", {
       text: null,
-      error: "This file isn't there any more.",
+      error: "This file is gone or can't be read.",
       loading: false,
     });
     fireEvent.click(fileButton("notes.md"));
-    expect(screen.getByText("This file isn't there any more.")).toBeTruthy();
+    expect(
+      screen.getByText("This file is gone or can't be read.")
+    ).toBeTruthy();
     expect(
       screen.queryByText(
         "Couldn't read the installed copy, so only the draft is shown."

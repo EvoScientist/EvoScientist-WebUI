@@ -170,7 +170,8 @@ type FileKey = readonly [
 
 const FILE_FALLBACK = "Couldn't read this file.";
 const FILE_ERRORS: Record<number, string> = {
-  404: "This file isn't there any more.",
+  // No such file or draft, no installed copy, or a file the core can't read.
+  404: "This file is gone or can't be read.",
   413: "This file is too large to show here.",
   415: "This file isn't text, so it isn't shown.",
 };
