@@ -253,8 +253,9 @@ describe("useAutoSkills", () => {
   // SWR's mutate resolves with the last good list when a read fails, so a
   // caller that needs the list as it is now reads it directly.
   describe("readNow", () => {
-    it("reads the backend, never the cache, and every reader gets the answer", async () => {
-      const answers = [json(list(["a"])), json(list(["b"]))];
+    it("reads the backend, never the cache, and leaves the cache to SWR", async () => {
+      // The page's read, readNow's own, then SWR's read after it.
+      const answers = [json(list(["a"])), json(list(["b"])), json(list(["b"]))];
       const fetchMock = stubFetch(() => answers.shift() ?? json({}, 500));
       const { result } = renderHook(
         () => [useAutoSkills(), useAutoSkills()] as const,
@@ -265,20 +266,70 @@ describe("useAutoSkills", () => {
       await act(async () => {
         read = await result.current[0].readNow();
       });
-      expect(fetchMock).toHaveBeenCalledTimes(2);
       expect(
         (read as { drafts: Array<{ proposal_id: string }> }).drafts[0]
       ).toMatchObject({ proposal_id: "b" });
-      for (const reader of result.current) {
+      // The readers follow SWR's own read, made once readNow settled.
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+      await waitFor(() =>
         expect(
-          reader.status === "ready" && reader.list.drafts[0].proposal_id
-        ).toBe("b");
-      }
+          result.current.map(
+            (r) => r.status === "ready" && r.list.drafts[0].proposal_id
+          )
+        ).toEqual(["b", "b"])
+      );
       // A failed read fails: no list from before comes back as current.
       await act(async () => {
         await expect(result.current[0].readNow()).rejects.toThrow();
       });
-      expect(fetchMock).toHaveBeenCalledTimes(3);
+    });
+
+    it("a slow direct read doesn't write over a newer read of the list", async () => {
+      // A draft approved meanwhile: SWR's read has it, the slow direct read
+      // still had it Pending.
+      let slow: (r: Response) => void = () => {};
+      let held: (r: Response) => void = () => {};
+      let calls = 0;
+      const fetchMock = stubFetch(() => {
+        calls += 1;
+        if (calls === 1) return json(list(["a"]));
+        if (calls === 2) return new Promise<Response>((r) => (slow = r));
+        if (calls === 3) return json(list(["newer"]));
+        return new Promise<Response>((r) => (held = r));
+      });
+      const { result } = renderHook(() => useAutoSkills(), { wrapper });
+      await waitFor(() => expect(result.current.status).toBe("ready"));
+      let direct: Promise<unknown> = Promise.resolve();
+      act(() => {
+        direct = result.current.readNow();
+      });
+      await act(async () => {
+        await result.current.refresh();
+      });
+      expect(
+        result.current.status === "ready" &&
+          result.current.list.drafts[0].proposal_id
+      ).toBe("newer");
+      await act(async () => {
+        slow(json(list(["older"])));
+        await direct;
+      });
+      // The caller has its answer; the readers keep the newer list.
+      expect(
+        result.current.status === "ready" &&
+          result.current.list.drafts[0].proposal_id
+      ).toBe("newer");
+      // SWR reads again after it, in its own order.
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
+      await act(async () => {
+        held(json(list(["newest"])));
+      });
+      await waitFor(() =>
+        expect(
+          result.current.status === "ready" &&
+            result.current.list.drafts[0].proposal_id
+        ).toBe("newest")
+      );
     });
 
     it("can be cut short", async () => {

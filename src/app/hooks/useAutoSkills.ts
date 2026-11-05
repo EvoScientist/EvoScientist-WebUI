@@ -71,9 +71,9 @@ export function useAutoSkills(
   /** Read again for every reader. Its answer is SWR's cache, which keeps
    *  the last good list when a read fails: never count on it as fresh. */
   refresh: () => Promise<DraftList | "unsupported" | undefined>;
-  /** The drafts as the backend has them now, read directly; a list read is
-   *  written into every reader's cache. Rejects when the read fails or is
-   *  aborted. */
+  /** The drafts as the backend has them now, read directly, for the caller
+   *  alone; then SWR reads again for every reader. Rejects when the read
+   *  fails or is aborted. */
   readNow: (signal?: AbortSignal) => Promise<DraftList | "unsupported">;
 } {
   const { deploymentUrl, apiKey } = useDeployment();
@@ -90,9 +90,18 @@ export function useAutoSkills(
       // This deployment's key, kept: the hook's own mutate would follow a
       // switch made while the read was out.
       const at: ListKey = ["autoskills", base, apiKey];
-      const answer = await fetchDrafts(at, signal);
-      await mutateCache(at, answer, { revalidate: false });
-      return answer;
+      try {
+        return await fetchDrafts(at, signal);
+      } finally {
+        // The answer isn't written into the cache: a slow one could land
+        // after a newer read of the list and bring back what changed. SWR
+        // reads again instead, in its own order.
+        try {
+          void Promise.resolve(mutateCache(at)).catch(() => {});
+        } catch {
+          // The next poll reads again.
+        }
+      }
     },
     [base, apiKey, mutateCache]
   );
