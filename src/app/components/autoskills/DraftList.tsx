@@ -11,9 +11,11 @@ import {
 } from "@/lib/autoskills";
 import { formatTime } from "@/lib/time";
 import { cn } from "@/lib/utils";
+import { useRunNowState } from "@/providers/runNowContext";
 
-// The drafts of one tab, one collapsible group per project. Selection,
-// the open draft and the runs live in the page; this only draws them.
+// The drafts of one tab, one collapsible group per project. Selection and
+// the open draft live in the page, the runs above the views (they go on
+// after the page is left); this only draws them.
 
 const CHECKBOX =
   "size-4 rounded border border-muted-foreground bg-transparent text-[var(--brand-solid)] focus:ring-0 focus:ring-offset-0 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:opacity-50";
@@ -29,7 +31,6 @@ export interface DraftListProps {
   onToggle(ids: string[], on: boolean): void;
   openId: string | null;
   onOpen(id: string): void;
-  running: ReadonlySet<string>;
   onRun(projectKey: string): void;
   canWrite: boolean;
   /** The registered projects' keys; null while they are not known. Until
@@ -45,11 +46,11 @@ export function DraftList({
   onToggle,
   openId,
   onOpen,
-  running,
   onRun,
   canWrite,
   registered,
 }: DraftListProps) {
+  const { running } = useRunNowState();
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   // The groups already carry the page's labels: installedLabel reads them.
   const labels = useMemo(

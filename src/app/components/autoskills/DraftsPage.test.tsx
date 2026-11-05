@@ -6,6 +6,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Draft, DraftList } from "@/lib/autoskills";
 import type { ProjectsState } from "@/lib/projects";
@@ -86,9 +87,6 @@ vi.mock("@/app/hooks/useDraftActions", () => ({
     busy: hooks.busy,
   }),
 }));
-vi.mock("@/app/hooks/useRunNow", () => ({
-  useRunNow: () => ({ running: hooks.running, run: hooks.run }),
-}));
 vi.mock("@/app/hooks/useSettings", () => ({
   useSettings: () => ({
     payload: hooks.settings ? { settings: hooks.settings } : undefined,
@@ -104,7 +102,17 @@ vi.mock("@/app/components/SkillDetailDialog", () => ({
 }));
 
 import { SkillsMarketplace } from "@/app/components/SkillsMarketplace";
+import { RunNowContext } from "@/providers/runNowContext";
 import { DraftsPage } from "./DraftsPage";
+
+/** Run now's state, as RunNowProvider keeps it above the views. */
+function RunNow({ children }: { children: ReactNode }) {
+  return (
+    <RunNowContext.Provider value={{ running: hooks.running, run: hooks.run }}>
+      {children}
+    </RunNowContext.Provider>
+  );
+}
 
 const A = "/work/EvoSci_test";
 const B = "/work/project_B";
@@ -155,7 +163,9 @@ function page(
 ) {
   return (
     <TestProjectsProvider value={{ ...mockProjects(projects), ...over }}>
-      <DraftsPage />
+      <RunNow>
+        <DraftsPage />
+      </RunNow>
     </TestProjectsProvider>
   );
 }
@@ -948,7 +958,9 @@ describe("DraftsPage", () => {
     q.values.set("draftId", "x");
     render(
       <TestProjectsProvider value={mockProjects(readyProjects(A, B))}>
-        <SkillsMarketplace />
+        <RunNow>
+          <SkillsMarketplace />
+        </RunNow>
       </TestProjectsProvider>
     );
     expect(screen.getByText("Drafted from memory")).toBeTruthy();

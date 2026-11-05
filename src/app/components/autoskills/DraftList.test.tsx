@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 import { fireEvent, render, screen, within } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import type { Draft, DraftGroup, DraftStatus } from "@/lib/autoskills";
 import { formatTime } from "@/lib/time";
+import { RunNowContext } from "@/providers/runNowContext";
 import { DraftList } from "./DraftList";
 
 const A = "/work/EvoSci_test";
@@ -78,11 +80,13 @@ function renderList(
     status: DraftStatus;
     selected: ReadonlySet<string>;
     openId: string | null;
+    /** The projects whose run the page follows (Run now's context). */
     running: ReadonlySet<string>;
     canWrite: boolean;
     registered: ReadonlySet<string> | null;
   }> = {}
 ) {
+  const { running = new Set<string>(), ...rest } = over;
   const props = {
     groups: twoProjects(),
     status: "pending" as DraftStatus,
@@ -90,13 +94,17 @@ function renderList(
     onToggle: vi.fn(),
     openId: null,
     onOpen: vi.fn(),
-    running: new Set<string>(),
     onRun: vi.fn(),
     canWrite: true,
     registered: new Set([A, B, GONE]) as ReadonlySet<string> | null,
-    ...over,
+    ...rest,
   };
-  const { rerender } = render(<DraftList {...props} />);
+  const runNow = { running, run: vi.fn(async () => undefined) };
+  const { rerender } = render(<DraftList {...props} />, {
+    wrapper: ({ children }: { children: ReactNode }) => (
+      <RunNowContext.Provider value={runNow}>{children}</RunNowContext.Provider>
+    ),
+  });
   return { props, rerender };
 }
 

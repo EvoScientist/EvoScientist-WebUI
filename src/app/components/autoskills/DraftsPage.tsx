@@ -13,7 +13,6 @@ import {
 import { decidable, stillPending } from "@/app/components/autoskills/selection";
 import { markAutoSeen, useAutoSkills } from "@/app/hooks/useAutoSkills";
 import { useDraftActions } from "@/app/hooks/useDraftActions";
-import { useRunNow } from "@/app/hooks/useRunNow";
 import { useSettings, useSettingsAccess } from "@/app/hooks/useSettings";
 import { Button } from "@/components/ui/button";
 import {
@@ -37,6 +36,7 @@ import type { Project } from "@/lib/projects";
 import { cn } from "@/lib/utils";
 import { useDeployment } from "@/providers/ClientProvider";
 import { useProjects } from "@/providers/ProjectsProvider";
+import { useRunNowState } from "@/providers/runNowContext";
 
 // Research Skills › Drafted from memory: the drafts of every registered
 // project by status, grouped by project, with a multi-select to approve or
@@ -113,7 +113,9 @@ export function DraftsPage() {
   const { payload } = useSettings();
   const { access } = useSettingsAccess();
   const { approve, reject, busy } = useDraftActions(projectList);
-  const { running, run } = useRunNow(projectList);
+  // Kept above the views: a run goes on, and is reported, after this page
+  // is left.
+  const { run } = useRunNowState();
   const { deploymentUrl } = useDeployment();
 
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -530,7 +532,6 @@ export function DraftsPage() {
                   onToggle={toggle}
                   openId={openDraft?.proposal_id ?? null}
                   onOpen={openRow}
-                  running={running}
                   onRun={runNow}
                   canWrite={canWrite}
                   registered={registered}
