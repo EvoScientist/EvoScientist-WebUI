@@ -942,6 +942,31 @@ describe("DraftsPage", () => {
     expect(hooks.run).toHaveBeenCalledWith(B);
   });
 
+  it("Run now waits while the settings say AutoSkills is off", () => {
+    ready([]);
+    hooks.settings = { memory_skill_synthesis_enabled: false };
+    const view = render(page());
+    const run = () =>
+      within(screen.getByRole("group", { name: "project_B" })).getByRole(
+        "button",
+        { name: "Run now" }
+      ) as HTMLButtonElement;
+    expect(run().disabled).toBe(true);
+    expect(run().title).toBe(
+      "AutoSkills is off. Turn it on in Settings first."
+    );
+    fireEvent.click(run());
+    expect(hooks.run).not.toHaveBeenCalled();
+
+    // Settings not known (yet, or an old core): the core says it if off.
+    hooks.settings = undefined;
+    view.rerender(page());
+    expect(run().disabled).toBe(false);
+    expect(run().title).toBe("");
+    fireEvent.click(run());
+    expect(hooks.run).toHaveBeenCalledWith(B);
+  });
+
   it("the breadcrumb returns to Research Skills", async () => {
     vi.stubGlobal(
       "fetch",

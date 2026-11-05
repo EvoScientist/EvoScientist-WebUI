@@ -84,6 +84,7 @@ function renderList(
     running: ReadonlySet<string>;
     canWrite: boolean;
     registered: ReadonlySet<string> | null;
+    autoSkillsOff: boolean;
   }> = {}
 ) {
   const { running = new Set<string>(), ...rest } = over;
@@ -97,6 +98,7 @@ function renderList(
     onRun: vi.fn(),
     canWrite: true,
     registered: new Set([A, B, GONE]) as ReadonlySet<string> | null,
+    autoSkillsOff: false,
     ...rest,
   };
   const runNow = { running, run: vi.fn(async () => undefined) };
@@ -324,6 +326,42 @@ describe("DraftList", () => {
     for (const box of screen.getAllByRole("checkbox")) {
       expect((box as HTMLInputElement).disabled).toBe(true);
     }
+  });
+
+  it("Run now is off while AutoSkills is off, and says why", () => {
+    const OFF = "AutoSkills is off. Turn it on in Settings first.";
+    const { props, rerender } = renderList({ autoSkillsOff: true });
+    for (const run of screen.getAllByRole("button", { name: "Run now" })) {
+      expect((run as HTMLButtonElement).disabled).toBe(true);
+      expect(run.getAttribute("title")).toBe(OFF);
+    }
+    // Picking drafts stays possible: approving doesn't need AutoSkills on.
+    expect(
+      (
+        screen.getByRole("checkbox", {
+          name: "Select arxiv-paper-retrieval",
+        }) as HTMLInputElement
+      ).disabled
+    ).toBe(false);
+
+    rerender(
+      <DraftList
+        {...props}
+        autoSkillsOff={false}
+      />
+    );
+    for (const run of screen.getAllByRole("button", { name: "Run now" })) {
+      expect((run as HTMLButtonElement).disabled).toBe(false);
+      expect(run.getAttribute("title")).toBeNull();
+    }
+  });
+
+  it("a run that goes on after AutoSkills is turned off reads Running… alone", () => {
+    renderList({ autoSkillsOff: true, running: new Set([A]) });
+    const running = within(group("EvoSci_test")).getByRole("button", {
+      name: "Running…",
+    });
+    expect(running.getAttribute("title")).toBeNull();
   });
 
   it("disables every write control while the page can't write", () => {

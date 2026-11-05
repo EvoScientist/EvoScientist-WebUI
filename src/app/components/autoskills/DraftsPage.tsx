@@ -179,6 +179,9 @@ export function DraftsPage() {
   const readOnlyReason =
     access && !access.writable ? autoSkillsReadOnlyReason(access) : null;
   const line = statusLine(payload?.settings);
+  // Only settings that say so: unknown ones leave Run now to the core.
+  const autoSkillsOff =
+    payload?.settings?.memory_skill_synthesis_enabled === false;
 
   const baseId = useId();
   const tabId = (s: DraftStatus) => `${baseId}-tab-${s}`;
@@ -535,6 +538,7 @@ export function DraftsPage() {
                   onRun={runNow}
                   canWrite={canWrite}
                   registered={registered}
+                  autoSkillsOff={autoSkillsOff}
                 />
               </div>
 

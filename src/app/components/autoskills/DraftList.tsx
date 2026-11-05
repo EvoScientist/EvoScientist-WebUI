@@ -37,7 +37,12 @@ export interface DraftListProps {
    *  they are, nothing runs and nothing is picked; then a group of a project
    *  the backend doesn't serve (any more) neither: the core would refuse. */
   registered: ReadonlySet<string> | null;
+  /** The settings say AutoSkills is off: Run now waits (unknown settings
+   *  don't count; the core says so then). */
+  autoSkillsOff: boolean;
 }
+
+const RUN_OFF = "AutoSkills is off. Turn it on in Settings first.";
 
 export function DraftList({
   groups,
@@ -49,6 +54,7 @@ export function DraftList({
   onRun,
   canWrite,
   registered,
+  autoSkillsOff,
 }: DraftListProps) {
   const { running } = useRunNowState();
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
@@ -98,6 +104,7 @@ export function DraftList({
           served={
             registered === null ? null : registered.has(group.project.key)
           }
+          autoSkillsOff={autoSkillsOff}
           labels={labels}
         />
       ))}
@@ -118,6 +125,7 @@ function Group({
   onRun,
   canWrite,
   served,
+  autoSkillsOff,
   labels,
 }: {
   group: DraftGroup;
@@ -133,6 +141,7 @@ function Group({
   canWrite: boolean;
   /** Whether the backend serves this project; null while not known. */
   served: boolean | null;
+  autoSkillsOff: boolean;
   labels: Map<string, string>;
 }) {
   const id = useId();
@@ -192,8 +201,13 @@ function Group({
             size="sm"
             onClick={onRun}
             disabled={
-              !canWrite || running || served !== true || group.project.missing
+              !canWrite ||
+              running ||
+              served !== true ||
+              group.project.missing ||
+              autoSkillsOff
             }
+            title={autoSkillsOff && !running ? RUN_OFF : undefined}
             className="border-solid max-md:min-h-11"
           >
             {running ? "Running…" : "Run now"}
