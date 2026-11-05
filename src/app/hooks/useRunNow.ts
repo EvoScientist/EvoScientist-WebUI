@@ -8,33 +8,85 @@ import {
   autoSkillsReadOnlyReason,
   labelFor,
   projectLabels,
+  type DraftList,
+  type DraftStatus,
 } from "@/lib/autoskills";
 import type { Project } from "@/lib/projects";
 import { useClient } from "@/providers/ClientProvider";
 
 export const RUN_POLL_MS = 3_000;
+/** How long a run is followed; then the page stops asking (the run goes on,
+ *  and the drafts update when it finishes). */
+export const RUN_CEILING_MS = 30 * 60_000;
+/** How long the end of a run waits for the drafts' re-read, which has no
+ *  timeout of its own, before it says so without a count. */
+export const REREAD_WAIT_MS = 10_000;
 
 const MAX_FAILED_POLLS = 3;
 const END_STATES = new Set(["success", "error", "timeout", "interrupted"]);
 
-function pendingIds(
-  list: {
-    drafts: readonly {
-      proposal_id: string;
-      status: string;
-      workspace_dir: string;
-    }[];
-  },
-  key: string
-): Set<string> {
-  return new Set(
+type Drafts = Pick<DraftList, "drafts">;
+
+/** The project's drafts by id, with their status. */
+function snapshotOf(list: Drafts, key: string): Map<string, DraftStatus> {
+  return new Map(
     list.drafts
-      .filter((d) => d.status === "pending" && d.workspace_dir === key)
-      .map((d) => d.proposal_id)
+      .filter((d) => d.workspace_dir === key)
+      .map((d) => [d.proposal_id, d.status])
   );
 }
 
-/** Start AutoSkills in a project, wait for the run and say how it went. */
+/** What a run added to the project: drafts pending now that weren't, and
+ *  the ones auto mode approved (at submission) that weren't approved. */
+function addedSince(
+  before: ReadonlyMap<string, DraftStatus>,
+  list: Drafts,
+  key: string
+): { drafts: number; installed: number } {
+  let drafts = 0;
+  let installed = 0;
+  for (const d of list.drafts) {
+    if (d.workspace_dir !== key) continue;
+    const was = before.get(d.proposal_id);
+    if (d.status === "pending" && was !== "pending") drafts += 1;
+    else if (
+      d.status === "approved" &&
+      d.approved_by === "auto" &&
+      was !== "approved"
+    ) {
+      installed += 1;
+    }
+  }
+  return { drafts, installed };
+}
+
+/** The end toast; without counts (no list before or after) it says only
+ *  that the run finished. */
+function finishedText(
+  label: string,
+  added: { drafts: number; installed: number } | null
+): string {
+  if (added === null) return `AutoSkills finished in ${label}.`;
+  const parts: string[] = [];
+  if (added.drafts > 0) {
+    parts.push(
+      added.drafts === 1 ? "1 new draft" : `${added.drafts} new drafts`
+    );
+  }
+  if (added.installed > 0) {
+    parts.push(
+      added.installed === 1
+        ? "1 skill installed automatically"
+        : `${added.installed} skills installed automatically`
+    );
+  }
+  return parts.length === 0
+    ? `AutoSkills finished in ${label}: no new patterns this time.`
+    : `AutoSkills finished in ${label}: ${parts.join(", ")}.`;
+}
+
+/** Start AutoSkills in a project, or follow the run already going there,
+ *  wait for it and say how it went. */
 export function useRunNow(projects: readonly Project[]): {
   running: ReadonlySet<string>;
   run(projectKey: string): Promise<void>;
@@ -94,6 +146,33 @@ export function useRunNow(projects: readonly Project[]): {
     []
   );
 
+  /** Read the drafts again without waiting for the answer; a failure is
+   *  the next poll's to fix. */
+  const rereadInBackground = useCallback(() => {
+    try {
+      void Promise.resolve(refreshRef.current()).catch(() => {});
+    } catch {
+      // Same.
+    }
+  }, []);
+
+  /** The drafts read again, or undefined when the read fails, takes longer
+   *  than `ms`, or the hook is cleaned up first. */
+  const rereadWithin = useCallback(
+    (ms: number) =>
+      new Promise<unknown>((resolve) => {
+        void sleep(ms).then(() => resolve(undefined));
+        try {
+          Promise.resolve(refreshRef.current()).then(resolve, () =>
+            resolve(undefined)
+          );
+        } catch {
+          resolve(undefined);
+        }
+      }),
+    [sleep]
+  );
+
   const run = useCallback(
     async (key: string): Promise<void> => {
       if (activeRef.current.has(key)) return;
@@ -104,25 +183,32 @@ export function useRunNow(projects: readonly Project[]): {
       const cancelled = () => epochRef.current !== epoch;
       const label = labelFor(key, projectLabels(projectsRef.current));
       // Only a list that was read can say what is new afterwards.
-      const before = listRef.current ? pendingIds(listRef.current, key) : null;
+      const snapshot = () =>
+        listRef.current ? snapshotOf(listRef.current, key) : null;
+      let before = snapshot();
 
-      /** true: success; false: any other end; null: cancelled. */
+      /** How the run ended for this page: its own end, three failed polls
+       *  in a row, the ceiling, or a cleanup. */
       async function poll(
         threadId: string,
         runId: string
-      ): Promise<boolean | null> {
+      ): Promise<"success" | "failed" | "ceiling" | "cancelled"> {
+        const since = Date.now();
         let failed = 0;
         for (;;) {
           await sleep(RUN_POLL_MS);
-          if (cancelled()) return null;
+          if (cancelled()) return "cancelled";
+          if (Date.now() - since >= RUN_CEILING_MS) return "ceiling";
           try {
             const r = await clientRef.current.runs.get(threadId, runId);
-            if (cancelled()) return null;
+            if (cancelled()) return "cancelled";
             failed = 0;
-            if (END_STATES.has(r.status)) return r.status === "success";
+            if (END_STATES.has(r.status)) {
+              return r.status === "success" ? "success" : "failed";
+            }
           } catch {
-            if (cancelled()) return null;
-            if (++failed >= MAX_FAILED_POLLS) return false;
+            if (cancelled()) return "cancelled";
+            if (++failed >= MAX_FAILED_POLLS) return "failed";
           }
         }
       }
@@ -131,12 +217,18 @@ export function useRunNow(projects: readonly Project[]): {
         const start = await postRelay({ action: "run", workspace_dir: key });
         if (cancelled()) return;
         const data = start === "network" ? {} : start.data;
-        if (
-          start === "network" ||
-          !start.ok ||
-          typeof data.thread_id !== "string" ||
-          typeof data.run_id !== "string"
-        ) {
+        const threadId = data.thread_id;
+        const runId = data.run_id;
+        const named = typeof threadId === "string" && typeof runId === "string";
+        // A manual run of this project is already going (another tab, an
+        // earlier page): the core names it instead of starting a second
+        // one, and it is followed like one started here, counted from now.
+        const joined =
+          start !== "network" &&
+          start.status === 409 &&
+          data.error === "already_running" &&
+          named;
+        if (start === "network" || !(start.ok || joined) || !named) {
           // The specific sentences are for refused answers; a 2xx without
           // ids is always the generic one.
           const code =
@@ -146,36 +238,36 @@ export function useRunNow(projects: readonly Project[]): {
           toast.error(startFailure(code, label));
           return;
         }
-        const finished = await poll(data.thread_id, data.run_id);
-        if (finished === null) return;
-        if (!finished) {
+        if (joined) {
+          before = snapshot();
+          toast.info(`AutoSkills is already running in ${label}.`);
+        }
+        const end = await poll(threadId, runId);
+        if (end === "cancelled") return;
+        if (end === "ceiling") {
+          rereadInBackground();
+          toast.info(
+            `AutoSkills is still running in ${label}. The drafts update when it finishes.`
+          );
+          return;
+        }
+        if (end === "failed") {
           toast.error(
             `AutoSkills didn't finish in ${label}. Try Run now again later.`
           );
           return;
         }
-        let list: unknown;
-        try {
-          list = await refreshRef.current();
-        } catch {
-          list = undefined;
-        }
+        const list = await rereadWithin(REREAD_WAIT_MS);
         if (cancelled()) return;
         const drafts = (list as { drafts?: unknown } | null | undefined)
           ?.drafts;
-        if (before === null || !Array.isArray(drafts)) {
-          toast.success(`AutoSkills finished in ${label}.`);
-          return;
-        }
-        const n = [
-          ...pendingIds(list as Parameters<typeof pendingIds>[0], key),
-        ].filter((id) => !before.has(id)).length;
         toast.success(
-          n === 0
-            ? `AutoSkills finished in ${label}: no new patterns this time.`
-            : n === 1
-            ? `AutoSkills finished in ${label}: 1 new draft.`
-            : `AutoSkills finished in ${label}: ${n} new drafts.`
+          finishedText(
+            label,
+            before !== null && Array.isArray(drafts)
+              ? addedSince(before, list as Drafts, key)
+              : null
+          )
         );
       } finally {
         // Only the run that holds the key may release it.
@@ -185,7 +277,7 @@ export function useRunNow(projects: readonly Project[]): {
         }
       }
     },
-    [sleep]
+    [sleep, rereadInBackground, rereadWithin]
   );
 
   return { running, run };

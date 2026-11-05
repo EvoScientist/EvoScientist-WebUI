@@ -5,7 +5,11 @@ import type { Draft, DraftList } from "@/lib/autoskills";
 import type { Project } from "@/lib/projects";
 import { autoSkillsReadOnlyReason } from "@/lib/autoskills";
 
-const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
+const toast = vi.hoisted(() => ({
+  success: vi.fn(),
+  error: vi.fn(),
+  info: vi.fn(),
+}));
 vi.mock("sonner", () => ({ toast }));
 
 const runsGet = vi.hoisted(() => vi.fn());
@@ -27,7 +31,12 @@ vi.mock("@/app/hooks/useAutoSkills", () => ({
   }),
 }));
 
-import { RUN_POLL_MS, useRunNow } from "./useRunNow";
+import {
+  REREAD_WAIT_MS,
+  RUN_CEILING_MS,
+  RUN_POLL_MS,
+  useRunNow,
+} from "./useRunNow";
 
 const A = "/work/EvoSci_test";
 const B = "/work/project_B";
@@ -36,8 +45,18 @@ const projects: Project[] = [
   { key: B, name: "project_B", missing: false },
 ];
 
-function draft(id: string, dir: string, status = "pending"): Draft {
-  return { proposal_id: id, status, workspace_dir: dir } as unknown as Draft;
+function draft(
+  id: string,
+  dir: string,
+  status = "pending",
+  approvedBy: "user" | "auto" | null = null
+): Draft {
+  return {
+    proposal_id: id,
+    status,
+    workspace_dir: dir,
+    approved_by: approvedBy,
+  } as unknown as Draft;
 }
 function listOf(drafts: Draft[]): DraftList {
   return { drafts, counts: {}, byProject: {} } as unknown as DraftList;
@@ -77,6 +96,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   toast.success.mockClear();
   toast.error.mockClear();
+  toast.info.mockClear();
   runsGet.mockReset();
   state.status = "ready";
   state.list = listOf([draft("old", B)]);
@@ -124,7 +144,7 @@ describe("useRunNow", () => {
     expect(bodies).toHaveLength(1);
   });
 
-  it("counts new drafts in that project only", async () => {
+  it("counts new drafts and automatic installs in that project only", async () => {
     stubRelay(200, started);
     runsGet.mockResolvedValue({ status: "success" });
     state.refresh.mockResolvedValue(
@@ -133,7 +153,11 @@ describe("useRunNow", () => {
         draft("n1", B),
         draft("n2", B),
         draft("other", A),
-        draft("done", B, "approved"),
+        // Approved by the user meanwhile: not the run's.
+        draft("done", B, "approved", "user"),
+        // Auto mode approves at submission: the run installed it.
+        draft("auto1", B, "approved", "auto"),
+        draft("auto-other", A, "approved", "auto"),
       ])
     );
     const { result } = renderHook(() => useRunNow(projects));
@@ -143,7 +167,52 @@ describe("useRunNow", () => {
     await flush();
     await tick();
     expect(toast.success).toHaveBeenCalledWith(
-      "AutoSkills finished in project_B: 2 new drafts."
+      "AutoSkills finished in project_B: 2 new drafts, 1 skill installed automatically."
+    );
+  });
+
+  it("a run in auto mode says what it installed", async () => {
+    state.list = listOf([
+      draft("old", B),
+      draft("before", B, "approved", "auto"),
+    ]);
+    stubRelay(200, started);
+    runsGet.mockResolvedValue({ status: "success" });
+    state.refresh.mockResolvedValue(
+      listOf([
+        draft("old", B),
+        // Approved before the run: not counted again.
+        draft("before", B, "approved", "auto"),
+        draft("a1", B, "approved", "auto"),
+        draft("a2", B, "approved", "auto"),
+      ])
+    );
+    const { result } = renderHook(() => useRunNow(projects));
+    await act(async () => {
+      void result.current.run(B);
+    });
+    await flush();
+    await tick();
+    expect(toast.success).toHaveBeenCalledWith(
+      "AutoSkills finished in project_B: 2 skills installed automatically."
+    );
+  });
+
+  it("an automatic approval of a draft that was pending counts as installed", async () => {
+    state.list = listOf([draft("p", B)]);
+    stubRelay(200, started);
+    runsGet.mockResolvedValue({ status: "success" });
+    state.refresh.mockResolvedValue(
+      listOf([draft("p", B, "approved", "auto"), draft("n", B)])
+    );
+    const { result } = renderHook(() => useRunNow(projects));
+    await act(async () => {
+      void result.current.run(B);
+    });
+    await flush();
+    await tick();
+    expect(toast.success).toHaveBeenCalledWith(
+      "AutoSkills finished in project_B: 1 new draft, 1 skill installed automatically."
     );
   });
 
@@ -451,6 +520,157 @@ describe("useRunNow", () => {
     await flush();
     expect(result.current.running.has(A)).toBe(true);
     expect(result.current.running.has(B)).toBe(true);
+  });
+
+  it("stops following a run after 30 minutes and says it still runs", async () => {
+    stubRelay(200, started);
+    runsGet.mockResolvedValue({ status: "running" });
+    const { result } = renderHook(() => useRunNow(projects));
+    await act(async () => {
+      void result.current.run(B);
+    });
+    await flush();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(RUN_CEILING_MS - RUN_POLL_MS);
+    });
+    expect(toast.info).not.toHaveBeenCalled();
+    expect(result.current.running.has(B)).toBe(true);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(RUN_POLL_MS * 2);
+    });
+    // No fixed id: the text alone.
+    expect(toast.info.mock.calls).toEqual([
+      [
+        "AutoSkills is still running in project_B. The drafts update when it finishes.",
+      ],
+    ]);
+    expect(state.refresh).toHaveBeenCalledTimes(1);
+    expect(result.current.running.has(B)).toBe(false);
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
+    const polls = runsGet.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(RUN_POLL_MS * 10);
+    });
+    expect(runsGet).toHaveBeenCalledTimes(polls);
+  });
+
+  it("a re-read that never answers doesn't hold the end of a run", async () => {
+    stubRelay(200, started);
+    runsGet.mockResolvedValue({ status: "success" });
+    state.refresh.mockReturnValue(new Promise(() => {}));
+    const { result } = renderHook(() => useRunNow(projects));
+    await act(async () => {
+      void result.current.run(B);
+    });
+    await flush();
+    await tick();
+    expect(state.refresh).toHaveBeenCalledTimes(1);
+    expect(toast.success).not.toHaveBeenCalled();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(REREAD_WAIT_MS);
+    });
+    // Without the list there is no count.
+    expect(toast.success).toHaveBeenCalledWith(
+      "AutoSkills finished in project_B."
+    );
+    expect(result.current.running.has(B)).toBe(false);
+  });
+
+  it("joins a run already going in that project and follows it to the end", async () => {
+    stubRelay(409, {
+      error: "already_running",
+      thread_id: "t9",
+      run_id: "r9",
+    });
+    runsGet
+      .mockResolvedValueOnce({ status: "running" })
+      .mockResolvedValueOnce({ status: "success" });
+    state.refresh.mockResolvedValue(listOf([draft("old", B), draft("n1", B)]));
+    const { result } = renderHook(() => useRunNow(projects));
+    await act(async () => {
+      void result.current.run(B);
+    });
+    await flush();
+    // Said once, with no fixed id.
+    expect(toast.info.mock.calls).toEqual([
+      ["AutoSkills is already running in project_B."],
+    ]);
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(result.current.running.has(B)).toBe(true);
+    await tick();
+    expect(runsGet).toHaveBeenCalledWith("t9", "r9");
+    expect(result.current.running.has(B)).toBe(true);
+    await tick();
+    expect(toast.success).toHaveBeenCalledWith(
+      "AutoSkills finished in project_B: 1 new draft."
+    );
+    expect(toast.info).toHaveBeenCalledTimes(1);
+    expect(result.current.running.has(B)).toBe(false);
+    expect(bodies).toHaveLength(1);
+  });
+
+  it("counts a joined run's drafts from the moment it was joined", async () => {
+    let answer!: (r: Response) => void;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        () =>
+          new Promise<Response>((resolve) => {
+            answer = resolve;
+          })
+      )
+    );
+    runsGet.mockResolvedValue({ status: "success" });
+    const { result, rerender } = renderHook(() => useRunNow(projects));
+    await act(async () => {
+      void result.current.run(B);
+    });
+    // The list read meanwhile already has the joined run's first draft.
+    state.list = listOf([draft("old", B), draft("n0", B)]);
+    rerender();
+    await act(async () => {
+      answer(
+        new Response(
+          JSON.stringify({
+            error: "already_running",
+            thread_id: "t9",
+            run_id: "r9",
+          }),
+          { status: 409, headers: { "Content-Type": "application/json" } }
+        )
+      );
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    state.refresh.mockResolvedValue(
+      listOf([draft("old", B), draft("n0", B), draft("n1", B)])
+    );
+    await tick();
+    expect(toast.success).toHaveBeenCalledWith(
+      "AutoSkills finished in project_B: 1 new draft."
+    );
+  });
+
+  it("already_running without both ids says it didn't start", async () => {
+    for (const body of [
+      { error: "already_running" },
+      { error: "already_running", thread_id: "t9" },
+      { error: "already_running", thread_id: "t9", run_id: 5 },
+    ]) {
+      toast.error.mockClear();
+      stubRelay(409, body);
+      const { result, unmount } = renderHook(() => useRunNow(projects));
+      await act(async () => {
+        await result.current.run(B);
+      });
+      expect(toast.error).toHaveBeenCalledWith(
+        "AutoSkills didn't start in project_B. Try Run now again later."
+      );
+      expect(toast.info).not.toHaveBeenCalled();
+      expect(runsGet).not.toHaveBeenCalled();
+      expect(result.current.running.size).toBe(0);
+      unmount();
+    }
   });
 
   it("stops polling on unmount", async () => {
