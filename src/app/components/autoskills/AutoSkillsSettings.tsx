@@ -23,7 +23,7 @@ import {
 } from "@/components/ui/select";
 import { autoSkillsReadOnlyReason } from "@/lib/autoskills";
 import { INPUT_LIKE_TRIGGER, LIST_MAX_HEIGHT } from "@/lib/fieldStyles";
-import { isSettingsPayload } from "@/lib/settings";
+import { isSettingsPayload, type SettingsPayload } from "@/lib/settings";
 import { saveErrorText } from "@/lib/settingsForm";
 import { cn } from "@/lib/utils";
 
@@ -79,6 +79,18 @@ function validTime(value: string): boolean {
   return /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
 }
 
+/** A settings answer the panel takes as what is saved: the real core always
+ *  sends `revision`, a string or null (no config.yaml yet). One without the
+ *  key is malformed and neither shown as saved nor a successful re-read. */
+function withRevision(value: unknown): value is SettingsPayload {
+  if (!isSettingsPayload(value)) return false;
+  const answer = value as unknown as Record<string, unknown>;
+  return (
+    "revision" in answer &&
+    (typeof answer.revision === "string" || answer.revision === null)
+  );
+}
+
 const CHECKBOX =
   "size-4 rounded border border-muted-foreground bg-transparent text-[var(--brand-solid)] focus:ring-0 focus:ring-offset-0 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background";
 const TOUCH_ROW = "max-md:min-h-11";
@@ -97,8 +109,9 @@ export function AutoSkillsSettings({
   const { payload, refresh } = useSettings();
   const { access } = useSettingsAccess();
   // The saved snapshot is the last real settings payload seen: a re-read
-  // that answers nothing (404, an error) must not swap it for defaults.
-  const real = isSettingsPayload(payload) ? payload : null;
+  // that answers nothing (404, an error) or a malformed body must not swap
+  // it for defaults.
+  const real = withRevision(payload) ? payload : null;
   const realKey = real ? JSON.stringify([real.settings, real.revision]) : null;
   const [snap, setSnap] = useState({ key: realKey, payload: real });
   if (real && realKey !== snap.key) setSnap({ key: realKey, payload: real });
@@ -194,7 +207,11 @@ export function AutoSkillsSettings({
     if (!canSave) return;
     const body: Record<string, unknown> = {};
     for (const f of sendable) body[f] = values[f];
-    const first = (Object.keys(revs) as Field[]).find((f) => f in edits);
+    // The oldest base among the edits that go out: one that can't be sent
+    // (a bad time while drafting is off) doesn't hold an older revision.
+    const first = (Object.keys(revs) as Field[]).find((f) =>
+      sendable.includes(f)
+    );
     body.revision = first === undefined ? null : revs[first] ?? null;
     setSaving(true);
     setMessage(null);
@@ -237,7 +254,7 @@ export function AutoSkillsSettings({
         } catch {
           fresh = undefined;
         }
-        if (isSettingsPayload(fresh) && typeof fresh.revision === "string") {
+        if (withRevision(fresh)) {
           setEdits({});
           setRevs({});
           setMessage(

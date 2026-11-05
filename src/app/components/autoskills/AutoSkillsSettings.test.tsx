@@ -18,6 +18,8 @@ if (!Element.prototype.scrollIntoView) {
 const hooks = vi.hoisted(() => ({
   settings: {} as Record<string, unknown>,
   revision: "rev1" as string | null,
+  /** A payload without the `revision` key (a malformed answer). */
+  noRevision: false,
   noPayload: false,
   access: { writable: true } as SettingsWriteAccess | undefined,
   refresh: vi.fn(),
@@ -33,7 +35,7 @@ vi.mock("@/app/hooks/useSettings", () => ({
           providers: {},
           read_only: [],
           setup_needed: false,
-          revision: hooks.revision,
+          ...(hooks.noRevision ? {} : { revision: hooks.revision }),
         },
     refresh: hooks.refresh,
   }),
@@ -77,6 +79,7 @@ const save = () => screen.getByRole("button", { name: "Save" });
 beforeEach(() => {
   hooks.settings = { ...SAVED };
   hooks.revision = "rev1";
+  hooks.noRevision = false;
   hooks.noPayload = false;
   hooks.access = { writable: true };
   hooks.refresh = vi.fn().mockResolvedValue(undefined);
@@ -492,6 +495,97 @@ describe("AutoSkillsSettings", () => {
     respond(409, { error: "revision_mismatch" });
     fireEvent.click(save());
     expect(await screen.findByText(/reading them again failed/)).toBeTruthy();
+  });
+
+  it("a payload without a revision key is not taken as the saved values", async () => {
+    const { rerender } = panel();
+    fireEvent.click(
+      screen.getByLabelText("Auto — install drafts without asking")
+    );
+    // Read again, answering a body without a revision: were it taken, the
+    // edit would equal its "saved" value and be dropped.
+    hooks.settings = { ...SAVED, memory_skill_synthesis_mode: "auto" };
+    hooks.noRevision = true;
+    rerender(
+      <AutoSkillsSettings
+        open
+        onOpenChange={vi.fn()}
+      />
+    );
+    expect(
+      (
+        screen.getByLabelText(
+          "Auto — install drafts without asking"
+        ) as HTMLInputElement
+      ).checked
+    ).toBe(true);
+    expect((save() as HTMLButtonElement).disabled).toBe(false);
+    respond(200, {});
+    fireEvent.click(save());
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      memory_skill_synthesis_mode: "auto",
+      revision: "rev1",
+    });
+  });
+
+  it("a conflict re-read answering a null revision shows what is saved now", async () => {
+    // config.yaml went away between the read and the save.
+    panel();
+    hooks.refresh = vi.fn(async () => {
+      hooks.settings = { ...SAVED, memory_skill_synthesis_cadence: "monthly" };
+      hooks.revision = null;
+      return {
+        settings: hooks.settings,
+        sources: {},
+        providers: {},
+        read_only: [],
+        setup_needed: false,
+        revision: null,
+      };
+    });
+    fireEvent.click(
+      screen.getByLabelText("Auto — install drafts without asking")
+    );
+    respond(409, { error: "revision_mismatch" });
+    fireEvent.click(save());
+    expect(
+      await screen.findByText(
+        "These settings changed elsewhere. Showing what is saved now."
+      )
+    ).toBeTruthy();
+    expect(
+      (
+        screen.getByLabelText(
+          "Review — I approve each skill"
+        ) as HTMLInputElement
+      ).checked
+    ).toBe(true);
+    expect(screen.getByLabelText("How often").textContent).toContain("Monthly");
+    expect((save() as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("the revision sent comes only from the edits sent", async () => {
+    const { rerender } = panel();
+    // A bad time, started at rev1: not sent while drafting is off.
+    fireEvent.change(screen.getByLabelText("At (local time)"), {
+      target: { value: "" },
+    });
+    hooks.revision = "rev2";
+    rerender(
+      <AutoSkillsSettings
+        open
+        onOpenChange={vi.fn()}
+      />
+    );
+    fireEvent.click(screen.getByLabelText("Draft skills from memory"));
+    respond(200, {});
+    fireEvent.click(save());
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      memory_skill_synthesis_enabled: false,
+      revision: "rev2",
+    });
   });
 
   it("sends the revision of the oldest edit still pending", async () => {
