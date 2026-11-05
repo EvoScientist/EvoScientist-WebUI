@@ -1246,17 +1246,36 @@ describe("DraftsPage", () => {
     fireEvent.click(approve);
     expect(hooks.approve).toHaveBeenCalledTimes(2);
 
-    // A list read before the decision still has it Pending: still waits.
-    ready([x, y]);
-    view.rerender(page());
-    expect(box().disabled).toBe(true);
-    // The list that shows it decided clears it; back in Pending later (an
-    // Undo elsewhere), it is decidable again.
+    // The next list takes over: it has x decided, so x leaves Pending.
     ready([{ ...x, status: "approved" }, y]);
     view.rerender(page());
-    ready([x, y]);
+    expect(screen.queryByRole("checkbox", { name: "Select x" })).toBeNull();
+  });
+
+  it("a decision another window took back is decidable again with the next list", async () => {
+    const x = draft({ proposal_id: "x" });
+    ready([x]);
+    hooks.approve.mockResolvedValueOnce({ done: [x], failed: [] });
+    q.values.set("draftId", "x");
+    const view = render(page());
+    pick("x");
+    fireEvent.click(
+      within(selection()!).getByRole("button", { name: "Approve" })
+    );
+    const box = () =>
+      screen.getByRole("checkbox", { name: "Select x" }) as HTMLInputElement;
+    await waitFor(() => expect(box().disabled).toBe(true));
+    // Another window's Undo: the next list has x Pending again.
+    ready([x]);
     view.rerender(page());
     expect(box().disabled).toBe(false);
+    const pane = within(
+      screen.getByRole("heading", { level: 3 }).parentElement!
+    );
+    expect(
+      (pane.getByRole("button", { name: "Approve" }) as HTMLButtonElement)
+        .disabled
+    ).toBe(false);
   });
 
   it("an Undo that succeeds makes its drafts decidable again", async () => {

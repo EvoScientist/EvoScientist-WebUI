@@ -128,8 +128,8 @@ export function DraftsPage() {
   const { access } = useSettingsAccess();
   // Drafts decided here that the list still reads as Pending: the core has
   // decided them, but the re-read hasn't landed (or stalls). They leave the
-  // selection at once and can't be decided again until a list no longer
-  // lists them as pending, or an Undo takes them back.
+  // selection at once and can't be decided again until the next list
+  // arrives, or an Undo here takes them back.
   const [decided, setDecided] = useState<ReadonlySet<string>>(NO_SELECTION);
   const { approve, reject, busy } = useDraftActions(projectList, {
     onReverted: (drafts) =>
@@ -168,9 +168,11 @@ export function DraftsPage() {
     else if (list) {
       setSelected((prev) => stillPending(prev, list, registered));
     }
-    // A newer list that no longer has them Pending has caught up.
+    // The first list after a decision takes over, whatever it says: decided
+    // there, they aren't pending; pending again (another window's Undo),
+    // they are decidable again. Every id here was recorded before it.
     if (list && basis.list !== list) {
-      setDecided((prev) => stillPending(prev, list, null));
+      setDecided((prev) => (prev.size === 0 ? prev : NO_SELECTION));
     }
   }
 
