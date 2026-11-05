@@ -611,7 +611,9 @@ function SkillsHome() {
       >
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Uninstall skill?</DialogTitle>
+            <DialogTitle>
+              {permanent ? "Delete skill?" : "Uninstall skill?"}
+            </DialogTitle>
             <DialogDescription>
               {dialogTarget?.project !== undefined ? (
                 // A project's own folder: deleted, with nothing to install

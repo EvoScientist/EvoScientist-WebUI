@@ -368,7 +368,10 @@ describe("SkillsMarketplace skills from memory", () => {
     );
     // The page's own question first, saying what goes: the folder, for good.
     const dialog = screen.getByRole("dialog");
-    expect(within(dialog).getByText("Uninstall skill?")).toBeTruthy();
+    expect(
+      within(dialog).getByRole("heading", { name: "Delete skill?" })
+    ).toBeTruthy();
+    expect(within(dialog).queryByText("Uninstall skill?")).toBeNull();
     expect(
       within(dialog).getByText(
         "This deletes the folder projA/skills/arxiv-paper-retrieval. It can't be undone."
@@ -853,6 +856,9 @@ describe("SkillsMarketplace global uninstall", () => {
     );
     const dialog = screen.getByRole("dialog");
     expect(
+      within(dialog).getByRole("heading", { name: "Delete skill?" })
+    ).toBeTruthy();
+    expect(
       within(dialog).getByText(
         "This deletes the skill folder for every project. It can't be undone."
       )
@@ -879,6 +885,10 @@ describe("SkillsMarketplace global uninstall", () => {
       await screen.findByRole("button", { name: /^uninstall$/i })
     );
     const dialog = screen.getByRole("dialog");
+    // A catalog skill can be installed again: an uninstall, not a delete.
+    expect(
+      within(dialog).getByRole("heading", { name: "Uninstall skill?" })
+    ).toBeTruthy();
     expect(
       within(dialog).getByText(/will be removed from this Web UI/)
     ).toBeTruthy();
