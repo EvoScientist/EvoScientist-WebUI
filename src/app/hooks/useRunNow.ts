@@ -107,6 +107,8 @@ export function useRunNow(projects: readonly Project[]): {
   listRef.current = auto.status === "ready" ? auto.list : null;
   const refreshRef = useRef(auto.refresh);
   refreshRef.current = auto.refresh;
+  const readNowRef = useRef(auto.readNow);
+  readNowRef.current = auto.readNow;
 
   // The token of the run that holds each project key.
   const activeRef = useRef(new Map<string, object>());
@@ -202,21 +204,36 @@ export function useRunNow(projects: readonly Project[]): {
     }
   }, []);
 
-  /** The drafts read again, or undefined when the read fails, takes longer
-   *  than `ms`, or the hook is cleaned up first. */
-  const rereadWithin = useCallback(
+  /** The drafts as the backend has them now, or undefined when the read
+   *  fails, takes longer than `ms` (it is aborted) or the hook is cleaned up
+   *  first. Read directly: SWR's mutate answers with the last good list
+   *  when a read fails, which would count nothing as new. */
+  const readWithin = useCallback(
     (ms: number) =>
-      new Promise<unknown>((resolve) => {
-        void sleep(ms).then(() => resolve(undefined));
+      new Promise<DraftList | "unsupported" | undefined>((resolve) => {
+        const controller = new AbortController();
+        const limit = pause(ms);
+        void limit.promise.then(() => {
+          controller.abort();
+          resolve(undefined);
+        });
         try {
-          Promise.resolve(refreshRef.current()).then(resolve, () =>
-            resolve(undefined)
+          readNowRef.current(controller.signal).then(
+            (answer) => {
+              limit.cancel();
+              resolve(answer);
+            },
+            () => {
+              limit.cancel();
+              resolve(undefined);
+            }
           );
         } catch {
+          limit.cancel();
           resolve(undefined);
         }
       }),
-    [sleep]
+    [pause]
   );
 
   const run = useCallback(
@@ -306,15 +323,13 @@ export function useRunNow(projects: readonly Project[]): {
           );
           return;
         }
-        const list = await rereadWithin(REREAD_WAIT_MS);
+        const list = await readWithin(REREAD_WAIT_MS);
         if (cancelled()) return;
-        const drafts = (list as { drafts?: unknown } | null | undefined)
-          ?.drafts;
         toast.success(
           finishedText(
             label,
-            before !== null && Array.isArray(drafts)
-              ? addedSince(before, list as Drafts, key)
+            before !== null && typeof list === "object"
+              ? addedSince(before, list, key)
               : null
           )
         );
@@ -326,7 +341,7 @@ export function useRunNow(projects: readonly Project[]): {
         }
       }
     },
-    [sleep, getRun, rereadInBackground, rereadWithin]
+    [sleep, getRun, rereadInBackground, readWithin]
   );
 
   return { running, run };

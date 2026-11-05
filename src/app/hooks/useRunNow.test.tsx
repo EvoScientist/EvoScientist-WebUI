@@ -21,13 +21,17 @@ vi.mock("@/providers/ClientProvider", () => ({
 const state = vi.hoisted(() => ({
   status: "ready" as string,
   list: null as unknown,
+  // SWR's mutate: resolves with the cached list, even when the read fails.
   refresh: vi.fn(),
+  // The direct read the end of a run counts from.
+  readNow: vi.fn(),
 }));
 vi.mock("@/app/hooks/useAutoSkills", () => ({
   useAutoSkills: () => ({
     status: state.status,
     list: state.list,
     refresh: state.refresh,
+    readNow: state.readNow,
   }),
 }));
 
@@ -103,6 +107,8 @@ beforeEach(() => {
   state.list = listOf([draft("old", B)]);
   state.refresh.mockReset();
   state.refresh.mockResolvedValue(listOf([draft("old", B)]));
+  state.readNow.mockReset();
+  state.readNow.mockResolvedValue(listOf([draft("old", B)]));
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -131,7 +137,7 @@ describe("useRunNow", () => {
     expect(toast.success).not.toHaveBeenCalled();
     await tick();
     expect(runsGet).toHaveBeenCalledTimes(2);
-    expect(state.refresh).toHaveBeenCalledTimes(1);
+    expect(state.readNow).toHaveBeenCalledTimes(1);
     expect(result.current.running.has(B)).toBe(false);
     expect(toast.success).toHaveBeenCalledTimes(1);
   });
@@ -151,7 +157,7 @@ describe("useRunNow", () => {
   it("counts new drafts and automatic installs in that project only", async () => {
     stubRelay(200, started);
     runsGet.mockResolvedValue({ status: "success" });
-    state.refresh.mockResolvedValue(
+    state.readNow.mockResolvedValue(
       listOf([
         draft("old", B),
         draft("n1", B),
@@ -182,7 +188,7 @@ describe("useRunNow", () => {
     ]);
     stubRelay(200, started);
     runsGet.mockResolvedValue({ status: "success" });
-    state.refresh.mockResolvedValue(
+    state.readNow.mockResolvedValue(
       listOf([
         draft("old", B),
         // Approved before the run: not counted again.
@@ -206,7 +212,7 @@ describe("useRunNow", () => {
     state.list = listOf([draft("p", B)]);
     stubRelay(200, started);
     runsGet.mockResolvedValue({ status: "success" });
-    state.refresh.mockResolvedValue(
+    state.readNow.mockResolvedValue(
       listOf([draft("p", B, "approved", "auto"), draft("n", B)])
     );
     const { result } = renderHook(() => useRunNow(projects));
@@ -223,7 +229,7 @@ describe("useRunNow", () => {
   it("says one new draft in the singular", async () => {
     stubRelay(200, started);
     runsGet.mockResolvedValue({ status: "success" });
-    state.refresh.mockResolvedValue(listOf([draft("old", B), draft("n1", B)]));
+    state.readNow.mockResolvedValue(listOf([draft("old", B), draft("n1", B)]));
     const { result } = renderHook(() => useRunNow(projects));
     await act(async () => {
       void result.current.run(B);
@@ -252,7 +258,7 @@ describe("useRunNow", () => {
   it("reports a finished run without a count when the re-read gives no list", async () => {
     stubRelay(200, started);
     runsGet.mockResolvedValue({ status: "success" });
-    state.refresh.mockResolvedValue("unsupported");
+    state.readNow.mockResolvedValue("unsupported");
     const { result } = renderHook(() => useRunNow(projects));
     await act(async () => {
       void result.current.run(B);
@@ -355,7 +361,7 @@ describe("useRunNow", () => {
     state.list = null;
     stubRelay(200, started);
     runsGet.mockResolvedValue({ status: "success" });
-    state.refresh.mockResolvedValue(listOf([draft("old", B)]));
+    state.readNow.mockResolvedValue(listOf([draft("old", B)]));
     const { result } = renderHook(() => useRunNow(projects));
     await act(async () => {
       void result.current.run(B);
@@ -645,25 +651,45 @@ describe("useRunNow", () => {
     expect(result.current.running.has(B)).toBe(false);
   });
 
-  it("a re-read that never answers doesn't hold the end of a run", async () => {
+  it("a failed read at the end gives no counts, whatever the cache still holds", async () => {
     stubRelay(200, started);
     runsGet.mockResolvedValue({ status: "success" });
-    state.refresh.mockReturnValue(new Promise(() => {}));
+    // SWR's mutate would hand back the list from before the run.
+    state.refresh.mockResolvedValue(listOf([draft("old", B)]));
+    state.readNow.mockRejectedValue(new Error("HTTP 500"));
     const { result } = renderHook(() => useRunNow(projects));
     await act(async () => {
       void result.current.run(B);
     });
     await flush();
     await tick();
-    expect(state.refresh).toHaveBeenCalledTimes(1);
+    expect(toast.success).toHaveBeenCalledWith(
+      "AutoSkills finished in project_B."
+    );
+    expect(result.current.running.has(B)).toBe(false);
+  });
+
+  it("a re-read that never answers doesn't hold the end of a run", async () => {
+    stubRelay(200, started);
+    runsGet.mockResolvedValue({ status: "success" });
+    state.readNow.mockReturnValue(new Promise(() => {}));
+    const { result } = renderHook(() => useRunNow(projects));
+    await act(async () => {
+      void result.current.run(B);
+    });
+    await flush();
+    await tick();
+    expect(state.readNow).toHaveBeenCalledTimes(1);
     expect(toast.success).not.toHaveBeenCalled();
     await act(async () => {
       await vi.advanceTimersByTimeAsync(REREAD_WAIT_MS);
     });
-    // Without the list there is no count.
+    // Without the list there is no count, and the read was cut short.
     expect(toast.success).toHaveBeenCalledWith(
       "AutoSkills finished in project_B."
     );
+    const [signal] = state.readNow.mock.calls[0] as [AbortSignal];
+    expect(signal.aborted).toBe(true);
     expect(result.current.running.has(B)).toBe(false);
   });
 
@@ -676,7 +702,7 @@ describe("useRunNow", () => {
     runsGet
       .mockResolvedValueOnce({ status: "running" })
       .mockResolvedValueOnce({ status: "success" });
-    state.refresh.mockResolvedValue(listOf([draft("old", B), draft("n1", B)]));
+    state.readNow.mockResolvedValue(listOf([draft("old", B), draft("n1", B)]));
     const { result } = renderHook(() => useRunNow(projects));
     await act(async () => {
       void result.current.run(B);
@@ -734,7 +760,7 @@ describe("useRunNow", () => {
       );
       await vi.advanceTimersByTimeAsync(0);
     });
-    state.refresh.mockResolvedValue(
+    state.readNow.mockResolvedValue(
       listOf([draft("old", B), draft("n0", B), draft("n1", B)])
     );
     await tick();

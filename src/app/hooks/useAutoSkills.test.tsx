@@ -220,6 +220,98 @@ describe("useAutoSkills", () => {
     }
   });
 
+  // SWR's mutate resolves with the last good list when a read fails, so a
+  // caller that needs the list as it is now reads it directly.
+  describe("readNow", () => {
+    it("reads the backend, never the cache, and every reader gets the answer", async () => {
+      const answers = [json(list(["a"])), json(list(["b"]))];
+      const fetchMock = stubFetch(() => answers.shift() ?? json({}, 500));
+      const { result } = renderHook(
+        () => [useAutoSkills(), useAutoSkills()] as const,
+        { wrapper }
+      );
+      await waitFor(() => expect(result.current[0].status).toBe("ready"));
+      let read: unknown;
+      await act(async () => {
+        read = await result.current[0].readNow();
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(
+        (read as { drafts: Array<{ proposal_id: string }> }).drafts[0]
+      ).toMatchObject({ proposal_id: "b" });
+      for (const reader of result.current) {
+        expect(
+          reader.status === "ready" && reader.list.drafts[0].proposal_id
+        ).toBe("b");
+      }
+      // A failed read fails: no list from before comes back as current.
+      await act(async () => {
+        await expect(result.current[0].readNow()).rejects.toThrow();
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+    });
+
+    it("can be cut short", async () => {
+      stubFetch(() => json(list()));
+      const { result } = renderHook(() => useAutoSkills(), { wrapper });
+      await waitFor(() => expect(result.current.status).toBe("ready"));
+      const aborting = vi.fn(
+        (_input: RequestInfo | URL, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () =>
+              reject(new DOMException("Aborted", "AbortError"))
+            );
+          })
+      );
+      vi.stubGlobal("fetch", aborting);
+      const controller = new AbortController();
+      let outcome: Promise<unknown> = Promise.resolve();
+      act(() => {
+        outcome = result.current.readNow(controller.signal);
+      });
+      controller.abort();
+      await expect(outcome).rejects.toThrow();
+      expect(aborting.mock.calls[0][1]?.signal).toBe(controller.signal);
+    });
+
+    it("an answer for a deployment left meanwhile stays that deployment's", async () => {
+      let late: (r: Response) => void = () => {};
+      let calls = 0;
+      stubFetch((url) => {
+        calls += 1;
+        if (url.includes(":7000")) return json(list(["b"]));
+        // The first read is the page's; the second is readNow's, held.
+        return calls === 1
+          ? json(list(["a"]))
+          : new Promise<Response>((r) => (late = r));
+      });
+      const { result, rerender } = renderHook(() => useAutoSkills(), {
+        wrapper,
+      });
+      await waitFor(() => expect(result.current.status).toBe("ready"));
+      let held: Promise<unknown> = Promise.resolve();
+      act(() => {
+        held = result.current.readNow();
+      });
+      deployment.deploymentUrl = "http://127.0.0.1:7000";
+      rerender();
+      await waitFor(() =>
+        expect(
+          result.current.status === "ready" &&
+            result.current.list.drafts[0].proposal_id
+        ).toBe("b")
+      );
+      await act(async () => {
+        late(json(list(["old"])));
+        await held;
+      });
+      expect(
+        result.current.status === "ready" &&
+          result.current.list.drafts[0].proposal_id
+      ).toBe("b");
+    });
+  });
+
   it("refreshAutoSkills makes every reader read again", async () => {
     // The global mutate reaches SWR's default cache, so no private provider.
     deployment.deploymentUrl = "http://127.0.0.1:6555";

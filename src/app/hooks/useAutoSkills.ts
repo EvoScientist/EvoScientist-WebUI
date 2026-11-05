@@ -1,6 +1,7 @@
 "use client";
 
-import useSWR, { mutate as globalMutate } from "swr";
+import { useCallback } from "react";
+import useSWR, { mutate as globalMutate, useSWRConfig } from "swr";
 import { useDeployment } from "@/providers/ClientProvider";
 import { parseDraftList, type Draft, type DraftList } from "@/lib/autoskills";
 
@@ -23,12 +24,14 @@ function headersFor(apiKey: string): Record<string, string> {
   return headers;
 }
 
-async function fetchDrafts([, base, apiKey]: ListKey): Promise<
-  DraftList | "unsupported"
-> {
+async function fetchDrafts(
+  [, base, apiKey]: ListKey,
+  signal?: AbortSignal
+): Promise<DraftList | "unsupported"> {
   const res = await fetch(`${base}/api/autoskills/proposals`, {
     headers: headersFor(apiKey),
     cache: "no-store",
+    signal,
   });
   // Deployments without the routes (EvoScientist before AutoSkills review).
   if (res.status === 404 || res.status === 405) return "unsupported";
@@ -59,7 +62,13 @@ function refreshEvery(latest: DraftList | "unsupported" | undefined): number {
 
 /** The current deployment's drafts. */
 export function useAutoSkills(): AutoSkillsState & {
+  /** Read again for every reader. Its answer is SWR's cache, which keeps
+   *  the last good list when a read fails: never count on it as fresh. */
   refresh: () => Promise<DraftList | "unsupported" | undefined>;
+  /** The drafts as the backend has them now, read directly; a list read is
+   *  written into every reader's cache. Rejects when the read fails or is
+   *  aborted. */
+  readNow: (signal?: AbortSignal) => Promise<DraftList | "unsupported">;
 } {
   const { deploymentUrl, apiKey } = useDeployment();
   const base = baseOf(deploymentUrl);
@@ -68,6 +77,19 @@ export function useAutoSkills(): AutoSkillsState & {
     refreshInterval: refreshEvery,
     revalidateOnFocus: true,
   });
+  const { mutate: mutateCache } = useSWRConfig();
+  const readNow = useCallback(
+    async (signal?: AbortSignal) => {
+      if (!base) throw new Error("No deployment to read the drafts from.");
+      // This deployment's key, kept: the hook's own mutate would follow a
+      // switch made while the read was out.
+      const at: ListKey = ["autoskills", base, apiKey];
+      const answer = await fetchDrafts(at, signal);
+      await mutateCache(at, answer, { revalidate: false });
+      return answer;
+    },
+    [base, apiKey, mutateCache]
+  );
   // The latest read decides: a failed re-read shows the error, not the old
   // list (SWR keeps `data` next to `error`; a later success clears the error).
   let state: AutoSkillsState;
@@ -75,7 +97,7 @@ export function useAutoSkills(): AutoSkillsState & {
   else if (data === "unsupported") state = { status: "unsupported" };
   else if (data) state = { status: "ready", list: data };
   else state = { status: "loading" };
-  return { ...state, refresh: mutate };
+  return { ...state, refresh: mutate, readNow };
 }
 
 /** Read every mounted AutoSkills list again, whatever its deployment. */

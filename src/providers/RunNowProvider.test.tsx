@@ -48,12 +48,14 @@ vi.mock("sonner", () => ({ toast }));
 const state = vi.hoisted(() => ({
   list: null as unknown,
   refresh: vi.fn(),
+  readNow: vi.fn(),
 }));
 vi.mock("@/app/hooks/useAutoSkills", () => ({
   useAutoSkills: () => ({
     status: "ready",
     list: state.list,
     refresh: state.refresh,
+    readNow: state.readNow,
   }),
   markAutoSeen: vi.fn(),
 }));
@@ -180,6 +182,7 @@ beforeEach(() => {
   runsGet.mockReset();
   state.list = listOf([]);
   state.refresh.mockReset();
+  state.readNow.mockReset();
   seen.value = null;
 });
 afterEach(() => {
@@ -194,7 +197,7 @@ describe("RunNowProvider", () => {
       .mockResolvedValueOnce({ status: "running" })
       .mockResolvedValueOnce({ status: "running" })
       .mockResolvedValue({ status: "success" });
-    state.refresh.mockResolvedValue(listOf([draft("n1", B)]));
+    state.readNow.mockResolvedValue(listOf([draft("n1", B)]));
     const view = render(<Shell show />);
 
     fireEvent.click(runButton());
@@ -233,7 +236,7 @@ describe("RunNowProvider", () => {
   it("the end of a run left on another view is still said", async () => {
     stubRelay(200, { thread_id: "t1", run_id: "r1" });
     runsGet.mockResolvedValue({ status: "running" });
-    state.refresh.mockResolvedValue(listOf([]));
+    state.readNow.mockResolvedValue(listOf([]));
     const view = render(<Shell show />);
     fireEvent.click(runButton());
     await advance(0);
