@@ -137,6 +137,12 @@ function SkillsHome() {
     key: string;
     skills: SkillCard[];
   } | null>(null);
+  // Why the newest read of a project's skills failed: that section's own,
+  // gone at its next read.
+  const [projectError, setProjectError] = useState<{
+    key: string;
+    message: string;
+  } | null>(null);
   const [loading, setLoading] = useState(true);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -176,26 +182,19 @@ function SkillsHome() {
   // The project the newest read of a project's skills asked for.
   const projectAsked = useRef<string | null>(null);
 
-  // The page: the catalog and the global lists, with the project's skills
-  // when the project is already known here. It never waits for that check,
-  // which may never answer.
+  // The page: the catalog and the global lists. Never a project's skills,
+  // which have their own read: one read for both made the page wait for a
+  // project (the check may never answer), and an old project's late answer
+  // wrote over the next one's page.
   const load = useCallback(async (refresh = false, quiet = false) => {
     const page = ++pageSeq.current;
-    const key = projectKeyRef.current;
-    const projectRead = key === null ? null : ++projectSeq.current;
-    if (key !== null) projectAsked.current = key;
     if (!quiet) setLoading(true);
     setError(null);
     setCatalogError(null);
     const [catRes, instRes] = await Promise.allSettled([
       readCatalog(refresh),
-      readInstalled(key),
+      readInstalled(null),
     ]);
-    if (key !== null && projectRead === projectSeq.current) {
-      const own =
-        instRes.status === "fulfilled" ? instRes.value.projectSkills : null;
-      setProjectSkills(own ? { key, skills: own.filter(belongsHere) } : null);
-    }
     if (page !== pageSeq.current) return;
 
     const cat = (catRes.status === "fulfilled" ? catRes.value : []).filter(
@@ -229,20 +228,33 @@ function SkillsHome() {
     setLoading(false);
   }, []);
 
-  // "This project's skills" alone: read once the project is known here and
-  // on a project switch, without loading the page again.
+  // "This project's skills" alone, with its own count and error: read once
+  // the project is known here, on a project switch and after a change to
+  // them, without loading the page again.
   const loadProject = useCallback(async (key: string) => {
     const mine = ++projectSeq.current;
     projectAsked.current = key;
+    setProjectError(null);
     try {
       const { projectSkills: own } = await readInstalled(key);
       if (mine !== projectSeq.current) return;
       setProjectSkills(own ? { key, skills: own.filter(belongsHere) } : null);
     } catch (e) {
       if (mine !== projectSeq.current) return;
-      setError(e instanceof Error ? e.message : "Failed to load skills");
+      setProjectSkills(null);
+      setProjectError({
+        key,
+        message: e instanceof Error ? e.message : "Failed to load skills",
+      });
     }
   }, []);
+
+  /** The page and, when one is known here, the project's skills. */
+  const reloadAll = (refresh: boolean, quiet: boolean) => {
+    void load(refresh, quiet);
+    const key = projectKeyRef.current;
+    if (key !== null) void loadProject(key);
+  };
 
   useEffect(() => {
     void load();
@@ -352,7 +364,7 @@ function SkillsHome() {
           ? { key, skills: prev.skills.filter((s) => s.name !== name) }
           : prev
       );
-      void load(false, true);
+      reloadAll(false, true);
       void refreshAutoSkills();
       notifyTeamsChanged();
     } catch (e) {
@@ -378,9 +390,14 @@ function SkillsHome() {
   };
 
   // The list read for the current project; one read for another project
-  // (the current one changed meanwhile) isn't shown under its name.
+  // (the current one changed meanwhile) isn't shown under its name, nor is
+  // its error.
   const own =
     projectKey && projectSkills?.key === projectKey ? projectSkills : null;
+  const ownError =
+    projectKey && projectError?.key === projectKey
+      ? projectError.message
+      : null;
 
   return (
     <div className="h-full overflow-y-auto">
@@ -405,7 +422,7 @@ function SkillsHome() {
           </div>
           <button
             type="button"
-            onClick={() => load(true)}
+            onClick={() => reloadAll(true, false)}
             disabled={loading}
             aria-label="Refresh"
             className="rounded-md p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
@@ -493,6 +510,21 @@ function SkillsHome() {
                 </div>
               )}
             </section>
+
+            {/* A failed read also drops the list, so never both. */}
+            {ownError && (
+              <section>
+                <h3 className="mb-2.5 text-xs font-semibold uppercase tracking-wider text-tertiary">
+                  This project&apos;s skills
+                </h3>
+                <p
+                  role="alert"
+                  className="text-sm text-destructive"
+                >
+                  {ownError}
+                </p>
+              </section>
+            )}
 
             {own && own.skills.length > 0 && (
               <section>

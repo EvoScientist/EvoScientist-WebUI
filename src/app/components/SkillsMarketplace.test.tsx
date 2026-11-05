@@ -656,15 +656,103 @@ describe("SkillsMarketplace reads", () => {
     expect(catalogReads(fetchMock)).toHaveLength(1);
   });
 
-  it("reads once when the project is known at once", async () => {
+  it("reads the page and the project's skills apart when the project is known at once", async () => {
     const fetchMock = mockApi([], [card("plain")], [card("mine")]);
     render(page(mockProjects()));
     await screen.findByRole("heading", { name: "This project's skills" });
     expect(screen.getByText("plain")).toBeTruthy();
+    // Never one read for both: neither waits for, nor overwrites, the other.
     expect(skillReads(fetchMock)).toEqual([
+      "/api/skills",
       `/api/skills?project=${projectHandle(TEST_PROJECT)}`,
     ]);
     expect(catalogReads(fetchMock)).toHaveLength(1);
+  });
+
+  it("a switch during the first read: the global lists and the new project's skills stand, the old read's failure touches neither", async () => {
+    const B = "/srv/projB";
+    let failA: (() => void) | undefined;
+    const fetchMock = vi.fn((input: string, _init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes(`project=${projectHandle(TEST_PROJECT)}`)) {
+        return new Promise((resolve) => {
+          failA = () =>
+            resolve({
+              ok: false,
+              json: () => Promise.resolve({ error: "A's read failed" }),
+            });
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve(
+            url.includes("catalog")
+              ? { skills: [row({ installed: false })] }
+              : url.includes("project=")
+              ? { skills: [card("plain")], projectSkills: [card("b-skill")] }
+              : { skills: [card("plain")], projectSkills: null }
+          ),
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const at = (current: string) =>
+      page(mockProjects(readyProjects(TEST_PROJECT, B), { current }));
+    const view = render(at(TEST_PROJECT));
+    view.rerender(at(B));
+
+    // The global lists don't wait for A's read.
+    expect(await screen.findByText("plain")).toBeTruthy();
+    expect(await screen.findByText("b-skill")).toBeTruthy();
+    expect(screen.getByText("Paper Review")).toBeTruthy();
+    expect(screen.queryByText("Loading skills…")).toBeNull();
+
+    failA?.();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.getByText("plain")).toBeTruthy();
+    expect(screen.getByText("b-skill")).toBeTruthy();
+    expect(screen.queryByText("A's read failed")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByText("Loading skills…")).toBeNull();
+  });
+
+  it("a failed read of the project's skills is said in that section, until its next read", async () => {
+    const B = "/srv/projB";
+    const fetchMock = vi.fn((input: string, _init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes(`project=${projectHandle(TEST_PROJECT)}`)) {
+        return Promise.resolve({
+          ok: false,
+          json: () => Promise.resolve({ error: "projA isn't served" }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve(
+            url.includes("catalog")
+              ? { skills: [] }
+              : url.includes("project=")
+              ? { skills: [card("plain")], projectSkills: [card("b-skill")] }
+              : { skills: [card("plain")], projectSkills: null }
+          ),
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const at = (current: string) =>
+      page(mockProjects(readyProjects(TEST_PROJECT, B), { current }));
+    const view = render(at(TEST_PROJECT));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe("projA isn't served");
+    expect(section("This project's skills").contains(alert)).toBe(true);
+    // The global lists are the page's, and stand.
+    expect(screen.getByText("plain")).toBeTruthy();
+
+    view.rerender(at(B));
+    expect(await screen.findByText("b-skill")).toBeTruthy();
+    expect(screen.queryByText("projA isn't served")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("a project switch reads only the new project's section", async () => {
