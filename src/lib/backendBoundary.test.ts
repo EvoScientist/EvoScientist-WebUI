@@ -17,7 +17,7 @@ const page = (url: string) => {
 const PLAIN = (backend: string) =>
   `Can't reach the backend at ${backend}. Is "EvoSci deploy" running? Click to retry.`;
 const LOG =
-  '; its log (langgraph_dev.log in the server folder of its data folder, ~/.evoscientist/server by default; ~/.config/evoscientist with an older EvoScientist) then shows "Refused a request" with the fix. Click to retry.';
+  '; its log (langgraph_dev.log in ~/.evoscientist/server, $EVOSCIENTIST_DATA_DIR/server when that is set, or ~/.config/evoscientist with an older EvoScientist) then shows "Refused a request" with the fix. Click to retry.';
 
 describe("isLoopbackHost", () => {
   it("trusts exactly the backend's loopback names, on any port", () => {

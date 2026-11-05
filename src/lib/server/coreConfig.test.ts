@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import {
@@ -18,8 +18,13 @@ function writeConfig(text: string) {
   writeFileSync(join(xdg, "evoscientist", "config.yaml"), text);
 }
 
-/** A record of a running backend of this config folder, in `dir`. */
-function writeRecord(dir: string, port: number) {
+/** A record of a running backend of this config folder and of `dataDir`
+ *  (the default data folder unless given), in `dir`. */
+function writeRecord(
+  dir: string,
+  port: number,
+  dataDir = join(home, ".evoscientist")
+) {
   mkdirSync(dir, { recursive: true });
   writeFileSync(
     join(dir, "langgraph_dev.workspace.json"),
@@ -27,6 +32,7 @@ function writeRecord(dir: string, port: number) {
       pid: process.pid,
       port,
       config_dir: join(xdg, "evoscientist"),
+      data_dir: dataDir,
     })
   );
 }
@@ -120,11 +126,42 @@ describe("readCoreConfig with a running backend's record", () => {
     expect(readCoreConfig().port).toBe(7020);
   });
 
+  it("ignores an old location record of another data folder", () => {
+    vi.stubEnv("EVOSCIENTIST_DATA_DIR", join(home, "a"));
+    writeConfig("langgraph_dev_port: 7001\n");
+    writeRecord(oldRecordDir(), 7020, join(home, "b"));
+    expect(readCoreConfig().port).toBe(7001);
+  });
+
+  it("ignores a record without a data folder", () => {
+    writeConfig("langgraph_dev_port: 7001\n");
+    mkdirSync(oldRecordDir(), { recursive: true });
+    writeFileSync(
+      join(oldRecordDir(), "langgraph_dev.workspace.json"),
+      JSON.stringify({
+        pid: process.pid,
+        port: 7020,
+        config_dir: join(xdg, "evoscientist"),
+      })
+    );
+    expect(readCoreConfig().port).toBe(7001);
+  });
+
+  it("matches the data folder through a symlink", () => {
+    const real = join(home, "real");
+    const link = join(home, "link");
+    mkdirSync(real);
+    symlinkSync(real, link, "junction");
+    vi.stubEnv("EVOSCIENTIST_DATA_DIR", link);
+    writeRecord(oldRecordDir(), 7020, real);
+    expect(readCoreConfig().port).toBe(7020);
+  });
+
   it("finds the server home under EVOSCIENTIST_DATA_DIR", () => {
     const dataDir = join(home, "elsewhere");
     vi.stubEnv("EVOSCIENTIST_DATA_DIR", dataDir);
     writeRecord(serverHome(), 7010);
-    writeRecord(join(dataDir, "server"), 7030);
+    writeRecord(join(dataDir, "server"), 7030, dataDir);
     expect(readCoreConfig().port).toBe(7030);
   });
 });

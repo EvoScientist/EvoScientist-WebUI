@@ -4,7 +4,7 @@
 // every other field in config.yaml are never read or returned; the settings
 // page gets them from the backend's own GET /api/settings.
 
-import { readFileSync } from "fs";
+import { readFileSync, realpathSync } from "fs";
 import { homedir } from "os";
 import { join, resolve } from "path";
 import { CORE_SCHEMA, load as loadYaml } from "js-yaml";
@@ -67,6 +67,22 @@ function serverRecordPaths(): string[] {
   ];
 }
 
+/** Whether two folders are the same, as the backend compares them: through
+ *  symlinks, and ignoring case on Windows. */
+function sameFolder(recorded: unknown, folder: string): boolean {
+  if (typeof recorded !== "string" || !recorded) return false;
+  const canonical = (path: string) => {
+    let real: string;
+    try {
+      real = realpathSync.native(path);
+    } catch {
+      real = resolve(path);
+    }
+    return process.platform === "win32" ? real.toLowerCase() : real;
+  };
+  return canonical(recorded) === canonical(folder);
+}
+
 function isAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -77,11 +93,11 @@ function isAlive(pid: number): boolean {
   }
 }
 
-/** The port the running backend recorded, while that server runs and
- *  it reads this config folder; null otherwise (an older core,
- *  none running, or one of another configuration). A backend started with
- *  `EvoSci deploy --port X` and a WebUI started apart from it only agree
- *  through it. */
+/** The port the running backend recorded, while that server runs and it
+ *  reads this config folder and this data folder; null otherwise (a core that
+ *  records no folders, none running, or one of another configuration or data
+ *  folder). A backend started with `EvoSci deploy --port X` and a WebUI
+ *  started apart from it only agree through it. */
 function recordedPort(): number | null {
   for (const path of serverRecordPaths()) {
     const port = portFromRecord(path);
@@ -96,13 +112,14 @@ function portFromRecord(path: string): number | null {
       pid?: unknown;
       port?: unknown;
       config_dir?: unknown;
+      data_dir?: unknown;
     };
     const port =
       typeof record.port === "number" ? validPort(record.port) : null;
     if (port === null) return null;
     if (
-      typeof record.config_dir !== "string" ||
-      resolve(record.config_dir) !== resolve(configDir())
+      !sameFolder(record.config_dir, configDir()) ||
+      !sameFolder(record.data_dir, globalDataDir())
     ) {
       return null;
     }

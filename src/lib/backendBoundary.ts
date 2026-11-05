@@ -20,7 +20,7 @@ const QUICK_TUNNEL = /\.trycloudflare\.com$/;
 // (`paths.SERVER_HOME`); older releases wrote it to ~/.config/evoscientist,
 // whatever XDG_CONFIG_HOME says. The page can't know which applies.
 const BACKEND_LOG =
-  "langgraph_dev.log in the server folder of its data folder, ~/.evoscientist/server by default; ~/.config/evoscientist with an older EvoScientist";
+  "langgraph_dev.log in ~/.evoscientist/server, $EVOSCIENTIST_DATA_DIR/server when that is set, or ~/.config/evoscientist with an older EvoScientist";
 
 export function isLoopbackHost(hostname: string): boolean {
   return LOOPBACK_NAMES.has(hostname.toLowerCase());
