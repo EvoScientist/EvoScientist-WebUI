@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryState } from "nuqs";
 import { Loader2, RotateCw } from "lucide-react";
 import {
@@ -8,7 +8,9 @@ import {
   type SkillDetailTarget,
 } from "@/app/components/SkillDetailDialog";
 import { SkillTile } from "@/app/components/SkillTile";
+import { DraftsBanner } from "@/app/components/autoskills/DraftsBanner";
 import { DraftsPage } from "@/app/components/autoskills/DraftsPage";
+import { refreshAutoSkills, useAutoSkills } from "@/app/hooks/useAutoSkills";
 import { notifyTeamsChanged } from "@/app/hooks/useTeams";
 import { Button } from "@/components/ui/button";
 import {
@@ -19,6 +21,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { fromMemorySkills } from "@/lib/autoskills";
+import { projectHandle } from "@/lib/projects";
+import { useProjects } from "@/providers/ProjectsProvider";
 
 interface SkillCard {
   name: string;
@@ -47,6 +52,24 @@ interface CatalogSkill {
   isSkill?: boolean;
 }
 
+/** The tag of a skill an approved draft installed. */
+const MEMORY_TAGS = {
+  create: "from memory",
+  update: "updated from memory",
+} as const;
+
+function memoryTag(
+  installs: ReadonlyMap<string, "create" | "update"> | undefined,
+  name: string
+): string | undefined {
+  const operation = installs?.get(name);
+  return operation ? MEMORY_TAGS[operation] : undefined;
+}
+
+/** A project skill's busy key, apart from a global skill of the same name
+ *  (a skill name holds no "/"). */
+const projectBusyKey = (name: string) => `project/${name}`;
+
 /** Research Skills, or its "Drafted from memory" sub-page. Coming back
  *  mounts the skills again, so their lists are read anew. */
 export function SkillsMarketplace() {
@@ -56,12 +79,30 @@ export function SkillsMarketplace() {
 
 function SkillsHome() {
   const [, setView] = useQueryState("view");
+  const { current, files } = useProjects();
+  // The current project's own skills/ show where this page reads its files.
+  const projectKey = current && files === "here" ? current.key : null;
+  const auto = useAutoSkills();
+  const drafts = auto.status === "ready" ? auto.list : null;
+  const currentKey = current?.key ?? null;
+  // The installed skills approved drafts put there, while the drafts are
+  // known: tagged in this project's skills and the global ones.
+  const fromMemory = useMemo(
+    () => (drafts ? fromMemorySkills(drafts, currentKey) : null),
+    [drafts, currentKey]
+  );
   const [catalog, setCatalog] = useState<CatalogSkill[]>([]);
   const [other, setOther] = useState<SkillCard[]>([]);
+  // The skills of the project `key` (read with its handle).
+  const [projectSkills, setProjectSkills] = useState<{
+    key: string;
+    skills: SkillCard[];
+  } | null>(null);
   const [loading, setLoading] = useState(true);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // Per-skill in-flight action, keyed by skill name.
+  // Per-skill in-flight action, keyed by skill name (`projectBusyKey` for a
+  // project's own skill).
   const [busy, setBusy] = useState<
     Record<string, "install" | "uninstall" | "update">
   >({});
@@ -71,62 +112,97 @@ function SkillsHome() {
     name: string;
     title: string;
     isCatalog: boolean;
+    /** The project whose skills/ holds it; absent for the global tier. */
+    project?: string;
   } | null>(null);
+  // Only the newest read may show: one settling late (the project changed
+  // meanwhile, or an uninstall read again) would bring back what is gone.
+  const loadSeq = useRef(0);
 
-  const load = useCallback(async (refresh = false) => {
-    setLoading(true);
-    setError(null);
-    setCatalogError(null);
-    const [catRes, instRes] = await Promise.allSettled([
-      fetch(`/api/skills/catalog${refresh ? "?refresh=1" : ""}`).then(
-        async (r) => {
+  const load = useCallback(
+    async (refresh = false, quiet = false) => {
+      const seq = ++loadSeq.current;
+      if (!quiet) setLoading(true);
+      setError(null);
+      setCatalogError(null);
+      const [catRes, instRes] = await Promise.allSettled([
+        fetch(`/api/skills/catalog${refresh ? "?refresh=1" : ""}`).then(
+          async (r) => {
+            const d = await r.json();
+            if (!r.ok) throw new Error(d.error || "Failed to load catalog");
+            return (d.skills ?? []) as CatalogSkill[];
+          }
+        ),
+        fetch(
+          projectKey
+            ? `/api/skills?project=${projectHandle(projectKey)}`
+            : "/api/skills"
+        ).then(async (r) => {
           const d = await r.json();
-          if (!r.ok) throw new Error(d.error || "Failed to load catalog");
-          return (d.skills ?? []) as CatalogSkill[];
-        }
-      ),
-      fetch("/api/skills").then(async (r) => {
-        const d = await r.json();
-        if (!r.ok) throw new Error(d.error || "Failed to load skills");
-        return (d.skills ?? []) as SkillCard[];
-      }),
-    ]);
+          if (!r.ok) throw new Error(d.error || "Failed to load skills");
+          return {
+            skills: (d.skills ?? []) as SkillCard[],
+            projectSkills: Array.isArray(d.projectSkills)
+              ? (d.projectSkills as SkillCard[])
+              : null,
+          };
+        }),
+      ]);
+      if (seq !== loadSeq.current) return;
 
-    // An entry whose `metadata.type` omits `skill` is an actor, not a tool:
-    // it belongs under Experts only. Absence of the field means yes, so
-    // nothing disappears just because an author never wrote it.
-    const belongsHere = (s: { isSkill?: boolean }) => s.isSkill !== false;
-    const cat = (catRes.status === "fulfilled" ? catRes.value : []).filter(
-      belongsHere
-    );
-    if (catRes.status === "rejected") {
-      setCatalogError(
-        catRes.reason instanceof Error
-          ? catRes.reason.message
-          : "Failed to load the official catalog."
+      // An entry whose `metadata.type` omits `skill` is an actor, not a tool:
+      // it belongs under Experts only. Absence of the field means yes, so
+      // nothing disappears just because an author never wrote it.
+      const belongsHere = (s: { isSkill?: boolean }) => s.isSkill !== false;
+      const cat = (catRes.status === "fulfilled" ? catRes.value : []).filter(
+        belongsHere
       );
-    }
-    setCatalog(cat);
+      if (catRes.status === "rejected") {
+        setCatalogError(
+          catRes.reason instanceof Error
+            ? catRes.reason.message
+            : "Failed to load the official catalog."
+        );
+      }
+      setCatalog(cat);
 
-    // Installed skills that aren't in the official catalog (custom/local ones).
-    if (instRes.status === "fulfilled") {
-      const catNames = new Set(cat.map((c) => c.name));
-      setOther(
-        instRes.value.filter((s) => !catNames.has(s.name) && belongsHere(s))
-      );
-    } else {
-      setOther([]);
-      setError(
-        instRes.reason instanceof Error
-          ? instRes.reason.message
-          : "Failed to load installed skills."
-      );
-    }
-    setLoading(false);
-  }, []);
+      // Installed skills that aren't in the official catalog (custom/local ones).
+      if (instRes.status === "fulfilled") {
+        const catNames = new Set(cat.map((c) => c.name));
+        setOther(
+          instRes.value.skills.filter(
+            (s) => !catNames.has(s.name) && belongsHere(s)
+          )
+        );
+        const own = instRes.value.projectSkills;
+        setProjectSkills(
+          projectKey && own
+            ? { key: projectKey, skills: own.filter(belongsHere) }
+            : null
+        );
+      } else {
+        setOther([]);
+        setProjectSkills(null);
+        setError(
+          instRes.reason instanceof Error
+            ? instRes.reason.message
+            : "Failed to load installed skills."
+        );
+      }
+      setLoading(false);
+    },
+    [projectKey]
+  );
 
   useEffect(() => {
     load();
+  }, [load]);
+
+  // The read after a removal is the current project's: a project chosen
+  // while the removal ran must not lose its list to the old one's.
+  const loadLatest = useRef(load);
+  useEffect(() => {
+    loadLatest.current = load;
   }, [load]);
 
   // Install and update hit the same endpoint (it overwrites + re-records the
@@ -201,12 +277,57 @@ function SkillsHome() {
     }
   };
 
+  // A project's own skill: removed from its skills/ alone. The drafts read
+  // again too (an approved draft's skill is gone), and so do the experts.
+  const uninstallFromProject = async (key: string, name: string) => {
+    const busyKey = projectBusyKey(name);
+    setBusy((b) => ({ ...b, [busyKey]: "uninstall" }));
+    setError(null);
+    try {
+      const res = await fetch(
+        `/api/skills?project=${projectHandle(key)}&name=${encodeURIComponent(
+          name
+        )}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok) {
+        const d = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(d.error || "Failed to uninstall");
+      }
+      setProjectSkills((prev) =>
+        prev && prev.key === key
+          ? { key, skills: prev.skills.filter((s) => s.name !== name) }
+          : prev
+      );
+      void loadLatest.current(false, true);
+      void refreshAutoSkills();
+      notifyTeamsChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to uninstall");
+    } finally {
+      setBusy((b) => {
+        const next = { ...b };
+        delete next[busyKey];
+        return next;
+      });
+    }
+  };
+
   const confirmUninstall = async () => {
     if (!uninstallTarget) return;
     const target = uninstallTarget;
     setUninstallTarget(null);
-    await uninstall(target.name, target.isCatalog);
+    if (target.project !== undefined) {
+      await uninstallFromProject(target.project, target.name);
+    } else {
+      await uninstall(target.name, target.isCatalog);
+    }
   };
+
+  // The list read for the current project; one read for another project
+  // (the current one changed meanwhile) isn't shown under its name.
+  const own =
+    projectKey && projectSkills?.key === projectKey ? projectSkills : null;
 
   return (
     <div className="h-full overflow-y-auto">
@@ -242,6 +363,8 @@ function SkillsHome() {
             />
           </button>
         </header>
+
+        <DraftsBanner />
 
         {error && (
           <p
@@ -318,6 +441,35 @@ function SkillsHome() {
               )}
             </section>
 
+            {own && own.skills.length > 0 && (
+              <section>
+                <h3 className="mb-2.5 text-xs font-semibold uppercase tracking-wider text-tertiary">
+                  This project&apos;s skills
+                </h3>
+                <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                  {own.skills.map((s) => (
+                    <SkillTile
+                      key={s.name}
+                      title={s.title}
+                      description={s.description}
+                      installed
+                      tag={memoryTag(fromMemory?.project, s.name)}
+                      busy={busy[projectBusyKey(s.name)]}
+                      actions={expertBadge(s.isExpert, setView)}
+                      onUninstall={() =>
+                        setUninstallTarget({
+                          name: s.name,
+                          title: s.title,
+                          isCatalog: false,
+                          project: own.key,
+                        })
+                      }
+                    />
+                  ))}
+                </div>
+              </section>
+            )}
+
             {other.length > 0 && (
               <section>
                 <h3 className="mb-2.5 text-xs font-semibold uppercase tracking-wider text-tertiary">
@@ -330,6 +482,7 @@ function SkillsHome() {
                       title={s.title}
                       description={s.description}
                       installed
+                      tag={memoryTag(fromMemory?.global, s.name)}
                       busy={busy[s.name]}
                       actions={expertBadge(s.isExpert, setView)}
                       onOpen={() =>

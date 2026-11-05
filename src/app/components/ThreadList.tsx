@@ -60,6 +60,7 @@ import { useProjectDialogs } from "@/providers/projectDialogsContext";
 import type { Project } from "@/lib/projects";
 import { folderName } from "@/lib/workspaceAssistant";
 import { useMemoryActivity } from "@/app/hooks/useMemoryActivity";
+import { useAutoSkills } from "@/app/hooks/useAutoSkills";
 import {
   getThreadAutoApprove,
   useAutoApproveRevision,
@@ -160,6 +161,11 @@ export function ThreadList({
   // Badge the Memory nav when long-term memory changed since last viewed.
   const { unseenCount: memoryUnseen, markSeen: markMemorySeen } =
     useMemoryActivity();
+  // Badge Research Skills with the drafts waiting in every project; none
+  // on an EvoScientist without the drafts route.
+  const autoSkills = useAutoSkills();
+  const draftsWaiting =
+    autoSkills.status === "ready" ? autoSkills.list.counts.pending : 0;
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [search, setSearch] = useState("");
   const [renameTarget, setRenameTarget] = useState<ThreadItem | null>(null);
@@ -780,6 +786,23 @@ export function ThreadList({
           aria-hidden="true"
         />
         Research Skills
+        {draftsWaiting > 0 && (
+          <span
+            className="ml-auto inline-flex min-w-4 items-center justify-center rounded-full bg-[var(--brand-solid)] px-1 text-[10px] font-bold leading-none text-[var(--brand-foreground)]"
+            title={
+              draftsWaiting === 1
+                ? "1 drafted skill waits for review"
+                : `${draftsWaiting} drafted skills wait for review`
+            }
+            aria-label={
+              draftsWaiting === 1
+                ? "1 drafted skill to review"
+                : `${draftsWaiting} drafted skills to review`
+            }
+          >
+            {draftsWaiting}
+          </span>
+        )}
       </button>
       <button
         type="button"
