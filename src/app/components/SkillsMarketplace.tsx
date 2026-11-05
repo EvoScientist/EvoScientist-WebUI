@@ -398,6 +398,10 @@ function SkillsHome() {
     projectKey && projectError?.key === projectKey
       ? projectError.message
       : null;
+  // A skill outside the catalog has nowhere to be installed again from.
+  const permanent =
+    dialogTarget !== null &&
+    (dialogTarget.project !== undefined || !dialogTarget.isCatalog);
 
   return (
     <div className="h-full overflow-y-auto">
@@ -616,6 +620,10 @@ function SkillsHome() {
                   dialogTarget.project,
                   labels
                 )}/skills/${dialogTarget.name}. It can't be undone.`
+              ) : permanent ? (
+                // A global skill outside the catalog (from memory, or made
+                // by hand): the same.
+                "This deletes the skill folder for every project. It can't be undone."
               ) : (
                 <>
                   “{dialogTarget?.title ?? dialogTarget?.name}” will be removed
@@ -635,7 +643,7 @@ function SkillsHome() {
               onClick={confirmUninstall}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              {dialogTarget?.project !== undefined ? "Delete" : "Uninstall"}
+              {permanent ? "Delete" : "Uninstall"}
             </Button>
           </DialogFooter>
         </DialogContent>

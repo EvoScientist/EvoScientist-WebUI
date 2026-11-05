@@ -842,6 +842,36 @@ describe("SkillsMarketplace reads", () => {
 });
 
 describe("SkillsMarketplace global uninstall", () => {
+  it("a global skill outside the catalog is deleted for every project", async () => {
+    const fetchMock = mockApi([], [card("hand-made", "Hand Made")], []);
+    renderPage();
+    await screen.findByRole("heading", { name: "Hand Made" });
+    fireEvent.click(
+      within(section("Other installed skills")).getByRole("button", {
+        name: "Uninstall",
+      })
+    );
+    const dialog = screen.getByRole("dialog");
+    expect(
+      within(dialog).getByText(
+        "This deletes the skill folder for every project. It can't be undone."
+      )
+    ).toBeTruthy();
+    expect(within(dialog).queryByText(/install it again/)).toBeNull();
+    expect(
+      within(dialog).queryByRole("button", { name: "Uninstall" })
+    ).toBeNull();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.filter(([, init]) => init?.method === "DELETE")
+      ).toHaveLength(1)
+    );
+    expect(
+      fetchMock.mock.calls.find(([, init]) => init?.method === "DELETE")?.[0]
+    ).toBe("/api/skills?name=hand-made");
+  });
+
   it("keeps the global confirm and reads the drafts again", async () => {
     mockApi([row({ installed: true })]);
     renderPage();
