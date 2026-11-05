@@ -384,7 +384,7 @@ describe("installedLabel", () => {
         draft({ status: "approved", approved_skill_present: false }),
         labels
       )
-    ).toBe("Uninstalled since");
+    ).toBe("No longer installed");
     expect(installedLabel(draft({ status: "rejected" }), labels)).toBe(
       "Rejected. EvoMemory won't draft this pattern again."
     );

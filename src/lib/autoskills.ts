@@ -331,7 +331,7 @@ export function installedLabel(
     return "Rejected. EvoMemory won't draft this pattern again.";
   }
   if (draft.status !== "approved") return "";
-  if (draft.approved_skill_present === false) return "Uninstalled since";
+  if (draft.approved_skill_present === false) return "No longer installed";
   if (draft.scope === "global") return "Installed into all projects (global)";
   return `Installed into ${labelFor(draft.workspace_dir, labels)}/skills`;
 }
