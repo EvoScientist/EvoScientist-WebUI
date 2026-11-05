@@ -32,7 +32,9 @@ function sizeText(bytes: number): string {
   // MB before the rounded KB would read 1024.0.
   const kb = (bytes / 1024).toFixed(1);
   if (Number(kb) < 1024) return `${kb} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  // Rounded up, so a file over the limit never reads like the limit itself
+  // (1.00 MB).
+  return `${(Math.ceil((bytes / (1024 * 1024)) * 100) / 100).toFixed(2)} MB`;
 }
 
 function Reading() {

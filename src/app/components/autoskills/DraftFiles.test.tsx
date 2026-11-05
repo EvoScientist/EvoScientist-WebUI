@@ -156,7 +156,7 @@ describe("DraftFiles", () => {
     const { container } = render(<DraftFiles draft={d} />);
 
     expect(fileButton("scripts/verify.py").textContent).toContain("New file");
-    expect(fileButton("scripts/verify.py").textContent).toContain("2.4 MB");
+    expect(fileButton("scripts/verify.py").textContent).toContain("2.39 MB");
     expect(fileButton("SKILL.md").textContent).not.toContain("New file");
 
     reads.calls = [];
@@ -385,8 +385,26 @@ describe("DraftFiles", () => {
       "1023 B",
       "1.0 KB",
       "1023.9 KB",
-      "1.0 MB",
-      "1.0 MB",
+      "1.00 MB",
+      "1.00 MB",
     ]);
+  });
+
+  it("rounds MB up to two decimals, so a file over the limit never reads 1.00 MB", () => {
+    const sizes = [1_048_577, 1_073_308, 2_097_152, 2_500_000];
+    const d = draft({
+      proposal_id: "x",
+      files: sizes.map((size, i) => ({
+        path: `f${i}.txt`,
+        size,
+        installed: false,
+      })),
+    });
+    render(<DraftFiles draft={d} />);
+    // The size is the row's last part, after "too large to show here".
+    const shown = sizes.map(
+      (_, i) => fileButton(`f${i}.txt`).lastElementChild?.textContent
+    );
+    expect(shown).toEqual(["1.01 MB", "1.03 MB", "2.00 MB", "2.39 MB"]);
   });
 });
