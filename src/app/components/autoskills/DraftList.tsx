@@ -355,6 +355,13 @@ function Row({
                 <span>{installed}</span>
               </>
             )}
+            {/* Auto mode's installs, as the detail pane's chip says. */}
+            {draft.status === "approved" && draft.approved_by === "auto" && (
+              <>
+                <span aria-hidden="true">·</span>
+                <span>installed automatically</span>
+              </>
+            )}
           </span>
         </span>
       </button>

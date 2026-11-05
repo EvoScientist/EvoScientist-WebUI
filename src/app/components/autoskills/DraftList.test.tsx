@@ -262,6 +262,33 @@ describe("DraftList", () => {
     ).toContain("Installed into all projects (global)");
   });
 
+  it("approved rows say which skills were installed automatically", () => {
+    renderList({
+      status: "approved",
+      groups: [
+        {
+          project: { key: A, name: "EvoSci_test", missing: false },
+          label: "EvoSci_test",
+          drafts: [
+            {
+              ...x,
+              status: "approved",
+              approved_by: "auto",
+              approved_skill_present: true,
+            },
+            { ...y, status: "approved", approved_by: "user" },
+          ],
+        },
+      ],
+    });
+    expect(
+      screen.getByRole("button", { name: "arxiv-paper-retrieval" }).textContent
+    ).toContain("installed automatically");
+    expect(
+      screen.getByRole("button", { name: "chunk-verifier" }).textContent
+    ).not.toContain("automatically");
+  });
+
   it("shows the empty states", () => {
     const { props, rerender } = renderList({
       groups: twoProjects({ a: [], b: [] }),
