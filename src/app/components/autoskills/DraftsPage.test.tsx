@@ -1785,6 +1785,60 @@ describe("DraftsPage", () => {
     expect(box().disabled).toBe(true);
   });
 
+  it("an Undo's hold waits while a newer read replaces its own, and goes with that read", async () => {
+    const x = draft({ proposal_id: "x" });
+    ready([x]);
+    hooks.reject.mockResolvedValueOnce({ done: [x], failed: [] });
+    const view = render(page());
+    pick("x");
+    fireEvent.click(
+      within(selection()!).getByRole("button", { name: "Reject" })
+    );
+    const box = () =>
+      screen.getByRole("checkbox", { name: "Select x" }) as HTMLInputElement;
+    await waitFor(() => expect(box().disabled).toBe(true));
+    // The revert answers before any list landed: the page still renders the
+    // pre-Undo list, x pending at its old stamp.
+    const undo = reread();
+    act(() => hooks.onReverted?.([x], undo.promise));
+    // A newer read replaces the Undo's own; SWR discards the replaced one,
+    // whose promise still settles, and the newer one is still out.
+    hooks.auto = { ...hooks.auto, isValidating: true };
+    view.rerender(page());
+    await act(async () => undo.settle());
+    expect(box().disabled).toBe(true);
+
+    // The newer read commits: x at the revert's stamp, nothing in flight.
+    const x2 = { ...x, updated_at: "2026-11-06T12:00:00Z" };
+    ready([x2]);
+    view.rerender(page());
+    expect(box().disabled).toBe(false);
+    pick("x");
+    fireEvent.click(
+      within(selection()!).getByRole("button", { name: "Approve" })
+    );
+    expect(hooks.approve).toHaveBeenLastCalledWith([x2]);
+  });
+
+  it("an Undo's hold goes when the newest read ends, though the list object stays the same", async () => {
+    // As in the race above: the list already shows x at the revert's stamp.
+    const x = draft({ proposal_id: "x", updated_at: "2026-11-06T12:00:00Z" });
+    ready([x]);
+    const view = render(page());
+    const box = () =>
+      screen.getByRole("checkbox", { name: "Select x" }) as HTMLInputElement;
+    const undo = reread();
+    act(() => hooks.onReverted?.([x], undo.promise));
+    hooks.auto = { ...hooks.auto, isValidating: true };
+    view.rerender(page());
+    await act(async () => undo.settle());
+    expect(box().disabled).toBe(true);
+    // The newest read ends with equal data: SWR keeps the cached object.
+    hooks.auto = { ...hooks.auto, isValidating: false };
+    view.rerender(page());
+    expect(box().disabled).toBe(false);
+  });
+
   it("opening the page marks automatic installs seen", () => {
     ready([]);
     const before = Date.now();

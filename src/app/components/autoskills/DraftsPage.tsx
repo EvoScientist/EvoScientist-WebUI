@@ -236,7 +236,9 @@ export function DraftsPage() {
       const token = ++holdSeq.current;
       const ids = drafts.map((d) => d.proposal_id);
       setDecided((prev) => hold(prev, ids, token));
-      void reread.then(() => setReadUndos((prev) => [...prev, token]));
+      // Settled either way: the release below waits for the newest read.
+      const settled = () => setReadUndos((prev) => [...prev, token]);
+      void reread.then(settled, settled);
     },
   });
   // Kept above the views: a run goes on, and is reported, after this page
@@ -251,6 +253,9 @@ export function DraftsPage() {
     useState<ReadonlyMap<string, string>>(NO_SELECTION);
 
   const list = auto.status === "ready" ? auto.list : null;
+  // Read on every render, so the page renders again when a read of the list
+  // ends (the Undo holds below wait for that).
+  const reading = auto.isValidating;
 
   // A new list keeps only the picks still pending in it (a draft decided in
   // the CLI or another tab drops out, and so do the ones just decided here
@@ -276,15 +281,17 @@ export function DraftsPage() {
       setDecided((prev) => (prev.size === 0 ? prev : NO_HOLDS));
     }
   }
-  // An Undo's own re-read is in. When it read the list, the holds that Undo
-  // made go, even if SWR kept the cached list object (equal data) and no
-  // new list comes; a newer hold of the same draft stays. A failed read
-  // changes nothing: the next list releases them.
-  if (readUndos.length > 0) {
+  // An Undo's own re-read has settled, but a newer read may have replaced
+  // it: SWR discards the replaced read without writing the list, and its
+  // promise still settles. So the holds that Undo made go in the first
+  // render with the list ready and no read in flight: that list comes from
+  // the newest read, which started after the revert, even if SWR kept the
+  // cached object (equal data) and no new list comes. A newer hold of the
+  // same draft stays. While reads fail nothing changes: the next list
+  // releases every hold.
+  if (readUndos.length > 0 && auto.status === "ready" && !reading) {
     setReadUndos(NO_TOKENS);
-    if (auto.status === "ready") {
-      setDecided((prev) => release(prev, readUndos));
-    }
+    setDecided((prev) => release(prev, readUndos));
   }
 
   // Opening this page counts as having seen the automatic installs.

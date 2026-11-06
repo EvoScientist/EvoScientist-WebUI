@@ -245,6 +245,49 @@ describe("useAutoSkills", () => {
     await waitFor(() => expect(result.current.status).toBe("unsupported"));
   });
 
+  it("says whether a read of the list is in flight", async () => {
+    let answer: (res: Response) => void = () => {};
+    stubFetch(
+      () =>
+        new Promise<Response>((resolve) => {
+          answer = resolve;
+        })
+    );
+    const { result } = renderHook(() => useAutoSkills(), { wrapper });
+    await waitFor(() => expect(result.current.isValidating).toBe(true));
+    await act(async () => answer(json(list())));
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+    expect(result.current.isValidating).toBe(false);
+
+    // A re-read is out, then lands.
+    act(() => {
+      void result.current.refresh();
+    });
+    await waitFor(() => expect(result.current.isValidating).toBe(true));
+    await act(async () => answer(json(list())));
+    await waitFor(() => expect(result.current.isValidating).toBe(false));
+  });
+
+  it("a reader that doesn't ask about reads in flight isn't rendered again for one", async () => {
+    stubFetch(() => json(list()));
+    let renders = 0;
+    const { result } = renderHook(
+      () => {
+        renders += 1;
+        return useAutoSkills();
+      },
+      { wrapper }
+    );
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+    const before = renders;
+    // Equal data: SWR keeps the list, and the read starting and ending
+    // renders nothing for this reader.
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(renders).toBe(before);
+  });
+
   it("a failed re-read shows the error, not the old list", async () => {
     const answers = [json(list(["a"])), json({}, 500), json(list(["b"]))];
     stubFetch(() => answers.shift()!);

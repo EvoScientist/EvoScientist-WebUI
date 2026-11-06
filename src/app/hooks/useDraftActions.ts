@@ -306,10 +306,13 @@ export function useDraftActions(
               return decisionError(answer, d, labels);
             }
           );
-          // The re-read starts BEFORE the page hears of the Undo: the page
-          // holds the drafts and releases them when this read settles (SWR
-          // keeps only the newest request, so it settles on a read made
-          // after the revert). Don't swap the two calls.
+          // The re-read starts here, after the revert answered and BEFORE
+          // the page hears of the Undo, which gets its promise. The page
+          // holds the drafts and, once this read has settled, releases them
+          // in a render with no read of the list in flight: a newer read may
+          // replace this one (SWR discards it without writing the list, and
+          // its promise still settles), and every such read started after
+          // the revert too. Don't swap the two calls.
           const rereading = reread();
           if (done.length > 0) {
             try {

@@ -111,14 +111,19 @@ export function useAutoSkills(
    *  alone; then SWR reads again for every reader. Rejects when the read
    *  fails or is aborted. */
   readNow: (signal?: AbortSignal) => Promise<DraftList | "unsupported">;
+  /** Whether a read of the list is in flight (SWR's own flag for the key).
+   *  A read a newer one replaced keeps it true: only the newest read's end
+   *  clears it, so false means the list shown came from the newest read. */
+  isValidating: boolean;
 } {
   const { deploymentUrl, apiKey } = useDeployment();
   const base = baseOf(deploymentUrl);
   const key: ListKey | null = base ? ["autoskills", base, apiKey] : null;
-  const { data, error, mutate } = useSWR(key, fetchDrafts, {
+  const swr = useSWR(key, fetchDrafts, {
     refreshInterval: options.poll === false ? 0 : refreshEvery,
     revalidateOnFocus: true,
   });
+  const { data, error, mutate } = swr;
   const { mutate: mutateCache } = useSWRConfig();
   const readNow = useCallback(
     async (signal?: AbortSignal) => {
@@ -148,7 +153,16 @@ export function useAutoSkills(
   else if (data === "unsupported") state = { status: "unsupported" };
   else if (data) state = { status: "ready", list: data };
   else state = { status: "loading" };
-  return { ...state, refresh: mutate, readNow };
+  return {
+    ...state,
+    refresh: mutate,
+    readNow,
+    // A getter: SWR re-renders on a read starting or ending only the
+    // callers that read this (the drafts page), not every reader of the list.
+    get isValidating() {
+      return swr.isValidating;
+    },
+  };
 }
 
 /** Read every mounted AutoSkills list again, whatever its deployment. */
