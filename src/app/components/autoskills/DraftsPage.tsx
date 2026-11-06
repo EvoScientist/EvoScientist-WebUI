@@ -14,7 +14,11 @@ import {
   useShownQuestion,
   type Question,
 } from "@/app/components/autoskills/question";
-import { decidable, stillPending } from "@/app/components/autoskills/selection";
+import {
+  asSelected,
+  decidable,
+  stillPending,
+} from "@/app/components/autoskills/selection";
 import { markAutoSeen, useAutoSkills } from "@/app/hooks/useAutoSkills";
 import {
   useDraftActions,
@@ -51,7 +55,10 @@ import { useRunNowState } from "@/providers/runNowContext";
 // reject several at once and the open draft beside the list.
 
 const NO_PROJECTS: readonly Project[] = [];
-const NO_SELECTION: ReadonlySet<string> = new Set();
+const NO_IDS: ReadonlySet<string> = new Set();
+/** No picks: a selection maps each picked id to the draft's updated_at as
+ *  listed when it was picked. */
+const NO_SELECTION: ReadonlyMap<string, string> = new Map();
 
 const TABS: ReadonlyArray<{
   status: DraftStatus;
@@ -74,6 +81,18 @@ function without(
 ): ReadonlySet<string> {
   if (!ids.some((id) => set.has(id))) return set;
   const next = new Set(set);
+  for (const id of ids) next.delete(id);
+  return next;
+}
+
+/** `selection` without the picks of `ids`; the same one when none is in
+ *  it. */
+function unpick(
+  selection: ReadonlyMap<string, string>,
+  ids: readonly string[]
+): ReadonlyMap<string, string> {
+  if (!ids.some((id) => selection.has(id))) return selection;
+  const next = new Map(selection);
   for (const id of ids) next.delete(id);
   return next;
 }
@@ -190,7 +209,7 @@ export function DraftsPage() {
   // decided them, but the re-read hasn't landed (or stalls). They leave the
   // selection at once and can't be decided again until the next list
   // arrives, or an Undo here takes them back.
-  const [decided, setDecided] = useState<ReadonlySet<string>>(NO_SELECTION);
+  const [decided, setDecided] = useState<ReadonlySet<string>>(NO_IDS);
   const { approve, reject, busy } = useDraftActions(projectList, {
     onReverted: (drafts) =>
       setDecided((prev) =>
@@ -208,7 +227,8 @@ export function DraftsPage() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const settingsButtonRef = useRef<HTMLButtonElement>(null);
   const [confirming, setConfirming] = useState(false);
-  const [selected, setSelected] = useState<ReadonlySet<string>>(NO_SELECTION);
+  const [selected, setSelected] =
+    useState<ReadonlyMap<string, string>>(NO_SELECTION);
 
   const list = auto.status === "ready" ? auto.list : null;
 
@@ -232,7 +252,7 @@ export function DraftsPage() {
     // there, they aren't pending; pending again (another window's Undo),
     // they are decidable again. Every id here was recorded before it.
     if (list && basis.list !== list) {
-      setDecided((prev) => (prev.size === 0 ? prev : NO_SELECTION));
+      setDecided((prev) => (prev.size === 0 ? prev : NO_IDS));
     }
   }
 
@@ -251,6 +271,7 @@ export function DraftsPage() {
   const shown = useMemo(() => groups.flatMap((g) => g.drafts), [groups]);
   const openDraft = shown.find((d) => d.proposal_id === draftId) ?? null;
   const selectedDrafts = shown.filter((d) => selected.has(d.proposal_id));
+  const selectedIds = useMemo(() => new Set(selected.keys()), [selected]);
   const labels = useMemo(
     () => new Map(groups.map((g) => [g.project.key, g.label])),
     [groups]
@@ -379,7 +400,7 @@ export function DraftsPage() {
       .filter((f) => f.changed)
       .map((f) => f.draft.proposal_id);
     if (ids.length === 0 && changed.length === 0) return;
-    setSelected((prev) => without(prev, [...ids, ...changed]));
+    setSelected((prev) => unpick(prev, [...ids, ...changed]));
     if (ids.length > 0) setDecided((prev) => new Set([...prev, ...ids]));
   };
 
@@ -413,28 +434,35 @@ export function DraftsPage() {
     ]
   );
 
-  const toggle = (ids: string[], on: boolean) =>
+  // A pick records the draft's updated_at as listed now: a bulk approve
+  // sends that version, so a draft rewritten since draws draft_changed
+  // instead of installing unread. One picked already keeps its own.
+  const toggle = (ids: string[], on: boolean) => {
+    const listed = new Map(shown.map((d) => [d.proposal_id, d.updated_at]));
     setSelected((prev) => {
-      const next = new Set(prev);
+      const next = new Map(prev);
       for (const id of ids) {
-        if (on) next.add(id);
-        else next.delete(id);
+        const stamp = listed.get(id);
+        if (!on) next.delete(id);
+        else if (!next.has(id) && stamp !== undefined) next.set(id, stamp);
       }
       return next;
     });
+  };
 
   // No scopes: in bulk every draft installs where it records (its own
   // project, or global); only the detail pane picks a scope per draft.
-  // What is sent is checked once more against the list and the projects
-  // (the selection is pruned by the same rule on every change), and only
-  // while the projects' gate is open: a read that has just started closes
-  // it before the render that disables the buttons.
+  // Each goes at the version it was picked at (`asSelected`). What is sent
+  // is checked once more against the list and the projects (the selection
+  // is pruned by the same rule on every change), and only while the
+  // projects' gate is open: a read that has just started closes it before
+  // the render that disables the buttons.
   const approveSelection = () => {
     if (!isReady()) return;
     const send = sendable(selectedDrafts);
     if (send.length === 0) return;
     if (send.some((d) => d.operation === "update")) setConfirming(true);
-    else void approve(send).then(settle);
+    else void approve(asSelected(send, selected)).then(settle);
   };
   // A closed gate leaves the question open, to be answered after the read.
   // The question still takes clicks while it fades out: after Cancel,
@@ -443,7 +471,7 @@ export function DraftsPage() {
     if (!asking || !isReady()) return;
     setConfirming(false);
     const send = sendable(selectedDrafts);
-    if (send.length > 0) void approve(send).then(settle);
+    if (send.length > 0) void approve(asSelected(send, selected)).then(settle);
   };
   const rejectSelection = () => {
     if (!isReady()) return;
@@ -647,7 +675,7 @@ export function DraftsPage() {
                 <DraftList
                   groups={groups}
                   status={status}
-                  selected={selected}
+                  selected={selectedIds}
                   onToggle={toggle}
                   openId={openDraft?.proposal_id ?? null}
                   onOpen={openRow}

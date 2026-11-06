@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Draft, DraftList } from "@/lib/autoskills";
-import { decidable, stillPending } from "./selection";
+import { asSelected, decidable, stillPending } from "./selection";
 
 const A = "/work/EvoSci_test";
 const B = "/work/project_B";
@@ -48,16 +48,47 @@ const y = draft({ proposal_id: "y" });
 const z = draft({ proposal_id: "z", workspace_dir: B });
 
 describe("stillPending", () => {
-  it("keeps the picks still pending, in a registered project once known", () => {
+  it("keeps the picks still pending, in a registered project once known, with their stamps", () => {
     const list = listOf([x, { ...y, status: "approved" }, z]);
-    const picked = new Set(["x", "y", "z"]);
-    expect([...stillPending(picked, list, null)]).toEqual(["x", "z"]);
-    expect([...stillPending(picked, list, new Set([B]))]).toEqual(["z"]);
+    const picked = new Map([
+      ["x", "T-x"],
+      ["y", "T-y"],
+      ["z", "T-z"],
+    ]);
+    expect([...stillPending(picked, list, null)]).toEqual([
+      ["x", "T-x"],
+      ["z", "T-z"],
+    ]);
+    expect([...stillPending(picked, list, new Set([B]))]).toEqual([
+      ["z", "T-z"],
+    ]);
   });
 
-  it("returns the same set when nothing drops", () => {
-    const picked = new Set(["x"]);
+  it("returns the same selection when nothing drops", () => {
+    const picked = new Map([["x", "T-x"]]);
     expect(stillPending(picked, listOf([x]), new Set([A]))).toBe(picked);
+  });
+});
+
+describe("asSelected", () => {
+  it("sends each draft at the version it was picked at", () => {
+    // Picked at T1; a resubmit rewrote it since, and the list says T2.
+    const listed = { ...x, updated_at: "T2" };
+    const kept = { ...z, updated_at: "T1z" };
+    const out = asSelected(
+      [listed, kept],
+      new Map([
+        ["x", "T1"],
+        ["z", "T1z"],
+      ])
+    );
+    expect(out).toEqual([{ ...listed, updated_at: "T1" }, kept]);
+    // Not rewritten since the pick: the listed draft itself.
+    expect(out[1]).toBe(kept);
+  });
+
+  it("sends a draft with no stamp recorded as listed", () => {
+    expect(asSelected([x], new Map())[0]).toBe(x);
   });
 });
 

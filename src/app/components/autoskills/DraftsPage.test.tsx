@@ -8,6 +8,7 @@ import {
   within,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
+import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Draft, DraftList } from "@/lib/autoskills";
 import type { ProjectsState } from "@/lib/projects";
@@ -87,6 +88,9 @@ const hooks = vi.hoisted(() => ({
     })
   ),
   onReverted: undefined as ((drafts: Draft[]) => void) | undefined,
+  // The real useDraftActions, for a test that follows a decision to the
+  // relay.
+  realActions: false,
   busy: false,
   running: new Set<string>() as ReadonlySet<string>,
   run: vi.fn(async (_key: string) => undefined),
@@ -97,20 +101,28 @@ const hooks = vi.hoisted(() => ({
 vi.mock("@/app/hooks/useAutoSkills", () => ({
   useAutoSkills: () => ({ ...hooks.auto, refresh: hooks.refresh }),
   markAutoSeen: hooks.mark,
+  refreshAutoSkills: hooks.refresh,
 }));
-vi.mock("@/app/hooks/useDraftActions", () => ({
-  useDraftActions: (
-    _projects: unknown,
-    options?: { onReverted?: (drafts: Draft[]) => void }
-  ) => {
-    hooks.onReverted = options?.onReverted;
-    return {
-      approve: hooks.approve,
-      reject: hooks.reject,
-      busy: hooks.busy,
-    };
-  },
-}));
+vi.mock("@/app/hooks/useDraftActions", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("@/app/hooks/useDraftActions")
+  >();
+  return {
+    ...actual,
+    useDraftActions: (
+      projects: Parameters<typeof actual.useDraftActions>[0],
+      options?: { onReverted?: (drafts: Draft[]) => void }
+    ) => {
+      if (hooks.realActions) return actual.useDraftActions(projects, options);
+      hooks.onReverted = options?.onReverted;
+      return {
+        approve: hooks.approve,
+        reject: hooks.reject,
+        busy: hooks.busy,
+      };
+    },
+  };
+});
 vi.mock("@/app/hooks/useSettings", () => ({
   useSettings: () => ({
     payload: hooks.settings ? { settings: hooks.settings } : undefined,
@@ -211,13 +223,17 @@ beforeEach(() => {
     memory_skill_synthesis_time: "03:00",
   };
   hooks.access = { writable: true };
+  hooks.realActions = false;
 });
 // Restored here, so a failing assertion can't leak them into other tests.
 let focusSpy: { mockRestore(): void } | undefined;
+let toastSpy: { mockRestore(): void } | undefined;
 afterEach(() => {
   vi.unstubAllGlobals();
   focusSpy?.mockRestore();
   focusSpy = undefined;
+  toastSpy?.mockRestore();
+  toastSpy = undefined;
 });
 
 describe("DraftsPage", () => {
@@ -1494,6 +1510,134 @@ describe("DraftsPage", () => {
       within(selection()!).getByRole("button", { name: "Approve" })
     );
     expect(hooks.approve).toHaveBeenLastCalledWith([y2]);
+  });
+
+  it("a bulk approve sends each draft as it was picked, so a rewrite since draws draft_changed", async () => {
+    // The real decision hook, down to the relay's POST.
+    hooks.realActions = true;
+    const errors = vi.spyOn(toast, "error");
+    toastSpy = errors;
+    const x = draft({ proposal_id: "x", updated_at: "2026-11-06T08:00:00Z" });
+    const y = draft({
+      proposal_id: "y",
+      created_at: "2026-10-01T09:00:00Z",
+      updated_at: "2026-11-06T09:00:00Z",
+    });
+    ready([x, y]);
+    const view = render(page());
+    pick("x");
+    pick("y");
+    // A run resubmitted y after the pick; the next poll lists the new
+    // version, and y stays picked.
+    const y2 = { ...y, updated_at: "2026-11-06T10:00:00Z" };
+    ready([x, y2]);
+    view.rerender(page());
+    expect(selection()?.textContent).toContain("2 selected");
+
+    const bodies: Array<Record<string, unknown>> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+        bodies.push(body);
+        const [status, answer] =
+          body.proposal_id === "x"
+            ? [200, { approved: true, scope: "workspace", operation: "create" }]
+            : [409, { error: "draft_changed", updated_at: y2.updated_at }];
+        return new Response(JSON.stringify(answer), {
+          status,
+          headers: { "Content-Type": "application/json" },
+        });
+      })
+    );
+    approveSelected();
+    await waitFor(() => expect(errors).toHaveBeenCalled());
+    expect(bodies).toEqual([
+      // Not rewritten: the stamp it was picked at is the listed one.
+      {
+        action: "approve",
+        proposal_id: "x",
+        scope: null,
+        expected_updated_at: "2026-11-06T08:00:00Z",
+      },
+      // Rewritten since the pick: the version picked, which the core
+      // refuses rather than install the new one unread.
+      {
+        action: "approve",
+        proposal_id: "y",
+        scope: null,
+        expected_updated_at: "2026-11-06T09:00:00Z",
+      },
+    ]);
+    const node = errors.mock.calls.at(-1)?.[0] as {
+      props: { children: Array<{ props: { children: string } }> };
+    };
+    expect(node.props.children.map((c) => c.props.children)).toEqual([
+      "y changed since the page read it, so nothing was installed. Read the new version, then decide.",
+    ]);
+    // y stays pending, out of the selection and decidable; x waits as
+    // decided.
+    await waitFor(() => expect(selection()).toBeNull());
+    const box = (id: string) =>
+      screen.getByRole("checkbox", {
+        name: `Select ${id}`,
+      }) as HTMLInputElement;
+    expect(box("x").disabled).toBe(true);
+    expect(box("y").checked).toBe(false);
+    expect(box("y").disabled).toBe(false);
+  });
+
+  it("a group's select-all records each draft's stamp", () => {
+    const x = draft({ proposal_id: "x", updated_at: "T1-x" });
+    const y = draft({
+      proposal_id: "y",
+      created_at: "2026-10-01T09:00:00Z",
+      updated_at: "T1-y",
+    });
+    ready([x, y]);
+    const view = render(page());
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select all drafts in EvoSci_test" })
+    );
+    expect(selection()?.textContent).toContain("2 selected");
+    // Both rewritten after the pick.
+    const x2 = { ...x, updated_at: "T2-x" };
+    const y2 = { ...y, updated_at: "T2-y" };
+    ready([x2, y2]);
+    view.rerender(page());
+    approveSelected();
+    expect(hooks.approve.mock.calls).toEqual([
+      [
+        [
+          { ...x2, updated_at: "T1-x" },
+          { ...y2, updated_at: "T1-y" },
+        ],
+      ],
+    ]);
+  });
+
+  it("the bulk update question's Install sends the version picked", () => {
+    const u = draft({
+      proposal_id: "u",
+      operation: "update",
+      target_skill_name: "paper-review",
+      updated_at: "T1",
+    });
+    ready([u]);
+    const view = render(page());
+    pick("u");
+    approveSelected();
+    expect(
+      screen.getByRole("dialog", { name: "Replace an installed skill?" })
+    ).toBeTruthy();
+    // The re-read lists u's new version while the question is open.
+    const u2 = { ...u, updated_at: "T2" };
+    ready([u2]);
+    view.rerender(page());
+    fireEvent.click(
+      screen.getByRole("button", { name: "Replace and install" })
+    );
+    expect(hooks.approve.mock.calls).toEqual([[[{ ...u2, updated_at: "T1" }]]]);
   });
 
   it("an Undo that succeeds makes its drafts decidable again", async () => {

@@ -1,5 +1,6 @@
 // The drafts page's multi-select rules: which picks survive a re-read, and
-// which drafts a bulk decision may send.
+// which drafts a bulk decision may send, at which version. A selection maps
+// each picked draft's id to its updated_at as listed when it was picked.
 
 import type { Draft, DraftList } from "@/lib/autoskills";
 
@@ -18,16 +19,33 @@ function pendingIds(
   );
 }
 
-/** The ids of `selected` still pending in `list`, and, once the projects
- *  are known, still in a registered project. The same set when none drop. */
+/** The picks of `selected` still pending in `list`, and, once the projects
+ *  are known, still in a registered project, each with its recorded stamp.
+ *  The same selection when none drop. */
 export function stillPending(
-  selected: ReadonlySet<string>,
+  selected: ReadonlyMap<string, string>,
   list: DraftList,
   registered: ReadonlySet<string> | null
-): ReadonlySet<string> {
+): ReadonlyMap<string, string> {
   const pending = pendingIds(list, registered);
-  const kept = [...selected].filter((id) => pending.has(id));
-  return kept.length === selected.size ? selected : new Set(kept);
+  const kept = [...selected].filter(([id]) => pending.has(id));
+  return kept.length === selected.size ? selected : new Map(kept);
+}
+
+/** The drafts as they were picked: each with the updated_at recorded then,
+ *  so an approval installs that version only (the core answers
+ *  draft_changed for one rewritten since). A draft with no stamp recorded,
+ *  or not rewritten, goes as listed. */
+export function asSelected(
+  drafts: readonly Draft[],
+  selected: ReadonlyMap<string, string>
+): Draft[] {
+  return drafts.map((d) => {
+    const stamp = selected.get(d.proposal_id);
+    return stamp === undefined || stamp === d.updated_at
+      ? d
+      : { ...d, updated_at: stamp };
+  });
 }
 
 /** The drafts a bulk decision may send: still pending in `list` and in a
