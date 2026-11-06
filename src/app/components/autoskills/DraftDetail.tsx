@@ -233,6 +233,13 @@ function approveQuestion(
 
 const NO_FILES: readonly UnshowableFile[] = [];
 
+/** An approval as clicked: the version of the draft shown, and the place. */
+interface Decision {
+  version: string;
+  draft: Draft;
+  scope: DraftScope;
+}
+
 export function DraftDetail({
   draft,
   projectLabel,
@@ -259,13 +266,13 @@ export function DraftDetail({
     scope: draft.scope,
   });
   // The question before an approval (an update, or files the page can't
-  // show), for this version only, with the files its check found: it
+  // show), for this version only, with the decision fixed at the click (the
+  // draft and the place shown then) and the files its check found: it
   // doesn't come back when the draft is opened again, and a rewrite takes it
   // away.
-  const [asked, setAsked] = useState<{
-    version: string;
-    files: readonly UnshowableFile[];
-  } | null>(null);
+  const [asked, setAsked] = useState<
+    (Decision & { files: readonly UnshowableFile[] }) | null
+  >(null);
   if (pick.version !== version) {
     setPick({ version, scope: draft.scope });
     setAsked(null);
@@ -314,17 +321,16 @@ export function DraftDetail({
   // may show another draft or place meanwhile.
   const question = useShownQuestion(
     confirming,
-    approveQuestion(
-      draft,
-      scope,
-      projectLabel,
-      confirming && asked ? asked.files : NO_FILES
-    )
+    confirming && asked
+      ? approveQuestion(asked.draft, asked.scope, projectLabel, asked.files)
+      : approveQuestion(draft, scope, projectLabel, NO_FILES)
   );
 
   // Approve checks the draft's files first. A check that reads answers
   // later, while the page is busy: what it found goes to this pane as it is
-  // then (the latest render), and only for the version it checked.
+  // then (the latest render), and only for the version it checked. The
+  // decision is the one shown at the click: what goes, with or without the
+  // question, is that draft into that place, whatever is picked later.
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
@@ -334,34 +340,39 @@ export function DraftDetail({
   }, []);
   const afterCheck = useRef<
     (
-      checked: string,
+      decision: Decision,
       files: readonly UnshowableFile[],
       from: HTMLElement
     ) => void
   >(() => {});
-  afterCheck.current = (checked, files, from) => {
-    if (!mounted.current || checked !== version || !pending || !canWrite) {
+  afterCheck.current = (decision, files, from) => {
+    if (
+      !mounted.current ||
+      decision.version !== version ||
+      !pending ||
+      !canWrite
+    ) {
       return;
     }
-    if (draft.operation === "update" || files.length > 0) {
+    if (decision.draft.operation === "update" || files.length > 0) {
       invokerRef.current = from;
-      setAsked({ version, files });
+      setAsked({ ...decision, files });
     } else {
-      onApprove(draft, scope);
+      onApprove(decision.draft, decision.scope);
     }
   };
   const approve = (e: React.MouseEvent<HTMLButtonElement>) => {
     if (off) return;
     const from = e.currentTarget;
-    const checked = version;
+    const decision: Decision = { version, draft, scope };
     const out = checkFiles(draft);
     if (!(out instanceof Promise)) {
-      afterCheck.current(checked, out, from);
+      afterCheck.current(decision, out, from);
       return;
     }
     void out.then(
       (files) => {
-        if (files) afterCheck.current(checked, files, from);
+        if (files) afterCheck.current(decision, files, from);
       },
       () => {
         // A check never fails; nothing is approved if one did.
@@ -371,9 +382,9 @@ export function DraftDetail({
   const confirmApprove = () => {
     // The question still takes clicks while it fades out: after Cancel,
     // Escape or a first click, it approves nothing.
-    if (off || !confirming) return;
+    if (off || !confirming || !asked) return;
     setAsked(null);
-    onApprove(draft, scope);
+    onApprove(asked.draft, asked.scope);
   };
 
   // The recorded scope's refusal; another scope's is only known by trying.
@@ -441,6 +452,9 @@ export function DraftDetail({
             <Label htmlFor={scopeId}>Install into</Label>
             <Select
               value={scope}
+              // The check before an approval goes on with the place shown
+              // at the click: none is picked meanwhile.
+              disabled={checking}
               onValueChange={(next) => {
                 if (next === "workspace" || next === "global") {
                   setPick({ version, scope: next });

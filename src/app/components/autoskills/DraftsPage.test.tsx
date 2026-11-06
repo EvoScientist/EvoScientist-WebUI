@@ -2080,6 +2080,58 @@ describe("DraftsPage", () => {
       ).toBe(true);
     });
 
+    it("bulk approve sends the versions picked at the click, though a draft is picked again at a newer one during the check", async () => {
+      const waiting: Array<() => void> = [];
+      serveFiles(
+        () =>
+          new Promise<Response>((r) =>
+            waiting.push(() => r(new Response("text")))
+          )
+      );
+      const c = holding({ proposal_id: "c" }, [["SKILL.md", 10]]);
+      ready([c]);
+      const view = render(page());
+      pick("c");
+      approveSelected();
+      // Rewritten while its files are read, then picked again: the pick now
+      // records the new version, whose files were never checked.
+      const rewritten = { ...c, updated_at: "2026-11-02T09:00:00Z" };
+      ready([rewritten]);
+      view.rerender(page());
+      pick("c");
+      pick("c");
+      await act(async () => waiting.shift()!());
+      await waitFor(() => expect(hooks.approve).toHaveBeenCalled());
+      // The version picked at the click: the core answers draft_changed.
+      expect(hooks.approve.mock.calls).toEqual([[[c]]]);
+    });
+
+    it("the open draft's place can't change while its files are checked", async () => {
+      const waiting: Array<() => void> = [];
+      serveFiles(
+        () =>
+          new Promise<Response>((r) =>
+            waiting.push(() => r(new Response("text")))
+          )
+      );
+      const x = holding({ proposal_id: "x" }, [["SKILL.md", 10]]);
+      ready([x]);
+      q.values.set("draftId", "x");
+      render(page());
+      const pane = () =>
+        within(screen.getByRole("heading", { level: 3 }).parentElement!);
+      const place = () =>
+        pane().getByLabelText("Install into") as HTMLButtonElement;
+      expect(place().disabled).toBe(false);
+      fireEvent.click(pane().getByRole("button", { name: "Approve" }));
+      expect(place().disabled).toBe(true);
+      await act(async () => waiting.shift()!());
+      await waitFor(() =>
+        expect(hooks.approve.mock.calls).toEqual([[[x], { x: "workspace" }]])
+      );
+      expect(place().disabled).toBe(false);
+    });
+
     it("an update whose files can all be shown asks only its own question", async () => {
       serveFiles();
       const u = holding(

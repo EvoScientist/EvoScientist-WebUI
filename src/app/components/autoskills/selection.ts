@@ -48,6 +48,21 @@ export function asSelected(
   });
 }
 
+/** The drafts of a decision still pending in `list` and, once the projects
+ *  are known, in a registered project, each as the decision holds it: what
+ *  its question may still name (the rule that prunes the selection; while
+ *  the projects are read again the question waits, it doesn't go). None
+ *  while the drafts aren't known. */
+export function stillListed(
+  drafts: readonly Draft[],
+  list: DraftList | null,
+  registered: ReadonlySet<string> | null
+): Draft[] {
+  if (!list) return [];
+  const pending = pendingIds(list, registered);
+  return drafts.filter((d) => pending.has(d.proposal_id));
+}
+
 /** The drafts a bulk decision may send: still pending in `list` and in a
  *  registered project; none while either isn't known. The selection is
  *  pruned by the same rule on every change, so this only guards the send. */

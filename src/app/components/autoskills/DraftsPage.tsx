@@ -21,6 +21,7 @@ import { QuestionDescription } from "@/app/components/autoskills/QuestionDescrip
 import {
   asSelected,
   decidable,
+  stillListed,
   stillPending,
 } from "@/app/components/autoskills/selection";
 import {
@@ -71,11 +72,14 @@ const NO_TOKENS: readonly number[] = [];
 /** No picks: a selection maps each picked id to the draft's updated_at as
  *  listed when it was picked. */
 const NO_SELECTION: ReadonlyMap<string, string> = new Map();
-/** No bulk approval checked yet. */
-const NO_CHECK: {
-  ids: ReadonlySet<string>;
+/** A bulk approval as clicked: its drafts, each at the version it was
+ *  picked at, and the files their check found the page can't show. */
+interface BulkDecision {
+  drafts: readonly Draft[];
   found: UnshowableByDraft;
-} = { ids: new Set(), found: new Map() };
+}
+/** No bulk approval asked about yet. */
+const NO_DECISION: BulkDecision = { drafts: [], found: new Map() };
 
 const TABS: ReadonlyArray<{
   status: DraftStatus;
@@ -319,9 +323,9 @@ export function DraftsPage() {
     },
     []
   );
-  // The drafts the last bulk check covered and what it found: the question
-  // asks about these, and only these go.
-  const [checked, setChecked] = useState(NO_CHECK);
+  // The bulk approval the question asks about: only these drafts go, at
+  // the versions recorded at the click, whatever is picked meanwhile.
+  const [asked, setAsked] = useState<BulkDecision>(NO_DECISION);
 
   const list = auto.status === "ready" ? auto.list : null;
   // Read on every render, so the page renders again when a read of the list
@@ -386,15 +390,25 @@ export function DraftsPage() {
     () => new Map(groups.map((g) => [g.project.key, g.label])),
     [groups]
   );
-  // What the bulk question asks about: the picks its check covered.
-  const checkedDrafts = selectedDrafts.filter((d) =>
-    checked.ids.has(d.proposal_id)
+  // What a decision may send: still pending in the list, in a registered
+  // project, and not held here: decided here already, or moved back by an
+  // Undo here, while the list doesn't show that yet.
+  const sendable = (drafts: readonly Draft[]) =>
+    decidable(drafts, list, registered).filter(
+      (d) => !decided.has(d.proposal_id)
+    );
+  // What the bulk question asks about: the drafts of its approval still
+  // pending and not held here (one decided elsewhere or gone meanwhile is
+  // left out; while the projects are read again it waits, as the selection
+  // does).
+  const askedDrafts = stillListed(asked.drafts, list, registered).filter(
+    (d) => !decided.has(d.proposal_id)
   );
 
-  // The question only stands while those picks still hold an update or a
+  // The question only stands while those drafts still hold an update or a
   // file the page can't show.
-  const askable = checkedDrafts.some(
-    (d) => d.operation === "update" || checked.found.has(d.proposal_id)
+  const askable = askedDrafts.some(
+    (d) => d.operation === "update" || asked.found.has(d.proposal_id)
   );
   if (confirming && !askable) setConfirming(false);
   const asking = confirming && askable;
@@ -402,7 +416,7 @@ export function DraftsPage() {
   // decision's answers prune the selection meanwhile.
   const question = useShownQuestion(
     asking,
-    bulkQuestion(checkedDrafts, checked.found, labels)
+    bulkQuestion(askedDrafts, asked.found, labels)
   );
 
   // A decision under way, or the check before one.
@@ -506,13 +520,6 @@ export function DraftsPage() {
     () => [selectedTab()]
   );
 
-  // What a decision may send: still pending in the list, in a registered
-  // project, and not held here: decided here already, or moved back by an
-  // Undo here, while the list doesn't show that yet.
-  const sendable = (drafts: readonly Draft[]) =>
-    decidable(drafts, list, registered).filter(
-      (d) => !decided.has(d.proposal_id)
-    );
   // A decision's answers are in: what went through leaves the selection
   // and waits for the list. A draft that changed since the page read it
   // (nothing installed) leaves the selection too, so a second click can't
@@ -603,45 +610,47 @@ export function DraftsPage() {
   };
   // A check that reads answers later: it goes on with the page as it is
   // then (the latest render).
-  const afterBulkCheck = useRef<
-    (ids: ReadonlySet<string>, found: UnshowableByDraft) => void
-  >(() => {});
-  // Only the drafts checked go, as still picked and sendable; one picked
-  // during the check waits for the next Approve. With an update or a file
-  // the page can't show among them, the question first.
-  afterBulkCheck.current = (ids, found) => {
-    const send = sendable(selectedDrafts).filter((d) => ids.has(d.proposal_id));
+  const afterBulkCheck = useRef<(decision: BulkDecision) => void>(() => {});
+  // The approval as clicked goes, without the drafts that can't be decided
+  // any more; one picked during the check waits for the next Approve. With
+  // an update or a file the page can't show among them, the question first.
+  afterBulkCheck.current = (decision) => {
+    const send = sendable(decision.drafts);
     if (send.length === 0) return;
-    setChecked({ ids, found });
     if (
-      send.some((d) => d.operation === "update" || found.has(d.proposal_id))
+      send.some(
+        (d) => d.operation === "update" || decision.found.has(d.proposal_id)
+      )
     ) {
+      setAsked(decision);
       setConfirming(true);
     } else if (canDecide && isReady()) {
-      void approve(asSelected(send, selected)).then(settle);
+      void approve(send).then(settle);
     }
   };
 
   // No scopes: in bulk every draft installs where it records (its own
   // project, or global); only the detail pane picks a scope per draft.
-  // Each goes at the version it was picked at (`asSelected`). What is sent
-  // is checked once more against the list and the projects (the selection
-  // is pruned by the same rule on every change), and only while the
-  // projects' gate is open: a read that has just started closes it before
-  // the render that disables the buttons. The drafts' files are checked
-  // first (as listed now: their current files).
+  // The decision is fixed at the click: the drafts picked then, each at the
+  // version it was picked at (`asSelected`), whatever is picked while their
+  // files are checked. What is sent is checked once more against the list
+  // and the projects (the selection is pruned by the same rule on every
+  // change), and only while the projects' gate is open: a read that has
+  // just started closes it before the render that disables the buttons.
+  // The drafts' files are checked first (as listed now: their current
+  // files).
   const approveSelection = () => {
     if (!isReady()) return;
     const send = sendable(selectedDrafts);
     if (send.length === 0) return;
-    const ids = new Set(send.map((d) => d.proposal_id));
+    const drafts = asSelected(send, selected);
     const out = checkFor(send, { from: "bulk" });
     if (!(out instanceof Promise)) {
-      afterBulkCheck.current(ids, out);
+      afterBulkCheck.current({ drafts, found: out });
       return;
     }
     void out.then((found) => {
-      if (found) afterBulkCheck.current(ids, found);
+      if (found) afterBulkCheck.current({ drafts, found });
     });
   };
   // A closed gate leaves the question open, to be answered after the read.
@@ -650,10 +659,8 @@ export function DraftsPage() {
   const confirmApproval = () => {
     if (!asking || !isReady()) return;
     setConfirming(false);
-    const send = sendable(selectedDrafts).filter((d) =>
-      checked.ids.has(d.proposal_id)
-    );
-    if (send.length > 0) void approve(asSelected(send, selected)).then(settle);
+    const send = sendable(asked.drafts);
+    if (send.length > 0) void approve(send).then(settle);
   };
   // The open draft's check, for its pane: the files of that draft.
   const checkOpen = (

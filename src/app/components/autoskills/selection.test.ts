@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Draft, DraftList } from "@/lib/autoskills";
-import { asSelected, decidable, stillPending } from "./selection";
+import { asSelected, decidable, stillListed, stillPending } from "./selection";
 
 const A = "/work/EvoSci_test";
 const B = "/work/project_B";
@@ -89,6 +89,21 @@ describe("asSelected", () => {
 
   it("sends a draft with no stamp recorded as listed", () => {
     expect(asSelected([x], new Map())[0]).toBe(x);
+  });
+});
+
+describe("stillListed", () => {
+  it("keeps a decision's drafts still pending, in a registered project once known, as the decision holds them", () => {
+    const list = listOf([
+      { ...x, updated_at: "T2" },
+      { ...y, status: "approved" },
+      z,
+    ]);
+    // x as picked at T1 stays as the decision holds it.
+    const picked = { ...x, updated_at: "T1" };
+    expect(stillListed([picked, y, z], list, null)).toEqual([picked, z]);
+    expect(stillListed([picked, y, z], list, new Set([B]))).toEqual([z]);
+    expect(stillListed([picked], null, null)).toEqual([]);
   });
 });
 

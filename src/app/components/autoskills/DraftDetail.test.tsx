@@ -784,6 +784,51 @@ describe("DraftDetail", () => {
     expect(onApprove).toHaveBeenCalledWith(d, "global");
   });
 
+  it("the decision is the one shown at the click, though the place changes while the files are read", async () => {
+    const answers: Array<(files: UnshowableFile[] | null) => void> = [];
+    checkFiles.mockImplementation(
+      () => new Promise<UnshowableFile[] | null>((r) => answers.push(r))
+    );
+    // No question: the place shown at the click goes.
+    const c = draft({ proposal_id: "c", scope: "workspace" });
+    const view = render(detail(c));
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    pickScope("All projects (global)");
+    await act(async () => answers[0]([]));
+    expect(onApprove.mock.calls).toEqual([[c, "workspace"]]);
+
+    // The question asks about, and its button sends, the place shown at the
+    // click.
+    const u = draft({
+      proposal_id: "u",
+      operation: "update",
+      target_skill_name: "paper-review",
+      scope: "workspace",
+    });
+    view.rerender(detail(u));
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    pickScope("All projects (global)");
+    await act(async () => answers[1]([BIG]));
+    const dialog = screen.getByRole("dialog", {
+      name: "Replace an installed skill?",
+    });
+    expect(describedBy(dialog)).toContain(
+      "This replaces the installed paper-review."
+    );
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Replace and install" })
+    );
+    expect(onApprove.mock.calls[1]).toEqual([u, "workspace"]);
+  });
+
+  it("Install into is off while the draft's files are checked", () => {
+    const d = draft({ proposal_id: "x" });
+    const view = render(detail(d, { busy: true, checking: true }));
+    expect((scopeTrigger() as HTMLButtonElement).disabled).toBe(true);
+    view.rerender(detail(d));
+    expect((scopeTrigger() as HTMLButtonElement).disabled).toBe(false);
+  });
+
   it("a check of a version the pane no longer shows asks nothing and approves nothing", async () => {
     const answers: Array<(files: UnshowableFile[] | null) => void> = [];
     checkFiles.mockImplementation(
