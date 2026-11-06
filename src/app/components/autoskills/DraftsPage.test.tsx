@@ -1450,6 +1450,52 @@ describe("DraftsPage", () => {
     ).toBe(false);
   });
 
+  it("a draft that changed since the page read it leaves the selection and stays decidable", async () => {
+    const x = draft({ proposal_id: "x" });
+    const y = draft({ proposal_id: "y", created_at: "2026-10-01T09:00:00Z" });
+    ready([x, y]);
+    // x goes through; a resubmit rewrote y after the list was read.
+    hooks.approve.mockResolvedValueOnce({
+      done: [x],
+      failed: [
+        {
+          draft: y,
+          message:
+            "y changed since the page read it, so nothing was installed. Read the new version, then decide.",
+          changed: true,
+        },
+      ],
+    });
+    const view = render(page());
+    pick("x");
+    pick("y");
+    fireEvent.click(
+      within(selection()!).getByRole("button", { name: "Approve" })
+    );
+    const box = (id: string) =>
+      screen.getByRole("checkbox", {
+        name: `Select ${id}`,
+      }) as HTMLInputElement;
+    // x waits for the list as decided. y leaves the selection at once, so a
+    // second click can't approve its new version unread, but isn't decided:
+    // it is still pending.
+    await waitFor(() => expect(box("x").disabled).toBe(true));
+    expect(selection()).toBeNull();
+    expect(box("y").checked).toBe(false);
+    expect(box("y").disabled).toBe(false);
+
+    // The re-read lists y's new version: decidable, and that version goes.
+    const y2 = { ...y, updated_at: "2026-11-06T11:00:00Z" };
+    ready([{ ...x, status: "approved" }, y2]);
+    view.rerender(page());
+    expect(box("y").disabled).toBe(false);
+    pick("y");
+    fireEvent.click(
+      within(selection()!).getByRole("button", { name: "Approve" })
+    );
+    expect(hooks.approve).toHaveBeenLastCalledWith([y2]);
+  });
+
   it("an Undo that succeeds makes its drafts decidable again", async () => {
     const x = draft({ proposal_id: "x" });
     ready([x]);

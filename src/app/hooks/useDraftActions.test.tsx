@@ -297,6 +297,35 @@ describe("useDraftActions", () => {
     expect(errorLines()).toEqual(["x was already decided elsewhere."]);
   });
 
+  it("a draft changed since the page read it installs nothing and says so", async () => {
+    stubFetch([
+      [200, okApprove],
+      [409, { error: "draft_changed", updated_at: "2026-11-06T11:00:00Z" }],
+    ]);
+    const { result } = setup();
+    const a = draft({ proposal_id: "a" });
+    const b = draft({ proposal_id: "b", skill_name: "data-cleaning" });
+    let out: DecisionResult | undefined;
+    await act(async () => {
+      out = await result.current.approve([a, b]);
+    });
+    const line =
+      "data-cleaning changed since the page read it, so nothing was installed. Read the new version, then decide.";
+    // Not done (still pending), and marked so the page drops it from the
+    // selection.
+    expect(out).toEqual({
+      done: [a],
+      failed: [{ draft: b, message: line, changed: true }],
+    });
+    expect(errorLines()).toEqual([line]);
+    expect(toast.success).toHaveBeenCalledWith(
+      "Installed a into EvoSci_test/skills.",
+      expect.objectContaining({ action: expect.anything() })
+    );
+    // The re-read brings its new version.
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
   it("mixed bulk approve reports each draft", async () => {
     stubFetch([
       [200, okApprove],
@@ -846,6 +875,11 @@ describe("decisionError", () => {
   it("words each answer", () => {
     expect(decisionError({ status: 404, error: "not_found" }, d, labels)).toBe(
       "n is no longer there."
+    );
+    expect(
+      decisionError({ status: 409, error: "draft_changed" }, d, labels)
+    ).toBe(
+      "n changed since the page read it, so nothing was installed. Read the new version, then decide."
     );
     expect(
       decisionError(

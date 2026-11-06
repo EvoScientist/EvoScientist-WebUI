@@ -21,7 +21,9 @@ import {
 
 export interface DecisionResult {
   done: Draft[];
-  failed: Array<{ draft: Draft; message: string }>;
+  /** `changed`: the core installed nothing because the draft changed since
+   *  the page read it (approve's `draft_changed`); it is still pending. */
+  failed: Array<{ draft: Draft; message: string; changed?: boolean }>;
 }
 
 type Answer = { status: number; error?: string; detail?: string } | "network";
@@ -94,6 +96,8 @@ export function decisionError(
   switch (code) {
     case "not_pending":
       return `${name} was already decided elsewhere.`;
+    case "draft_changed":
+      return `${name} changed since the page read it, so nothing was installed. Read the new version, then decide.`;
     case "not_found":
       return `${name} is no longer there.`;
     case "project_not_served":
@@ -186,7 +190,12 @@ async function decideAll(
         operations[draft.proposal_id] = operation;
       }
     } else {
-      result.failed.push({ draft, message: failure(out.answer, draft) });
+      const message = failure(out.answer, draft);
+      if (out.answer !== "network" && out.answer.error === "draft_changed") {
+        result.failed.push({ draft, message, changed: true });
+      } else {
+        result.failed.push({ draft, message });
+      }
     }
   }
   return { ...result, placed, operations };

@@ -370,12 +370,17 @@ export function DraftsPage() {
       (d) => !decided.has(d.proposal_id)
     );
   // A decision's answers are in: what went through leaves the selection
-  // and waits for the list.
-  const settle = ({ done }: DecisionResult) => {
+  // and waits for the list. A draft that changed since the page read it
+  // (nothing installed) leaves the selection too, so a second click can't
+  // approve its new version unread, but stays decidable: it is pending.
+  const settle = ({ done, failed }: DecisionResult) => {
     const ids = done.map((d) => d.proposal_id);
-    if (ids.length === 0) return;
-    setSelected((prev) => without(prev, ids));
-    setDecided((prev) => new Set([...prev, ...ids]));
+    const changed = failed
+      .filter((f) => f.changed)
+      .map((f) => f.draft.proposal_id);
+    if (ids.length === 0 && changed.length === 0) return;
+    setSelected((prev) => without(prev, [...ids, ...changed]));
+    if (ids.length > 0) setDecided((prev) => new Set([...prev, ...ids]));
   };
 
   // The open draft: decided alone, with the scope its pane picked (the only
