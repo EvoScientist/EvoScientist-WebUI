@@ -3,6 +3,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useQueryState } from "nuqs";
 import { ArrowLeft, Loader2, Settings } from "lucide-react";
+import { toast } from "sonner";
 import { AutoSkillsSettings } from "@/app/components/autoskills/AutoSkillsSettings";
 import { DraftDetail } from "@/app/components/autoskills/DraftDetail";
 import { DraftList } from "@/app/components/autoskills/DraftList";
@@ -11,6 +12,8 @@ import {
   useFocusFallback,
 } from "@/app/components/autoskills/focus";
 import {
+  APPROVE_BUSY,
+  APPROVE_CHANGED,
   fileSection,
   filesQuestion,
   useShownQuestion,
@@ -545,6 +548,11 @@ export function DraftsPage() {
   const canDecideOpen = canDecide && openDecidable;
   const approveOpen = (d: Draft, scope: DraftScope) => {
     if (!isReady()) return;
+    // Never alongside another decision or an Undo.
+    if (busy) {
+      toast.error(APPROVE_BUSY);
+      return;
+    }
     const [send] = sendable([d]);
     if (send) void approve([send], { [send.proposal_id]: scope }).then(settle);
   };
@@ -608,15 +616,32 @@ export function DraftsPage() {
       }
     );
   };
+  /** Why an approval of `drafts`, clicked before their files were
+   *  checked, can't go once they are: another decision or an Undo (clicked
+   *  on an earlier toast meanwhile) is still being saved, the projects'
+   *  gate is closed, or none of them can be decided any more. Null when it
+   *  can. */
+  const blockedAfterCheck = (drafts: readonly Draft[]): string | null => {
+    if (busy) return APPROVE_BUSY;
+    if (!canDecide || !isReady() || sendable(drafts).length === 0) {
+      return APPROVE_CHANGED;
+    }
+    return null;
+  };
   // A check that reads answers later: it goes on with the page as it is
   // then (the latest render).
   const afterBulkCheck = useRef<(decision: BulkDecision) => void>(() => {});
   // The approval as clicked goes, without the drafts that can't be decided
   // any more; one picked during the check waits for the next Approve. With
   // an update or a file the page can't show among them, the question first.
+  // When it can't go, nothing is sent and the click says so.
   afterBulkCheck.current = (decision) => {
+    const blocked = blockedAfterCheck(decision.drafts);
+    if (blocked) {
+      toast.error(blocked);
+      return;
+    }
     const send = sendable(decision.drafts);
-    if (send.length === 0) return;
     if (
       send.some(
         (d) => d.operation === "update" || decision.found.has(d.proposal_id)
@@ -624,7 +649,7 @@ export function DraftsPage() {
     ) {
       setAsked(decision);
       setConfirming(true);
-    } else if (canDecide && isReady()) {
+    } else {
       void approve(send).then(settle);
     }
   };
@@ -660,15 +685,41 @@ export function DraftsPage() {
     if (!asking || !isReady()) return;
     setConfirming(false);
     const send = sendable(asked.drafts);
-    if (send.length > 0) void approve(send).then(settle);
+    const blocked = busy
+      ? APPROVE_BUSY
+      : send.length === 0
+      ? APPROVE_CHANGED
+      : null;
+    if (blocked) toast.error(blocked);
+    else void approve(send).then(settle);
   };
-  // The open draft's check, for its pane: the files of that draft.
+  // The open draft's check, for its pane: the files of that draft. Once
+  // read, its approval goes on only as clicked: not alongside another
+  // decision, through the open gate, and with the draft still decidable at
+  // the version clicked (a rewrite meanwhile was never checked). Otherwise
+  // nothing goes, and the click says so (null for the pane).
+  const afterPaneCheck = useRef<(d: Draft) => string | null>(() => null);
+  afterPaneCheck.current = (d) =>
+    blockedAfterCheck([d]) ??
+    (list?.drafts.some(
+      (l) => l.proposal_id === d.proposal_id && l.updated_at === d.updated_at
+    )
+      ? null
+      : APPROVE_CHANGED);
   const checkOpen = (
     d: Draft
   ): UnshowableFile[] | Promise<UnshowableFile[] | null> => {
     const out = checkFor([d], { from: "pane", id: d.proposal_id });
     if (!(out instanceof Promise)) return out.get(d.proposal_id) ?? [];
-    return out.then((found) => (found ? found.get(d.proposal_id) ?? [] : null));
+    return out.then((found) => {
+      if (!found) return null;
+      const blocked = afterPaneCheck.current(d);
+      if (blocked) {
+        toast.error(blocked);
+        return null;
+      }
+      return found.get(d.proposal_id) ?? [];
+    });
   };
   const rejectSelection = () => {
     if (!isReady()) return;

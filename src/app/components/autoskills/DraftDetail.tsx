@@ -2,10 +2,12 @@
 
 import { useEffect, useId, useRef, useState } from "react";
 import { useQueryState } from "nuqs";
+import { toast } from "sonner";
 import useSWR from "swr";
 import { DraftFiles, FileText } from "@/app/components/autoskills/DraftFiles";
 import { focusFirst } from "@/app/components/autoskills/focus";
 import {
+  APPROVE_CHANGED,
   fileSection,
   filesQuestion,
   useShownQuestion,
@@ -330,7 +332,11 @@ export function DraftDetail({
   // later, while the page is busy: what it found goes to this pane as it is
   // then (the latest render), and only for the version it checked. The
   // decision is the one shown at the click: what goes, with or without the
-  // question, is that draft into that place, whatever is picked later.
+  // question, is that draft into that place, whatever is picked later. When
+  // the pane has moved on (the draft rewritten or decided, another one
+  // opened, the pane closed, the page unable to decide it), nothing goes and
+  // the click says so; a check the page dropped answers null, and the page
+  // says why if it has to.
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
@@ -352,6 +358,7 @@ export function DraftDetail({
       !pending ||
       !canWrite
     ) {
+      toast.error(APPROVE_CHANGED);
       return;
     }
     if (decision.draft.operation === "update" || files.length > 0) {

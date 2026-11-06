@@ -2132,6 +2132,137 @@ describe("DraftsPage", () => {
       expect(place().disabled).toBe(false);
     });
 
+    const CHANGED =
+      "Nothing was installed: the drafts changed while their files were checked. Approve again.";
+    const BUSY = "Another change is still being saved. Approve again.";
+    /** Every read waits for the test to answer it. */
+    function holdReads() {
+      const waiting: Array<() => void> = [];
+      serveFiles(
+        () =>
+          new Promise<Response>((r) =>
+            waiting.push(() => r(new Response("text")))
+          )
+      );
+      return waiting;
+    }
+    const spyErrors = () => {
+      const errors = vi.spyOn(toast, "error");
+      toastSpy = errors;
+      return errors;
+    };
+
+    it("an approval checked while another change is being saved sends nothing, and says so", async () => {
+      const errors = spyErrors();
+      const waiting = holdReads();
+      const c = holding({ proposal_id: "c" }, [["SKILL.md", 10]]);
+      const x = holding(
+        { proposal_id: "x", created_at: "2026-10-01T09:00:00Z" },
+        [["SKILL.md", 10]]
+      );
+      ready([c, x]);
+      q.values.set("draftId", "x");
+      const view = render(page());
+      const pane = () =>
+        within(screen.getByRole("heading", { level: 3 }).parentElement!);
+
+      // The bar: an Undo clicked on an earlier toast is in flight when the
+      // check answers.
+      pick("c");
+      approveSelected();
+      hooks.busy = true;
+      view.rerender(page());
+      await act(async () => waiting.shift()!());
+      await waitFor(() => expect(errors).toHaveBeenCalledWith(BUSY));
+      expect(errors).toHaveBeenCalledTimes(1);
+      expect(hooks.approve).not.toHaveBeenCalled();
+      expect(screen.queryByRole("dialog")).toBeNull();
+      // The check is over: Approve is back, and usable once the Undo is.
+      expect(
+        within(selection()!).queryByRole("button", { name: "Checking files…" })
+      ).toBeNull();
+      hooks.busy = false;
+      view.rerender(page());
+      expect(
+        (
+          within(selection()!).getByRole("button", {
+            name: "Approve",
+          }) as HTMLButtonElement
+        ).disabled
+      ).toBe(false);
+
+      // The pane: the same.
+      fireEvent.click(pane().getByRole("button", { name: "Approve" }));
+      hooks.busy = true;
+      view.rerender(page());
+      await act(async () => waiting.shift()!());
+      await waitFor(() => expect(errors).toHaveBeenCalledTimes(2));
+      expect(errors).toHaveBeenLastCalledWith(BUSY);
+      expect(hooks.approve).not.toHaveBeenCalled();
+      expect(
+        pane().queryByRole("button", { name: "Checking files…" })
+      ).toBeNull();
+    });
+
+    it("an approval whose drafts changed while their files were checked sends nothing, and says so", async () => {
+      const errors = spyErrors();
+      const waiting = holdReads();
+      const c = holding({ proposal_id: "c" }, [["SKILL.md", 10]]);
+      const d = holding(
+        { proposal_id: "d", created_at: "2026-10-15T09:00:00Z" },
+        [["SKILL.md", 10]]
+      );
+      const x = holding(
+        { proposal_id: "x", created_at: "2026-10-01T09:00:00Z" },
+        [["SKILL.md", 10]]
+      );
+      ready([c, d, x]);
+      const gate = { open: true };
+      const gated = { isReady: () => gate.open };
+      const view = render(page(readyProjects(A, B), gated));
+      const pane = () =>
+        within(screen.getByRole("heading", { level: 3 }).parentElement!);
+
+      // Every draft of the approval decided elsewhere meanwhile.
+      pick("c");
+      approveSelected();
+      ready([{ ...c, status: "approved" }, d, x]);
+      view.rerender(page(readyProjects(A, B), gated));
+      await act(async () => waiting.shift()!());
+      await waitFor(() => expect(errors).toHaveBeenCalledWith(CHANGED));
+      expect(hooks.approve).not.toHaveBeenCalled();
+
+      // The projects' gate closed when the check answered.
+      pick("d");
+      approveSelected();
+      gate.open = false;
+      await act(async () => waiting.shift()!());
+      await waitFor(() => expect(errors).toHaveBeenCalledTimes(2));
+      expect(errors).toHaveBeenLastCalledWith(CHANGED);
+      expect(hooks.approve).not.toHaveBeenCalled();
+      expect(screen.queryByRole("dialog")).toBeNull();
+      gate.open = true;
+
+      // The open draft rewritten while its files were checked.
+      act(() => q.set("draftId", "x"));
+      fireEvent.click(pane().getByRole("button", { name: "Approve" }));
+      ready([
+        { ...c, status: "approved" },
+        d,
+        { ...x, updated_at: "2026-11-02T09:00:00Z" },
+      ]);
+      view.rerender(page(readyProjects(A, B), gated));
+      await act(async () => waiting.shift()!());
+      await waitFor(() => expect(errors).toHaveBeenCalledTimes(3));
+      expect(errors).toHaveBeenLastCalledWith(CHANGED);
+      expect(hooks.approve).not.toHaveBeenCalled();
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(
+        (pane().getByRole("button", { name: "Approve" }) as HTMLButtonElement)
+          .disabled
+      ).toBe(false);
+    });
+
     it("an update whose files can all be shown asks only its own question", async () => {
       serveFiles();
       const u = holding(

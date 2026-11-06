@@ -28,6 +28,14 @@ function sameWords(a: Question, b: Question): boolean {
   );
 }
 
+/** What an approval says when, once its drafts' files are checked, it
+ *  can't go as clicked: nothing is sent. */
+export const APPROVE_CHANGED =
+  "Nothing was installed: the drafts changed while their files were checked. Approve again.";
+/** The same, while another decision or an Undo is still being saved. */
+export const APPROVE_BUSY =
+  "Another change is still being saved. Approve again.";
+
 /** The words a question's dialog shows: `live` while it is open; while it
  *  fades out (200 ms, still on the page), the words it had open, whatever
  *  changes meanwhile (a decision's answers prune the selection, the pane

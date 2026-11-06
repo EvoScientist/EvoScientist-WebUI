@@ -17,6 +17,7 @@ import {
   readyProjects,
   TestProjectsProvider,
 } from "@/test/mockProjects";
+import { toast } from "sonner";
 import { SWRConfig } from "swr";
 
 // jsdom has no scrollIntoView; Radix Select calls it on the item it focuses
@@ -829,39 +830,65 @@ describe("DraftDetail", () => {
     expect((scopeTrigger() as HTMLButtonElement).disabled).toBe(false);
   });
 
-  it("a check of a version the pane no longer shows asks nothing and approves nothing", async () => {
-    const answers: Array<(files: UnshowableFile[] | null) => void> = [];
-    checkFiles.mockImplementation(
-      () => new Promise<UnshowableFile[] | null>((r) => answers.push(r))
-    );
-    const d = draft({ proposal_id: "x" });
-    const view = render(detail(d));
+  it("a check of a version the pane no longer shows asks nothing, approves nothing and says so", async () => {
+    const errors = vi.spyOn(toast, "error");
+    try {
+      const CHANGED =
+        "Nothing was installed: the drafts changed while their files were checked. Approve again.";
+      const answers: Array<(files: UnshowableFile[] | null) => void> = [];
+      checkFiles.mockImplementation(
+        () => new Promise<UnshowableFile[] | null>((r) => answers.push(r))
+      );
+      const d = draft({ proposal_id: "x" });
+      const view = render(detail(d));
 
-    // Rewritten in place while its files were read.
-    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
-    view.rerender(detail({ ...d, updated_at: "2026-11-02T09:00:00Z" }));
-    await act(async () => answers[0]([BIG]));
-    expect(screen.queryByRole("dialog")).toBeNull();
+      // Rewritten in place while its files were read.
+      fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+      view.rerender(detail({ ...d, updated_at: "2026-11-02T09:00:00Z" }));
+      await act(async () => answers[0]([BIG]));
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(errors.mock.calls).toEqual([[CHANGED]]);
 
-    // Another draft opened meanwhile.
-    view.rerender(detail(d));
-    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
-    view.rerender(detail(draft({ proposal_id: "y" })));
-    await act(async () => answers[1]([]));
-    expect(onApprove).not.toHaveBeenCalled();
+      // Another draft opened meanwhile.
+      view.rerender(detail(d));
+      fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+      view.rerender(detail(draft({ proposal_id: "y" })));
+      await act(async () => answers[1]([]));
+      expect(onApprove).not.toHaveBeenCalled();
+      expect(errors).toHaveBeenCalledTimes(2);
 
-    // A check the page dropped answers null.
-    view.rerender(detail(d));
-    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
-    await act(async () => answers[2](null));
-    expect(screen.queryByRole("dialog")).toBeNull();
-    expect(onApprove).not.toHaveBeenCalled();
+      // Decided elsewhere meanwhile, or the page can't decide it any more.
+      view.rerender(detail(d));
+      fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+      view.rerender(detail({ ...d, status: "approved" }));
+      await act(async () => answers[2]([]));
+      view.rerender(detail(d));
+      fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+      view.rerender(detail(d, { canWrite: false }));
+      await act(async () => answers[3]([]));
+      expect(onApprove).not.toHaveBeenCalled();
+      expect(errors).toHaveBeenCalledTimes(4);
 
-    // The pane closed meanwhile.
-    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
-    view.unmount();
-    await act(async () => answers[3]([]));
-    expect(onApprove).not.toHaveBeenCalled();
+      // A check the page dropped answers null: the page said why, if at all.
+      view.rerender(detail(d));
+      fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+      await act(async () => answers[4](null));
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(onApprove).not.toHaveBeenCalled();
+      expect(errors).toHaveBeenCalledTimes(4);
+
+      // The pane closed meanwhile.
+      fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+      view.unmount();
+      await act(async () => answers[5]([]));
+      expect(onApprove).not.toHaveBeenCalled();
+      expect(errors).toHaveBeenCalledTimes(5);
+      expect(new Set(errors.mock.calls.map((c) => c[0]))).toEqual(
+        new Set([CHANGED])
+      );
+    } finally {
+      errors.mockRestore();
+    }
   });
 
   it("the files question keeps its words while it fades out", () => {
