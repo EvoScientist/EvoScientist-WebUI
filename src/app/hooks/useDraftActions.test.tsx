@@ -118,8 +118,59 @@ describe("useDraftActions", () => {
     // The list's recorded scope may be stale (a draft resubmitted with
     // another one): without a pick the core installs where it records now.
     expect(calls).toEqual([
-      { action: "approve", proposal_id: "a", scope: "global" },
-      { action: "approve", proposal_id: "b", scope: null },
+      {
+        action: "approve",
+        proposal_id: "a",
+        scope: "global",
+        expected_updated_at: null,
+      },
+      {
+        action: "approve",
+        proposal_id: "b",
+        scope: null,
+        expected_updated_at: null,
+      },
+    ]);
+  });
+
+  it("every approve sends the draft's updated_at as the page read it", async () => {
+    stubFetch([
+      [200, okGlobal],
+      [200, okApprove],
+      [200, okApprove],
+    ]);
+    const { result } = setup();
+    const a = draft({ proposal_id: "a", updated_at: "2026-11-06T09:00:00Z" });
+    const b = draft({ proposal_id: "b", updated_at: "2026-11-06T10:00:00Z" });
+    // Read without one: nothing to check against.
+    const c = draft({ proposal_id: "c", updated_at: "" });
+    // The pane's approve, with the scope it shows.
+    await act(async () => {
+      await result.current.approve([a], { a: "global" });
+    });
+    // A bulk approve: each draft as the list has it, no scopes.
+    await act(async () => {
+      await result.current.approve([b, c]);
+    });
+    expect(calls).toEqual([
+      {
+        action: "approve",
+        proposal_id: "a",
+        scope: "global",
+        expected_updated_at: "2026-11-06T09:00:00Z",
+      },
+      {
+        action: "approve",
+        proposal_id: "b",
+        scope: null,
+        expected_updated_at: "2026-11-06T10:00:00Z",
+      },
+      {
+        action: "approve",
+        proposal_id: "c",
+        scope: null,
+        expected_updated_at: null,
+      },
     ]);
   });
 
@@ -138,11 +189,14 @@ describe("useDraftActions", () => {
         draft({ proposal_id: "constructor", scope: "workspace" }),
       ]);
     });
-    expect(calls).toEqual([
-      { action: "approve", proposal_id: "a", scope: null },
-      { action: "approve", proposal_id: "b", scope: null },
-      { action: "approve", proposal_id: "constructor", scope: null },
-    ]);
+    expect(calls).toEqual(
+      ["a", "b", "constructor"].map((id) => ({
+        action: "approve",
+        proposal_id: id,
+        scope: null,
+        expected_updated_at: null,
+      }))
+    );
   });
 
   it("the toast names where the core installed it, not the list's scope", async () => {

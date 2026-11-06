@@ -346,6 +346,10 @@ export function useDraftActions(
                   scope: Object.hasOwn(scopes, d.proposal_id)
                     ? scopes[d.proposal_id]
                     : null,
+                  // The version the page read: one a resubmit rewrote since
+                  // is refused (draft_changed), never installed unread. A
+                  // draft read without one checks nothing.
+                  expected_updated_at: d.updated_at || null,
                 }
               : { action, proposal_id: d.proposal_id },
           labels,
