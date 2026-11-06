@@ -203,12 +203,17 @@ async function decideAll(
 
 /** Read the drafts and experts again, in the background: the drafts GET has
  *  no timeout, and a re-read that fails or never answers must hold neither
- *  the toasts of a decision that was made nor the controls. */
-function reread(): void {
+ *  the toasts of a decision that was made nor the controls. The promise
+ *  settles once the drafts read does, never rejecting. */
+function reread(): Promise<void> {
+  let drafts: Promise<void> = Promise.resolve();
   try {
-    void Promise.resolve(refreshAutoSkills()).catch(() => {
-      // The next poll reads again.
-    });
+    drafts = Promise.resolve(refreshAutoSkills()).then(
+      () => undefined,
+      () => {
+        // The next poll reads again.
+      }
+    );
   } catch {
     // Same.
   }
@@ -217,6 +222,7 @@ function reread(): void {
   } catch {
     // Same.
   }
+  return drafts;
 }
 
 function toastErrors(
@@ -237,10 +243,13 @@ function toastErrors(
 }
 
 /** Approve and reject drafts through the relay, with the toasts and Undo.
- *  `onReverted` hears which drafts an Undo moved back to Pending. */
+ *  `onReverted` hears which drafts an Undo moved back to Pending, with that
+ *  Undo's own re-read of the drafts (settling when it does). */
 export function useDraftActions(
   projects: readonly Project[],
-  options: { onReverted?(drafts: Draft[]): void } = {}
+  options: {
+    onReverted?(drafts: Draft[], reread: Promise<void>): void;
+  } = {}
 ): {
   approve(
     drafts: Draft[],
@@ -297,10 +306,10 @@ export function useDraftActions(
               return decisionError(answer, d, labels);
             }
           );
-          reread();
+          const rereading = reread();
           if (done.length > 0) {
             try {
-              onRevertedRef.current?.(done);
+              onRevertedRef.current?.(done, rereading);
             } catch {
               // The toasts below still say what happened.
             }

@@ -87,7 +87,9 @@ const hooks = vi.hoisted(() => ({
       failed: [],
     })
   ),
-  onReverted: undefined as ((drafts: Draft[]) => void) | undefined,
+  onReverted: undefined as
+    | ((drafts: Draft[], reread: Promise<void>) => void)
+    | undefined,
   // The real useDraftActions, for a test that follows a decision to the
   // relay.
   realActions: false,
@@ -111,7 +113,9 @@ vi.mock("@/app/hooks/useDraftActions", async (importOriginal) => {
     ...actual,
     useDraftActions: (
       projects: Parameters<typeof actual.useDraftActions>[0],
-      options?: { onReverted?: (drafts: Draft[]) => void }
+      options?: {
+        onReverted?: (drafts: Draft[], reread: Promise<void>) => void;
+      }
     ) => {
       if (hooks.realActions) return actual.useDraftActions(projects, options);
       hooks.onReverted = options?.onReverted;
@@ -1654,7 +1658,8 @@ describe("DraftsPage", () => {
     await waitFor(() => expect(box().disabled).toBe(true));
     // The Undo answered before any list: the revert gave x a new updated_at,
     // so x waits for the list that has it rather than send the old one.
-    act(() => hooks.onReverted?.([x]));
+    // Its own re-read is still out.
+    act(() => hooks.onReverted?.([x], new Promise<void>(() => {})));
     expect(box().disabled).toBe(true);
 
     // The Undo's re-read lists x at its new stamp: decidable, and that
@@ -1668,6 +1673,72 @@ describe("DraftsPage", () => {
       within(selection()!).getByRole("button", { name: "Approve" })
     );
     expect(hooks.approve).toHaveBeenLastCalledWith([x2]);
+  });
+
+  /** A promise to settle by hand: an Undo's own re-read. */
+  function reread() {
+    let settle = () => {};
+    const promise = new Promise<void>((resolve) => {
+      settle = resolve;
+    });
+    return { promise, settle };
+  }
+
+  it("an Undo's own re-read releases its hold, though SWR keeps the same list object", async () => {
+    const x = draft({ proposal_id: "x" });
+    ready([x]);
+    hooks.reject.mockResolvedValueOnce({ done: [x], failed: [] });
+    const view = render(page());
+    pick("x");
+    fireEvent.click(
+      within(selection()!).getByRole("button", { name: "Reject" })
+    );
+    const box = () =>
+      screen.getByRole("checkbox", { name: "Select x" }) as HTMLInputElement;
+    await waitFor(() => expect(box().disabled).toBe(true));
+    // The decision's re-read: x rejected.
+    ready([{ ...x, status: "rejected" }]);
+    view.rerender(page());
+    // A poll answered after the core wrote the revert, rendered before the
+    // page handles the revert's answer: x pending at its new stamp.
+    ready([{ ...x, updated_at: "2026-11-06T12:00:00Z" }]);
+    view.rerender(page());
+    expect(box().disabled).toBe(false);
+
+    // The revert's answer: x is held until the Undo's own re-read is in.
+    const undo = reread();
+    act(() => hooks.onReverted?.([x], undo.promise));
+    expect(box().disabled).toBe(true);
+    // It reads equal data: SWR keeps the cached list object, so no new list
+    // comes. Its settling releases the hold.
+    await act(async () => undo.settle());
+    expect(box().disabled).toBe(false);
+  });
+
+  it("an Undo's re-read releases only the holds it made", async () => {
+    const x = draft({ proposal_id: "x" });
+    ready([x]);
+    const view = render(page());
+    const box = () =>
+      screen.getByRole("checkbox", { name: "Select x" }) as HTMLInputElement;
+    const undo = reread();
+    act(() => hooks.onReverted?.([x], undo.promise));
+    expect(box().disabled).toBe(true);
+    // A new list releases it first.
+    const x2 = { ...x, updated_at: "2026-11-06T12:00:00Z" };
+    ready([x2]);
+    view.rerender(page());
+    expect(box().disabled).toBe(false);
+    // A later decision holds x again.
+    hooks.approve.mockResolvedValueOnce({ done: [x2], failed: [] });
+    pick("x");
+    fireEvent.click(
+      within(selection()!).getByRole("button", { name: "Approve" })
+    );
+    await waitFor(() => expect(box().disabled).toBe(true));
+    // The old Undo's re-read settles late: the newer hold stays.
+    await act(async () => undo.settle());
+    expect(box().disabled).toBe(true);
   });
 
   it("opening the page marks automatic installs seen", () => {

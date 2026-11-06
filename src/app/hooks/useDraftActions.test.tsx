@@ -768,7 +768,68 @@ describe("Undo tells the page", () => {
     await act(async () => {
       await toast.success.mock.calls[0][1].action.onClick();
     });
-    expect(onReverted.mock.calls).toEqual([[[b]]]);
+    expect(onReverted.mock.calls).toEqual([[[b], expect.any(Promise)]]);
+  });
+
+  it("with its own re-read, started first and settling when that read does", async () => {
+    const onReverted = vi.fn();
+    stubFetch([[200, okApprove]]);
+    const { result } = renderHook(() =>
+      useDraftActions(projects, { onReverted })
+    );
+    const a = draft({ proposal_id: "a" });
+    await act(async () => {
+      await result.current.approve([a]);
+    });
+    // The Undo's re-read stays out until settled here.
+    let settle = () => {};
+    refresh.mockImplementationOnce(
+      () =>
+        new Promise<undefined>((resolve) => {
+          settle = () => resolve(undefined);
+        })
+    );
+    stubFetch([[200, okRevert]]);
+    await act(async () => {
+      await toast.success.mock.calls[0][1].action.onClick();
+    });
+    // Started before the page was told: the hold's release relies on it.
+    expect(refresh).toHaveBeenCalledTimes(2);
+    expect(refresh.mock.invocationCallOrder[1]).toBeLessThan(
+      onReverted.mock.invocationCallOrder[0]
+    );
+    expect(onReverted.mock.calls[0][0]).toEqual([a]);
+    const read = onReverted.mock.calls[0][1] as Promise<void>;
+    let settled = false;
+    void read.then(() => {
+      settled = true;
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(settled).toBe(false);
+    settle();
+    await act(async () => {
+      await read;
+    });
+    expect(settled).toBe(true);
+  });
+
+  it("a re-read that fails still settles the Undo's promise", async () => {
+    const onReverted = vi.fn();
+    stubFetch([[200, okApprove]]);
+    const { result } = renderHook(() =>
+      useDraftActions(projects, { onReverted })
+    );
+    await act(async () => {
+      await result.current.approve([draft({ proposal_id: "a" })]);
+    });
+    refresh.mockRejectedValueOnce(new Error("offline"));
+    stubFetch([[200, okRevert]]);
+    await act(async () => {
+      await toast.success.mock.calls[0][1].action.onClick();
+    });
+    await expect(onReverted.mock.calls[0][1]).resolves.toBeUndefined();
   });
 
   it("nothing when no Undo succeeded", async () => {

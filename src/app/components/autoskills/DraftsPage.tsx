@@ -55,7 +55,10 @@ import { useRunNowState } from "@/providers/runNowContext";
 // reject several at once and the open draft beside the list.
 
 const NO_PROJECTS: readonly Project[] = [];
-const NO_IDS: ReadonlySet<string> = new Set();
+/** No holds: each held id maps to the token of the decision or Undo that
+ *  holds it. */
+const NO_HOLDS: ReadonlyMap<string, number> = new Map();
+const NO_TOKENS: readonly number[] = [];
 /** No picks: a selection maps each picked id to the draft's updated_at as
  *  listed when it was picked. */
 const NO_SELECTION: ReadonlyMap<string, string> = new Map();
@@ -83,6 +86,30 @@ function unpick(
   if (!ids.some((id) => selection.has(id))) return selection;
   const next = new Map(selection);
   for (const id of ids) next.delete(id);
+  return next;
+}
+
+/** `holds` with each of `ids` held under `token`. */
+function hold(
+  holds: ReadonlyMap<string, number>,
+  ids: readonly string[],
+  token: number
+): ReadonlyMap<string, number> {
+  const next = new Map(holds);
+  for (const id of ids) next.set(id, token);
+  return next;
+}
+
+/** `holds` without the ones made under `tokens`; the same map when none
+ *  is. */
+function release(
+  holds: ReadonlyMap<string, number>,
+  tokens: readonly number[]
+): ReadonlyMap<string, number> {
+  const gone = [...holds].filter(([, token]) => tokens.includes(token));
+  if (gone.length === 0) return holds;
+  const next = new Map(holds);
+  for (const [id] of gone) next.delete(id);
   return next;
 }
 
@@ -198,13 +225,19 @@ export function DraftsPage() {
   // core has decided them, but the re-read hasn't landed (or stalls). They
   // leave the selection at once and can't be decided again until the next
   // list arrives. An Undo that succeeds holds its drafts the same way: the
-  // revert gave them a new updated_at, which only that list carries.
-  const [decided, setDecided] = useState<ReadonlySet<string>>(NO_IDS);
+  // revert gave them a new updated_at, which only a read after it carries.
+  // Each hold has the token of the decision or Undo that made it.
+  const [decided, setDecided] = useState<ReadonlyMap<string, number>>(NO_HOLDS);
+  const holdSeq = useRef(0);
+  // Undos whose own re-read has settled, by token, for the next render.
+  const [readUndos, setReadUndos] = useState<readonly number[]>(NO_TOKENS);
   const { approve, reject, busy } = useDraftActions(projectList, {
-    onReverted: (drafts) =>
-      setDecided(
-        (prev) => new Set([...prev, ...drafts.map((d) => d.proposal_id)])
-      ),
+    onReverted: (drafts, reread) => {
+      const token = ++holdSeq.current;
+      const ids = drafts.map((d) => d.proposal_id);
+      setDecided((prev) => hold(prev, ids, token));
+      void reread.then(() => setReadUndos((prev) => [...prev, token]));
+    },
   });
   // Kept above the views: a run goes on, and is reported, after this page
   // is left.
@@ -240,7 +273,17 @@ export function DraftsPage() {
     // or in another window), they are decidable again, at the updated_at it
     // lists. Every id here was recorded before it.
     if (list && basis.list !== list) {
-      setDecided((prev) => (prev.size === 0 ? prev : NO_IDS));
+      setDecided((prev) => (prev.size === 0 ? prev : NO_HOLDS));
+    }
+  }
+  // An Undo's own re-read is in. When it read the list, the holds that Undo
+  // made go, even if SWR kept the cached list object (equal data) and no
+  // new list comes; a newer hold of the same draft stays. A failed read
+  // changes nothing: the next list releases them.
+  if (readUndos.length > 0) {
+    setReadUndos(NO_TOKENS);
+    if (auto.status === "ready") {
+      setDecided((prev) => release(prev, readUndos));
     }
   }
 
@@ -260,6 +303,7 @@ export function DraftsPage() {
   const openDraft = shown.find((d) => d.proposal_id === draftId) ?? null;
   const selectedDrafts = shown.filter((d) => selected.has(d.proposal_id));
   const selectedIds = useMemo(() => new Set(selected.keys()), [selected]);
+  const decidedIds = useMemo(() => new Set(decided.keys()), [decided]);
   const labels = useMemo(
     () => new Map(groups.map((g) => [g.project.key, g.label])),
     [groups]
@@ -389,7 +433,10 @@ export function DraftsPage() {
       .map((f) => f.draft.proposal_id);
     if (ids.length === 0 && changed.length === 0) return;
     setSelected((prev) => unpick(prev, [...ids, ...changed]));
-    if (ids.length > 0) setDecided((prev) => new Set([...prev, ...ids]));
+    if (ids.length > 0) {
+      const token = ++holdSeq.current;
+      setDecided((prev) => hold(prev, ids, token));
+    }
   };
 
   // The open draft: decided alone, with the scope its pane picked (the only
@@ -671,7 +718,7 @@ export function DraftsPage() {
                   canWrite={canWrite}
                   registered={registered}
                   autoSkillsOff={autoSkillsOff}
-                  decided={decided}
+                  decided={decidedIds}
                 />
               </div>
 
