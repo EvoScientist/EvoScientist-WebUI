@@ -1,9 +1,21 @@
 "use client";
 
 import { useCallback } from "react";
-import useSWR, { mutate as globalMutate, useSWRConfig } from "swr";
+import useSWR, {
+  mutate as globalMutate,
+  unstable_serialize,
+  useSWRConfig,
+} from "swr";
 import { useDeployment } from "@/providers/ClientProvider";
-import { parseDraftList, type Draft, type DraftList } from "@/lib/autoskills";
+import {
+  MAX_SHOWN_BYTES,
+  parseDraftList,
+  unshowableFiles,
+  type Draft,
+  type DraftList,
+  type FileReadOutcome,
+  type UnshowableFile,
+} from "@/lib/autoskills";
 
 // One SWR read per deployment feeds the rail count, the banner, the drafts
 // page and the detail pane.
@@ -195,10 +207,31 @@ const FINAL_STATUSES: ReadonlySet<number> = new Set([400, 404, 413, 415]);
 
 class DraftFileError extends Error {
   readonly final: boolean;
-  constructor(message: string, final: boolean) {
+  /** The core's answer; null when there was none (network, timeout). */
+  readonly status: number | null;
+  constructor(message: string, final: boolean, status: number | null = null) {
     super(message);
     this.final = final;
+    this.status = status;
   }
+}
+
+function fileKey(
+  base: string,
+  apiKey: string,
+  draft: Draft,
+  path: string,
+  installed: boolean
+): FileKey {
+  return [
+    "autoskills-file",
+    base,
+    apiKey,
+    draft.proposal_id,
+    draft.updated_at,
+    path,
+    installed,
+  ];
 }
 
 async function fetchDraftFile([
@@ -224,7 +257,8 @@ async function fetchDraftFile([
       if (!res.ok) {
         throw new DraftFileError(
           FILE_ERRORS[res.status] ?? FILE_FALLBACK,
-          FINAL_STATUSES.has(res.status)
+          FINAL_STATUSES.has(res.status),
+          res.status
         );
       }
       return await res.text();
@@ -245,15 +279,7 @@ export function useDraftFile(
   const base = baseOf(deploymentUrl);
   const key: FileKey | null =
     base && draft && path
-      ? [
-          "autoskills-file",
-          base,
-          apiKey,
-          draft.proposal_id,
-          draft.updated_at,
-          path,
-          installed,
-        ]
+      ? fileKey(base, apiKey, draft, path, installed)
       : null;
   const { data, error, isLoading } = useSWR(key, fetchDraftFile, {
     // A missing, too large or binary file will not change by asking again.
@@ -264,6 +290,119 @@ export function useDraftFile(
     error: error ? (error as Error).message : null,
     loading: isLoading,
   };
+}
+
+/** How many of a check's files are read at a time. */
+const CHECK_READS = 4;
+
+/** Each draft of a check with the files the page can't show; a draft
+ *  without any isn't in it. */
+export type UnshowableByDraft = ReadonlyMap<string, UnshowableFile[]>;
+
+/** What an answer to a file read says about showing it. */
+function outcomeOf(error: unknown): FileReadOutcome {
+  if (error instanceof DraftFileError) {
+    if (error.status === 413) return "too_large";
+    if (error.status === 415) return "not_text";
+  }
+  return "unchecked";
+}
+
+/** What the Files tab's cache already knows about a file: shown, or a
+ *  final 413 / 415; null when it has to be read. */
+function knownOutcome(
+  state: { data?: unknown; error?: unknown } | undefined
+): FileReadOutcome | null {
+  if (!state) return null;
+  if (state.data !== undefined) return "shown";
+  const outcome = outcomeOf(state.error);
+  return outcome === "unchecked" ? null : outcome;
+}
+
+/** Run `tasks`, at most `limit` at a time. */
+async function inTurns(
+  tasks: ReadonlyArray<() => Promise<void>>,
+  limit: number
+): Promise<void> {
+  let next = 0;
+  const worker = async () => {
+    while (next < tasks.length) await tasks[next++]();
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(limit, tasks.length) }, worker)
+  );
+}
+
+/** The check before an approval: the files of each draft the page can't
+ *  show. A file listed over MAX_SHOWN_BYTES is known by its size; every
+ *  other one is read as the Files tab reads it (its route, its fetcher and
+ *  its SWR key, so a file opened before isn't read again and one read here
+ *  opens at once), at most CHECK_READS at a time, each read bounded like
+ *  the tab's. A 413 or 415 says the page can't show it; any other failure
+ *  that it couldn't be checked. The files are the drafts' current ones
+ *  (their updated_at is in the key). Answers at once, without a promise,
+ *  when nothing has to be read; never rejects. */
+export function useDraftFilesCheck(): (
+  drafts: readonly Draft[]
+) => UnshowableByDraft | Promise<UnshowableByDraft> {
+  const { deploymentUrl, apiKey } = useDeployment();
+  const base = baseOf(deploymentUrl);
+  const { cache, mutate } = useSWRConfig();
+  return useCallback(
+    (drafts: readonly Draft[]) => {
+      const reads = new Map<string, Map<string, FileReadOutcome>>();
+      const toRead: Array<() => Promise<void>> = [];
+      for (const draft of drafts) {
+        const outcomes = new Map<string, FileReadOutcome>();
+        reads.set(draft.proposal_id, outcomes);
+        for (const { path, size } of draft.files) {
+          if (size > MAX_SHOWN_BYTES) continue;
+          if (!base) {
+            outcomes.set(path, "unchecked");
+            continue;
+          }
+          const key = fileKey(base, apiKey, draft, path, false);
+          const known = knownOutcome(cache.get(unstable_serialize(key)));
+          if (known) {
+            outcomes.set(path, known);
+            continue;
+          }
+          toRead.push(async () => {
+            let outcome: FileReadOutcome;
+            try {
+              const text = await fetchDraftFile(key);
+              outcome = "shown";
+              // Into the tab's cache, without reading it again.
+              try {
+                void Promise.resolve(
+                  mutate(key, text, { revalidate: false })
+                ).catch(() => {});
+              } catch {
+                // Opening the file reads it then.
+              }
+            } catch (e) {
+              outcome = outcomeOf(e);
+            }
+            outcomes.set(path, outcome);
+          });
+        }
+      }
+      const found = (): UnshowableByDraft => {
+        const out = new Map<string, UnshowableFile[]>();
+        for (const draft of drafts) {
+          const files = unshowableFiles(
+            draft.files,
+            reads.get(draft.proposal_id) ?? new Map()
+          );
+          if (files.length > 0) out.set(draft.proposal_id, files);
+        }
+        return out;
+      };
+      if (toRead.length === 0) return found();
+      return inTurns(toRead, CHECK_READS).then(found);
+    },
+    [base, apiKey, cache, mutate]
+  );
 }
 
 const SEEN_KEY = "evoscientist-autoskills-seen-at";

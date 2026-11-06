@@ -3,7 +3,12 @@
 import { useMemo, useState } from "react";
 import { LineDiff } from "@/app/components/LineDiff";
 import { useDraftFile } from "@/app/hooks/useAutoSkills";
-import type { Draft, DraftFile } from "@/lib/autoskills";
+import {
+  MAX_SHOWN_BYTES,
+  sizeText,
+  type Draft,
+  type DraftFile,
+} from "@/lib/autoskills";
 import { textFileDiff } from "@/lib/fileEditDiff";
 import { cn } from "@/lib/utils";
 
@@ -21,20 +26,6 @@ export function FileText({ text }: { text: string }) {
       {text}
     </pre>
   );
-}
-
-/** The largest file the core shows (its MAX_FILE_BYTES): a larger one
- *  answers 413, so it is marked before it is opened. */
-const MAX_SHOWN_BYTES = 1_048_576;
-
-function sizeText(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  // MB before the rounded KB would read 1024.0.
-  const kb = (bytes / 1024).toFixed(1);
-  if (Number(kb) < 1024) return `${kb} KB`;
-  // Rounded up, so a file over the limit never reads like the limit itself
-  // (1.00 MB).
-  return `${(Math.ceil((bytes / (1024 * 1024)) * 100) / 100).toFixed(2)} MB`;
 }
 
 function Reading() {

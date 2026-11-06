@@ -9,6 +9,7 @@ import {
 } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { toast } from "sonner";
+import { SWRConfig } from "swr";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Draft, DraftList } from "@/lib/autoskills";
 import type { ProjectsState } from "@/lib/projects";
@@ -100,10 +101,14 @@ const hooks = vi.hoisted(() => ({
   access: undefined as SettingsWriteAccess | undefined,
 }));
 
-vi.mock("@/app/hooks/useAutoSkills", () => ({
+vi.mock("@/app/hooks/useAutoSkills", async (importOriginal) => ({
   useAutoSkills: () => ({ ...hooks.auto, refresh: hooks.refresh }),
   markAutoSeen: hooks.mark,
   refreshAutoSkills: hooks.refresh,
+  // The real check of a draft's files, reading through a stubbed fetch.
+  useDraftFilesCheck: (
+    await importOriginal<typeof import("@/app/hooks/useAutoSkills")>()
+  ).useDraftFilesCheck,
 }));
 vi.mock("@/app/hooks/useDraftActions", async (importOriginal) => {
   const actual = await importOriginal<
@@ -201,12 +206,15 @@ function page(
   projects: ProjectsState = readyProjects(A, B),
   over: Partial<ProjectsContextValue> = {}
 ) {
+  // Each mount reads files with a cache of its own; a rerender keeps it.
   return (
-    <TestProjectsProvider value={{ ...mockProjects(projects), ...over }}>
-      <RunNow>
-        <DraftsPage />
-      </RunNow>
-    </TestProjectsProvider>
+    <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+      <TestProjectsProvider value={{ ...mockProjects(projects), ...over }}>
+        <RunNow>
+          <DraftsPage />
+        </RunNow>
+      </TestProjectsProvider>
+    </SWRConfig>
   );
 }
 
@@ -1839,6 +1847,364 @@ describe("DraftsPage", () => {
     hooks.auto = { ...hooks.auto, isValidating: false };
     view.rerender(page());
     expect(box().disabled).toBe(false);
+  });
+
+  describe("files the page can't show", () => {
+    const BIG = 1_100_000;
+    /** A draft with files, as [path, size]. */
+    const holding = (
+      over: Partial<Draft> & { proposal_id: string },
+      files: Array<[string, number]>
+    ) =>
+      draft({
+        ...over,
+        files: files.map(([path, size]) => ({ path, size, installed: false })),
+      });
+    /** The core's file route: an answer per path, else the text. */
+    function serveFiles(
+      answer: (path: string) => Response | Promise<Response> = (path) =>
+        new Response(`text of ${path}`)
+    ) {
+      const fetchMock = vi.fn(async (input: RequestInfo | URL) =>
+        answer(new URL(String(input)).searchParams.get("path") ?? "")
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      return fetchMock;
+    }
+    const fileLines = (dialog: HTMLElement) =>
+      within(dialog)
+        .getAllByRole("listitem")
+        .map((li) => li.textContent);
+    const describedBy = (dialog: HTMLElement) =>
+      document.getElementById(dialog.getAttribute("aria-describedby") ?? "")
+        ?.textContent;
+
+    it("the detail pane checks the files first, busy meanwhile, then asks", async () => {
+      let skillMd: (r: Response) => void = () => {};
+      serveFiles((path) =>
+        path === "SKILL.md"
+          ? new Promise<Response>((r) => (skillMd = r))
+          : new Response("text")
+      );
+      const x = holding({ proposal_id: "x", skill_name: "csv-profiler" }, [
+        ["SKILL.md", 120],
+        ["data/big.csv", BIG],
+      ]);
+      const y = draft({ proposal_id: "y", created_at: "2026-10-01T09:00:00Z" });
+      ready([x, y]);
+      q.values.set("draftId", "x");
+      render(page());
+      pick("y");
+      const pane = () =>
+        within(screen.getByRole("heading", { level: 3 }).parentElement!);
+
+      fireEvent.click(pane().getByRole("button", { name: "Approve" }));
+      // Reading SKILL.md: this Approve says so, and no other decision can
+      // start.
+      const checking = pane().getByRole("button", {
+        name: "Checking files…",
+      }) as HTMLButtonElement;
+      expect(checking.disabled).toBe(true);
+      expect(
+        (pane().getByRole("button", { name: "Reject" }) as HTMLButtonElement)
+          .disabled
+      ).toBe(true);
+      for (const name of ["Approve", "Reject"]) {
+        const button = within(selection()!).getByRole("button", {
+          name,
+        }) as HTMLButtonElement;
+        expect(button.disabled).toBe(true);
+        fireEvent.click(button);
+      }
+      expect(hooks.approve).not.toHaveBeenCalled();
+      expect(hooks.reject).not.toHaveBeenCalled();
+      expect(screen.queryByRole("dialog")).toBeNull();
+
+      // Another draft opened meanwhile is busy, but isn't the one checked.
+      act(() => q.set("draftId", "y"));
+      expect(
+        (pane().getByRole("button", { name: "Approve" }) as HTMLButtonElement)
+          .disabled
+      ).toBe(true);
+      act(() => q.set("draftId", "x"));
+      expect(
+        pane().getByRole("button", { name: "Checking files…" })
+      ).toBeTruthy();
+
+      await act(async () => skillMd(new Response("# skill")));
+      const dialog = await screen.findByRole("dialog", {
+        name: "Install files you haven't seen?",
+      });
+      expect(fileLines(dialog)).toEqual([
+        "data/big.csv (1.05 MB) — too large to show",
+      ]);
+      expect(describedBy(dialog)).toContain(
+        "csv-profiler holds files this page can't show:"
+      );
+      expect(hooks.approve).not.toHaveBeenCalled();
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: "Install anyway" })
+      );
+      expect(hooks.approve.mock.calls).toEqual([[[x], { x: "workspace" }]]);
+    });
+
+    it("bulk approve lists every draft's files in one question", async () => {
+      const fetchMock = serveFiles((path) => {
+        if (path === "logo.png") return new Response("", { status: 415 });
+        if (path === "notes.md") return new Response("", { status: 500 });
+        return new Response("text");
+      });
+      const a = holding({ proposal_id: "a", skill_name: "thesis-figure-kit" }, [
+        ["SKILL.md", 10],
+        ["logo.png", 2048],
+      ]);
+      const b = holding(
+        {
+          proposal_id: "b",
+          skill_name: "csv-profiler",
+          created_at: "2026-10-01T09:00:00Z",
+        },
+        [
+          ["notes.md", 30],
+          ["data/big.csv", BIG],
+        ]
+      );
+      const c = draft({ proposal_id: "c", created_at: "2026-09-01T09:00:00Z" });
+      ready([a, b, c]);
+      render(page());
+      pick("thesis-figure-kit");
+      pick("csv-profiler");
+      pick("c");
+      approveSelected();
+      const dialog = await screen.findByRole("dialog", {
+        name: "Install files you haven't seen?",
+      });
+      expect(describedBy(dialog)).toBe(
+        "Some drafts hold files this page can't show:" +
+          "thesis-figure-kitlogo.png — not text" +
+          "csv-profilernotes.md — couldn't be checkeddata/big.csv (1.05 MB) — too large to show" +
+          "They are installed with their skills."
+      );
+      expect(dialogWords(dialog).buttons).toEqual(["Cancel", "Install anyway"]);
+      // Each file the core would show read once, the large one never.
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      expect(hooks.approve).not.toHaveBeenCalled();
+
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: "Install anyway" })
+      );
+      // Exactly what Approve sends: no scopes, each as picked.
+      expect(hooks.approve.mock.calls).toEqual([[[a, b, c]]]);
+    });
+
+    it("bulk approve reads Checking files… while it reads, and nothing else is decided", async () => {
+      const waiting: Array<() => void> = [];
+      serveFiles(
+        () =>
+          new Promise<Response>((r) =>
+            waiting.push(() => r(new Response("text")))
+          )
+      );
+      const c = holding({ proposal_id: "c" }, [["SKILL.md", 10]]);
+      ready([c]);
+      render(page());
+      pick("c");
+      approveSelected();
+      const checking = within(selection()!).getByRole("button", {
+        name: "Checking files…",
+      }) as HTMLButtonElement;
+      expect(checking.disabled).toBe(true);
+      const reject = within(selection()!).getByRole("button", {
+        name: "Reject",
+      }) as HTMLButtonElement;
+      expect(reject.disabled).toBe(true);
+      fireEvent.click(reject);
+      expect(hooks.reject).not.toHaveBeenCalled();
+
+      // Nothing it can't show: a new skill goes without a question.
+      await act(async () => waiting.shift()!());
+      await waitFor(() => expect(hooks.approve.mock.calls).toEqual([[[c]]]));
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(
+        within(selection()!).getByRole("button", { name: "Approve" })
+      ).toBeTruthy();
+    });
+
+    it("a draft picked while the check reads waits for the next Approve", async () => {
+      const waiting: Array<() => void> = [];
+      serveFiles(
+        () =>
+          new Promise<Response>((r) =>
+            waiting.push(() => r(new Response("text")))
+          )
+      );
+      const a = holding({ proposal_id: "a", skill_name: "csv-profiler" }, [
+        ["SKILL.md", 10],
+        ["data/big.csv", BIG],
+      ]);
+      const b = holding(
+        {
+          proposal_id: "b",
+          skill_name: "lit-map",
+          created_at: "2026-10-01T09:00:00Z",
+        },
+        [["data/huge.csv", BIG]]
+      );
+      ready([a, b]);
+      render(page());
+      pick("csv-profiler");
+      approveSelected();
+      // Picked during the check: its files were never checked.
+      pick("lit-map");
+      await act(async () => waiting.shift()!());
+      const dialog = await screen.findByRole("dialog", {
+        name: "Install files you haven't seen?",
+      });
+      expect(describedBy(dialog)).toBe(
+        "csv-profiler holds files this page can't show:" +
+          "data/big.csv (1.05 MB) — too large to show" +
+          "They are installed with the skill."
+      );
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: "Install anyway" })
+      );
+      expect(hooks.approve.mock.calls).toEqual([[[a]]]);
+      // Still picked, for its own question.
+      expect(
+        (
+          screen.getByRole("checkbox", {
+            name: "Select lit-map",
+            hidden: true,
+          }) as HTMLInputElement
+        ).checked
+      ).toBe(true);
+    });
+
+    it("an update whose files can all be shown asks only its own question", async () => {
+      serveFiles();
+      const u = holding(
+        {
+          proposal_id: "u",
+          operation: "update",
+          target_skill_name: "paper-review",
+        },
+        [["SKILL.md", 10]]
+      );
+      ready([u]);
+      render(page());
+      pick("u");
+      approveSelected();
+      const dialog = await screen.findByRole("dialog", {
+        name: "Replace an installed skill?",
+      });
+      expect(within(dialog).queryByRole("list")).toBeNull();
+      expect(dialogWords(dialog).description).toBe(
+        "This replaces the installed paper-review."
+      );
+    });
+
+    it("an update with a file it can't show adds the files to its question", async () => {
+      serveFiles();
+      const u = holding(
+        {
+          proposal_id: "u",
+          skill_name: "paper-review-v2",
+          operation: "update",
+          target_skill_name: "paper-review",
+        },
+        [
+          ["SKILL.md", 10],
+          ["model.bin", BIG],
+        ]
+      );
+      ready([u]);
+      render(page());
+      pick("paper-review-v2");
+      approveSelected();
+      const dialog = await screen.findByRole("dialog", {
+        name: "Replace an installed skill?",
+      });
+      expect(describedBy(dialog)).toBe(
+        "This replaces the installed paper-review." +
+          "paper-review-v2 holds files this page can't show:" +
+          "model.bin (1.05 MB) — too large to show" +
+          "They are installed with the skill."
+      );
+      expect(dialogWords(dialog).buttons).toEqual([
+        "Cancel",
+        "Replace and install",
+      ]);
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: "Replace and install" })
+      );
+      expect(hooks.approve.mock.calls).toEqual([[[u]]]);
+    });
+
+    it("reads the draft's current files and installs the version picked", () => {
+      const fetchMock = serveFiles();
+      const c = draft({ proposal_id: "c" });
+      ready([c]);
+      const view = render(page());
+      pick("c");
+      // Rewritten after it was picked: now with a large file.
+      const rewritten = holding(
+        { proposal_id: "c", updated_at: "2026-11-02T09:00:00Z" },
+        [["data/big.csv", BIG]]
+      );
+      ready([rewritten]);
+      view.rerender(page());
+      approveSelected();
+      // Known by its size: asked at once, nothing read.
+      const dialog = screen.getByRole("dialog", {
+        name: "Install files you haven't seen?",
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: "Install anyway" })
+      );
+      // The stamp recorded at the pick: the core answers draft_changed.
+      expect(hooks.approve.mock.calls).toEqual([
+        [[{ ...rewritten, updated_at: c.updated_at }]],
+      ]);
+    });
+
+    it("the files question keeps its words while it fades out", async () => {
+      animateDialogs();
+      serveFiles();
+      const c = holding({ proposal_id: "c", skill_name: "csv-profiler" }, [
+        ["data/big.csv", BIG],
+      ]);
+      ready([c]);
+      render(page());
+      pick("csv-profiler");
+      approveSelected();
+      const dialog = screen.getByRole("dialog", {
+        name: "Install files you haven't seen?",
+      });
+      const asked = dialogWords(dialog);
+      expect(asked.description).toBe(
+        "csv-profiler holds files this page can't show:" +
+          "data/big.csv (1.05 MB) — too large to show" +
+          "They are installed with the skill."
+      );
+
+      // The decision's answers empty the selection while it fades out.
+      hooks.approve.mockResolvedValueOnce({ done: [c], failed: [] });
+      const confirm = within(dialog).getByRole("button", {
+        name: "Install anyway",
+      });
+      fireEvent.click(confirm);
+      await waitFor(() =>
+        expect(
+          screen.queryByRole("region", { name: "Selection", hidden: true })
+        ).toBeNull()
+      );
+      expect(dialog.isConnected).toBe(true);
+      expect(dialog.getAttribute("data-state")).toBe("closed");
+      expect(dialogWords(dialog)).toEqual(asked);
+      fireEvent.click(confirm);
+      expect(hooks.approve).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("opening the page marks automatic installs seen", () => {

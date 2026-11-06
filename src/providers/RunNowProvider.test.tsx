@@ -58,6 +58,8 @@ vi.mock("@/app/hooks/useAutoSkills", () => ({
     readNow: state.readNow,
   }),
   markAutoSeen: vi.fn(),
+  // The check before an approval: nothing it can't show, at once.
+  useDraftFilesCheck: () => () => new Map(),
 }));
 vi.mock("@/app/hooks/useDraftActions", () => ({
   useDraftActions: () => ({

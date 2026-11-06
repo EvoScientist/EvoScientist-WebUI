@@ -399,6 +399,52 @@ export function isProjectCopy(draft: Draft): boolean {
   );
 }
 
+/** The largest file the core shows (its MAX_FILE_BYTES): a larger one
+ *  answers 413, so it is known before it is read. */
+export const MAX_SHOWN_BYTES = 1_048_576;
+
+/** A file's size as Files shows it: B, KB with one decimal, MB with two. */
+export function sizeText(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  // MB before the rounded KB would read 1024.0.
+  const kb = (bytes / 1024).toFixed(1);
+  if (Number(kb) < 1024) return `${kb} KB`;
+  // Rounded up, so a file over the limit never reads like the limit itself
+  // (1.00 MB).
+  return `${(Math.ceil((bytes / (1024 * 1024)) * 100) / 100).toFixed(2)} MB`;
+}
+
+/** What reading one of a draft's files through the core's file route
+ *  said: shown (200), too large (413), not text (415), or no answer to go
+ *  by (any other failure: a network error, a timeout, a 404, a 5xx). */
+export type FileReadOutcome = "shown" | "too_large" | "not_text" | "unchecked";
+
+/** A file of a draft the page can't show, so an approval would install it
+ *  unseen. */
+export interface UnshowableFile {
+  path: string;
+  size: number;
+  reason: Exclude<FileReadOutcome, "shown">;
+}
+
+/** The files of a draft the page can't show, in their order: one listed
+ *  over MAX_SHOWN_BYTES (never read), else what reading it said; a file
+ *  without an answer couldn't be checked. */
+export function unshowableFiles(
+  files: readonly DraftFile[],
+  reads: ReadonlyMap<string, FileReadOutcome>
+): UnshowableFile[] {
+  const out: UnshowableFile[] = [];
+  for (const f of files) {
+    const outcome: FileReadOutcome =
+      f.size > MAX_SHOWN_BYTES ? "too_large" : reads.get(f.path) ?? "unchecked";
+    if (outcome !== "shown") {
+      out.push({ path: f.path, size: f.size, reason: outcome });
+    }
+  }
+  return out;
+}
+
 /** Whether Undo can take a decision back: the core keeps no backup of an
  *  update, so an approved update stays. */
 export function isRevertible(

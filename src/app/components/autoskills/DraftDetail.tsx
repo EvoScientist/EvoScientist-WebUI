@@ -1,20 +1,23 @@
 "use client";
 
-import { useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useQueryState } from "nuqs";
 import useSWR from "swr";
 import { DraftFiles, FileText } from "@/app/components/autoskills/DraftFiles";
 import { focusFirst } from "@/app/components/autoskills/focus";
 import {
+  fileSection,
+  filesQuestion,
   useShownQuestion,
+  withFiles,
   type Question,
 } from "@/app/components/autoskills/question";
+import { QuestionDescription } from "@/app/components/autoskills/QuestionDescription";
 import { MarkdownContent } from "@/app/components/MarkdownContent";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -32,6 +35,7 @@ import {
   isProjectCopy,
   type Draft,
   type DraftScope,
+  type UnshowableFile,
 } from "@/lib/autoskills";
 import { INPUT_LIKE_TRIGGER, LIST_MAX_HEIGHT } from "@/lib/fieldStyles";
 import { formatFullTime, formatTime } from "@/lib/time";
@@ -62,6 +66,11 @@ export interface DraftDetailProps {
   projectLabel: string;
   canWrite: boolean;
   busy: boolean;
+  /** The page is checking this pane's draft's files: its Approve says so. */
+  checking: boolean;
+  /** The files of `draft` the page can't show, at once or once read (the
+   *  page is busy meanwhile); null when the page dropped the check. */
+  checkFiles(draft: Draft): UnshowableFile[] | Promise<UnshowableFile[] | null>;
   onApprove(draft: Draft, scope: DraftScope): void;
   onReject(draft: Draft): void;
   /** Where the focus goes when the question closes and neither its Approve
@@ -208,11 +217,29 @@ function updateQuestion(
   };
 }
 
+/** The question before `draft` is approved into `scope`: an update's, with
+ *  the files the page can't show under it, or about those files alone. */
+function approveQuestion(
+  draft: Draft,
+  scope: DraftScope,
+  projectLabel: string,
+  files: readonly UnshowableFile[]
+): Question {
+  const section = fileSection([{ name: draft.skill_name, files }]);
+  return draft.operation === "update"
+    ? withFiles(updateQuestion(draft, scope, projectLabel), section)
+    : filesQuestion(section);
+}
+
+const NO_FILES: readonly UnshowableFile[] = [];
+
 export function DraftDetail({
   draft,
   projectLabel,
   canWrite,
   busy,
+  checking,
+  checkFiles,
   onApprove,
   onReject,
   focusFallback,
@@ -231,19 +258,21 @@ export function DraftDetail({
     version,
     scope: draft.scope,
   });
-  // The question before an update is installed, for this version only: it
+  // The question before an approval (an update, or files the page can't
+  // show), for this version only, with the files its check found: it
   // doesn't come back when the draft is opened again, and a rewrite takes it
   // away.
-  const [confirmingVersion, setConfirmingVersion] = useState<string | null>(
-    null
-  );
+  const [asked, setAsked] = useState<{
+    version: string;
+    files: readonly UnshowableFile[];
+  } | null>(null);
   if (pick.version !== version) {
     setPick({ version, scope: draft.scope });
-    setConfirmingVersion(null);
+    setAsked(null);
   }
   const scope = pick.version === version ? pick.scope : draft.scope;
 
-  const confirming = pending && confirmingVersion === version;
+  const confirming = pending && asked?.version === version;
 
   const baseId = useId();
   const tabId = (key: TabKey) => `${baseId}-tab-${key}`;
@@ -285,22 +314,65 @@ export function DraftDetail({
   // may show another draft or place meanwhile.
   const question = useShownQuestion(
     confirming,
-    updateQuestion(draft, scope, projectLabel)
+    approveQuestion(
+      draft,
+      scope,
+      projectLabel,
+      confirming && asked ? asked.files : NO_FILES
+    )
   );
-  const approve = (e: React.MouseEvent<HTMLButtonElement>) => {
-    if (off) return;
-    if (draft.operation === "update") {
-      invokerRef.current = e.currentTarget;
-      setConfirmingVersion(version);
+
+  // Approve checks the draft's files first. A check that reads answers
+  // later, while the page is busy: what it found goes to this pane as it is
+  // then (the latest render), and only for the version it checked.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  const afterCheck = useRef<
+    (
+      checked: string,
+      files: readonly UnshowableFile[],
+      from: HTMLElement
+    ) => void
+  >(() => {});
+  afterCheck.current = (checked, files, from) => {
+    if (!mounted.current || checked !== version || !pending || !canWrite) {
+      return;
+    }
+    if (draft.operation === "update" || files.length > 0) {
+      invokerRef.current = from;
+      setAsked({ version, files });
     } else {
       onApprove(draft, scope);
     }
   };
-  const confirmUpdate = () => {
+  const approve = (e: React.MouseEvent<HTMLButtonElement>) => {
+    if (off) return;
+    const from = e.currentTarget;
+    const checked = version;
+    const out = checkFiles(draft);
+    if (!(out instanceof Promise)) {
+      afterCheck.current(checked, out, from);
+      return;
+    }
+    void out.then(
+      (files) => {
+        if (files) afterCheck.current(checked, files, from);
+      },
+      () => {
+        // A check never fails; nothing is approved if one did.
+      }
+    );
+  };
+  const confirmApprove = () => {
     // The question still takes clicks while it fades out: after Cancel,
     // Escape or a first click, it approves nothing.
     if (off || !confirming) return;
-    setConfirmingVersion(null);
+    setAsked(null);
     onApprove(draft, scope);
   };
 
@@ -409,7 +481,7 @@ export function DraftDetail({
               onClick={approve}
               className="max-md:min-h-11"
             >
-              Approve
+              {checking ? "Checking files…" : "Approve"}
             </Button>
             <Button
               type="button"
@@ -529,7 +601,7 @@ export function DraftDetail({
       <Dialog
         open={confirming}
         onOpenChange={(open) => {
-          if (!open) setConfirmingVersion(null);
+          if (!open) setAsked(null);
         }}
       >
         <DialogContent
@@ -546,20 +618,20 @@ export function DraftDetail({
         >
           <DialogHeader>
             <DialogTitle>{question.title}</DialogTitle>
-            <DialogDescription>{question.description}</DialogDescription>
+            <QuestionDescription question={question} />
           </DialogHeader>
           <DialogFooter>
             <Button
               type="button"
               variant="outline"
-              onClick={() => setConfirmingVersion(null)}
+              onClick={() => setAsked(null)}
               className="border-solid max-md:min-h-11"
             >
               Cancel
             </Button>
             <Button
               type="button"
-              onClick={confirmUpdate}
+              onClick={confirmApprove}
               disabled={off}
               className="max-md:min-h-11"
             >

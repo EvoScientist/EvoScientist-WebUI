@@ -11,15 +11,24 @@ import {
   useFocusFallback,
 } from "@/app/components/autoskills/focus";
 import {
+  fileSection,
+  filesQuestion,
   useShownQuestion,
+  withFiles,
   type Question,
 } from "@/app/components/autoskills/question";
+import { QuestionDescription } from "@/app/components/autoskills/QuestionDescription";
 import {
   asSelected,
   decidable,
   stillPending,
 } from "@/app/components/autoskills/selection";
-import { markAutoSeen, useAutoSkills } from "@/app/hooks/useAutoSkills";
+import {
+  markAutoSeen,
+  useAutoSkills,
+  useDraftFilesCheck,
+  type UnshowableByDraft,
+} from "@/app/hooks/useAutoSkills";
 import {
   useDraftActions,
   type DecisionResult,
@@ -29,7 +38,6 @@ import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -43,6 +51,7 @@ import {
   type Draft,
   type DraftScope,
   type DraftStatus,
+  type UnshowableFile,
 } from "@/lib/autoskills";
 import type { Project } from "@/lib/projects";
 import { cn } from "@/lib/utils";
@@ -62,6 +71,11 @@ const NO_TOKENS: readonly number[] = [];
 /** No picks: a selection maps each picked id to the draft's updated_at as
  *  listed when it was picked. */
 const NO_SELECTION: ReadonlyMap<string, string> = new Map();
+/** No bulk approval checked yet. */
+const NO_CHECK: {
+  ids: ReadonlySet<string>;
+  found: UnshowableByDraft;
+} = { ids: new Set(), found: new Map() };
 
 const TABS: ReadonlyArray<{
   status: DraftStatus;
@@ -133,6 +147,45 @@ function replacedNames(
       ? `${n} (${labelFor(updates[i].workspace_dir, labels)})`
       : n
   );
+}
+
+/** The drafts' own names; a name that repeats (the same skill drafted in
+ *  two projects) carries its project. */
+function draftNames(
+  drafts: readonly Draft[],
+  labels: Map<string, string>
+): string[] {
+  const seen = new Map<string, number>();
+  for (const d of drafts) {
+    seen.set(d.skill_name, (seen.get(d.skill_name) ?? 0) + 1);
+  }
+  return drafts.map((d) =>
+    (seen.get(d.skill_name) ?? 0) > 1
+      ? `${d.skill_name} (${labelFor(d.workspace_dir, labels)})`
+      : d.skill_name
+  );
+}
+
+/** The question before a bulk approval of `drafts`: the updates' question
+ *  when it holds any, with the files the page can't show (`found`) under
+ *  it; else the question about those files alone. */
+function bulkQuestion(
+  drafts: readonly Draft[],
+  found: UnshowableByDraft,
+  labels: Map<string, string>
+): Question {
+  const holders = drafts.filter((d) => found.has(d.proposal_id));
+  const names = draftNames(holders, labels);
+  const section = fileSection(
+    holders.map((d, i) => ({
+      name: names[i],
+      files: found.get(d.proposal_id) ?? [],
+    }))
+  );
+  const updates = drafts.filter((d) => d.operation === "update");
+  return updates.length > 0
+    ? withFiles(updatesQuestion(updates, labels), section)
+    : filesQuestion(section);
 }
 
 /** The question before a bulk approval that holds updates: what each
@@ -251,6 +304,24 @@ export function DraftsPage() {
   const [confirming, setConfirming] = useState(false);
   const [selected, setSelected] =
     useState<ReadonlyMap<string, string>>(NO_SELECTION);
+  // An approval checks the files of its drafts first. While a check reads,
+  // its Approve (the bar's, or the pane's for the draft checked) says so
+  // and no decision starts.
+  const checkFiles = useDraftFilesCheck();
+  const [checking, setChecking] = useState<
+    { from: "bulk" } | { from: "pane"; id: string } | null
+  >(null);
+  const checkSeq = useRef(0);
+  useEffect(
+    () => () => {
+      // Gone: a check's answer is dropped.
+      checkSeq.current += 1;
+    },
+    []
+  );
+  // The drafts the last bulk check covered and what it found: the question
+  // asks about these, and only these go.
+  const [checked, setChecked] = useState(NO_CHECK);
 
   const list = auto.status === "ready" ? auto.list : null;
   // Read on every render, so the page renders again when a read of the list
@@ -315,15 +386,27 @@ export function DraftsPage() {
     () => new Map(groups.map((g) => [g.project.key, g.label])),
     [groups]
   );
-  const updates = selectedDrafts.filter((d) => d.operation === "update");
+  // What the bulk question asks about: the picks its check covered.
+  const checkedDrafts = selectedDrafts.filter((d) =>
+    checked.ids.has(d.proposal_id)
+  );
 
-  // The question only stands while the selection still holds an update.
-  if (confirming && updates.length === 0) setConfirming(false);
-  const asking = confirming && updates.length > 0;
+  // The question only stands while those picks still hold an update or a
+  // file the page can't show.
+  const askable = checkedDrafts.some(
+    (d) => d.operation === "update" || checked.found.has(d.proposal_id)
+  );
+  if (confirming && !askable) setConfirming(false);
+  const asking = confirming && askable;
   // While it fades out the question keeps the words it had open: a
   // decision's answers prune the selection meanwhile.
-  const question = useShownQuestion(asking, updatesQuestion(updates, labels));
+  const question = useShownQuestion(
+    asking,
+    bulkQuestion(checkedDrafts, checked.found, labels)
+  );
 
+  // A decision under way, or the check before one.
+  const working = busy || checking !== null;
   const canWrite = access?.writable === true;
   // A decision also waits for the projects: until they are known (read
   // again) the selection can't be checked against them.
@@ -417,7 +500,7 @@ export function DraftsPage() {
   const bar = useFocusFallback(
     selectedDrafts.length === 0
       ? "gone"
-      : !canDecide || busy
+      : !canDecide || working
       ? "disabled"
       : "usable",
     () => [selectedTab()]
@@ -468,7 +551,7 @@ export function DraftsPage() {
   const pane = useFocusFallback(
     !openDraft
       ? "gone"
-      : openDraft.status === "pending" && (!canDecideOpen || busy)
+      : openDraft.status === "pending" && (!canDecideOpen || working)
       ? "disabled"
       : "usable",
     (box) => [
@@ -493,28 +576,92 @@ export function DraftsPage() {
     });
   };
 
+  /** The files of `drafts` the page can't show: at once when nothing has
+   *  to be read; else once read, with `from`'s Approve saying so and the
+   *  page busy meanwhile (null when the page went). */
+  const checkFor = (
+    drafts: readonly Draft[],
+    from: NonNullable<typeof checking>
+  ): UnshowableByDraft | Promise<UnshowableByDraft | null> => {
+    const out = checkFiles(drafts);
+    if (!(out instanceof Promise)) return out;
+    const token = ++checkSeq.current;
+    setChecking(from);
+    const done = () => {
+      if (token !== checkSeq.current) return false;
+      setChecking(null);
+      return true;
+    };
+    // A check never rejects; if one did, the page would stay busy.
+    return out.then(
+      (found) => (done() ? found : null),
+      () => {
+        done();
+        return null;
+      }
+    );
+  };
+  // A check that reads answers later: it goes on with the page as it is
+  // then (the latest render).
+  const afterBulkCheck = useRef<
+    (ids: ReadonlySet<string>, found: UnshowableByDraft) => void
+  >(() => {});
+  // Only the drafts checked go, as still picked and sendable; one picked
+  // during the check waits for the next Approve. With an update or a file
+  // the page can't show among them, the question first.
+  afterBulkCheck.current = (ids, found) => {
+    const send = sendable(selectedDrafts).filter((d) => ids.has(d.proposal_id));
+    if (send.length === 0) return;
+    setChecked({ ids, found });
+    if (
+      send.some((d) => d.operation === "update" || found.has(d.proposal_id))
+    ) {
+      setConfirming(true);
+    } else if (canDecide && isReady()) {
+      void approve(asSelected(send, selected)).then(settle);
+    }
+  };
+
   // No scopes: in bulk every draft installs where it records (its own
   // project, or global); only the detail pane picks a scope per draft.
   // Each goes at the version it was picked at (`asSelected`). What is sent
   // is checked once more against the list and the projects (the selection
   // is pruned by the same rule on every change), and only while the
   // projects' gate is open: a read that has just started closes it before
-  // the render that disables the buttons.
+  // the render that disables the buttons. The drafts' files are checked
+  // first (as listed now: their current files).
   const approveSelection = () => {
     if (!isReady()) return;
     const send = sendable(selectedDrafts);
     if (send.length === 0) return;
-    if (send.some((d) => d.operation === "update")) setConfirming(true);
-    else void approve(asSelected(send, selected)).then(settle);
+    const ids = new Set(send.map((d) => d.proposal_id));
+    const out = checkFor(send, { from: "bulk" });
+    if (!(out instanceof Promise)) {
+      afterBulkCheck.current(ids, out);
+      return;
+    }
+    void out.then((found) => {
+      if (found) afterBulkCheck.current(ids, found);
+    });
   };
   // A closed gate leaves the question open, to be answered after the read.
   // The question still takes clicks while it fades out: after Cancel,
   // Escape or a first click, it sends nothing.
-  const confirmUpdates = () => {
+  const confirmApproval = () => {
     if (!asking || !isReady()) return;
     setConfirming(false);
-    const send = sendable(selectedDrafts);
+    const send = sendable(selectedDrafts).filter((d) =>
+      checked.ids.has(d.proposal_id)
+    );
     if (send.length > 0) void approve(asSelected(send, selected)).then(settle);
+  };
+  // The open draft's check, for its pane: the files of that draft.
+  const checkOpen = (
+    d: Draft
+  ): UnshowableFile[] | Promise<UnshowableFile[] | null> => {
+    const out = checkFor([d], { from: "pane", id: d.proposal_id });
+    if (!(out instanceof Promise)) return out.get(d.proposal_id) ?? [];
+    return out.then((found) => (found ? found.get(d.proposal_id) ?? [] : null));
   };
   const rejectSelection = () => {
     if (!isReady()) return;
@@ -688,17 +835,19 @@ export function DraftsPage() {
                       ref={approveRef}
                       type="button"
                       size="sm"
-                      disabled={!canDecide || busy}
+                      disabled={!canDecide || working}
                       onClick={approveSelection}
                       className="max-md:min-h-11"
                     >
-                      Approve
+                      {checking?.from === "bulk"
+                        ? "Checking files…"
+                        : "Approve"}
                     </Button>
                     <Button
                       type="button"
                       variant="outline"
                       size="sm"
-                      disabled={!canDecide || busy}
+                      disabled={!canDecide || working}
                       onClick={rejectSelection}
                       className="border-solid max-md:min-h-11"
                     >
@@ -758,7 +907,12 @@ export function DraftsPage() {
                         draft={openDraft}
                         projectLabel={labelFor(openDraft.workspace_dir, labels)}
                         canWrite={canDecideOpen}
-                        busy={busy}
+                        busy={working}
+                        checking={
+                          checking?.from === "pane" &&
+                          checking.id === openDraft.proposal_id
+                        }
+                        checkFiles={checkOpen}
                         onApprove={approveOpen}
                         onReject={rejectOpen}
                         focusFallback={selectedTab}
@@ -793,7 +947,7 @@ export function DraftsPage() {
         >
           <DialogHeader>
             <DialogTitle>{question.title}</DialogTitle>
-            <DialogDescription>{question.description}</DialogDescription>
+            <QuestionDescription question={question} />
           </DialogHeader>
           <DialogFooter>
             <Button
@@ -806,8 +960,8 @@ export function DraftsPage() {
             </Button>
             <Button
               type="button"
-              onClick={confirmUpdates}
-              disabled={!canDecide || busy}
+              onClick={confirmApproval}
+              disabled={!canDecide || working}
               className="max-md:min-h-11"
             >
               {question.action}

@@ -10,11 +10,15 @@ import {
   isProjectCopy,
   isRevertible,
   labelFor,
+  MAX_SHOWN_BYTES,
   parseDraftList,
   projectLabels,
   statusLine,
+  unshowableFiles,
   type Draft,
+  type DraftFile,
   type DraftList,
+  type FileReadOutcome,
 } from "./autoskills";
 import type { Project } from "./projects";
 import type { SettingsWriteAccess } from "./settings";
@@ -557,5 +561,55 @@ describe("autoSkillsReadOnlyReason", () => {
     expect(
       autoSkillsReadOnlyReason({ writable: false, reason: "backend_timeout" })
     ).toBe("EvoScientist did not answer in time.");
+  });
+});
+
+describe("unshowableFiles", () => {
+  const file = (path: string, size: number): DraftFile => ({
+    path,
+    size,
+    installed: false,
+  });
+
+  it("lists what the page can't show: by size, a 413, a 415 and a read that failed", () => {
+    const files = [
+      file("SKILL.md", 120),
+      file("data/big.csv", MAX_SHOWN_BYTES + 1),
+      file("at-the-limit.txt", MAX_SHOWN_BYTES),
+      file("grew.txt", 10),
+      file("logo.png", 2048),
+      file("notes.md", 30),
+      file("never-answered.md", 5),
+    ];
+    const reads = new Map<string, FileReadOutcome>([
+      ["SKILL.md", "shown"],
+      ["at-the-limit.txt", "shown"],
+      // Listed small, but the core says too large (it grew since).
+      ["grew.txt", "too_large"],
+      ["logo.png", "not_text"],
+      ["notes.md", "unchecked"],
+    ]);
+    // The size alone decides a file over the limit; one with no answer
+    // couldn't be checked. In the files' order.
+    expect(unshowableFiles(files, reads)).toEqual([
+      { path: "data/big.csv", size: MAX_SHOWN_BYTES + 1, reason: "too_large" },
+      { path: "grew.txt", size: 10, reason: "too_large" },
+      { path: "logo.png", size: 2048, reason: "not_text" },
+      { path: "notes.md", size: 30, reason: "unchecked" },
+      { path: "never-answered.md", size: 5, reason: "unchecked" },
+    ]);
+  });
+
+  it("is empty when every file was shown", () => {
+    expect(
+      unshowableFiles(
+        [file("SKILL.md", 1), file("run.py", MAX_SHOWN_BYTES)],
+        new Map([
+          ["SKILL.md", "shown"],
+          ["run.py", "shown"],
+        ])
+      )
+    ).toEqual([]);
+    expect(unshowableFiles([], new Map())).toEqual([]);
   });
 });

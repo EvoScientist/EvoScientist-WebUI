@@ -11,8 +11,9 @@ import {
   refreshAutoSkills,
   useAutoSkills,
   useDraftFile,
+  useDraftFilesCheck,
 } from "@/app/hooks/useAutoSkills";
-import type { Draft } from "@/lib/autoskills";
+import type { Draft, UnshowableFile } from "@/lib/autoskills";
 
 const deployment = { deploymentUrl: "http://127.0.0.1:6174", apiKey: "" };
 vi.mock("@/providers/ClientProvider", () => ({
@@ -630,6 +631,230 @@ describe("useDraftFile", () => {
     const fetchMock = stubFetch(() => new Response("", { status: 500 }));
     renderHook(() => useDraftFile(d, "x", false), { wrapper: fastRetry });
     await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(1));
+  });
+});
+
+describe("useDraftFilesCheck", () => {
+  const BIG = 1_048_577;
+  const withFiles = (
+    id: string,
+    files: Array<[string, number]>,
+    updated_at = "2026-11-01T00:00:00Z"
+  ) =>
+    ({
+      ...draft(id),
+      updated_at,
+      files: files.map(([path, size]) => ({ path, size, installed: false })),
+    } as unknown as Draft);
+  const fileUrl = (id: string, path: string) =>
+    `http://127.0.0.1:6174/api/autoskills/proposals/${encodeURIComponent(
+      id
+    )}/file?path=${encodeURIComponent(path)}`;
+  type Found = ReadonlyMap<string, UnshowableFile[]>;
+
+  it("answers at once, reading nothing, when every file is known by its size", () => {
+    const fetchMock = stubFetch(() => new Response("x"));
+    const { result } = renderHook(() => useDraftFilesCheck(), { wrapper });
+    const out = result.current([
+      withFiles("a", [["data/big.csv", BIG]]),
+      withFiles("b", []),
+    ]);
+    expect(out).not.toBeInstanceOf(Promise);
+    expect(out).toEqual(
+      new Map([
+        ["a", [{ path: "data/big.csv", size: BIG, reason: "too_large" }]],
+      ])
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("reads the draft's own copy of each file within the limit, and sorts the answers", async () => {
+    const answers: Record<string, () => Response> = {
+      "SKILL.md": () => new Response("# skill"),
+      "grew.txt": () => new Response("", { status: 413 }),
+      "logo.png": () => new Response("", { status: 415 }),
+      "gone.md": () => json({ error: "not_found" }, 404),
+      "broken.md": () => new Response("", { status: 500 }),
+      "offline.md": () => {
+        throw new TypeError("Failed to fetch");
+      },
+    };
+    const fetchMock = stubFetch((url) => {
+      const path = new URL(url).searchParams.get("path") ?? "";
+      return answers[path]();
+    });
+    const { result } = renderHook(() => useDraftFilesCheck(), { wrapper });
+    const d = withFiles("p 1", [
+      ["SKILL.md", 7],
+      ["data/big.csv", BIG],
+      ["grew.txt", 10],
+      ["logo.png", 2048],
+      ["gone.md", 5],
+      ["broken.md", 5],
+      ["offline.md", 5],
+    ]);
+    const out = result.current([d]);
+    expect(out).toBeInstanceOf(Promise);
+    const found = await (out as Promise<Found>);
+    expect(found).toEqual(
+      new Map([
+        [
+          "p 1",
+          [
+            { path: "data/big.csv", size: BIG, reason: "too_large" },
+            { path: "grew.txt", size: 10, reason: "too_large" },
+            { path: "logo.png", size: 2048, reason: "not_text" },
+            { path: "gone.md", size: 5, reason: "unchecked" },
+            { path: "broken.md", size: 5, reason: "unchecked" },
+            { path: "offline.md", size: 5, reason: "unchecked" },
+          ],
+        ],
+      ])
+    );
+    // The Files tab's route, the draft's own copy; never the large file.
+    const urls = fetchMock.mock.calls.map((c) => String(c[0]));
+    expect(urls).toHaveLength(6);
+    expect(urls).toContain(fileUrl("p 1", "SKILL.md"));
+    expect(urls.some((u) => u.includes("installed"))).toBe(false);
+    expect(urls.some((u) => u.includes("big.csv"))).toBe(false);
+  });
+
+  it("reads at most four files at a time", async () => {
+    let open = 0;
+    let most = 0;
+    const waiting: Array<() => void> = [];
+    stubFetch(
+      () =>
+        new Promise<Response>((resolve) => {
+          open += 1;
+          most = Math.max(most, open);
+          waiting.push(() => {
+            open -= 1;
+            resolve(new Response("ok"));
+          });
+        })
+    );
+    const { result } = renderHook(() => useDraftFilesCheck(), { wrapper });
+    const out = result.current([
+      withFiles(
+        "a",
+        Array.from({ length: 6 }, (_, i) => [`a${i}.md`, 1] as [string, number])
+      ),
+      withFiles(
+        "b",
+        Array.from({ length: 4 }, (_, i) => [`b${i}.md`, 1] as [string, number])
+      ),
+    ]) as Promise<Found>;
+    let answered = 0;
+    while (answered < 10) {
+      await waitFor(() => expect(waiting.length).toBeGreaterThan(0));
+      expect(open).toBeLessThanOrEqual(4);
+      waiting.shift()!();
+      answered += 1;
+    }
+    expect(await out).toEqual(new Map());
+    expect(most).toBe(4);
+  });
+
+  it("gives up on a read after 15 s: the file couldn't be checked", async () => {
+    vi.useFakeTimers();
+    try {
+      stubFetch(() => new Promise<Response>(() => {}));
+      const { result } = renderHook(() => useDraftFilesCheck(), { wrapper });
+      const out = result.current([
+        withFiles("a", [["slow.md", 3]]),
+      ]) as Promise<Found>;
+      let found: Found | undefined;
+      void out.then((f) => (found = f));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(READ_TIMEOUT_MS - 10);
+      });
+      expect(found).toBeUndefined();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(20);
+      });
+      expect(found).toEqual(
+        new Map([["a", [{ path: "slow.md", size: 3, reason: "unchecked" }]]])
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shares the Files tab's reads: a file it read opens at once, and one opened before isn't read again", async () => {
+    const fetchMock = stubFetch((url) => {
+      const path = new URL(url).searchParams.get("path");
+      if (path === "logo.png") return new Response("", { status: 415 });
+      return new Response(`text of ${path}`);
+    });
+    const d = withFiles("a", [
+      ["SKILL.md", 7],
+      ["run.py", 9],
+      ["logo.png", 2048],
+    ]);
+    const { result, rerender } = renderHook(
+      ({ path }: { path: string | null }) => ({
+        check: useDraftFilesCheck(),
+        file: useDraftFile(path ? d : null, path, false),
+      }),
+      { wrapper, initialProps: { path: "SKILL.md" as string | null } }
+    );
+    // SKILL.md opened in Files before the check.
+    await waitFor(() =>
+      expect(result.current.file.text).toBe("text of SKILL.md")
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    const found = await (result.current.check([d]) as Promise<Found>);
+    expect(found).toEqual(
+      new Map([["a", [{ path: "logo.png", size: 2048, reason: "not_text" }]]])
+    );
+    // SKILL.md was not read again; run.py and logo.png were.
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+
+    // run.py, read by the check, shows at once when opened (SWR may still
+    // read it again behind the text, as for any file opened before).
+    rerender({ path: "run.py" });
+    expect(result.current.file.text).toBe("text of run.py");
+
+    // Opened, logo.png answers 415 there too.
+    rerender({ path: "logo.png" });
+    await waitFor(() =>
+      expect(result.current.file.error).toBe(
+        "This file isn't text, so it isn't shown."
+      )
+    );
+    // Now every answer is known: a second check reads nothing and answers at
+    // once.
+    const reads = fetchMock.mock.calls.length;
+    const again = result.current.check([d]);
+    expect(again).not.toBeInstanceOf(Promise);
+    expect(again).toEqual(found);
+    expect(fetchMock).toHaveBeenCalledTimes(reads);
+  });
+
+  it("reads a rewritten draft's files again", async () => {
+    const fetchMock = stubFetch(() => new Response("ok"));
+    const { result } = renderHook(() => useDraftFilesCheck(), { wrapper });
+    await result.current([withFiles("a", [["SKILL.md", 2]])]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // Read already: known.
+    expect(result.current([withFiles("a", [["SKILL.md", 2]])])).toEqual(
+      new Map()
+    );
+    // Same id, new updated_at: its current files are read.
+    await result.current([
+      withFiles("a", [["SKILL.md", 2]], "2026-11-02T00:00:00Z"),
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("sends the deployment's API key", async () => {
+    deployment.apiKey = "k-1";
+    const fetchMock = stubFetch(() => new Response("ok"));
+    const { result } = renderHook(() => useDraftFilesCheck(), { wrapper });
+    await result.current([withFiles("a", [["SKILL.md", 2]])]);
+    expect(fetchMock.mock.calls[0][1]?.headers).toEqual({ "X-Api-Key": "k-1" });
   });
 });
 

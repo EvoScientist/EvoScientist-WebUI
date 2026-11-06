@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -7,7 +8,7 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Draft, DraftScope } from "@/lib/autoskills";
+import type { Draft, DraftScope, UnshowableFile } from "@/lib/autoskills";
 import { formatFullTime, formatTime } from "@/lib/time";
 import type { FilesAccess } from "@/providers/ProjectsProvider";
 import { animateDialogs, dialogWords } from "@/test/animateDialogs";
@@ -109,6 +110,11 @@ function draft(over: Partial<Draft> & { proposal_id: string }): Draft {
 
 const onApprove = vi.fn((_d: Draft, _s: DraftScope) => undefined);
 const onReject = vi.fn((_d: Draft) => undefined);
+// The page's check of a draft's files before an approval: the files it
+// can't show, at once or after reading them (null: the page dropped it).
+const checkFiles = vi.fn(
+  (_d: Draft): UnshowableFile[] | Promise<UnshowableFile[] | null> => []
+);
 
 function detail(
   d: Draft,
@@ -118,6 +124,8 @@ function detail(
     projectLabel?: string;
     /** Whether the page and the backend share this machine. */
     files?: FilesAccess;
+    /** The page is checking this pane's draft's files. */
+    checking?: boolean;
   } = {}
 ) {
   // Each mount reads with a cache of its own; a rerender keeps it.
@@ -131,6 +139,8 @@ function detail(
           projectLabel={over.projectLabel ?? "EvoSci_test"}
           canWrite={over.canWrite ?? true}
           busy={over.busy ?? false}
+          checking={over.checking ?? false}
+          checkFiles={checkFiles}
           onApprove={onApprove}
           onReject={onReject}
         />
@@ -150,6 +160,7 @@ function pickScope(option: string) {
 beforeEach(() => {
   q.values.clear();
   fileReads.calls = [];
+  checkFiles.mockImplementation(() => []);
 });
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -589,6 +600,260 @@ describe("DraftDetail", () => {
     fireEvent.click(confirm);
     expect(onApprove).toHaveBeenCalledTimes(1);
     expect(onApprove).toHaveBeenCalledWith(d, "workspace");
+  });
+
+  const BIG: UnshowableFile = {
+    path: "data/big.csv",
+    size: 1_100_000,
+    reason: "too_large",
+  };
+  /** The question's file list, line by line. */
+  const fileLines = (dialog: HTMLElement) =>
+    within(dialog)
+      .getAllByRole("listitem")
+      .map((li) => li.textContent);
+  /** What the dialog's description says, all of it. */
+  const describedBy = (dialog: HTMLElement) =>
+    document.getElementById(dialog.getAttribute("aria-describedby") ?? "")
+      ?.textContent;
+
+  it("approving a new skill with a file the page can't show asks first", async () => {
+    checkFiles.mockImplementation(() => [BIG]);
+    const d = draft({
+      proposal_id: "csv-profiler",
+      skill_name: "csv-profiler",
+      files: [
+        { path: "SKILL.md", size: 120, installed: false },
+        { path: "data/big.csv", size: 1_100_000, installed: false },
+      ],
+    });
+    render(detail(d));
+    const approve = screen.getByRole("button", { name: "Approve" });
+    approve.focus();
+    fireEvent.click(approve);
+    expect(checkFiles).toHaveBeenCalledWith(d);
+    const dialog = screen.getByRole("dialog", {
+      name: "Install files you haven't seen?",
+    });
+    expect(dialogWords(dialog).buttons).toEqual(["Cancel", "Install anyway"]);
+    expect(
+      within(dialog).getByText("csv-profiler holds files this page can't show:")
+    ).toBeTruthy();
+    expect(fileLines(dialog)).toEqual([
+      "data/big.csv (1.05 MB) — too large to show",
+    ]);
+    expect(
+      within(dialog).getByText("They are installed with the skill.")
+    ).toBeTruthy();
+    // All of it is the dialog's description.
+    expect(describedBy(dialog)).toBe(
+      "csv-profiler holds files this page can't show:data/big.csv (1.05 MB) — too large to showThey are installed with the skill."
+    );
+    expect(onApprove).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(onApprove).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(approve);
+
+    fireEvent.click(approve);
+    fireEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: "Install anyway",
+      })
+    );
+    expect(onApprove).toHaveBeenCalledTimes(1);
+    expect(onApprove).toHaveBeenCalledWith(d, "workspace");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("names a file that isn't text and one it couldn't check", () => {
+    checkFiles.mockImplementation(() => [
+      { path: "logo.png", size: 2048, reason: "not_text" },
+      { path: "notes.md", size: 30, reason: "unchecked" },
+    ]);
+    render(detail(draft({ proposal_id: "thesis-figure-kit" })));
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    const dialog = screen.getByRole("dialog", {
+      name: "Install files you haven't seen?",
+    });
+    expect(fileLines(dialog)).toEqual([
+      "logo.png — not text",
+      "notes.md — couldn't be checked",
+    ]);
+  });
+
+  it("a new skill whose files can all be shown is approved without a question", () => {
+    const d = draft({ proposal_id: "x" });
+    render(detail(d));
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    expect(checkFiles).toHaveBeenCalledWith(d);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(onApprove).toHaveBeenCalledWith(d, "workspace");
+  });
+
+  it("an update with a file the page can't show adds the files to its question", () => {
+    checkFiles.mockImplementation(() => [BIG]);
+    const d = draft({
+      proposal_id: "paper-review-v2",
+      operation: "update",
+      target_skill_name: "paper-review",
+    });
+    render(detail(d));
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    const dialog = screen.getByRole("dialog", {
+      name: "Replace an installed skill?",
+    });
+    expect(describedBy(dialog)).toBe(
+      "This replaces the installed paper-review.paper-review-v2 holds files this page can't show:data/big.csv (1.05 MB) — too large to showThey are installed with the skill."
+    );
+    expect(dialogWords(dialog).buttons).toEqual([
+      "Cancel",
+      "Replace and install",
+    ]);
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Replace and install" })
+    );
+    expect(onApprove).toHaveBeenCalledWith(d, "workspace");
+  });
+
+  it("an update whose files can all be shown asks only its own question", () => {
+    const d = draft({
+      proposal_id: "paper-review-v2",
+      operation: "update",
+      target_skill_name: "paper-review",
+    });
+    render(detail(d));
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    const dialog = screen.getByRole("dialog", {
+      name: "Replace an installed skill?",
+    });
+    expect(within(dialog).queryByRole("list")).toBeNull();
+    expect(describedBy(dialog)).toBe(
+      "This replaces the installed paper-review."
+    );
+  });
+
+  it("waits for a check that reads files, reading Checking files… meanwhile", async () => {
+    let answer: (files: UnshowableFile[] | null) => void = () => {};
+    checkFiles.mockImplementation(
+      () => new Promise<UnshowableFile[] | null>((r) => (answer = r))
+    );
+    const d = draft({ proposal_id: "csv-profiler" });
+    const view = render(detail(d));
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(onApprove).not.toHaveBeenCalled();
+
+    // The page is busy with the check: this Approve says so.
+    view.rerender(detail(d, { busy: true, checking: true }));
+    const checking = screen.getByRole("button", {
+      name: "Checking files…",
+    }) as HTMLButtonElement;
+    expect(checking.disabled).toBe(true);
+    expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+    expect(
+      (screen.getByRole("button", { name: "Reject" }) as HTMLButtonElement)
+        .disabled
+    ).toBe(true);
+    // Only the pane that checks says so; another pane is just busy.
+    view.rerender(detail(d, { busy: true }));
+    expect(screen.getByRole("button", { name: "Approve" })).toBeTruthy();
+
+    view.rerender(detail(d, { busy: true, checking: true }));
+    await act(async () => answer([BIG]));
+    view.rerender(detail(d));
+    expect(
+      screen.getByRole("dialog", { name: "Install files you haven't seen?" })
+    ).toBeTruthy();
+    expect(onApprove).not.toHaveBeenCalled();
+  });
+
+  it("a check that finds nothing approves once it answers", async () => {
+    let answer: (files: UnshowableFile[] | null) => void = () => {};
+    checkFiles.mockImplementation(
+      () => new Promise<UnshowableFile[] | null>((r) => (answer = r))
+    );
+    const d = draft({ proposal_id: "x", scope: "global" });
+    render(detail(d));
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    expect(onApprove).not.toHaveBeenCalled();
+    await act(async () => answer([]));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(onApprove).toHaveBeenCalledTimes(1);
+    expect(onApprove).toHaveBeenCalledWith(d, "global");
+  });
+
+  it("a check of a version the pane no longer shows asks nothing and approves nothing", async () => {
+    const answers: Array<(files: UnshowableFile[] | null) => void> = [];
+    checkFiles.mockImplementation(
+      () => new Promise<UnshowableFile[] | null>((r) => answers.push(r))
+    );
+    const d = draft({ proposal_id: "x" });
+    const view = render(detail(d));
+
+    // Rewritten in place while its files were read.
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    view.rerender(detail({ ...d, updated_at: "2026-11-02T09:00:00Z" }));
+    await act(async () => answers[0]([BIG]));
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    // Another draft opened meanwhile.
+    view.rerender(detail(d));
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    view.rerender(detail(draft({ proposal_id: "y" })));
+    await act(async () => answers[1]([]));
+    expect(onApprove).not.toHaveBeenCalled();
+
+    // A check the page dropped answers null.
+    view.rerender(detail(d));
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    await act(async () => answers[2](null));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(onApprove).not.toHaveBeenCalled();
+
+    // The pane closed meanwhile.
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    view.unmount();
+    await act(async () => answers[3]([]));
+    expect(onApprove).not.toHaveBeenCalled();
+  });
+
+  it("the files question keeps its words while it fades out", () => {
+    animateDialogs();
+    checkFiles.mockImplementation(() => [BIG]);
+    const view = render(detail(draft({ proposal_id: "csv-profiler" })));
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    const dialog = screen.getByRole("dialog", {
+      name: "Install files you haven't seen?",
+    });
+    const asked = dialogWords(dialog);
+    expect(asked.buttons).toEqual(["Cancel", "Install anyway"]);
+    expect(asked.description).toContain(
+      "data/big.csv (1.05 MB) — too large to show"
+    );
+
+    const confirm = within(dialog).getByRole("button", {
+      name: "Install anyway",
+    });
+    fireEvent.click(confirm);
+    // Fading out while the pane shows another draft.
+    checkFiles.mockImplementation(() => []);
+    view.rerender(
+      detail(
+        draft({
+          proposal_id: "paper-review-v2",
+          operation: "update",
+          target_skill_name: "paper-review",
+        })
+      )
+    );
+    expect(dialog.isConnected).toBe(true);
+    expect(dialog.getAttribute("data-state")).toBe("closed");
+    expect(dialogWords(dialog)).toEqual(asked);
+    // And it approves nothing more.
+    fireEvent.click(confirm);
+    expect(onApprove).toHaveBeenCalledTimes(1);
   });
 
   it("shows the install error for the recorded scope only", () => {
