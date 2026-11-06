@@ -14,6 +14,13 @@ export const dynamic = "force-dynamic";
 
 /** The longest folder path taken. */
 const MAX_PATH = 4096;
+/** The longest `expected_updated_at` taken (a draft's ISO timestamp). */
+const MAX_STAMP = 64;
+
+function hasControl(text: string): boolean {
+  // eslint-disable-next-line no-control-regex
+  return /[\u0000-\u001f]/.test(text);
+}
 
 type Plan = { path: string; body: Record<string, unknown> };
 
@@ -33,9 +40,9 @@ function planOf(raw: unknown): Plan | null {
   if (body.action === "run") {
     const folder = body.workspace_dir;
     if (typeof folder !== "string") return null;
-    // eslint-disable-next-line no-control-regex
-    const control = /[\u0000-\u001f]/.test(folder);
-    if (!folder.trim() || folder.length > MAX_PATH || control) return null;
+    if (!folder.trim() || folder.length > MAX_PATH || hasControl(folder)) {
+      return null;
+    }
     return { path: "/api/autoskills/run", body: { workspace_dir: folder } };
   }
   const action = body.action;
@@ -50,7 +57,18 @@ function planOf(raw: unknown): Plan | null {
   if (scope !== null && scope !== "workspace" && scope !== "global") {
     return null;
   }
-  return { path, body: { scope } };
+  // The draft's updated_at as the page read it: the core installs only that
+  // version (409 draft_changed otherwise). Null checks nothing.
+  const expected = body.expected_updated_at ?? null;
+  if (
+    expected !== null &&
+    (typeof expected !== "string" ||
+      expected.length > MAX_STAMP ||
+      hasControl(expected))
+  ) {
+    return null;
+  }
+  return { path, body: { scope, expected_updated_at: expected } };
 }
 
 /**

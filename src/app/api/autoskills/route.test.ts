@@ -72,7 +72,10 @@ describe("/api/autoskills", () => {
       "http://127.0.0.1:6606/api/autoskills/proposals/arxiv-paper-retrieval/approve"
     );
     expect(init.method).toBe("POST");
-    expect(JSON.parse(init.body)).toEqual({ scope: "global" });
+    expect(JSON.parse(init.body)).toEqual({
+      scope: "global",
+      expected_updated_at: null,
+    });
     expect(init.headers["X-EvoScientist-Local-Secret"]).toBe(SECRET);
   });
 
@@ -85,7 +88,51 @@ describe("/api/autoskills", () => {
 
     await POST(request({ action: "approve", proposal_id: "a-b", ...extra }));
 
-    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ scope });
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      scope,
+      expected_updated_at: null,
+    });
+  });
+
+  it.each([
+    [{}, null],
+    [{ expected_updated_at: null }, null],
+    [
+      { expected_updated_at: "2026-11-06T09:00:00.123456+00:00" },
+      "2026-11-06T09:00:00.123456+00:00",
+    ],
+    [{ expected_updated_at: "x".repeat(64) }, "x".repeat(64)],
+  ])(
+    "approves with expected_updated_at %j forwarded as %j",
+    async (extra, expected) => {
+      fetchMock.mockResolvedValue(answer(200, {}));
+
+      await POST(
+        request({
+          action: "approve",
+          proposal_id: "a-b",
+          scope: "global",
+          ...extra,
+        })
+      );
+
+      expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+        scope: "global",
+        expected_updated_at: expected,
+      });
+    }
+  );
+
+  it("sends expected_updated_at with approve only", async () => {
+    fetchMock.mockImplementation(async () => answer(200, {}));
+    const stamp = { expected_updated_at: "2026-11-06T09:00:00+00:00" };
+
+    await POST(request({ action: "reject", proposal_id: "a-b", ...stamp }));
+    await POST(request({ action: "revert", proposal_id: "a-b", ...stamp }));
+
+    expect(
+      fetchMock.mock.calls.map(([, init]) => JSON.parse(init.body))
+    ).toEqual([{}, {}]);
   });
 
   it("rejects, reverts and runs on their core paths", async () => {
@@ -126,6 +173,30 @@ describe("/api/autoskills", () => {
     ["a missing action", { proposal_id: "a-b" }],
     ["a bad scope", { action: "approve", proposal_id: "a-b", scope: "all" }],
     ["a numeric scope", { action: "approve", proposal_id: "a-b", scope: 1 }],
+    [
+      "a numeric expected_updated_at",
+      { action: "approve", proposal_id: "a-b", expected_updated_at: 1 },
+    ],
+    [
+      "an expected_updated_at that is an object",
+      { action: "approve", proposal_id: "a-b", expected_updated_at: {} },
+    ],
+    [
+      "an expected_updated_at over 64 characters",
+      {
+        action: "approve",
+        proposal_id: "a-b",
+        expected_updated_at: "x".repeat(65),
+      },
+    ],
+    [
+      "an expected_updated_at with a control character",
+      {
+        action: "approve",
+        proposal_id: "a-b",
+        expected_updated_at: "2026-11-06\n",
+      },
+    ],
     ["a run without a folder", { action: "run" }],
     ["a run with a blank folder", { action: "run", workspace_dir: "  " }],
     [
