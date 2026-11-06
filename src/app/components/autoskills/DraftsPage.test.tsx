@@ -1640,11 +1640,11 @@ describe("DraftsPage", () => {
     expect(hooks.approve.mock.calls).toEqual([[[{ ...u2, updated_at: "T1" }]]]);
   });
 
-  it("an Undo that succeeds makes its drafts decidable again", async () => {
+  it("after a successful Undo a draft waits for the next list, then goes at its new version", async () => {
     const x = draft({ proposal_id: "x" });
     ready([x]);
     hooks.reject.mockResolvedValueOnce({ done: [x], failed: [] });
-    render(page());
+    const view = render(page());
     pick("x");
     fireEvent.click(
       within(selection()!).getByRole("button", { name: "Reject" })
@@ -1652,8 +1652,22 @@ describe("DraftsPage", () => {
     const box = () =>
       screen.getByRole("checkbox", { name: "Select x" }) as HTMLInputElement;
     await waitFor(() => expect(box().disabled).toBe(true));
+    // The Undo answered before any list: the revert gave x a new updated_at,
+    // so x waits for the list that has it rather than send the old one.
     act(() => hooks.onReverted?.([x]));
+    expect(box().disabled).toBe(true);
+
+    // The Undo's re-read lists x at its new stamp: decidable, and that
+    // version goes.
+    const x2 = { ...x, updated_at: "2026-11-06T12:00:00Z" };
+    ready([x2]);
+    view.rerender(page());
     expect(box().disabled).toBe(false);
+    pick("x");
+    fireEvent.click(
+      within(selection()!).getByRole("button", { name: "Approve" })
+    );
+    expect(hooks.approve).toHaveBeenLastCalledWith([x2]);
   });
 
   it("opening the page marks automatic installs seen", () => {

@@ -74,17 +74,6 @@ function statusOf(param: string | null): DraftStatus {
   return param === "approved" || param === "rejected" ? param : "pending";
 }
 
-/** `set` without `ids`; the same set when none of them is in it. */
-function without(
-  set: ReadonlySet<string>,
-  ids: readonly string[]
-): ReadonlySet<string> {
-  if (!ids.some((id) => set.has(id))) return set;
-  const next = new Set(set);
-  for (const id of ids) next.delete(id);
-  return next;
-}
-
 /** `selection` without the picks of `ids`; the same one when none is in
  *  it. */
 function unpick(
@@ -205,18 +194,16 @@ export function DraftsPage() {
   );
   const { payload } = useSettings();
   const { access } = useSettingsAccess();
-  // Drafts decided here that the list still reads as Pending: the core has
-  // decided them, but the re-read hasn't landed (or stalls). They leave the
-  // selection at once and can't be decided again until the next list
-  // arrives, or an Undo here takes them back.
+  // Drafts decided (or taken back) here that wait for the next list: the
+  // core has decided them, but the re-read hasn't landed (or stalls). They
+  // leave the selection at once and can't be decided again until the next
+  // list arrives. An Undo that succeeds holds its drafts the same way: the
+  // revert gave them a new updated_at, which only that list carries.
   const [decided, setDecided] = useState<ReadonlySet<string>>(NO_IDS);
   const { approve, reject, busy } = useDraftActions(projectList, {
     onReverted: (drafts) =>
-      setDecided((prev) =>
-        without(
-          prev,
-          drafts.map((d) => d.proposal_id)
-        )
+      setDecided(
+        (prev) => new Set([...prev, ...drafts.map((d) => d.proposal_id)])
       ),
   });
   // Kept above the views: a run goes on, and is reported, after this page
@@ -248,9 +235,10 @@ export function DraftsPage() {
     else if (list) {
       setSelected((prev) => stillPending(prev, list, registered));
     }
-    // The first list after a decision takes over, whatever it says: decided
-    // there, they aren't pending; pending again (another window's Undo),
-    // they are decidable again. Every id here was recorded before it.
+    // The first list after a decision or an Undo takes over, whatever it
+    // says: decided there, they aren't pending; pending again (an Undo here
+    // or in another window), they are decidable again, at the updated_at it
+    // lists. Every id here was recorded before it.
     if (list && basis.list !== list) {
       setDecided((prev) => (prev.size === 0 ? prev : NO_IDS));
     }
