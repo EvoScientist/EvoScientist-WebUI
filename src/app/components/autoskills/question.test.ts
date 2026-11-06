@@ -91,6 +91,30 @@ describe("the files an approval installs unseen", () => {
     expect(fileSection([])).toBeUndefined();
   });
 
+  it("gives a size only to a file listed over the limit: one that grew past it since says no size", () => {
+    // Listed within the limit, but the core answered 413 when it was read:
+    // its listed size isn't what makes it too large.
+    const grew = { path: "grew.txt", size: 10, reason: "too_large" as const };
+    const edge = {
+      path: "edge.csv",
+      size: 1_048_577,
+      reason: "too_large" as const,
+    };
+    const atLimit = {
+      path: "at-limit.csv",
+      size: 1_048_576,
+      reason: "too_large" as const,
+    };
+    expect(
+      fileSection([{ name: "csv-profiler", files: [grew, edge, atLimit] }])
+        ?.groups[0].lines
+    ).toEqual([
+      "grew.txt — too large to show",
+      "edge.csv (1.01 MB) — too large to show",
+      "at-limit.csv — too large to show",
+    ]);
+  });
+
   it("asks about the files alone, or adds them to another question", () => {
     const section = fileSection([{ name: "csv-profiler", files: [big] }]);
     expect(filesQuestion(section)).toEqual({

@@ -1,5 +1,9 @@
 import { useState } from "react";
-import { sizeText, type UnshowableFile } from "@/lib/autoskills";
+import {
+  MAX_SHOWN_BYTES,
+  sizeText,
+  type UnshowableFile,
+} from "@/lib/autoskills";
 
 /** The files an approval would install unseen, under the question's
  *  sentences: an opening line, one group per draft (named only when there
@@ -46,11 +50,15 @@ export function useShownQuestion(open: boolean, live: Question): Question {
   return open ? live : held;
 }
 
-/** One file the page can't show, as the question lists it. */
+/** One file the page can't show, as the question lists it. A size only for
+ *  a file listed over the limit: one listed within it whose read answered
+ *  413 has grown since, and its listed size would say it fits. */
 function fileLine(file: UnshowableFile): string {
   switch (file.reason) {
     case "too_large":
-      return `${file.path} (${sizeText(file.size)}) — too large to show`;
+      return file.size > MAX_SHOWN_BYTES
+        ? `${file.path} (${sizeText(file.size)}) — too large to show`
+        : `${file.path} — too large to show`;
     case "not_text":
       return `${file.path} — not text`;
     default:
