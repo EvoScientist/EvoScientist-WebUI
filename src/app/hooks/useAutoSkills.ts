@@ -234,15 +234,12 @@ function fileKey(
   ];
 }
 
-async function fetchDraftFile([
-  ,
-  base,
-  apiKey,
-  id,
-  ,
-  path,
-  installed,
-]: FileKey): Promise<string> {
+/** SWR calls it with the key alone; the check before an approval also
+ *  passes its own signal, which stops the read with the check. */
+async function fetchDraftFile(
+  [, base, apiKey, id, , path, installed]: FileKey,
+  outer?: AbortSignal
+): Promise<string> {
   const url =
     `${base}/api/autoskills/proposals/${encodeURIComponent(id)}/file` +
     `?path=${encodeURIComponent(path)}${installed ? "&installed=1" : ""}`;
@@ -262,7 +259,7 @@ async function fetchDraftFile([
         );
       }
       return await res.text();
-    });
+    }, outer);
   } catch (e) {
     if (e instanceof DraftFileError) throw e;
     throw new DraftFileError(FILE_FALLBACK, false);
@@ -294,6 +291,10 @@ export function useDraftFile(
 
 /** How many of a check's files are read at a time. */
 const CHECK_READS = 4;
+/** How long a whole check may take. Each read is bounded on its own, but a
+ *  backend that never answers would hold the page busy for READ_TIMEOUT_MS
+ *  per CHECK_READS files. */
+export const CHECK_DEADLINE_MS = 20_000;
 
 /** Each draft of a check with the files the page can't show; a draft
  *  without any isn't in it. */
@@ -319,14 +320,16 @@ function knownOutcome(
   return outcome === "unchecked" ? null : outcome;
 }
 
-/** Run `tasks`, at most `limit` at a time. */
+/** Run `tasks`, at most `limit` at a time; none starts once `stop` is
+ *  aborted. */
 async function inTurns(
   tasks: ReadonlyArray<() => Promise<void>>,
-  limit: number
+  limit: number,
+  stop: AbortSignal
 ): Promise<void> {
   let next = 0;
   const worker = async () => {
-    while (next < tasks.length) await tasks[next++]();
+    while (next < tasks.length && !stop.aborted) await tasks[next++]();
   };
   await Promise.all(
     Array.from({ length: Math.min(limit, tasks.length) }, worker)
@@ -339,18 +342,24 @@ async function inTurns(
  *  its SWR key, so a file opened before isn't read again and one read here
  *  opens at once), at most CHECK_READS at a time, each read bounded like
  *  the tab's. A 413 or 415 says the page can't show it; any other failure
- *  that it couldn't be checked. The files are the drafts' current ones
- *  (their updated_at is in the key). Answers at once, without a promise,
- *  when nothing has to be read; never rejects. */
+ *  that it couldn't be checked. The whole check ends after
+ *  CHECK_DEADLINE_MS, or when `stop` aborts: the reads out are stopped, no
+ *  other starts, and every file without an answer couldn't be checked. The
+ *  files are the drafts' current ones (their updated_at is in the key).
+ *  Answers at once, without a promise, when nothing has to be read; never
+ *  rejects. */
 export function useDraftFilesCheck(): (
-  drafts: readonly Draft[]
+  drafts: readonly Draft[],
+  stop?: AbortSignal
 ) => UnshowableByDraft | Promise<UnshowableByDraft> {
   const { deploymentUrl, apiKey } = useDeployment();
   const base = baseOf(deploymentUrl);
   const { cache, mutate } = useSWRConfig();
   return useCallback(
-    (drafts: readonly Draft[]) => {
+    (drafts: readonly Draft[], stop?: AbortSignal) => {
       const reads = new Map<string, Map<string, FileReadOutcome>>();
+      // Ends the check: the deadline, or the caller's stop.
+      const ended = new AbortController();
       const toRead: Array<() => Promise<void>> = [];
       for (const draft of drafts) {
         const outcomes = new Map<string, FileReadOutcome>();
@@ -370,7 +379,7 @@ export function useDraftFilesCheck(): (
           toRead.push(async () => {
             let outcome: FileReadOutcome;
             try {
-              const text = await fetchDraftFile(key);
+              const text = await fetchDraftFile(key, ended.signal);
               outcome = "shown";
               // Into the tab's cache, without reading it again.
               try {
@@ -399,7 +408,15 @@ export function useDraftFilesCheck(): (
         return out;
       };
       if (toRead.length === 0) return found();
-      return inTurns(toRead, CHECK_READS).then(found);
+      const end = () => ended.abort();
+      if (stop?.aborted) end();
+      else stop?.addEventListener("abort", end, { once: true });
+      const deadline = setTimeout(end, CHECK_DEADLINE_MS);
+      return inTurns(toRead, CHECK_READS, ended.signal).then(() => {
+        clearTimeout(deadline);
+        stop?.removeEventListener("abort", end);
+        return found();
+      });
     },
     [base, apiKey, cache, mutate]
   );

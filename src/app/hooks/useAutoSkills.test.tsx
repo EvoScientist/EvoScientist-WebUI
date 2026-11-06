@@ -5,6 +5,7 @@ import { act, render, renderHook, waitFor } from "@testing-library/react";
 import { SWRConfig } from "swr";
 import {
   AUTOSKILLS_REFRESH_MS,
+  CHECK_DEADLINE_MS,
   READ_TIMEOUT_MS,
   markAutoSeen,
   readAutoSeenAt,
@@ -779,6 +780,88 @@ describe("useDraftFilesCheck", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("ends the whole check after 20 s: the reads out are stopped, no other starts, and every file not answered couldn't be checked", async () => {
+    vi.useFakeTimers();
+    try {
+      // A backend that never answers: each read gives up after 15 s, so 32
+      // files would take two minutes four at a time.
+      const fetchMock = stubFetch(() => new Promise<Response>(() => {}));
+      const { result } = renderHook(() => useDraftFilesCheck(), { wrapper });
+      const paths = Array.from({ length: 32 }, (_, i) => `f${i}.md`);
+      const out = result.current([
+        withFiles(
+          "a",
+          paths.map((p) => [p, 3] as [string, number])
+        ),
+      ]) as Promise<Found>;
+      let found: Found | undefined;
+      void out.then((f) => (found = f));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(CHECK_DEADLINE_MS - 10);
+      });
+      expect(found).toBeUndefined();
+      // Four at once, then four more once the first gave up at 15 s.
+      expect(fetchMock).toHaveBeenCalledTimes(8);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(20);
+      });
+      expect(found).toEqual(
+        new Map([
+          ["a", paths.map((path) => ({ path, size: 3, reason: "unchecked" }))],
+        ])
+      );
+      // The reads out were stopped, and none started after the deadline.
+      for (const call of fetchMock.mock.calls.slice(4)) {
+        expect((call[1]?.signal as AbortSignal).aborted).toBe(true);
+      }
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(READ_TIMEOUT_MS * 4);
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(8);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a check the caller stops ends at once and reads nothing more", async () => {
+    const fetchMock = stubFetch(() => new Promise<Response>(() => {}));
+    const { result } = renderHook(() => useDraftFilesCheck(), { wrapper });
+    const stop = new AbortController();
+    const out = result.current(
+      [
+        withFiles(
+          "a",
+          Array.from(
+            { length: 6 },
+            (_, i) => [`f${i}.md`, 3] as [string, number]
+          )
+        ),
+      ],
+      stop.signal
+    ) as Promise<Found>;
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    stop.abort();
+    const found = await out;
+    expect(found.get("a")?.map((f) => f.reason)).toEqual(
+      Array(6).fill("unchecked")
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    for (const call of fetchMock.mock.calls) {
+      expect((call[1]?.signal as AbortSignal).aborted).toBe(true);
+    }
+
+    // Stopped before it starts: nothing is read.
+    const before = fetchMock.mock.calls.length;
+    const again = await (result.current(
+      [withFiles("b", [["SKILL.md", 3]])],
+      stop.signal
+    ) as Promise<Found>);
+    expect(again).toEqual(
+      new Map([["b", [{ path: "SKILL.md", size: 3, reason: "unchecked" }]]])
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(before);
   });
 
   it("shares the Files tab's reads: a file it read opens at once, and one opened before isn't read again", async () => {
