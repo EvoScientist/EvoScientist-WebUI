@@ -207,23 +207,30 @@ function Group({
           </span>
         </button>
         {pending && (
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={onRun}
-            disabled={
-              !canWrite ||
-              running ||
-              served !== true ||
-              group.project.missing ||
-              autoSkillsOff
-            }
+          // The hint sits on the wrapper: a disabled Button takes no pointer
+          // (disabled:pointer-events-none), so its own title never shows.
+          // Always there, so the button isn't mounted again when it changes.
+          <span
             title={autoSkillsOff && !running ? RUN_OFF : undefined}
-            className="border-solid max-md:min-h-11"
+            className="inline-flex shrink-0"
           >
-            {running ? "Running…" : "Run now"}
-          </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={onRun}
+              disabled={
+                !canWrite ||
+                running ||
+                served !== true ||
+                group.project.missing ||
+                autoSkillsOff
+              }
+              className="border-solid max-md:min-h-11"
+            >
+              {running ? "Running…" : "Run now"}
+            </Button>
+          </span>
         )}
       </div>
       <div

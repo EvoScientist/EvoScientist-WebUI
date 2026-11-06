@@ -380,12 +380,24 @@ describe("DraftList", () => {
     }
   });
 
-  it("Run now is off while AutoSkills is off, and says why", () => {
+  it("Run now is off while AutoSkills is off, and says why on hover", () => {
     const OFF = "AutoSkills is off. Turn it on in Settings first.";
     const { props, rerender } = renderList({ autoSkillsOff: true });
     for (const run of screen.getAllByRole("button", { name: "Run now" })) {
       expect((run as HTMLButtonElement).disabled).toBe(true);
-      expect(run.getAttribute("title")).toBe(OFF);
+      // A disabled Button takes no pointer (disabled:pointer-events-none),
+      // so a title on it never shows: the hint sits on what holds it.
+      expect(run.className).toContain("disabled:pointer-events-none");
+      expect(run.getAttribute("title")).toBeNull();
+      const hint = run.closest("[title]") as HTMLElement | null;
+      expect(hint).not.toBeNull();
+      expect(hint).not.toBe(run);
+      expect(hint?.getAttribute("title")).toBe(OFF);
+      // Nothing from the hint up turns the pointer off.
+      for (let el = hint; el; el = el.parentElement) {
+        expect(el.className.split(/\s+/)).not.toContain("pointer-events-none");
+        expect(el).not.toHaveProperty("disabled", true);
+      }
     }
     // Picking drafts stays possible: approving doesn't need AutoSkills on.
     expect(
@@ -404,7 +416,7 @@ describe("DraftList", () => {
     );
     for (const run of screen.getAllByRole("button", { name: "Run now" })) {
       expect((run as HTMLButtonElement).disabled).toBe(false);
-      expect(run.getAttribute("title")).toBeNull();
+      expect(run.closest("[title]")).toBeNull();
     }
   });
 
@@ -413,7 +425,7 @@ describe("DraftList", () => {
     const running = within(group("EvoSci_test")).getByRole("button", {
       name: "Running…",
     });
-    expect(running.getAttribute("title")).toBeNull();
+    expect(running.closest("[title]")).toBeNull();
   });
 
   it("disables every write control while the page can't write", () => {

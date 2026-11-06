@@ -1167,7 +1167,9 @@ describe("DraftsPage", () => {
         { name: "Run now" }
       ) as HTMLButtonElement;
     expect(run().disabled).toBe(true);
-    expect(run().title).toBe(
+    // On what holds the button: a disabled one takes no pointer.
+    expect(run().title).toBe("");
+    expect(run().closest("[title]")?.getAttribute("title")).toBe(
       "AutoSkills is off. Turn it on in Settings first."
     );
     fireEvent.click(run());
@@ -1177,7 +1179,7 @@ describe("DraftsPage", () => {
     hooks.settings = undefined;
     view.rerender(page());
     expect(run().disabled).toBe(false);
-    expect(run().title).toBe("");
+    expect(run().closest("[title]")).toBeNull();
     fireEvent.click(run());
     expect(hooks.run).toHaveBeenCalledWith(B);
   });
