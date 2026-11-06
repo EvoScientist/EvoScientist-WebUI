@@ -304,7 +304,12 @@ export function DraftsPage() {
   // Kept above the views: a run goes on, and is reported, after this page
   // is left.
   const { run } = useRunNowState();
-  const { deploymentUrl } = useDeployment();
+  const { deploymentUrl, apiKey } = useDeployment();
+  // The backend the page talks to (its address and key): a check started
+  // for one is dropped once the page talks to another.
+  const deployment = `${deploymentUrl}\n${apiKey}`;
+  const deploymentNow = useRef(deployment);
+  deploymentNow.current = deployment;
 
   const [settingsOpen, setSettingsOpen] = useState(false);
   const settingsButtonRef = useRef<HTMLButtonElement>(null);
@@ -316,15 +321,24 @@ export function DraftsPage() {
   // and no decision starts.
   const checkFiles = useDraftFilesCheck();
   const [checking, setChecking] = useState<
-    { from: "bulk" } | { from: "pane"; id: string } | null
+    | (({ from: "bulk" } | { from: "pane"; id: string }) & {
+        deployment: string;
+      })
+    | null
   >(null);
+  // Another backend: the page leaves "Checking files…" at once.
+  if (checking && checking.deployment !== deployment) setChecking(null);
   const checkSeq = useRef(0);
+  const checkStop = useRef<AbortController | null>(null);
   useEffect(
     () => () => {
-      // Gone: a check's answer is dropped.
+      // Gone, or another backend: a check's answer is dropped, and its
+      // reads stop.
       checkSeq.current += 1;
+      checkStop.current?.abort();
+      checkStop.current = null;
     },
-    []
+    [deployment]
   );
   // The bulk approval the question asks about: only these drafts go, at
   // the versions recorded at the click, whatever is picked meanwhile.
@@ -593,19 +607,24 @@ export function DraftsPage() {
 
   /** The files of `drafts` the page can't show: at once when nothing has
    *  to be read; else once read, with `from`'s Approve saying so and the
-   *  page busy meanwhile (null when the page went). */
+   *  page busy meanwhile (null when the page went or talks to another
+   *  backend now). */
   const checkFor = (
     drafts: readonly Draft[],
-    from: NonNullable<typeof checking>
+    from: { from: "bulk" } | { from: "pane"; id: string }
   ): UnshowableByDraft | Promise<UnshowableByDraft | null> => {
-    const out = checkFiles(drafts);
+    const stop = new AbortController();
+    const out = checkFiles(drafts, stop.signal);
     if (!(out instanceof Promise)) return out;
     const token = ++checkSeq.current;
-    setChecking(from);
+    checkStop.current = stop;
+    setChecking({ ...from, deployment });
     const done = () => {
       if (token !== checkSeq.current) return false;
+      checkStop.current = null;
       setChecking(null);
-      return true;
+      // Answered before the page dropped it for another backend.
+      return deploymentNow.current === deployment;
     };
     // A check never rejects; if one did, the page would stay busy.
     return out.then(

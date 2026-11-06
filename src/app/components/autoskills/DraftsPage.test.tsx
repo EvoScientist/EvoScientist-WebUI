@@ -99,17 +99,22 @@ const hooks = vi.hoisted(() => ({
   run: vi.fn(async (_key: string) => undefined),
   settings: undefined as Record<string, unknown> | undefined,
   access: undefined as SettingsWriteAccess | undefined,
+  deployment: { deploymentUrl: "http://127.0.0.1:6174", apiKey: "" },
 }));
 
-vi.mock("@/app/hooks/useAutoSkills", async (importOriginal) => ({
-  useAutoSkills: () => ({ ...hooks.auto, refresh: hooks.refresh }),
-  markAutoSeen: hooks.mark,
-  refreshAutoSkills: hooks.refresh,
-  // The real check of a draft's files, reading through a stubbed fetch.
-  useDraftFilesCheck: (
-    await importOriginal<typeof import("@/app/hooks/useAutoSkills")>()
-  ).useDraftFilesCheck,
-}));
+vi.mock("@/app/hooks/useAutoSkills", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("@/app/hooks/useAutoSkills")
+  >();
+  return {
+    useAutoSkills: () => ({ ...hooks.auto, refresh: hooks.refresh }),
+    markAutoSeen: hooks.mark,
+    refreshAutoSkills: hooks.refresh,
+    // The real check of a draft's files, reading through a stubbed fetch.
+    useDraftFilesCheck: actual.useDraftFilesCheck,
+    CHECK_DEADLINE_MS: actual.CHECK_DEADLINE_MS,
+  };
+});
 vi.mock("@/app/hooks/useDraftActions", async (importOriginal) => {
   const actual = await importOriginal<
     typeof import("@/app/hooks/useDraftActions")
@@ -140,12 +145,13 @@ vi.mock("@/app/hooks/useSettings", () => ({
 }));
 vi.mock("@/providers/ClientProvider", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  useDeployment: () => ({ deploymentUrl: URL_, apiKey: "" }),
+  useDeployment: () => hooks.deployment,
 }));
 vi.mock("@/app/components/SkillDetailDialog", () => ({
   SkillDetailDialog: () => null,
 }));
 
+import { CHECK_DEADLINE_MS } from "@/app/hooks/useAutoSkills";
 import { SkillsMarketplace } from "@/app/components/SkillsMarketplace";
 import { RunNowContext } from "@/providers/runNowContext";
 import { DraftsPage } from "./DraftsPage";
@@ -236,6 +242,7 @@ beforeEach(() => {
   };
   hooks.access = { writable: true };
   hooks.realActions = false;
+  hooks.deployment = { deploymentUrl: URL_, apiKey: "" };
 });
 // Restored here, so a failing assertion can't leak them into other tests.
 let focusSpy: { mockRestore(): void } | undefined;
@@ -1865,12 +1872,15 @@ describe("DraftsPage", () => {
       answer: (path: string) => Response | Promise<Response> = (path) =>
         new Response(`text of ${path}`)
     ) {
-      const fetchMock = vi.fn(async (input: RequestInfo | URL) =>
-        answer(new URL(String(input)).searchParams.get("path") ?? "")
+      const fetchMock = vi.fn(
+        async (input: RequestInfo | URL, _init?: RequestInit) =>
+          answer(new URL(String(input)).searchParams.get("path") ?? "")
       );
       vi.stubGlobal("fetch", fetchMock);
       return fetchMock;
     }
+    const scopeOf = (box: ReturnType<typeof within>) =>
+      box.getByLabelText("Install into");
     const fileLines = (dialog: HTMLElement) =>
       within(dialog)
         .getAllByRole("listitem")
@@ -2261,6 +2271,115 @@ describe("DraftsPage", () => {
         (pane().getByRole("button", { name: "Approve" }) as HTMLButtonElement)
           .disabled
       ).toBe(false);
+    });
+
+    it("a check that hears nothing gives up after 20 s and asks about every file it couldn't check", async () => {
+      vi.useFakeTimers();
+      try {
+        const fetchMock = serveFiles(() => new Promise<Response>(() => {}));
+        const paths = Array.from({ length: 32 }, (_, i) => `f${i}.md`);
+        const c = holding(
+          { proposal_id: "c", skill_name: "csv-profiler" },
+          paths.map((p) => [p, 3])
+        );
+        ready([c]);
+        render(page());
+        pick("csv-profiler");
+        approveSelected();
+        expect(
+          within(selection()!).getByRole("button", {
+            name: "Checking files…",
+          })
+        ).toBeTruthy();
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(CHECK_DEADLINE_MS - 10);
+        });
+        expect(screen.queryByRole("dialog")).toBeNull();
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(20);
+        });
+        const dialog = screen.getByRole("dialog", {
+          name: "Install files you haven't seen?",
+        });
+        expect(fileLines(dialog)).toEqual(
+          paths.map((p) => `${p} — couldn't be checked`)
+        );
+        // Four reads, then four more at 15 s; none after the deadline.
+        expect(fetchMock).toHaveBeenCalledTimes(8);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(60_000);
+        });
+        expect(fetchMock).toHaveBeenCalledTimes(8);
+        expect(hooks.approve).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("a deployment switch drops the check: Checking files… goes, its reads stop, and nothing is sent", async () => {
+      const errors = spyErrors();
+      const waiting: Array<() => void> = [];
+      const fetchMock = serveFiles(
+        () =>
+          new Promise<Response>((r) =>
+            waiting.push(() => r(new Response("text")))
+          )
+      );
+      const c = holding({ proposal_id: "c" }, [["SKILL.md", 10]]);
+      const x = holding(
+        { proposal_id: "x", created_at: "2026-10-01T09:00:00Z" },
+        [["SKILL.md", 10]]
+      );
+      ready([c, x]);
+      q.values.set("draftId", "x");
+      const view = render(page());
+      const pane = () =>
+        within(screen.getByRole("heading", { level: 3 }).parentElement!);
+      const enabled = (el: HTMLElement) => !(el as HTMLButtonElement).disabled;
+
+      // The bar's check, then another backend.
+      pick("c");
+      approveSelected();
+      expect(
+        within(selection()!).getByRole("button", { name: "Checking files…" })
+      ).toBeTruthy();
+      hooks.deployment = {
+        deploymentUrl: "http://127.0.0.1:7001",
+        apiKey: "",
+      };
+      view.rerender(page());
+      expect(
+        enabled(within(selection()!).getByRole("button", { name: "Approve" }))
+      ).toBe(true);
+      expect(enabled(pane().getByRole("button", { name: "Approve" }))).toBe(
+        true
+      );
+      await waitFor(() =>
+        expect(
+          (fetchMock.mock.calls[0][1]?.signal as AbortSignal).aborted
+        ).toBe(true)
+      );
+      await act(async () => waiting.shift()!());
+
+      // The pane's check, then the same address with another key.
+      fireEvent.click(pane().getByRole("button", { name: "Approve" }));
+      expect(
+        pane().getByRole("button", { name: "Checking files…" })
+      ).toBeTruthy();
+      hooks.deployment = {
+        deploymentUrl: "http://127.0.0.1:7001",
+        apiKey: "k-2",
+      };
+      view.rerender(page());
+      expect(enabled(pane().getByRole("button", { name: "Approve" }))).toBe(
+        true
+      );
+      expect(enabled(scopeOf(pane()))).toBe(true);
+      await act(async () => waiting.shift()!());
+
+      expect(hooks.approve).not.toHaveBeenCalled();
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(errors).not.toHaveBeenCalled();
     });
 
     it("an update whose files can all be shown asks only its own question", async () => {
