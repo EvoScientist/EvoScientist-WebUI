@@ -1620,6 +1620,50 @@ describe("DraftsPage", () => {
     ]);
   });
 
+  it("a group's select-all keeps the stamp a draft was first picked at", async () => {
+    // The real decision hook, down to the relay's POST.
+    hooks.realActions = true;
+    const x = draft({ proposal_id: "x", updated_at: "T1-x" });
+    const y = draft({
+      proposal_id: "y",
+      created_at: "2026-10-01T09:00:00Z",
+      updated_at: "T1-y",
+    });
+    ready([x, y]);
+    const view = render(page());
+    pick("y");
+    // The list moves y on; select-all then picks x, and y stays as it was
+    // first picked.
+    ready([x, { ...y, updated_at: "T2-y" }]);
+    view.rerender(page());
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select all drafts in EvoSci_test" })
+    );
+    expect(selection()?.textContent).toContain("2 selected");
+
+    const bodies: Array<Record<string, unknown>> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        bodies.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+        return new Response(
+          JSON.stringify({
+            approved: true,
+            scope: "workspace",
+            operation: "create",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      })
+    );
+    approveSelected();
+    await waitFor(() => expect(bodies).toHaveLength(2));
+    expect(bodies.map((b) => [b.proposal_id, b.expected_updated_at])).toEqual([
+      ["x", "T1-x"],
+      ["y", "T1-y"],
+    ]);
+  });
+
   it("the bulk update question's Install sends the version picked", () => {
     const u = draft({
       proposal_id: "u",
