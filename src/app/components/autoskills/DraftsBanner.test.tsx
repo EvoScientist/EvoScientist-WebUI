@@ -103,6 +103,34 @@ function expectNoParagraphGaps(container: HTMLElement) {
   }
 }
 
+/** A quiet state's way in: a small box in the banner's colours that is
+ *  itself the one button, as wide as its words, with the brand hover, the
+ *  app's focus ring and a phone's 44 px target. */
+function expectBoxButton(button: HTMLElement) {
+  const classes = button.className.split(/\s+/);
+  for (const c of [
+    "inline-flex",
+    "rounded-lg",
+    "border",
+    // globals.css resets a button's border: without it the width is 0.
+    "border-solid",
+    "border-[var(--brand)]",
+    "bg-[var(--brand-soft)]",
+    "text-[var(--brand)]",
+    "enabled:hover:border-[var(--brand-hover)]",
+    "enabled:hover:text-[var(--brand-hover)]",
+    "focus-visible:ring-2",
+    "focus-visible:ring-ring",
+    "max-md:min-h-11",
+  ]) {
+    expect(classes).toContain(c);
+  }
+  expect(button.className).not.toMatch(/opacity|w-full|underline/);
+  expect(button.querySelector("svg")?.getAttribute("aria-hidden")).toBe("true");
+  // The whole box is the button: the only one in the banner.
+  expect(screen.getAllByRole("button")).toEqual([button]);
+}
+
 const banner = () =>
   render(
     <TestProjectsProvider value={mockProjects(readyProjects(A, B))}>
@@ -298,7 +326,9 @@ describe("DraftsBanner", () => {
 
     expect(screen.queryByText(/drafted from your memory/)).toBeNull();
     expect(screen.queryByRole("button", { name: "Review" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "AutoSkills history" }));
+    const history = screen.getByRole("button", { name: "AutoSkills history" });
+    expectBoxButton(history);
+    fireEvent.click(history);
     expect(q.writes).toEqual(
       expect.arrayContaining([
         ["skillsPage", "drafts"],
@@ -316,9 +346,11 @@ describe("DraftsBanner", () => {
     expect(screen.queryByRole("button", { name: "AutoSkills history" })).toBe(
       null
     );
-    fireEvent.click(
-      screen.getByRole("button", { name: "AutoSkills settings" })
-    );
+    const settings = screen.getByRole("button", {
+      name: "AutoSkills settings",
+    });
+    expectBoxButton(settings);
+    fireEvent.click(settings);
     expect(q.writes).toEqual([
       ["skillsPage", "drafts"],
       ["draftsTab", null],

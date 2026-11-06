@@ -21,8 +21,10 @@ const NO_PROJECTS: readonly Project[] = [];
 
 const BOX =
   "mb-4 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-[var(--brand)] bg-[var(--brand-soft)] px-3.5 py-3";
-const LINK =
-  "rounded-sm text-sm text-[var(--brand)] underline-offset-4 transition-colors hover:text-[var(--brand-hover)] hover:underline focus-visible:ring-2 focus-visible:ring-ring max-md:min-h-11";
+// The quiet states' way in: a small box in the banner's colours, itself
+// the button, as wide as its words.
+const BOX_BUTTON =
+  "inline-flex items-center gap-2 rounded-lg border border-solid border-[var(--brand)] bg-[var(--brand-soft)] px-3 py-1.5 text-sm font-medium text-[var(--brand)] transition-colors focus-visible:ring-2 focus-visible:ring-ring enabled:hover:border-[var(--brand-hover)] enabled:hover:text-[var(--brand-hover)] max-md:min-h-11";
 
 /** How many of the automatic approvals came after `seenAt` (all of them
  *  when nothing was seen); one without a time that parses doesn't count. */
@@ -70,8 +72,12 @@ export function DraftsBanner(): JSX.Element | null {
             void setSkillsPage("drafts");
             void setDraftsTab(null);
           }}
-          className={LINK}
+          className={BOX_BUTTON}
         >
+          <Sparkles
+            className="size-4 shrink-0"
+            aria-hidden="true"
+          />
           AutoSkills settings
         </button>
       </div>
@@ -169,8 +175,12 @@ export function DraftsBanner(): JSX.Element | null {
       <button
         type="button"
         onClick={() => openDrafts("approved")}
-        className={LINK}
+        className={BOX_BUTTON}
       >
+        <Sparkles
+          className="size-4 shrink-0"
+          aria-hidden="true"
+        />
         AutoSkills history
       </button>
     </div>
