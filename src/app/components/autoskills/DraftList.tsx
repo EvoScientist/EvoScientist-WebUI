@@ -40,8 +40,10 @@ export interface DraftListProps {
   /** The settings say AutoSkills is off: Run now waits (unknown settings
    *  don't count; the core says so then). */
   autoSkillsOff: boolean;
-  /** Drafts decided here that the list still reads as Pending (its re-read
-   *  hasn't landed): not picked again. */
+  /** Drafts held here until a read of the list after the decision or Undo
+   *  lands: decided here while the list still reads them as Pending, or
+   *  moved back to Pending by an Undo whose new updated_at the list doesn't
+   *  have yet. Not picked meanwhile. */
   decided: ReadonlySet<string>;
 }
 

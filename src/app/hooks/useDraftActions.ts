@@ -306,6 +306,10 @@ export function useDraftActions(
               return decisionError(answer, d, labels);
             }
           );
+          // The re-read starts BEFORE the page hears of the Undo: the page
+          // holds the drafts and releases them when this read settles (SWR
+          // keeps only the newest request, so it settles on a read made
+          // after the revert). Don't swap the two calls.
           const rereading = reread();
           if (done.length > 0) {
             try {

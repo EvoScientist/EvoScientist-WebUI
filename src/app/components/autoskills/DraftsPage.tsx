@@ -417,7 +417,8 @@ export function DraftsPage() {
   );
 
   // What a decision may send: still pending in the list, in a registered
-  // project, and not decided here already (the list may not show it yet).
+  // project, and not held here: decided here already, or moved back by an
+  // Undo here, while the list doesn't show that yet.
   const sendable = (drafts: readonly Draft[]) =>
     decidable(drafts, list, registered).filter(
       (d) => !decided.has(d.proposal_id)
