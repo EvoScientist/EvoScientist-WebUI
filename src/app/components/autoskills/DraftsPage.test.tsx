@@ -7,7 +7,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { useLayoutEffect, type ReactNode } from "react";
 import { toast } from "sonner";
 import { SWRConfig } from "swr";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -100,6 +100,10 @@ const hooks = vi.hoisted(() => ({
   settings: undefined as Record<string, unknown> | undefined,
   access: undefined as SettingsWriteAccess | undefined,
   deployment: { deploymentUrl: "http://127.0.0.1:6174", apiKey: "" },
+  // A check of the test's own in place of the real one, when set.
+  check: undefined as
+    | ((drafts: readonly Draft[], stop?: AbortSignal) => unknown)
+    | undefined,
 }));
 
 vi.mock("@/app/hooks/useAutoSkills", async (importOriginal) => {
@@ -110,8 +114,12 @@ vi.mock("@/app/hooks/useAutoSkills", async (importOriginal) => {
     useAutoSkills: () => ({ ...hooks.auto, refresh: hooks.refresh }),
     markAutoSeen: hooks.mark,
     refreshAutoSkills: hooks.refresh,
-    // The real check of a draft's files, reading through a stubbed fetch.
-    useDraftFilesCheck: actual.useDraftFilesCheck,
+    // The real check of a draft's files, reading through a stubbed fetch,
+    // unless the test brings its own.
+    useDraftFilesCheck: () => {
+      const real = actual.useDraftFilesCheck();
+      return hooks.check ?? real;
+    },
     CHECK_DEADLINE_MS: actual.CHECK_DEADLINE_MS,
   };
 });
@@ -210,7 +218,8 @@ function ready(drafts: Draft[]) {
 
 function page(
   projects: ProjectsState = readyProjects(A, B),
-  over: Partial<ProjectsContextValue> = {}
+  over: Partial<ProjectsContextValue> = {},
+  after?: ReactNode
 ) {
   // Each mount reads files with a cache of its own; a rerender keeps it.
   return (
@@ -218,6 +227,7 @@ function page(
       <TestProjectsProvider value={{ ...mockProjects(projects), ...over }}>
         <RunNow>
           <DraftsPage />
+          {after}
         </RunNow>
       </TestProjectsProvider>
     </SWRConfig>
@@ -243,6 +253,7 @@ beforeEach(() => {
   hooks.access = { writable: true };
   hooks.realActions = false;
   hooks.deployment = { deploymentUrl: URL_, apiKey: "" };
+  hooks.check = undefined;
 });
 // Restored here, so a failing assertion can't leak them into other tests.
 let focusSpy: { mockRestore(): void } | undefined;
@@ -1936,12 +1947,20 @@ describe("DraftsPage", () => {
         (pane().getByRole("button", { name: "Approve" }) as HTMLButtonElement)
           .disabled
       ).toBe(true);
+      // Back on x the check still reads, but the click was given up when y
+      // was opened: its answer asks nothing.
       act(() => q.set("draftId", "x"));
       expect(
         pane().getByRole("button", { name: "Checking files…" })
       ).toBeTruthy();
-
       await act(async () => skillMd(new Response("# skill")));
+      await waitFor(() =>
+        expect(pane().getByRole("button", { name: "Approve" })).toBeTruthy()
+      );
+      expect(screen.queryByRole("dialog")).toBeNull();
+
+      // A new click: SKILL.md was read, so it asks at once.
+      fireEvent.click(pane().getByRole("button", { name: "Approve" }));
       const dialog = await screen.findByRole("dialog", {
         name: "Install files you haven't seen?",
       });
@@ -2269,6 +2288,130 @@ describe("DraftsPage", () => {
       expect(hooks.approve).not.toHaveBeenCalled();
       expect(screen.queryByRole("dialog")).toBeNull();
       expect(errors).not.toHaveBeenCalled();
+    });
+
+    it("leaving the open draft or the tab while its files are checked gives the click up for good, though they come back", async () => {
+      const errors = spyErrors();
+      const waiting = holdReads();
+      // One draft per round: a file read once is known after, and its next
+      // check wouldn't read.
+      const [x1, x2, x3] = ["x1", "x2", "x3"].map((id, i) =>
+        holding(
+          {
+            proposal_id: id,
+            scope: "workspace",
+            created_at: `2026-10-0${i + 1}T09:00:00Z`,
+          },
+          [["SKILL.md", 10]]
+        )
+      );
+      const y = holding(
+        { proposal_id: "y", created_at: "2026-09-01T09:00:00Z" },
+        [["SKILL.md", 10]]
+      );
+      ready([x1, x2, x3, y]);
+      q.values.set("draftId", "x1");
+      const view = render(page());
+      const pane = () =>
+        within(screen.getByRole("heading", { level: 3 }).parentElement!);
+      const place = () => pane().getByLabelText("Install into");
+      const checkEnds = () =>
+        waitFor(() =>
+          expect(
+            screen.queryByRole("button", { name: "Checking files…" })
+          ).toBeNull()
+        );
+      // The check answers with an Undo in flight: what the page would say
+      // then isn't said for a click given up.
+      const answerWhileBusy = async () => {
+        hooks.busy = true;
+        view.rerender(page());
+        await act(async () => waiting.shift()!());
+        await checkEnds();
+        hooks.busy = false;
+        view.rerender(page());
+      };
+
+      // Clicked into all projects; y shown, then x1 again, at its own place.
+      fireEvent.click(place());
+      fireEvent.click(
+        screen.getByRole("option", { name: "All projects (global)" })
+      );
+      fireEvent.click(pane().getByRole("button", { name: "Approve" }));
+      act(() => q.set("draftId", "y"));
+      act(() => q.set("draftId", "x1"));
+      expect(place().textContent).toBe("EvoSci_test/skills (this project)");
+      await answerWhileBusy();
+
+      // Another tab, then Pending again, with x2 open.
+      act(() => q.set("draftId", "x2"));
+      fireEvent.click(pane().getByRole("button", { name: "Approve" }));
+      fireEvent.click(screen.getByRole("tab", { name: /^Approved/ }));
+      fireEvent.click(screen.getByRole("tab", { name: /^Pending/ }));
+      await answerWhileBusy();
+
+      // Without an Undo in flight too.
+      act(() => q.set("draftId", "x3"));
+      fireEvent.click(pane().getByRole("button", { name: "Approve" }));
+      act(() => q.set("draftId", "y"));
+      act(() => q.set("draftId", "x3"));
+      await act(async () => waiting.shift()!());
+      await checkEnds();
+
+      expect(hooks.approve).not.toHaveBeenCalled();
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(errors).not.toHaveBeenCalled();
+    });
+
+    it("a check that answers once the page has gone sends nothing", async () => {
+      // A check that answers only when told, whatever stops it: the page
+      // must drop the answer itself.
+      let answer: (found: Map<string, unknown>) => void = () => {};
+      hooks.check = () =>
+        new Promise<Map<string, unknown>>((r) => (answer = r));
+      const c = draft({ proposal_id: "c" });
+      ready([c]);
+      const view = render(page());
+      pick("c");
+      approveSelected();
+      view.unmount();
+      await act(async () => answer(new Map()));
+      expect(hooks.approve).not.toHaveBeenCalled();
+    });
+
+    it("a check started for a new backend before the old one's cleanup runs goes to its end", async () => {
+      const waiting = holdReads();
+      const c = holding({ proposal_id: "c" }, [["SKILL.md", 10]]);
+      ready([c]);
+      // Clicks Approve in the commit that switches the backend: after the
+      // DOM has the new page, before the old backend's effects are cleaned
+      // up.
+      function ApproveInCommit({ armed }: { armed: boolean }) {
+        useLayoutEffect(() => {
+          if (!armed) return;
+          within(selection()!).getByRole("button", { name: "Approve" }).click();
+        }, [armed]);
+        return null;
+      }
+      const view = render(
+        page(undefined, undefined, <ApproveInCommit armed={false} />)
+      );
+      pick("c");
+      hooks.deployment = {
+        deploymentUrl: "http://127.0.0.1:7001",
+        apiKey: "",
+      };
+      view.rerender(page(undefined, undefined, <ApproveInCommit armed />));
+      expect(
+        within(selection()!).getByRole("button", { name: "Checking files…" })
+      ).toBeTruthy();
+      await act(async () => waiting.shift()!());
+      await waitFor(() => expect(hooks.approve.mock.calls).toEqual([[[c]]]));
+      expect(
+        within(selection()!).queryByRole("button", {
+          name: "Checking files…",
+        })
+      ).toBeNull();
     });
 
     it("a draft unticked while the files are checked is neither asked about nor sent", async () => {

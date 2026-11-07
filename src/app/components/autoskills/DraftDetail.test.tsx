@@ -822,6 +822,55 @@ describe("DraftDetail", () => {
     expect(onApprove.mock.calls[1]).toEqual([u, "workspace"]);
   });
 
+  it("leaving the draft while its files are checked gives the click up for good, though the draft comes back", async () => {
+    const errors = vi.spyOn(toast, "error");
+    try {
+      const answers: Array<(files: UnshowableFile[] | null) => void> = [];
+      checkFiles.mockImplementation(
+        () => new Promise<UnshowableFile[] | null>((r) => answers.push(r))
+      );
+      const x = draft({ proposal_id: "x", scope: "workspace" });
+      const u = draft({
+        proposal_id: "u",
+        operation: "update",
+        target_skill_name: "paper-review",
+      });
+      const y = draft({ proposal_id: "y" });
+      const view = render(detail(x));
+
+      // Clicked for all projects, then y shown and x again: x is back at its
+      // own place, and the click into all projects is gone.
+      pickScope("All projects (global)");
+      fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+      view.rerender(detail(y));
+      view.rerender(detail(x));
+      expect(scopeTrigger().textContent).toBe(
+        "EvoSci_test/skills (this project)"
+      );
+      await act(async () => answers[0]([]));
+      expect(onApprove).not.toHaveBeenCalled();
+
+      // An update: its question doesn't come either.
+      view.rerender(detail(u));
+      fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+      view.rerender(detail(y));
+      view.rerender(detail(u));
+      await act(async () => answers[1]([BIG]));
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(onApprove).not.toHaveBeenCalled();
+      expect(errors).not.toHaveBeenCalled();
+
+      // A click after coming back goes as usual.
+      fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+      await act(async () => answers[2]([]));
+      expect(
+        screen.getByRole("dialog", { name: "Replace an installed skill?" })
+      ).toBeTruthy();
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
   it("Install into is off while the draft's files are checked", () => {
     const d = draft({ proposal_id: "x" });
     const view = render(detail(d, { busy: true, checking: true }));

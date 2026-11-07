@@ -235,9 +235,11 @@ function approveQuestion(
 
 const NO_FILES: readonly UnshowableFile[] = [];
 
-/** An approval as clicked: the version of the draft shown, and the place. */
+/** An approval as clicked: the version of the draft shown, and the place,
+ *  in the pane's visit of that draft. */
 interface Decision {
   version: string;
+  visit: number;
   draft: Draft;
   scope: DraftScope;
 }
@@ -278,6 +280,13 @@ export function DraftDetail({
   if (pick.version !== version) {
     setPick({ version, scope: draft.scope });
     setAsked(null);
+  }
+  // Each draft shown here in turn: another one shown gives up a click made
+  // for the one before for good, even when that draft comes back (at its
+  // own place, not the one clicked).
+  const [shown, setShown] = useState({ id: draft.proposal_id, visit: 0 });
+  if (shown.id !== draft.proposal_id) {
+    setShown({ id: draft.proposal_id, visit: shown.visit + 1 });
   }
   const scope = pick.version === version ? pick.scope : draft.scope;
 
@@ -334,10 +343,10 @@ export function DraftDetail({
   // decision is the one shown at the click: what goes, with or without the
   // question, is that draft into that place, whatever is picked later.
   // Another draft opened or the pane closed meanwhile is the user's own
-  // move: nothing goes, and nothing is said. A change (the draft rewritten or
-  // decided, the page unable to decide it) sends nothing either, and the
-  // click says so. A check the page dropped answers null, and the page says
-  // why if it has to.
+  // move: nothing goes, and nothing is said, even once the draft is back. A
+  // change (the draft rewritten or decided, the page unable to decide it)
+  // sends nothing either, and the click says so. A check the page dropped
+  // answers null, and the page says why if it has to.
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
@@ -353,9 +362,7 @@ export function DraftDetail({
     ) => void
   >(() => {});
   afterCheck.current = (decision, files, from) => {
-    if (!mounted.current || decision.draft.proposal_id !== draft.proposal_id) {
-      return;
-    }
+    if (!mounted.current || decision.visit !== shown.visit) return;
     if (decision.version !== version || !pending || !canWrite) {
       toast.error(APPROVE_CHANGED);
       return;
@@ -370,7 +377,7 @@ export function DraftDetail({
   const approve = (e: React.MouseEvent<HTMLButtonElement>) => {
     if (off) return;
     const from = e.currentTarget;
-    const decision: Decision = { version, draft, scope };
+    const decision: Decision = { version, visit: shown.visit, draft, scope };
     const out = checkFiles(draft);
     if (!(out instanceof Promise)) {
       afterCheck.current(decision, out, from);
