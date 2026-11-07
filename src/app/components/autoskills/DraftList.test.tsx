@@ -420,12 +420,38 @@ describe("DraftList", () => {
     }
   });
 
+  it("Run now is described by the hint for screen readers while AutoSkills is off", () => {
+    const OFF = "AutoSkills is off. Turn it on in Settings first.";
+    const { props, rerender } = renderList({ autoSkillsOff: true });
+    const runs = screen.getAllByRole("button", { name: "Run now" });
+    expect(runs.length).toBeGreaterThan(1);
+    const ids = runs.map((run) => run.getAttribute("aria-describedby"));
+    // One sr-only copy of the hint for the list, every button pointing at it.
+    expect(new Set(ids).size).toBe(1);
+    const hint = document.getElementById(ids[0] ?? "");
+    expect(hint?.textContent).toBe(OFF);
+    expect(hint?.className.split(/\s+/)).toContain("sr-only");
+    expect(document.querySelectorAll(`[id="${ids[0]}"]`)).toHaveLength(1);
+
+    rerender(
+      <DraftList
+        {...props}
+        autoSkillsOff={false}
+      />
+    );
+    for (const run of screen.getAllByRole("button", { name: "Run now" })) {
+      expect(run.getAttribute("aria-describedby")).toBeNull();
+    }
+    expect(screen.queryByText(OFF)).toBeNull();
+  });
+
   it("a run that goes on after AutoSkills is turned off reads Running… alone", () => {
     renderList({ autoSkillsOff: true, running: new Set([A]) });
     const running = within(group("EvoSci_test")).getByRole("button", {
       name: "Running…",
     });
     expect(running.closest("[title]")).toBeNull();
+    expect(running.getAttribute("aria-describedby")).toBeNull();
   });
 
   it("disables every write control while the page can't write", () => {

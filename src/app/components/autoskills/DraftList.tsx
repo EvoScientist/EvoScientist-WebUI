@@ -71,6 +71,10 @@ export function DraftList({
   );
   const pending = status === "pending";
   const empty = groups.every((g) => g.drafts.length === 0);
+  // The off hint for screen readers: a disabled Run now is described by it
+  // (its title shows on hover only).
+  const offHintId = useId();
+  const offHint = pending && autoSkillsOff && groups.length > 0;
 
   const toggleGroup = (key: string) =>
     setCollapsed((prev) => {
@@ -111,10 +115,21 @@ export function DraftList({
             registered === null ? null : registered.has(group.project.key)
           }
           autoSkillsOff={autoSkillsOff}
+          offHintId={offHint ? offHintId : null}
           decided={decided}
           labels={labels}
         />
       ))}
+      {/* Last: an sr-only box takes no room, but space-y would push the
+          first group down if it came first. */}
+      {offHint && (
+        <span
+          id={offHintId}
+          className="sr-only"
+        >
+          {RUN_OFF}
+        </span>
+      )}
     </div>
   );
 }
@@ -133,6 +148,7 @@ function Group({
   canWrite,
   served,
   autoSkillsOff,
+  offHintId,
   decided,
   labels,
 }: {
@@ -150,6 +166,8 @@ function Group({
   /** Whether the backend serves this project; null while not known. */
   served: boolean | null;
   autoSkillsOff: boolean;
+  /** The list's sr-only copy of the off hint; null when it isn't there. */
+  offHintId: string | null;
   decided: ReadonlySet<string>;
   labels: Map<string, string>;
 }) {
@@ -218,6 +236,9 @@ function Group({
               type="button"
               variant="outline"
               size="sm"
+              aria-describedby={
+                autoSkillsOff && !running && offHintId ? offHintId : undefined
+              }
               onClick={onRun}
               disabled={
                 !canWrite ||
