@@ -562,11 +562,6 @@ export function DraftsPage() {
   const canDecideOpen = canDecide && openDecidable;
   const approveOpen = (d: Draft, scope: DraftScope) => {
     if (!isReady()) return;
-    // Never alongside another decision or an Undo.
-    if (busy) {
-      toast.error(APPROVE_BUSY);
-      return;
-    }
     const [send] = sendable([d]);
     if (send) void approve([send], { [send.proposal_id]: scope }).then(settle);
   };
@@ -704,27 +699,14 @@ export function DraftsPage() {
     if (!asking || !isReady()) return;
     setConfirming(false);
     const send = sendable(asked.drafts);
-    const blocked = busy
-      ? APPROVE_BUSY
-      : send.length === 0
-      ? APPROVE_CHANGED
-      : null;
-    if (blocked) toast.error(blocked);
-    else void approve(send).then(settle);
+    if (send.length > 0) void approve(send).then(settle);
   };
   // The open draft's check, for its pane: the files of that draft. Once
-  // read, its approval goes on only as clicked: not alongside another
-  // decision, through the open gate, and with the draft still decidable at
-  // the version clicked (a rewrite meanwhile was never checked). Otherwise
-  // nothing goes, and the click says so (null for the pane).
-  const afterPaneCheck = useRef<(d: Draft) => string | null>(() => null);
-  afterPaneCheck.current = (d) =>
-    blockedAfterCheck([d]) ??
-    (list?.drafts.some(
-      (l) => l.proposal_id === d.proposal_id && l.updated_at === d.updated_at
-    )
-      ? null
-      : APPROVE_CHANGED);
+  // read, its approval goes on only when it can (as the bar's): otherwise
+  // nothing goes, the click says so, and the pane hears null. The pane
+  // itself goes on only with the version clicked.
+  const blockedNow = useRef(blockedAfterCheck);
+  blockedNow.current = blockedAfterCheck;
   const checkOpen = (
     d: Draft
   ): UnshowableFile[] | Promise<UnshowableFile[] | null> => {
@@ -732,7 +714,7 @@ export function DraftsPage() {
     if (!(out instanceof Promise)) return out.get(d.proposal_id) ?? [];
     return out.then((found) => {
       if (!found) return null;
-      const blocked = afterPaneCheck.current(d);
+      const blocked = blockedNow.current([d]);
       if (blocked) {
         toast.error(blocked);
         return null;
