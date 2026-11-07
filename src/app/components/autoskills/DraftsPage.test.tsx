@@ -2363,6 +2363,34 @@ describe("DraftsPage", () => {
       expect(errors).not.toHaveBeenCalled();
     });
 
+    it("a check of a backend left and come back to is given up for good", async () => {
+      const errors = spyErrors();
+      holdReads();
+      const c = holding({ proposal_id: "c" }, [["SKILL.md", 10]]);
+      ready([c]);
+      const view = render(page());
+      pick("c");
+      approveSelected();
+      // To another backend and straight back, before the check's reads
+      // have taken in their abort.
+      hooks.deployment = {
+        deploymentUrl: "http://127.0.0.1:7001",
+        apiKey: "",
+      };
+      view.rerender(page());
+      hooks.deployment = { deploymentUrl: URL_, apiKey: "" };
+      view.rerender(page());
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 20));
+      });
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(hooks.approve).not.toHaveBeenCalled();
+      expect(errors).not.toHaveBeenCalled();
+      expect(
+        within(selection()!).getByRole("button", { name: "Approve" })
+      ).toBeTruthy();
+    });
+
     it("a check that answers once the page has gone sends nothing", async () => {
       // A check that answers only when told, whatever stops it: the page
       // must drop the answer itself.

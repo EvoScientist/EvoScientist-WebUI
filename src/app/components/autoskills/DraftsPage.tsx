@@ -348,9 +348,11 @@ export function DraftsPage() {
   useEffect(
     () => () => {
       // Another backend: the check of this one stops reading, and its answer
-      // is dropped (`done` compares the backend). A check started for the
-      // new one before this runs is left alone, to go to its end.
+      // is dropped for good, even if the page comes back to this backend
+      // before it answers. A check started for the new one before this runs
+      // is left alone, to go to its end.
       if (checkRun.current?.deployment === deployment) {
+        checkSeq.current += 1;
         checkRun.current.stop.abort();
         checkRun.current = null;
       }
