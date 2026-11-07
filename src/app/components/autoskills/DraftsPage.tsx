@@ -648,20 +648,29 @@ export function DraftsPage() {
   // The approval as clicked goes, without the drafts that can't be decided
   // any more; one picked during the check waits for the next Approve. With
   // an update or a file the page can't show among them, the question first.
-  // When it can't go, nothing is sent and the click says so.
+  // A draft the user unticked meanwhile (still listed, no longer picked)
+  // stays out, and nothing is said for it; when that leaves none, nothing
+  // goes. When the rest can't go, nothing is sent and the click says so.
   afterBulkCheck.current = (decision) => {
-    const blocked = blockedAfterCheck(decision.drafts);
+    const listed = new Set(
+      stillListed(decision.drafts, list, registered).map((d) => d.proposal_id)
+    );
+    const drafts = decision.drafts.filter(
+      (d) => selected.has(d.proposal_id) || !listed.has(d.proposal_id)
+    );
+    if (drafts.length === 0) return;
+    const blocked = blockedAfterCheck(drafts);
     if (blocked) {
       toast.error(blocked);
       return;
     }
-    const send = sendable(decision.drafts);
+    const send = sendable(drafts);
     if (
       send.some(
         (d) => d.operation === "update" || decision.found.has(d.proposal_id)
       )
     ) {
-      setAsked(decision);
+      setAsked({ drafts, found: decision.found });
       setConfirming(true);
     } else {
       void approve(send).then(settle);
@@ -672,7 +681,7 @@ export function DraftsPage() {
   // project, or global); only the detail pane picks a scope per draft.
   // The decision is fixed at the click: the drafts picked then, each at the
   // version it was picked at (`asSelected`), whatever is picked while their
-  // files are checked. What is sent is checked once more against the list
+  // files are checked (unticking one still leaves it out). What is sent is checked once more against the list
   // and the projects (the selection is pruned by the same rule on every
   // change), and only while the projects' gate is open: a read that has
   // just started closes it before the render that disables the buttons.
@@ -702,18 +711,25 @@ export function DraftsPage() {
     if (send.length > 0) void approve(send).then(settle);
   };
   // The open draft's check, for its pane: the files of that draft. Once
-  // read, its approval goes on only when it can (as the bar's): otherwise
-  // nothing goes, the click says so, and the pane hears null. The pane
-  // itself goes on only with the version clicked.
+  // read, its approval goes on only while that draft is still the one open
+  // in the tab of the click (another draft, the pane closed or another tab
+  // is the user's own move: nothing goes, silently), and only when it can
+  // (as the bar's): otherwise nothing goes, the click says so, and the pane
+  // hears null. The pane itself goes on only with the version clicked.
   const blockedNow = useRef(blockedAfterCheck);
   blockedNow.current = blockedAfterCheck;
+  const openNow = useRef({ draftId, status });
+  openNow.current = { draftId, status };
   const checkOpen = (
     d: Draft
   ): UnshowableFile[] | Promise<UnshowableFile[] | null> => {
     const out = checkFor([d], { from: "pane", id: d.proposal_id });
     if (!(out instanceof Promise)) return out.get(d.proposal_id) ?? [];
+    const tab = status;
     return out.then((found) => {
       if (!found) return null;
+      const open = openNow.current;
+      if (open.draftId !== d.proposal_id || open.status !== tab) return null;
       const blocked = blockedNow.current([d]);
       if (blocked) {
         toast.error(blocked);

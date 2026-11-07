@@ -2214,6 +2214,155 @@ describe("DraftsPage", () => {
       ).toBeNull();
     });
 
+    it("a draft unticked while the files are checked doesn't go, silently; the rest go as picked at the click", async () => {
+      const errors = spyErrors();
+      const waiting = holdReads();
+      const a = holding({ proposal_id: "a" }, [["SKILL.md", 10]]);
+      const b = holding(
+        { proposal_id: "b", created_at: "2026-10-15T09:00:00Z" },
+        [["SKILL.md", 10]]
+      );
+      const c = holding(
+        { proposal_id: "c", created_at: "2026-10-01T09:00:00Z" },
+        [["SKILL.md", 10]]
+      );
+      ready([a, b, c]);
+      const view = render(page());
+
+      // b unticked during the check; a unticked and ticked again after a
+      // rewrite: it goes at the version of the click.
+      pick("a");
+      pick("b");
+      approveSelected();
+      pick("b");
+      const rewritten = { ...a, updated_at: "2026-11-02T09:00:00Z" };
+      ready([rewritten, b, c]);
+      view.rerender(page());
+      pick("a");
+      pick("a");
+      await act(async () => {
+        while (waiting.length > 0) waiting.shift()!();
+      });
+      await waitFor(() => expect(hooks.approve).toHaveBeenCalled());
+      expect(hooks.approve.mock.calls).toEqual([[[a]]]);
+      expect(errors).not.toHaveBeenCalled();
+
+      // Every draft unticked (Clear) during the check: nothing goes, and
+      // nothing is said.
+      hooks.approve.mockClear();
+      const clear = () =>
+        fireEvent.click(
+          within(selection()!).getByRole("button", { name: "Clear" })
+        );
+      clear();
+      pick("c");
+      approveSelected();
+      clear();
+      await act(async () => {
+        while (waiting.length > 0) waiting.shift()!();
+      });
+      await waitFor(() =>
+        expect(
+          screen.queryByRole("button", { name: "Checking files…" })
+        ).toBeNull()
+      );
+      expect(hooks.approve).not.toHaveBeenCalled();
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(errors).not.toHaveBeenCalled();
+    });
+
+    it("a draft unticked while the files are checked is neither asked about nor sent", async () => {
+      const waiting = holdReads();
+      const u = holding(
+        {
+          proposal_id: "u",
+          skill_name: "paper-review-v2",
+          operation: "update",
+          target_skill_name: "paper-review",
+        },
+        [["SKILL.md", 10]]
+      );
+      const b = holding(
+        {
+          proposal_id: "b",
+          skill_name: "csv-profiler",
+          created_at: "2026-10-01T09:00:00Z",
+        },
+        [["data/big.csv", BIG]]
+      );
+      ready([u, b]);
+      render(page());
+      pick("paper-review-v2");
+      pick("csv-profiler");
+      approveSelected();
+      pick("csv-profiler");
+      await act(async () => waiting.shift()!());
+      const dialog = await screen.findByRole("dialog", {
+        name: "Replace an installed skill?",
+      });
+      // Only u's question: b and its large file are out.
+      expect(describedBy(dialog)).toBe(
+        "This replaces the installed paper-review."
+      );
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: "Replace and install" })
+      );
+      expect(hooks.approve.mock.calls).toEqual([[[u]]]);
+    });
+
+    it("leaving the open draft while its files are checked cancels its approval, silently", async () => {
+      const errors = spyErrors();
+      const waiting = holdReads();
+      const x = holding({ proposal_id: "x" }, [["SKILL.md", 10]]);
+      const y = holding(
+        { proposal_id: "y", created_at: "2026-10-01T09:00:00Z" },
+        [["SKILL.md", 10]]
+      );
+      const z = holding(
+        { proposal_id: "z", created_at: "2026-09-01T09:00:00Z" },
+        [["SKILL.md", 10]]
+      );
+      ready([x, y, z]);
+      q.values.set("draftId", "x");
+      const view = render(page());
+      const pane = () =>
+        within(screen.getByRole("heading", { level: 3 }).parentElement!);
+      // Each time with an Undo in flight when the check answers: what the
+      // page would say then isn't said for a draft the user left.
+      const answerWhileBusy = async () => {
+        hooks.busy = true;
+        view.rerender(page());
+        await act(async () => waiting.shift()!());
+        await waitFor(() =>
+          expect(
+            screen.queryByRole("button", { name: "Checking files…" })
+          ).toBeNull()
+        );
+        hooks.busy = false;
+        view.rerender(page());
+      };
+
+      // Another draft opened.
+      fireEvent.click(pane().getByRole("button", { name: "Approve" }));
+      act(() => q.set("draftId", "y"));
+      await answerWhileBusy();
+
+      // The pane closed.
+      fireEvent.click(pane().getByRole("button", { name: "Approve" }));
+      act(() => q.set("draftId", null));
+      await answerWhileBusy();
+
+      // Another tab shown.
+      act(() => q.set("draftId", "z"));
+      fireEvent.click(pane().getByRole("button", { name: "Approve" }));
+      fireEvent.click(screen.getByRole("tab", { name: /^Approved/ }));
+      await answerWhileBusy();
+
+      expect(hooks.approve).not.toHaveBeenCalled();
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(errors).not.toHaveBeenCalled();
+    });
+
     it("an approval whose drafts changed while their files were checked sends nothing, and says so", async () => {
       const errors = spyErrors();
       const waiting = holdReads();
