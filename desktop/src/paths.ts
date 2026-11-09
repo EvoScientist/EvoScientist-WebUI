@@ -95,13 +95,16 @@ export function runtimeDirs(dataDir: string, home = homedir()): string[] {
 
 /**
  * Where the backend's log, and so the app's own logs, live before `ready`
- * names it: the first of `dirs` that holds the backend's log, else the first.
+ * names it: the first of `dirs` that holds the backend's log, else the last,
+ * where the core the app installs keeps it.
  */
 export function runtimeDir(
   dirs: string[],
   exists: (path: string) => boolean
 ): string {
-  return dirs.find((dir) => exists(join(dir, BACKEND_LOG))) ?? dirs[0];
+  return (
+    dirs.find((dir) => exists(join(dir, BACKEND_LOG))) ?? dirs[dirs.length - 1]
+  );
 }
 
 /**

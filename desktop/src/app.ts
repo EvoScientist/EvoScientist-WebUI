@@ -528,8 +528,8 @@ export function createApp(deps: AppDeps): App {
       code,
       message,
       detail,
-      // The failure line names the backend's log, before `ready` too; older
-      // cores leave it out.
+      // The log the failure line names (before `ready` too), else ready's log
+      // while there is one, else the one in the folder runtimeDir picks.
       logs: [
         log.path,
         uiLog.path,

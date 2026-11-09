@@ -12,6 +12,8 @@ import {
   sharedDirFromEnv,
   withReadyFolders,
 } from "./paths";
+import { evoscientist } from "../package.json";
+import { compareReleases, installVersion, parseRelease } from "./versions";
 
 const HOME = resolve("/home/u");
 
@@ -166,7 +168,7 @@ describe("withReadyFolders", () => {
       url: "u",
       dataDir: folders.dataDir,
       configDir: folders.configDir,
-      logFile: join(folders.dataDir, "server", "langgraph_dev.log"),
+      logFile: join(HOME, ".config", "evoscientist", "langgraph_dev.log"),
     });
     expect(r.missing).toEqual(["data_dir", "config_dir", "log_file"]);
   });
@@ -175,7 +177,7 @@ describe("withReadyFolders", () => {
     const r = withReadyFolders(
       { url: "u", dataDir: "/d", configDir: "/c", logFile: "" },
       folders,
-      () => false,
+      (p) => p === join("/d", "server", "langgraph_dev.log"),
       HOME
     );
     expect(r.ready.logFile).toBe(join("/d", "server", "langgraph_dev.log"));
@@ -192,7 +194,10 @@ describe("runtimeDir", () => {
   });
 
   it("takes the server home when it holds the backend's log", () => {
-    expect(runtimeDir(dirs, () => true)).toBe(serverHome);
+    const has = (p: string) =>
+      p === join(serverHome, "langgraph_dev.log") ||
+      p === join(older, "langgraph_dev.log");
+    expect(runtimeDir(dirs, has)).toBe(serverHome);
   });
 
   it("takes the older cores' folder when only it holds the backend's log", () => {
@@ -200,7 +205,16 @@ describe("runtimeDir", () => {
     expect(runtimeDir(dirs, has)).toBe(older);
   });
 
-  it("takes the server home when neither holds the backend's log", () => {
-    expect(runtimeDir(dirs, () => false)).toBe(serverHome);
+  it("takes the older cores' folder when neither holds the backend's log", () => {
+    expect(runtimeDir(dirs, () => false)).toBe(older);
+  });
+
+  it("falls back to the older cores' folder only while the app installs a core that keeps its log there", () => {
+    const installs = parseRelease(installVersion(evoscientist.coreRange) ?? "");
+    expect(installs).not.toBeNull();
+    expect(
+      compareReleases(installs as number[], [0, 4, 2]),
+      "the app now installs a core that keeps its log in the server home: revisit runtimeDir's fallback"
+    ).toBeLessThan(0);
   });
 });
