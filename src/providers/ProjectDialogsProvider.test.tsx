@@ -178,7 +178,7 @@ describe("Move project", () => {
     workspace_dir: "/srv/projB",
     threads: 2,
     tasks: 1,
-    memory: true,
+    memory: ["P-0123456789abcdef"],
     proposals: 0,
     warnings: [],
     resumed: false,
@@ -241,7 +241,7 @@ describe("Move project", () => {
     expect(projects.followMove).toHaveBeenCalledWith(GONE.key, "/srv/projB");
     expect(projects.refresh).toHaveBeenCalled();
     expect(vi.mocked(toast.success).mock.calls[0][0]).toContain(
-      "2 conversations"
+      "2 conversations, 1 scheduled task, its memory"
     );
   });
 
@@ -268,18 +268,26 @@ describe("Move project", () => {
 
     // The move finished meanwhile: the list no longer has the old folder.
     showProjects(
-      mockProjects(readyProjects(A, OTHER_GONE, "/srv/projB"), {
+      mockProjects(readyProjects(A, "/srv/projB"), {
         current: A,
         canMove: true,
       })
     );
+    expect(
+      (screen.getByRole("radio", { name: /projB/ }) as HTMLInputElement).checked
+    ).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Move" }));
 
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    expect(fetchMock).toHaveBeenLastCalledWith(
-      "/api/projects/move",
-      expect.anything()
-    );
+    const [url, init] = fetchMock.mock.lastCall as unknown as [
+      string,
+      RequestInit
+    ];
+    expect(url).toBe("/api/projects/move");
+    expect(JSON.parse(String(init.body))).toEqual({
+      old: GONE.key,
+      new: "/srv/projB",
+    });
   });
 
   it("says a move onto a registered project merges into it, and still moves", async () => {

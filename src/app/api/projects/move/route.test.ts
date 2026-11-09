@@ -160,6 +160,22 @@ describe("POST /api/projects/move", () => {
     expect(seen).toHaveLength(0);
   });
 
+  it("says the backend can't be reached when nothing listens on its port", async () => {
+    const closed = createServer();
+    await new Promise<void>((resolve) =>
+      closed.listen(0, "127.0.0.1", () => resolve())
+    );
+    const { port } = closed.address() as AddressInfo;
+    await new Promise((resolve) => closed.close(resolve));
+    vi.stubEnv("EVOSCIENTIST_LANGGRAPH_DEV_PORT", String(port));
+    resetCoreConfigCache();
+
+    const res = await POST(request("POST"));
+
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({ error: "backend_unreachable" });
+  });
+
   it("refuses another site's page", async () => {
     const res = await POST(
       request("POST", {
@@ -233,6 +249,17 @@ describe("GET /api/projects/move", () => {
     await GET(request("GET"));
 
     expect(seen).toHaveLength(2);
+  });
+
+  it("takes only the secret's refusal as the move", async () => {
+    respond = () => ({ status: 403, body: { error: "origin_not_allowed" } });
+    const other = await GET(request("GET"));
+    respond = secretRefusal;
+
+    const next = await GET(request("GET"));
+
+    expect(await other.json()).toEqual({ supported: false });
+    expect(await next.json()).toEqual({ supported: true });
   });
 
   it("does not keep an answer that is neither", async () => {

@@ -173,6 +173,24 @@ describe("ProjectsProvider", () => {
       ]);
     });
 
+    it("moves the selection of the moved project to its new folder", async () => {
+      writeLastUsedProject(A, "/home/you/alpha");
+      let answer = () => rows(["/home/you/alpha", false], ["/old/beta", true]);
+      stubBackends({ [A]: { projects: () => answer() } });
+      const { result } = renderProjects();
+      await waitFor(() => expect(result.current.isReady()).toBe(true));
+      act(() => result.current.selectProject("/old/beta"));
+
+      act(() => result.current.followMove("/old/beta", "/srv/beta"));
+      answer = () => rows(["/home/you/alpha", false], ["/srv/beta", false]);
+      await act(async () => {
+        await result.current.refresh();
+      });
+
+      expect(result.current.current?.key).toBe("/srv/beta");
+      expect(readLastUsedProject(A)).toBe("/home/you/alpha");
+    });
+
     it("leaves the choice alone when it names another project", async () => {
       writeLastUsedProject(A, "/srv/zeta");
       let answer = () =>

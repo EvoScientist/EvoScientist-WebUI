@@ -81,6 +81,10 @@ function errorText(body: ErrorBody, status: number): string {
       return "The project has scheduled tasks that are on. Pause them first.";
     case "unregister_failed":
       return "Removing the project failed. Try again.";
+    case "move_pending":
+      return typeof body.detail === "string" && body.detail
+        ? body.detail
+        : "A move of this folder isn't finished yet. Finish it first.";
     case "local_secret_required":
       return REFUSAL_TEXT.secret_rejected;
     default:
@@ -260,7 +264,7 @@ export async function moveProject(
     key: body.workspace_dir,
     threads: count(body.threads),
     tasks: count(body.tasks),
-    memory: body.memory === true,
+    memory: Array.isArray(body.memory) && body.memory.length > 0,
     proposals: count(body.proposals),
     warnings: Array.isArray(body.warnings)
       ? body.warnings.filter((w): w is string => typeof w === "string")

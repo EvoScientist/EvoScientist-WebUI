@@ -39,6 +39,7 @@ import {
 } from "@/lib/projectRemoval";
 import type { Project } from "@/lib/projects";
 import { folderName } from "@/lib/workspaceAssistant";
+import { cn } from "@/lib/utils";
 import { ProjectDialogsContext } from "@/providers/projectDialogsContext";
 
 /**
@@ -106,6 +107,10 @@ function useCanMoveProjects(): boolean {
   const readOnly = useProjectsReadOnlyReason();
   return canMove && readOnly === null;
 }
+
+/** The move choices' radios, as the settings' checkboxes look. */
+const RADIO_CLASS =
+  "size-4 shrink-0 border border-muted-foreground bg-transparent text-[var(--brand-solid)] focus:ring-0 focus:ring-offset-0 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background";
 
 /** The projects whose folder is missing, and `chosen` while it is chosen
  *  (a move cut short may finish and drop it from the list), those named like
@@ -284,7 +289,7 @@ function ProjectFolderDialog({
         if (!open) close();
       }}
     >
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="[overflow-wrap:anywhere] sm:max-w-md">
         <DialogHeader>
           <DialogTitle>
             {moving ? `Where is ${moving.name} now?` : "Add project"}
@@ -340,6 +345,7 @@ function ProjectFolderDialog({
                   <input
                     type="radio"
                     name="add-project-choice"
+                    className={RADIO_CLASS}
                     checked={target === null}
                     onChange={() => setChoice(null)}
                   />
@@ -353,11 +359,11 @@ function ProjectFolderDialog({
                     <input
                       type="radio"
                       name="add-project-choice"
-                      className="mt-1"
+                      className={cn(RADIO_CLASS, "mt-0.5")}
                       checked={target?.key === project.key}
                       onChange={() => setChoice(project)}
                     />
-                    <span className="min-w-0 break-all">
+                    <span className="min-w-0">
                       {project.name}{" "}
                       <span className="text-muted-foreground">
                         (moved from {project.key})
@@ -375,7 +381,7 @@ function ProjectFolderDialog({
             <p
               id="add-project-merge"
               role="status"
-              className="text-xs text-amber-700 empty:hidden dark:text-amber-300"
+              className="text-xs text-amber-700 empty:!mt-0 dark:text-amber-300"
             >
               {target && mergeInto
                 ? `${mergeInto.name} is already a project; ${target.name}'s conversations, scheduled tasks and memory will be merged into it.`

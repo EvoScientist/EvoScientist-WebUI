@@ -173,7 +173,7 @@ export function ThreadList({
     () => new Set()
   );
 
-  const { projects, current } = useProjects();
+  const { projects, current, arrivedMoves } = useProjects();
   const { openAddProject, openRemoveProject, openMoveProject } =
     useProjectDialogs();
   const projectList = useMemo(
@@ -198,6 +198,15 @@ export function ThreadList({
       setRevision((r) => r + 1);
     }, RELOAD_BUNDLE_MS);
   }, []);
+  // A move (into a project that was there already, too) changed which
+  // project its conversations are in. Moves from before the mount are in
+  // the lists already.
+  const seenMoves = useRef(arrivedMoves);
+  useEffect(() => {
+    if (seenMoves.current === arrivedMoves) return;
+    seenMoves.current = arrivedMoves;
+    mutateFn();
+  }, [arrivedMoves, mutateFn]);
   useEffect(
     () => () => {
       if (reloadTimer.current !== null) clearTimeout(reloadTimer.current);

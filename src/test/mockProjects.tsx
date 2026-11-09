@@ -28,6 +28,9 @@ export function readyProjects(
   };
 }
 
+/** One array for every mock: a new one is what a move looks like. */
+const NO_MOVES: ProjectsContextValue["arrivedMoves"] = [];
+
 export function mockProjects(
   projects: ProjectsState = readyProjects(TEST_PROJECT),
   options: {
@@ -50,7 +53,7 @@ export function mockProjects(
     current,
     selectProject: vi.fn(),
     followMove: vi.fn(),
-    arrivedMoves: [],
+    arrivedMoves: NO_MOVES,
     files: options.files ?? "here",
   };
 }

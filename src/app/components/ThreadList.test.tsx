@@ -533,6 +533,36 @@ describe("ThreadList by project", () => {
     }
   });
 
+  it("reads the lists again when a moved project's new folder is listed", async () => {
+    vi.useFakeTimers();
+    try {
+      const before = two();
+      const { rerender } = renderList(
+        <ThreadList onThreadSelect={vi.fn()} />,
+        before
+      );
+      mutate.mockClear();
+
+      rerender(
+        <TestProjectsProvider
+          value={{
+            ...before,
+            arrivedMoves: [{ from: "/gone/projC", to: TEST_PROJECT }],
+          }}
+        >
+          <ThreadList onThreadSelect={vi.fn()} />
+        </TestProjectsProvider>
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400);
+      });
+
+      expect(mutate).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("starts a new chat in a project from its section", () => {
     const onNewChat = vi.fn();
     const onClose = vi.fn();

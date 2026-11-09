@@ -84,6 +84,20 @@ describe("addProject", () => {
     expect(!result.ok && result.message).toContain("disk full");
   });
 
+  it("names the backend's detail when a move of the folder isn't finished", async () => {
+    answer(409, {
+      error: "move_pending",
+      detail: "/old/p is being moved to /new/p; finish the move first.",
+    });
+
+    const result = await addProject("/old/p");
+
+    expect(result).toEqual({
+      ok: false,
+      message: "/old/p is being moved to /new/p; finish the move first.",
+    });
+  });
+
   it("says when the WebUI server can't be reached", async () => {
     vi.stubGlobal(
       "fetch",
@@ -114,7 +128,7 @@ describe("moveProject", () => {
       workspace_dir: "/new/p",
       threads: 3,
       tasks: 1,
-      memory: true,
+      memory: ["P-0123456789abcdef"],
       proposals: 0,
       warnings: ["One task kept its old folder."],
       resumed: false,
@@ -142,6 +156,14 @@ describe("moveProject", () => {
       old: "/old/p",
       new: "/new/p",
     });
+  });
+
+  it("reports no memory when the backend moved no memory project", async () => {
+    answer(200, { workspace_dir: "/new/p", memory: [] });
+
+    const result = await moveProject("/old/p", "/new/p");
+
+    expect(result).toMatchObject({ ok: true, memory: false });
   });
 
   it("reports a move that moved nothing as not moved", async () => {
