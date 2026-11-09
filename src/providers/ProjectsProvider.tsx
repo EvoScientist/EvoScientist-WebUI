@@ -12,6 +12,7 @@ import {
   type ReactNode,
 } from "react";
 
+import { readMoveSupport } from "@/lib/projectActions";
 import { retryWithBackoff } from "@/lib/retry";
 import {
   fetchProjects,
@@ -31,6 +32,9 @@ export type FilesAccess = "pending" | "here" | "elsewhere";
 export interface ProjectsContextValue {
   /** The last project list the backend gave. */
   projects: ProjectsState;
+  /** Read with the list: whether this machine's backend can move a project
+   *  (whether this page may is the settings access's to say). */
+  canMove: boolean;
   /** True while the list is being read again; nothing runs meanwhile. */
   refreshing: boolean;
   /** The last failure while reading the list, while it is retried. */
@@ -52,7 +56,22 @@ export interface ProjectsContextValue {
   /** Make `key` the current project; `remember` also makes it the last used
    *  (a pick, or a message sent in it). */
   selectProject: (key: string, options?: { remember?: boolean }) => void;
+  /** The project at `from` now is at `to`: the selection and the last used
+   *  one (here and in storage) follow it when they named it; nothing else
+   *  changes. Called before the list that has `to` is read. */
+  followMove: (from: string, to: string) => void;
+  /** The moves followed that the last published list brought in (it has
+   *  their new folders), a new array each time: what holds an old key (the
+   *  open thread's metadata) reads it again. */
+  arrivedMoves: readonly ProjectMove[];
   files: FilesAccess;
+}
+
+const NO_MOVES: readonly ProjectMove[] = [];
+
+export interface ProjectMove {
+  from: string;
+  to: string;
 }
 
 export const ProjectsContext = createContext<ProjectsContextValue | null>(null);
@@ -125,18 +144,32 @@ async function checkFiles(
   return remote === local ? "here" : "elsewhere";
 }
 
+interface ProjectsRead {
+  projects: ProjectsState;
+  canMove: boolean;
+}
+
 async function readProjects(
   deploymentUrl: string,
   apiKey: string,
   signal: AbortSignal
-): Promise<ProjectsState> {
-  const projects = await fetchProjects(deploymentUrl, apiKey, signal);
-  return projects ? { status: "ready", projects } : { status: "unsupported" };
+): Promise<ProjectsRead> {
+  const [projects, canMove] = await Promise.all([
+    fetchProjects(deploymentUrl, apiKey, signal),
+    readMoveSupport(signal),
+  ]);
+  return {
+    projects: projects
+      ? { status: "ready", projects }
+      : { status: "unsupported" },
+    canMove,
+  };
 }
 
 interface ProviderState {
   backend: string;
   projects: ProjectsState;
+  canMove: boolean;
   files: FilesAccess;
   refreshing: boolean;
   error: string | null;
@@ -144,12 +177,19 @@ interface ProviderState {
   selected: string | null;
   /** The project last used on this backend, from this browser's storage. */
   lastUsed: string | null;
+  /** The moves followed, until a list that has their new folder is
+   *  published. */
+  pendingMoves: readonly ProjectMove[];
+  arrivedMoves: readonly ProjectMove[];
 }
 
 function initialState(backend: string, deploymentUrl: string): ProviderState {
   return {
     backend,
     projects: { status: "pending" },
+    canMove: false,
+    pendingMoves: NO_MOVES,
+    arrivedMoves: NO_MOVES,
     files: "pending",
     refreshing: true,
     error: null,
@@ -216,7 +256,7 @@ export function ProjectsProvider({
       promise: Promise.resolve({ status: "pending" }),
     };
     run.promise = (async () => {
-      let answer: ProjectsState | null = null;
+      let answer: ProjectsRead | null = null;
       do {
         againRef.current = false;
         answer = await retryWithBackoff(
@@ -236,7 +276,8 @@ export function ProjectsProvider({
       if (!answer || controller.signal.aborted) {
         return { status: "pending" } as ProjectsState;
       }
-      const published = answer;
+      const published = answer.projects;
+      const { canMove } = answer;
       // A project no longer on the list is forgotten: added again, it is a
       // new project, current only when picked. The stored one only when it
       // is this page's: another tab may have just picked one this list
@@ -249,14 +290,26 @@ export function ProjectsProvider({
       if (forget(lastUsed) && readLastUsedProject(deploymentUrl) === lastUsed) {
         writeLastUsedProject(deploymentUrl, null);
       }
-      setState((prev) => ({
-        ...prev,
-        projects: published,
-        refreshing: false,
-        error: null,
-        selected: forget(prev.selected) ? null : prev.selected,
-        lastUsed: forget(prev.lastUsed) ? null : prev.lastUsed,
-      }));
+      setState((prev) => {
+        const arrived = prev.pendingMoves.filter((move) =>
+          findProject(published, move.to)
+        );
+        return {
+          ...prev,
+          projects: published,
+          canMove,
+          refreshing: false,
+          error: null,
+          selected: forget(prev.selected) ? null : prev.selected,
+          lastUsed: forget(prev.lastUsed) ? null : prev.lastUsed,
+          ...(arrived.length > 0 && {
+            pendingMoves: prev.pendingMoves.filter(
+              (move) => !arrived.includes(move)
+            ),
+            arrivedMoves: arrived,
+          }),
+        };
+      });
       return published;
     })();
     runningRef.current = run;
@@ -321,6 +374,21 @@ export function ProjectsProvider({
     [deploymentUrl]
   );
 
+  const followMove = useCallback(
+    (from: string, to: string) => {
+      if (readLastUsedProject(deploymentUrl) === from) {
+        writeLastUsedProject(deploymentUrl, to);
+      }
+      setState((prev) => ({
+        ...prev,
+        selected: prev.selected === from ? to : prev.selected,
+        lastUsed: prev.lastUsed === from ? to : prev.lastUsed,
+        pendingMoves: [...prev.pendingMoves, { from, to }],
+      }));
+    },
+    [deploymentUrl]
+  );
+
   const current = useMemo(
     () => pickProject(state.projects, [state.selected, state.lastUsed]),
     [state.projects, state.selected, state.lastUsed]
@@ -329,15 +397,18 @@ export function ProjectsProvider({
   const value = useMemo(
     () => ({
       projects: state.projects,
+      canMove: state.canMove,
       refreshing: state.refreshing,
       error: state.error,
       isReady,
       refresh,
       current,
       selectProject,
+      followMove,
+      arrivedMoves: state.arrivedMoves,
       files: state.files,
     }),
-    [state, isReady, refresh, current, selectProject]
+    [state, isReady, refresh, current, selectProject, followMove]
   );
   return (
     <ProjectsContext.Provider value={value}>

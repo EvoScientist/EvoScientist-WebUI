@@ -13,6 +13,7 @@ import {
   ChevronRight,
   Clock,
   Download,
+  FolderInput,
   FolderMinus,
   FolderPlus,
   Loader2,
@@ -173,7 +174,8 @@ export function ThreadList({
   );
 
   const { projects, current } = useProjects();
-  const { openAddProject, openRemoveProject } = useProjectDialogs();
+  const { openAddProject, openRemoveProject, openMoveProject } =
+    useProjectDialogs();
   const projectList = useMemo(
     () => (projects.status === "ready" ? projects.projects : []),
     [projects]
@@ -1008,6 +1010,11 @@ export function ThreadList({
                   : undefined
               }
               onRemove={() => openRemoveProject(project)}
+              onMove={
+                openMoveProject && project.missing
+                  ? () => openMoveProject(project)
+                  : undefined
+              }
             >
               <ThreadGroups
                 scope={{ project: project.key }}
@@ -1187,6 +1194,7 @@ function ProjectSection({
   waiting = 0,
   onNewChat,
   onRemove,
+  onMove,
   children,
 }: {
   project?: Project;
@@ -1202,6 +1210,8 @@ function ProjectSection({
   onNewChat?: () => void;
   /** Remove this project (absent: no such action). */
   onRemove?: () => void;
+  /** Choose the folder this project was moved to (absent: no such action). */
+  onMove?: () => void;
   children: React.ReactNode;
 }) {
   const name = project?.name ?? title ?? "";
@@ -1288,6 +1298,15 @@ function ProjectSection({
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
+              {onMove && (
+                <DropdownMenuItem
+                  className="min-h-11 md:min-h-0"
+                  onSelect={onMove}
+                >
+                  <FolderInput aria-hidden="true" />
+                  Moved? Choose its new folder…
+                </DropdownMenuItem>
+              )}
               <DropdownMenuItem
                 className="min-h-11 md:min-h-0"
                 onSelect={onRemove}

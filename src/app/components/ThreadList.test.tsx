@@ -590,4 +590,83 @@ describe("ThreadList by project", () => {
       expect.objectContaining({ key: OTHER })
     );
   });
+
+  describe("a project whose folder is missing", () => {
+    const withMissing = () =>
+      mockProjects(
+        readyProjects(TEST_PROJECT, {
+          key: OTHER,
+          name: "projB",
+          missing: true,
+        }),
+        { current: TEST_PROJECT }
+      );
+
+    async function openMenu(name: string) {
+      fireEvent.keyDown(
+        screen.getByRole("button", { name: `Actions for project ${name}` }),
+        { key: "Enter" }
+      );
+      await screen.findByRole("menuitem", { name: "Remove project" });
+    }
+
+    it("offers to choose its new folder", async () => {
+      const dialogs = {
+        openAddProject: vi.fn(),
+        openRemoveProject: vi.fn(),
+        openMoveProject: vi.fn(),
+      };
+      render(
+        <TestProjectsProvider value={withMissing()}>
+          <ProjectDialogsContext.Provider value={dialogs}>
+            <ThreadList onThreadSelect={vi.fn()} />
+          </ProjectDialogsContext.Provider>
+        </TestProjectsProvider>
+      );
+
+      await openMenu("projB");
+      fireEvent.click(screen.getByRole("menuitem", { name: /new folder/ }));
+
+      expect(dialogs.openMoveProject).toHaveBeenCalledWith(
+        expect.objectContaining({ key: OTHER })
+      );
+    });
+
+    it("offers no move for a project whose folder is in place", async () => {
+      const dialogs = {
+        openAddProject: vi.fn(),
+        openRemoveProject: vi.fn(),
+        openMoveProject: vi.fn(),
+      };
+      render(
+        <TestProjectsProvider value={withMissing()}>
+          <ProjectDialogsContext.Provider value={dialogs}>
+            <ThreadList onThreadSelect={vi.fn()} />
+          </ProjectDialogsContext.Provider>
+        </TestProjectsProvider>
+      );
+
+      await openMenu("projA");
+
+      expect(screen.queryByRole("menuitem", { name: /new folder/ })).toBeNull();
+    });
+
+    it("offers no move when the page can't move projects", async () => {
+      const dialogs = {
+        openAddProject: vi.fn(),
+        openRemoveProject: vi.fn(),
+      };
+      render(
+        <TestProjectsProvider value={withMissing()}>
+          <ProjectDialogsContext.Provider value={dialogs}>
+            <ThreadList onThreadSelect={vi.fn()} />
+          </ProjectDialogsContext.Provider>
+        </TestProjectsProvider>
+      );
+
+      await openMenu("projB");
+
+      expect(screen.queryByRole("menuitem", { name: /new folder/ })).toBeNull();
+    });
+  });
 });

@@ -22,7 +22,13 @@ import {
 import { useSettingsAccess } from "@/app/hooks/useSettings";
 import { useClient } from "@/providers/ClientProvider";
 import { useProjects } from "@/providers/ProjectsProvider";
-import { addProject, projectsReadOnlyReason } from "@/lib/projectActions";
+import {
+  addProject,
+  moveProject,
+  movedText,
+  projectsReadOnlyReason,
+  typedFolder,
+} from "@/lib/projectActions";
 import {
   projectWork,
   removeProjectAndWork,
@@ -31,18 +37,28 @@ import {
   type ProjectWork,
 } from "@/lib/projectRemoval";
 import type { Project } from "@/lib/projects";
+import { folderName } from "@/lib/workspaceAssistant";
 import { ProjectDialogsContext } from "@/providers/projectDialogsContext";
 
 /**
- * The dialogs that add and remove projects, for every surface (the sidebar,
- * the composer, a read-only conversation). Neither moves the page: what is
- * open stays open, and a new chat is the user's to start.
+ * The dialogs that add, move and remove projects, for every surface (the
+ * sidebar, the composer, a read-only conversation). What is open stays open,
+ * and a new chat is the user's to start; a moved project stays the current
+ * one, in its new folder.
  */
 export function ProjectDialogsProvider({ children }: { children: ReactNode }) {
-  const [adding, setAdding] = useState<{ folder: string } | null>(null);
+  const [adding, setAdding] = useState<{
+    folder: string;
+    moving: Project | null;
+  } | null>(null);
   const [removing, setRemoving] = useState<Project | null>(null);
+  const canMove = useCanMoveProjects();
   const openAddProject = useCallback(
-    (folder?: string) => setAdding({ folder: folder ?? "" }),
+    (folder?: string) => setAdding({ folder: folder ?? "", moving: null }),
+    []
+  );
+  const openMoveProject = useCallback(
+    (project: Project) => setAdding({ folder: "", moving: project }),
     []
   );
   const openRemoveProject = useCallback(
@@ -50,15 +66,20 @@ export function ProjectDialogsProvider({ children }: { children: ReactNode }) {
     []
   );
   const value = useMemo(
-    () => ({ openAddProject, openRemoveProject }),
-    [openAddProject, openRemoveProject]
+    () => ({
+      openAddProject,
+      openRemoveProject,
+      openMoveProject: canMove ? openMoveProject : undefined,
+    }),
+    [openAddProject, openRemoveProject, openMoveProject, canMove]
   );
   return (
     <ProjectDialogsContext.Provider value={value}>
       {children}
       {adding && (
-        <AddProjectDialog
+        <ProjectFolderDialog
           initialFolder={adding.folder}
+          moving={adding.moving}
           onClose={() => setAdding(null)}
         />
       )}
@@ -77,27 +98,95 @@ function useProjectsReadOnlyReason(): string | null {
   return projectsReadOnlyReason(useSettingsAccess().access);
 }
 
-function AddProjectDialog({
+/** Whether this page offers to move a project: it can change projects and
+ *  the backend can move one. */
+function useCanMoveProjects(): boolean {
+  const { canMove } = useProjects();
+  const readOnly = useProjectsReadOnlyReason();
+  return canMove && readOnly === null;
+}
+
+/** The projects whose folder is missing, and `chosen` while it is chosen
+ *  (a move cut short may finish and drop it from the list), those named like
+ *  `folder` first. Names compare ignoring case, as folders may. */
+function moveCandidates(
+  projects: readonly Project[],
+  folder: string,
+  chosen: Project | null
+): Array<{ project: Project; sameName: boolean }> {
+  const name = folderName(typedFolder(folder)).toLowerCase();
+  const missing = projects.filter((project) => project.missing);
+  if (chosen && !missing.some((project) => project.key === chosen.key)) {
+    missing.push(chosen);
+  }
+  return missing
+    .map((project) => ({
+      project,
+      sameName: name !== "" && folderName(project.key).toLowerCase() === name,
+    }))
+    .sort((a, b) => Number(b.sameName) - Number(a.sameName));
+}
+
+/** The registered project, other than `moving`, at the typed `folder`: a
+ *  move there merges into it. Paths compare ignoring case, the kind of
+ *  separator and a trailing one, as folders may. */
+function mergeTarget(
+  projects: readonly Project[],
+  folder: string,
+  moving: Project
+): Project | null {
+  const path = (key: string) =>
+    key
+      .replace(/[\\/]+/g, "/")
+      .replace(/\/$/, "")
+      .toLowerCase();
+  const typed = path(typedFolder(folder));
+  if (!typed) return null;
+  return (
+    projects.find(
+      (project) => project.key !== moving.key && path(project.key) === typed
+    ) ?? null
+  );
+}
+
+/**
+ * Ask for a folder: to add as a project, or, for `moving` (a project whose
+ * folder is missing), the folder it was moved to. Adding offers the missing
+ * projects too, when the backend can move one: the folder may be one of them,
+ * moved. Nothing is moved unless one is chosen.
+ */
+function ProjectFolderDialog({
   initialFolder,
+  moving,
   onClose,
 }: {
   initialFolder: string;
+  moving: Project | null;
   onClose: () => void;
 }) {
-  const { refresh } = useProjects();
+  const { projects, refresh, followMove } = useProjects();
   const readOnly = useProjectsReadOnlyReason();
+  const canMove = useCanMoveProjects();
   const [folder, setFolder] = useState(initialFolder);
-  const [busy, setBusy] = useState(false);
+  // The missing project this folder is; null: a new project.
+  const [choice, setChoice] = useState<Project | null>(null);
+  const [busy, setBusy] = useState<"add" | "move" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const submit = async () => {
-    const path = folder.trim();
-    if (!path || busy || readOnly) return;
-    setBusy(true);
-    setError(null);
+  const candidates =
+    !moving && canMove && projects.status === "ready"
+      ? moveCandidates(projects.projects, folder, choice)
+      : [];
+  const target = moving ?? (candidates.length > 0 ? choice : null);
+  const mergeInto =
+    target && projects.status === "ready"
+      ? mergeTarget(projects.projects, folder, target)
+      : null;
+
+  const add = async (path: string) => {
     const result = await addProject(path);
     if (!result.ok) {
-      setBusy(false);
+      setBusy(null);
       setError(result.message);
       return;
     }
@@ -110,6 +199,43 @@ function AddProjectDialog({
     onClose();
   };
 
+  const move = async (project: Project, path: string) => {
+    const result = await moveProject(project.key, path);
+    if (!result.ok) {
+      setBusy(null);
+      setError(result.message);
+      return;
+    }
+    if (!result.moved) {
+      void refresh();
+      // The old folder is a project again: its warning says so.
+      for (const warning of result.warnings.length > 0
+        ? result.warnings
+        : [`${project.name} was not moved.`]) {
+        toast.warning(warning, { duration: 15_000 });
+      }
+      onClose();
+      return;
+    }
+    // Its old key names nothing now: a selection or stored choice of it
+    // moves to the new folder, before the list that drops it is read.
+    followMove(project.key, result.key);
+    void refresh();
+    toast.success(movedText(project.name, result));
+    for (const warning of result.warnings) {
+      toast.warning(warning, { duration: 15_000 });
+    }
+    onClose();
+  };
+
+  const submit = async () => {
+    const path = folder.trim();
+    if (!path || busy || readOnly) return;
+    setBusy(target ? "move" : "add");
+    setError(null);
+    await (target ? move(target, path) : add(path));
+  };
+
   return (
     <Dialog
       open
@@ -119,10 +245,13 @@ function AddProjectDialog({
     >
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Add project</DialogTitle>
+          <DialogTitle>
+            {moving ? `Where is ${moving.name} now?` : "Add project"}
+          </DialogTitle>
           <DialogDescription>
-            A folder on the machine that runs EvoScientist. Its conversations
-            and scheduled tasks come back with it.
+            {moving
+              ? `Its folder ${moving.key} is missing. Give the folder it was moved to: its conversations, scheduled tasks and memory follow it. No files are moved.`
+              : "A folder on the machine that runs EvoScientist. Its conversations and scheduled tasks come back with it."}
           </DialogDescription>
         </DialogHeader>
         {readOnly ? (
@@ -150,15 +279,74 @@ function AddProjectDialog({
               placeholder="/home/you/my-project"
               spellCheck={false}
               autoComplete="off"
-              disabled={busy}
+              disabled={busy !== null}
               aria-invalid={error !== null}
-              aria-describedby={error ? "add-project-error" : undefined}
+              aria-describedby={
+                [error && "add-project-error", mergeInto && "add-project-merge"]
+                  .filter(Boolean)
+                  .join(" ") || undefined
+              }
             />
+            {candidates.length > 0 && (
+              <fieldset
+                className="space-y-1 pt-1"
+                disabled={busy !== null}
+              >
+                <legend className="text-xs font-medium text-muted-foreground">
+                  Is this one of these, moved here? This folder is:
+                </legend>
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="radio"
+                    name="add-project-choice"
+                    checked={target === null}
+                    onChange={() => setChoice(null)}
+                  />
+                  a new project
+                </label>
+                {candidates.map(({ project, sameName }) => (
+                  <label
+                    key={project.key}
+                    className="flex items-start gap-2 text-sm"
+                  >
+                    <input
+                      type="radio"
+                      name="add-project-choice"
+                      className="mt-1"
+                      checked={target?.key === project.key}
+                      onChange={() => setChoice(project)}
+                    />
+                    <span className="min-w-0 break-all">
+                      {project.name}{" "}
+                      <span className="text-muted-foreground">
+                        (moved from {project.key})
+                      </span>
+                      {sameName && (
+                        <span className="ml-1 rounded bg-muted px-1 py-px text-[11px] font-medium">
+                          same name
+                        </span>
+                      )}
+                    </span>
+                  </label>
+                ))}
+              </fieldset>
+            )}
+            <p
+              id="add-project-merge"
+              role="status"
+              className="text-xs text-amber-700 empty:hidden dark:text-amber-300"
+            >
+              {target && mergeInto
+                ? `${mergeInto.name} is already a project; ${target.name}'s conversations, scheduled tasks and memory will be merged into it.`
+                : ""}
+            </p>
             <p
               role="status"
               className="text-xs text-muted-foreground"
             >
-              {busy
+              {busy === "move"
+                ? "Moving the project's conversations, scheduled tasks and memory…"
+                : busy === "add"
                 ? "Adding the project and restoring its conversations and scheduled tasks…"
                 : ""}
             </p>
@@ -177,14 +365,14 @@ function AddProjectDialog({
           <Button
             variant="outline"
             onClick={onClose}
-            disabled={busy}
+            disabled={busy !== null}
           >
             {readOnly ? "Close" : "Cancel"}
           </Button>
           {!readOnly && (
             <Button
               onClick={() => void submit()}
-              disabled={busy || !folder.trim()}
+              disabled={busy !== null || !folder.trim()}
             >
               {busy && (
                 <Loader2
@@ -192,7 +380,7 @@ function AddProjectDialog({
                   aria-hidden="true"
                 />
               )}
-              Add
+              {target ? "Move" : "Add"}
             </Button>
           )}
         </DialogFooter>

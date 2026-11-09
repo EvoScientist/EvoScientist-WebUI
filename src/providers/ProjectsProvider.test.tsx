@@ -110,6 +110,122 @@ describe("ProjectsProvider", () => {
     expect(result.current.current?.key).toBe("/home/you/alpha");
   });
 
+  describe("followMove", () => {
+    const rows = (...rows: Array<[string, boolean]>) =>
+      json(200, {
+        workspaces: rows.map(([key, missing]) => ({
+          workspace_dir: key,
+          name: key.split("/").at(-1),
+          missing,
+        })),
+      });
+
+    it("moves the stored choice of the moved project to its new folder", async () => {
+      writeLastUsedProject(A, "/old/beta");
+      let answer = () => rows(["/home/you/alpha", false], ["/old/beta", true]);
+      stubBackends({ [A]: { projects: () => answer() } });
+      const { result } = renderProjects();
+      await waitFor(() => expect(result.current.isReady()).toBe(true));
+
+      act(() => result.current.followMove("/old/beta", "/srv/beta"));
+      // Announced only with the list that has the new folder.
+      expect(result.current.arrivedMoves).toEqual([]);
+      answer = () => rows(["/home/you/alpha", false], ["/srv/beta", false]);
+      await act(async () => {
+        await result.current.refresh();
+      });
+
+      expect(result.current.current?.key).toBe("/srv/beta");
+      expect(readLastUsedProject(A)).toBe("/srv/beta");
+      expect(result.current.arrivedMoves).toEqual([
+        { from: "/old/beta", to: "/srv/beta" },
+      ]);
+    });
+
+    it("announces every move a list brings in", async () => {
+      let answer = () =>
+        rows(
+          ["/home/you/alpha", false],
+          ["/old/beta", true],
+          ["/old/gamma", true]
+        );
+      stubBackends({ [A]: { projects: () => answer() } });
+      const { result } = renderProjects();
+      await waitFor(() => expect(result.current.isReady()).toBe(true));
+
+      act(() => {
+        result.current.followMove("/old/beta", "/srv/beta");
+        result.current.followMove("/old/gamma", "/srv/gamma");
+      });
+      answer = () =>
+        rows(
+          ["/home/you/alpha", false],
+          ["/srv/beta", false],
+          ["/srv/gamma", false]
+        );
+      await act(async () => {
+        await result.current.refresh();
+      });
+
+      expect(result.current.arrivedMoves.map((move) => move.to)).toEqual([
+        "/srv/beta",
+        "/srv/gamma",
+      ]);
+    });
+
+    it("leaves the choice alone when it names another project", async () => {
+      writeLastUsedProject(A, "/srv/zeta");
+      let answer = () =>
+        rows(
+          ["/home/you/alpha", false],
+          ["/srv/zeta", false],
+          ["/old/beta", true]
+        );
+      stubBackends({ [A]: { projects: () => answer() } });
+      const { result } = renderProjects();
+      await waitFor(() => expect(result.current.isReady()).toBe(true));
+      act(() => result.current.selectProject("/srv/zeta"));
+
+      act(() => result.current.followMove("/old/beta", "/srv/beta"));
+      answer = () =>
+        rows(
+          ["/home/you/alpha", false],
+          ["/srv/zeta", false],
+          ["/srv/beta", false]
+        );
+      await act(async () => {
+        await result.current.refresh();
+      });
+
+      expect(result.current.current?.key).toBe("/srv/zeta");
+      expect(readLastUsedProject(A)).toBe("/srv/zeta");
+    });
+  });
+
+  it("carries whether this machine's backend can move a project with the list", async () => {
+    stubBackends({ [A]: { projects: () => listing("/home/you/alpha") } });
+    const backends = globalThis.fetch;
+    let supported = true;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) =>
+        String(input) === "/api/projects/move"
+          ? json(200, { supported })
+          : backends(input, init)
+      )
+    );
+    const { result } = renderProjects();
+
+    await waitFor(() => expect(result.current.isReady()).toBe(true));
+    expect(result.current.canMove).toBe(true);
+
+    supported = false;
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(result.current.canMove).toBe(false);
+  });
+
   it("says a core without the project list is unsupported", async () => {
     stubBackends({ [A]: { projects: () => json(404) } });
     const { result } = renderProjects();

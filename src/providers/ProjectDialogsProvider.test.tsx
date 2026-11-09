@@ -47,16 +47,22 @@ function Probe() {
   return null;
 }
 
-function renderDialogs() {
-  const projects = mockProjects(readyProjects(A), { current: A });
-  render(
-    <TestProjectsProvider value={projects}>
+function renderDialogs(
+  projects = mockProjects(readyProjects(A), { current: A })
+) {
+  const tree = (value: typeof projects) => (
+    <TestProjectsProvider value={value}>
       <ProjectDialogsProvider>
         <Probe />
       </ProjectDialogsProvider>
     </TestProjectsProvider>
   );
-  return { projects };
+  const { rerender } = render(tree(projects));
+  return {
+    projects,
+    /** Show another project list, as a refresh does. */
+    showProjects: (value: typeof projects) => rerender(tree(value)),
+  };
 }
 
 /** The confirm button once the project's work is read: it shows earlier,
@@ -145,6 +151,239 @@ describe("Add project", () => {
 
     expect(screen.getByText(/machine that runs it/)).toBeTruthy();
     expect(screen.queryByLabelText("Folder")).toBeNull();
+  });
+});
+
+describe("Move project", () => {
+  const GONE = { key: "/old/data/projB", name: "projB", missing: true };
+  const OTHER_GONE = { key: "/old/notes", name: "notes", missing: true };
+
+  function renderWithMissing(canMove = true) {
+    return renderDialogs(
+      mockProjects(readyProjects(A, OTHER_GONE, GONE), {
+        current: A,
+        canMove,
+      })
+    );
+  }
+
+  const moved = {
+    workspace_dir: "/srv/projB",
+    threads: 2,
+    tasks: 1,
+    memory: true,
+    proposals: 0,
+    warnings: [],
+    resumed: false,
+    moved: true,
+  };
+
+  function typeFolder(path: string) {
+    fireEvent.change(screen.getByLabelText("Folder"), {
+      target: { value: path },
+    });
+  }
+
+  it("offers the missing projects when adding, a new project by default", () => {
+    renderWithMissing();
+    act(() => dialogs!.openAddProject());
+    typeFolder("/srv/projB");
+
+    const choices = screen.getAllByRole("radio");
+    expect(choices).toHaveLength(3);
+    expect((choices[0] as HTMLInputElement).checked).toBe(true);
+    expect(choices[0].closest("label")!.textContent).toMatch(/new project/);
+    // The project named like the folder comes first, marked.
+    expect(choices[1].closest("label")!.textContent).toContain(GONE.key);
+    expect(choices[1].closest("label")!.textContent).toMatch(/same name/);
+    expect(choices[2].closest("label")!.textContent).not.toMatch(/same name/);
+  });
+
+  it("adds the folder when no missing project is chosen", async () => {
+    const fetchMock = stubRelay(200, { workspace_dir: "/srv/projB" });
+    renderWithMissing();
+    act(() => dialogs!.openAddProject());
+    typeFolder("/srv/projB");
+
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(fetchMock).toHaveBeenCalledWith("/api/projects", expect.anything());
+  });
+
+  it("moves the chosen project instead of adding, and switches to its new folder", async () => {
+    const fetchMock = stubRelay(200, moved);
+    const { projects } = renderWithMissing();
+    act(() => dialogs!.openAddProject());
+    typeFolder("/srv/projB");
+
+    fireEvent.click(screen.getByRole("radio", { name: /projB/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Move" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [
+      string,
+      RequestInit
+    ];
+    expect(url).toBe("/api/projects/move");
+    expect(JSON.parse(String(init.body))).toEqual({
+      old: GONE.key,
+      new: "/srv/projB",
+    });
+    expect(projects.followMove).toHaveBeenCalledWith(GONE.key, "/srv/projB");
+    expect(projects.refresh).toHaveBeenCalled();
+    expect(toast.success).toHaveBeenCalledWith(
+      expect.stringContaining("2 conversations")
+    );
+  });
+
+  it("keeps the chosen project when a refresh drops it before a retry", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: "backend_timeout" }), {
+          status: 504,
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ...moved, resumed: true }), {
+          status: 200,
+        })
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const { showProjects } = renderWithMissing();
+    act(() => dialogs!.openAddProject());
+    typeFolder("/srv/projB");
+    fireEvent.click(screen.getByRole("radio", { name: /projB/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Move" }));
+    await screen.findByRole("alert");
+
+    // The move finished meanwhile: the list no longer has the old folder.
+    showProjects(
+      mockProjects(readyProjects(A, OTHER_GONE, "/srv/projB"), {
+        current: A,
+        canMove: true,
+      })
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Move" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/projects/move",
+      expect.anything()
+    );
+  });
+
+  it("says a move onto a registered project merges into it, and still moves", async () => {
+    const fetchMock = stubRelay(200, { ...moved, workspace_dir: A });
+    renderWithMissing();
+    act(() => dialogs!.openMoveProject!(GONE));
+
+    typeFolder("/srv/other");
+    expect(screen.queryByText(/merged into/)).toBeNull();
+    typeFolder(`${A.toUpperCase()}/`);
+    expect(screen.getByText(/merged into/).textContent).toContain("projA");
+
+    fireEvent.click(screen.getByRole("button", { name: "Move" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/projects/move",
+      expect.anything()
+    );
+  });
+
+  it("says a move chosen when adding merges into a registered project", () => {
+    renderWithMissing();
+    act(() => dialogs!.openAddProject());
+    typeFolder(A);
+    expect(screen.queryByText(/merged into/)).toBeNull();
+
+    fireEvent.click(screen.getByRole("radio", { name: /projB/ }));
+
+    expect(screen.getByText(/merged into/)).toBeTruthy();
+  });
+
+  it("marks a project of the same name in another case", () => {
+    renderWithMissing();
+    act(() => dialogs!.openAddProject());
+    typeFolder("/srv/PROJB");
+
+    expect(
+      screen.getAllByRole("radio")[1].closest("label")!.textContent
+    ).toMatch(/same name/);
+  });
+
+  it("offers no choice when the backend can't move projects", () => {
+    renderWithMissing(false);
+    act(() => dialogs!.openAddProject());
+
+    expect(screen.queryByRole("radio")).toBeNull();
+    expect(dialogs!.openMoveProject).toBeUndefined();
+  });
+
+  it("offers no move on a page that can't change projects", () => {
+    access.value = { writable: false, reason: "other_backend" };
+    renderWithMissing();
+
+    expect(dialogs!.openMoveProject).toBeUndefined();
+  });
+
+  it("moves a missing project to the folder typed for it", async () => {
+    const fetchMock = stubRelay(200, moved);
+    renderWithMissing();
+    act(() => dialogs!.openMoveProject!(GONE));
+
+    expect(screen.queryByRole("radio")).toBeNull();
+    typeFolder("/srv/projB");
+    fireEvent.click(screen.getByRole("button", { name: "Move" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/projects/move",
+      expect.anything()
+    );
+    expect(toast.success).toHaveBeenCalled();
+  });
+
+  it("keeps the dialog open with the reason when the move fails", async () => {
+    stubRelay(500, {
+      error: "move_failed",
+      detail: "disk full",
+      pending: true,
+    });
+    const { projects } = renderWithMissing();
+    act(() => dialogs!.openMoveProject!(GONE));
+    typeFolder("/srv/projB");
+
+    fireEvent.click(screen.getByRole("button", { name: "Move" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("disk full");
+    expect(alert.textContent).toMatch(/try again/i);
+    expect(projects.followMove).not.toHaveBeenCalled();
+  });
+
+  it("warns, without a success, when nothing was moved", async () => {
+    stubRelay(200, {
+      ...moved,
+      workspace_dir: GONE.key,
+      warnings: ["The old folder is back: nothing was moved."],
+      moved: false,
+    });
+    const { projects } = renderWithMissing();
+    act(() => dialogs!.openMoveProject!(GONE));
+    typeFolder("/srv/projB");
+
+    fireEvent.click(screen.getByRole("button", { name: "Move" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(toast.warning).toHaveBeenCalledWith(
+      "The old folder is back: nothing was moved.",
+      expect.anything()
+    );
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(projects.followMove).not.toHaveBeenCalled();
   });
 });
 

@@ -30,7 +30,11 @@ export function readyProjects(
 
 export function mockProjects(
   projects: ProjectsState = readyProjects(TEST_PROJECT),
-  options: { current?: string | null; files?: FilesAccess } = {}
+  options: {
+    current?: string | null;
+    files?: FilesAccess;
+    canMove?: boolean;
+  } = {}
 ): ProjectsContextValue {
   const current =
     options.current === null
@@ -38,12 +42,15 @@ export function mockProjects(
       : pickProject(projects, [options.current ?? null]);
   return {
     projects,
+    canMove: options.canMove ?? false,
     refreshing: false,
     error: null,
     isReady: () => projects.status !== "pending",
     refresh: vi.fn(async () => projects),
     current,
     selectProject: vi.fn(),
+    followMove: vi.fn(),
+    arrivedMoves: [],
     files: options.files ?? "here",
   };
 }
