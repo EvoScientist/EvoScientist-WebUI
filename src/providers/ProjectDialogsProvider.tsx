@@ -4,6 +4,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -149,6 +150,11 @@ function mergeTarget(
   );
 }
 
+/** What a move in progress says, in the dialog and once it is closed. */
+function movingText(name: string): string {
+  return `Moving ${name}'s conversations, scheduled tasks and memory…`;
+}
+
 /**
  * Ask for a folder: to add as a project, or, for `moving` (a project whose
  * folder is missing), the folder it was moved to. Adding offers the missing
@@ -199,48 +205,83 @@ function ProjectFolderDialog({
     onClose();
   };
 
+  // A move goes on when the dialog is closed: a toast then says so, and
+  // becomes its outcome. Set once closed during a move (nothing here is
+  // rendered again then).
+  const movingRef = useRef<Project | null>(null);
+  const closedToastRef = useRef<string | number | null>(null);
+
   const move = async (project: Project, path: string) => {
     const result = await moveProject(project.key, path);
+    const id = closedToastRef.current;
+    // The outcome toast takes the closed dialog's place.
+    const outcome = id === null ? undefined : { id };
     if (!result.ok) {
-      setBusy(null);
-      setError(result.message);
+      if (id === null) {
+        setBusy(null);
+        setError(result.message);
+      } else {
+        // Without the dialog, the toast names what it was about.
+        toast.error(result.message, {
+          id,
+          description: `${project.name} → ${path}`,
+          duration: 15_000,
+        });
+      }
       return;
     }
     if (!result.moved) {
       void refresh();
       // The old folder is a project again: its warning says so.
-      for (const warning of result.warnings.length > 0
-        ? result.warnings
-        : [`${project.name} was not moved.`]) {
-        toast.warning(warning, { duration: 15_000 });
-      }
-      onClose();
+      const warnings =
+        result.warnings.length > 0
+          ? result.warnings
+          : [`${project.name} was not moved.`];
+      warnings.forEach((warning, i) =>
+        toast.warning(warning, {
+          duration: 15_000,
+          ...(i === 0 && outcome),
+        })
+      );
+      if (id === null) onClose();
       return;
     }
     // Its old key names nothing now: a selection or stored choice of it
     // moves to the new folder, before the list that drops it is read.
     followMove(project.key, result.key);
     void refresh();
-    toast.success(movedText(project.name, result));
+    toast.success(movedText(project.name, result), outcome);
     for (const warning of result.warnings) {
       toast.warning(warning, { duration: 15_000 });
     }
-    onClose();
+    if (id === null) onClose();
   };
 
   const submit = async () => {
     const path = folder.trim();
     if (!path || busy || readOnly) return;
+    movingRef.current = target;
     setBusy(target ? "move" : "add");
     setError(null);
     await (target ? move(target, path) : add(path));
+  };
+
+  // Adding can't be left; a move goes on in the background.
+  const close = () => {
+    if (busy === "add") return;
+    if (busy === "move" && movingRef.current) {
+      closedToastRef.current = toast.loading(
+        movingText(movingRef.current.name)
+      );
+    }
+    onClose();
   };
 
   return (
     <Dialog
       open
       onOpenChange={(open) => {
-        if (!open && !busy) onClose();
+        if (!open) close();
       }}
     >
       <DialogContent className="sm:max-w-md">
@@ -345,7 +386,7 @@ function ProjectFolderDialog({
               className="text-xs text-muted-foreground"
             >
               {busy === "move"
-                ? "Moving the project's conversations, scheduled tasks and memory…"
+                ? movingText(movingRef.current?.name ?? "the project")
                 : busy === "add"
                 ? "Adding the project and restoring its conversations and scheduled tasks…"
                 : ""}
@@ -364,10 +405,10 @@ function ProjectFolderDialog({
         <DialogFooter>
           <Button
             variant="outline"
-            onClick={onClose}
-            disabled={busy !== null}
+            onClick={close}
+            disabled={busy === "add"}
           >
-            {readOnly ? "Close" : "Cancel"}
+            {readOnly || busy === "move" ? "Close" : "Cancel"}
           </Button>
           {!readOnly && (
             <Button

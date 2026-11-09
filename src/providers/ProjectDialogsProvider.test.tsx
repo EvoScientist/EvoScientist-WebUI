@@ -24,7 +24,12 @@ vi.mock("@/app/hooks/useSettings", () => ({
 }));
 vi.mock("@/providers/ClientProvider", () => ({ useClient: () => client }));
 vi.mock("sonner", () => ({
-  toast: { success: vi.fn(), warning: vi.fn(), error: vi.fn() },
+  toast: {
+    success: vi.fn(),
+    warning: vi.fn(),
+    error: vi.fn(),
+    loading: vi.fn(() => "move-toast"),
+  },
 }));
 
 import { ProjectDialogsProvider } from "./ProjectDialogsProvider";
@@ -102,6 +107,8 @@ beforeEach(() => {
   client.runs.cancel.mockReset();
   vi.mocked(toast.success).mockClear();
   vi.mocked(toast.warning).mockClear();
+  vi.mocked(toast.error).mockClear();
+  vi.mocked(toast.loading).mockClear();
 });
 
 afterEach(() => vi.unstubAllGlobals());
@@ -233,8 +240,8 @@ describe("Move project", () => {
     });
     expect(projects.followMove).toHaveBeenCalledWith(GONE.key, "/srv/projB");
     expect(projects.refresh).toHaveBeenCalled();
-    expect(toast.success).toHaveBeenCalledWith(
-      expect.stringContaining("2 conversations")
+    expect(vi.mocked(toast.success).mock.calls[0][0]).toContain(
+      "2 conversations"
     );
   });
 
@@ -384,6 +391,112 @@ describe("Move project", () => {
     );
     expect(toast.success).not.toHaveBeenCalled();
     expect(projects.followMove).not.toHaveBeenCalled();
+  });
+
+  /** The relay answers once the returned function is called. */
+  function stubSlowRelay() {
+    let answer: (status: number, body: unknown) => void = () => {};
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        () =>
+          new Promise<Response>((resolve) => {
+            answer = (status, body) =>
+              resolve(new Response(JSON.stringify(body), { status }));
+          })
+      )
+    );
+    return (status: number, body: unknown) => answer(status, body);
+  }
+
+  describe("closed while the move runs", () => {
+    async function startAndClose() {
+      const answer = stubSlowRelay();
+      const rendered = renderWithMissing();
+      act(() => dialogs!.openMoveProject!(GONE));
+      typeFolder("/srv/projB");
+      fireEvent.click(screen.getByRole("button", { name: "Move" }));
+      await screen.findByText(/Moving projB's/);
+
+      // The footer's button, not the dialog's corner one: it closes, the
+      // move goes on.
+      const close = screen
+        .getAllByRole("button", { name: "Close" })
+        .find((button) => button.querySelector(".sr-only") === null)!;
+      fireEvent.click(close);
+
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(toast.loading).toHaveBeenCalledWith(
+        expect.stringContaining("projB")
+      );
+      return { answer, ...rendered };
+    }
+
+    it("turns the loading toast into the success", async () => {
+      const { answer, projects } = await startAndClose();
+
+      await act(async () => answer(200, moved));
+
+      expect(toast.success).toHaveBeenCalledWith(
+        expect.stringContaining("2 conversations"),
+        expect.objectContaining({ id: "move-toast" })
+      );
+      expect(projects.followMove).toHaveBeenCalledWith(GONE.key, "/srv/projB");
+      expect(projects.refresh).toHaveBeenCalled();
+    });
+
+    it("turns the loading toast into the failure", async () => {
+      const { answer } = await startAndClose();
+
+      await act(async () =>
+        answer(409, { error: "busy", detail: "A conversation is running." })
+      );
+
+      expect(toast.error).toHaveBeenCalledWith(
+        "A conversation is running.",
+        expect.objectContaining({ id: "move-toast" })
+      );
+      expect(toast.success).not.toHaveBeenCalled();
+    });
+
+    it("turns the loading toast into the first warning when nothing moved", async () => {
+      const { answer } = await startAndClose();
+
+      await act(async () =>
+        answer(200, {
+          ...moved,
+          workspace_dir: GONE.key,
+          warnings: ["The old folder is back.", "Another note."],
+          moved: false,
+        })
+      );
+
+      const calls = vi.mocked(toast.warning).mock.calls;
+      expect(calls.map(([text]) => text)).toEqual([
+        "The old folder is back.",
+        "Another note.",
+      ]);
+      expect(calls[0][1]).toMatchObject({ id: "move-toast" });
+      expect(calls[1][1]).not.toHaveProperty("id");
+      expect(toast.success).not.toHaveBeenCalled();
+    });
+  });
+
+  it("can't be closed while a project is being added", async () => {
+    stubSlowRelay();
+    renderWithMissing();
+    act(() => dialogs!.openAddProject());
+    typeFolder("/srv/new");
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    await screen.findByText(/Adding the project/);
+
+    expect(
+      screen.getByRole("button", { name: "Cancel" }).hasAttribute("disabled")
+    ).toBe(true);
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+
+    expect(screen.queryByRole("dialog")).not.toBeNull();
+    expect(toast.loading).not.toHaveBeenCalled();
   });
 });
 
