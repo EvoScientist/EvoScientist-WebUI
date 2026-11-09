@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createApp, type AppDeps, type AppLog, type AppWindow } from "./app";
 import type { MemoryWaitResult, WorkCheck } from "./closeCheck";
+import type { CrashInfo } from "./crash";
 import type { DeployOutcome, DeploySession } from "./deploy";
 import type { DeployError, DeployReady } from "./lines";
 import type { Collected, ExitInfo } from "./proc";
@@ -178,7 +179,7 @@ function harness(over: Partial<AppDeps> = {}) {
       xdgConfigHomeSet: false,
     },
     childEnv: {},
-    runtimeDir: "/runtime",
+    runtimeDirs: ["/data/server", "/older"],
     uiServerJs: "/ui/server.js",
     uiEntry: "/ui-entry.mjs",
     execPath: "/electron",
@@ -364,6 +365,69 @@ describe("launch", () => {
       kind: "error",
       code: "ui_server_exited",
     });
+  });
+});
+
+describe("crash report", () => {
+  /** The backend log the only crash report written attaches. */
+  const backendLog = (h: ReturnType<typeof harness>) => {
+    const calls = vi.mocked(h.deps.writeCrashReport).mock.calls;
+    expect(calls).toHaveLength(1);
+    return (calls[0][1] as CrashInfo).logs[2];
+  };
+
+  /** A harness whose first `deploy` fails before `ready` with `detail`. */
+  function failingStart(detail: Record<string, unknown>, over = {}) {
+    return harness({
+      startDeploy: () => {
+        const s = fakeSession();
+        s.outcome = Promise.resolve({
+          kind: "error",
+          error: {
+            event: "error",
+            code: "backend_start_failed",
+            message: "m",
+            detail,
+          },
+        });
+        return s;
+      },
+      ...over,
+    });
+  }
+
+  it("attaches the log a failure before ready names", async () => {
+    const h = failingStart({ log_file: "/elsewhere/langgraph_dev.log" });
+    await h.app.launch();
+    expect(backendLog(h)).toBe("/elsewhere/langgraph_dev.log");
+  });
+
+  it("attaches the server home's log before ready when the failure names none", async () => {
+    const h = failingStart({});
+    await h.app.launch();
+    expect(backendLog(h)).toBe(join("/data/server", "langgraph_dev.log"));
+  });
+
+  it("attaches the older cores' log when only that one exists", async () => {
+    const h = failingStart(
+      {},
+      { fileExists: (p: string) => p === join("/older", "langgraph_dev.log") }
+    );
+    await h.app.launch();
+    expect(backendLog(h)).toBe(join("/older", "langgraph_dev.log"));
+  });
+
+  it("attaches the log a lost backend's failure names", async () => {
+    const h = await launched();
+    h.sessions[0].lose({ detail: { log_file: "/new/langgraph_dev.log" } });
+    expect(backendLog(h)).toBe("/new/langgraph_dev.log");
+  });
+
+  it("attaches ready's log for a failure that names none", async () => {
+    const h = await launched();
+    h.uis[0].exit(3);
+    await settle();
+    expect(backendLog(h)).toBe(READY.logFile);
   });
 });
 

@@ -24,11 +24,13 @@ import { FATAL_CODES, type CrashInfo } from "./crash";
 import type { DeploySession } from "./deploy";
 import type { InstallRun } from "./install";
 import type { UiRecord } from "./leftover";
-import type { DeployReady, VersionInfo } from "./lines";
+import { detailLogFile, type DeployReady, type VersionInfo } from "./lines";
 import type { Located } from "./locate";
 import type { Lookup } from "./release";
 import {
+  BACKEND_LOG,
   DEFAULT_BACKEND_PORT,
+  runtimeDir,
   withReadyFolders,
   type Env,
   type Folders,
@@ -101,8 +103,9 @@ export interface AppDeps {
   folders: Folders;
   /** The environment of every `EvoSci` child (folderEnv). */
   childEnv: NodeJS.ProcessEnv;
-  /** Where `langgraph_dev.log` is before `ready` names it. */
-  runtimeDir: string;
+  /** Where `langgraph_dev.log` may be before `ready` names it, newest first
+   *  (runtimeDirs). */
+  runtimeDirs: string[];
   /** The bundled WebUI's `server.js` and the entry script that runs it. */
   uiServerJs: string;
   uiEntry: string;
@@ -525,10 +528,14 @@ export function createApp(deps: AppDeps): App {
       code,
       message,
       detail,
+      // The failure line names the backend's log, before `ready` too; older
+      // cores leave it out.
       logs: [
         log.path,
         uiLog.path,
-        ready?.logFile ?? join(deps.runtimeDir, "langgraph_dev.log"),
+        detailLogFile(detail) ??
+          ready?.logFile ??
+          join(runtimeDir(deps.runtimeDirs, deps.fileExists), BACKEND_LOG),
       ],
     });
     if (file) log.warn(`crash report: ${file}`);
@@ -658,7 +665,7 @@ export function createApp(deps: AppDeps): App {
     if (!result.ok) return showError(result.error);
 
     core = result.core;
-    const filled = withReadyFolders(result.ready, folders);
+    const filled = withReadyFolders(result.ready, folders, deps.fileExists);
     if (filled.missing.length > 0)
       log.warn(
         `ready without ${filled.missing.join(

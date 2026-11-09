@@ -7,6 +7,8 @@ import {
   folderEnv,
   readStartConfig,
   resolveFolders,
+  runtimeDir,
+  runtimeDirs,
   sharedDirFromEnv,
   withReadyFolders,
 } from "./paths";
@@ -147,7 +149,7 @@ describe("withReadyFolders", () => {
       configDir: "/c",
       logFile: "/l/x.log",
     };
-    expect(withReadyFolders(ready, folders, HOME)).toEqual({
+    expect(withReadyFolders(ready, folders, () => false, HOME)).toEqual({
       ready,
       missing: [],
     });
@@ -157,14 +159,48 @@ describe("withReadyFolders", () => {
     const r = withReadyFolders(
       { url: "u", dataDir: "", configDir: "", logFile: "" },
       folders,
+      () => false,
       HOME
     );
     expect(r.ready).toEqual({
       url: "u",
       dataDir: folders.dataDir,
       configDir: folders.configDir,
-      logFile: join(HOME, ".config", "evoscientist", "langgraph_dev.log"),
+      logFile: join(folders.dataDir, "server", "langgraph_dev.log"),
     });
     expect(r.missing).toEqual(["data_dir", "config_dir", "log_file"]);
+  });
+
+  it("fills in the log of the data folder ready names", () => {
+    const r = withReadyFolders(
+      { url: "u", dataDir: "/d", configDir: "/c", logFile: "" },
+      folders,
+      () => false,
+      HOME
+    );
+    expect(r.ready.logFile).toBe(join("/d", "server", "langgraph_dev.log"));
+  });
+});
+
+describe("runtimeDir", () => {
+  const dirs = runtimeDirs(join(HOME, ".evoscientist"), HOME);
+  const serverHome = join(HOME, ".evoscientist", "server");
+  const older = join(HOME, ".config", "evoscientist");
+
+  it("lists the server home before the older cores' folder", () => {
+    expect(dirs).toEqual([serverHome, older]);
+  });
+
+  it("takes the server home when it holds the backend's log", () => {
+    expect(runtimeDir(dirs, () => true)).toBe(serverHome);
+  });
+
+  it("takes the older cores' folder when only it holds the backend's log", () => {
+    const has = (p: string) => p === join(older, "langgraph_dev.log");
+    expect(runtimeDir(dirs, has)).toBe(older);
+  });
+
+  it("takes the server home when neither holds the backend's log", () => {
+    expect(runtimeDir(dirs, () => false)).toBe(serverHome);
   });
 });

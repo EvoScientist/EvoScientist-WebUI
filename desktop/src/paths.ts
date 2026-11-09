@@ -82,13 +82,26 @@ export function folderEnv(env: Env, folders: Folders): Env {
   return out;
 }
 
+export const BACKEND_LOG = "langgraph_dev.log";
+
 /**
- * Where the backend's log, and so the app's own logs, live before the first
- * `ready`: `~/.config/evoscientist` whatever `XDG_CONFIG_HOME` or
- * `EVOSCIENTIST_DATA_DIR` say, until the core moves its runtime files (C18).
+ * Where the backend keeps its log, newest first: the server home in the data
+ * folder, then `~/.config/evoscientist` whatever `XDG_CONFIG_HOME` says,
+ * where older cores keep it.
  */
-export function runtimeDir(home = homedir()): string {
-  return join(home, ".config", "evoscientist");
+export function runtimeDirs(dataDir: string, home = homedir()): string[] {
+  return [join(dataDir, "server"), join(home, ".config", "evoscientist")];
+}
+
+/**
+ * Where the backend's log, and so the app's own logs, live before `ready`
+ * names it: the first of `dirs` that holds the backend's log, else the first.
+ */
+export function runtimeDir(
+  dirs: string[],
+  exists: (path: string) => boolean
+): string {
+  return dirs.find((dir) => exists(join(dir, BACKEND_LOG))) ?? dirs[0];
 }
 
 /**
@@ -103,6 +116,7 @@ export function withReadyFolders<
 >(
   ready: R,
   folders: Folders,
+  exists: (path: string) => boolean,
   home = homedir()
 ): { ready: R; missing: string[] } {
   const missing: string[] = [];
@@ -111,15 +125,16 @@ export function withReadyFolders<
     missing.push(field);
     return fallback;
   };
+  const dataDir = pick(ready.dataDir, "data_dir", folders.dataDir);
   return {
     ready: {
       ...ready,
-      dataDir: pick(ready.dataDir, "data_dir", folders.dataDir),
+      dataDir,
       configDir: pick(ready.configDir, "config_dir", folders.configDir),
       logFile: pick(
         ready.logFile,
         "log_file",
-        join(runtimeDir(home), "langgraph_dev.log")
+        join(runtimeDir(runtimeDirs(dataDir, home), exists), BACKEND_LOG)
       ),
     },
     missing,
