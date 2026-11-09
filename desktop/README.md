@@ -40,7 +40,7 @@ npm run dist   # Windows: release/EvoScientist-Setup.exe, its blockmap and lates
 
 `npm run pack` downloads the core's install scripts first (`npm run fetch-core-scripts`, which `npm start` needs too before it can install or repair the core); it needs Node 24.5 or newer (`node --use-env-proxy`); behind a proxy, set `HTTPS_PROXY`. The app is in `release/win-unpacked/EvoScientist.exe` (`linux-unpacked`, `mac` on other platforms). The bundled WebUI is in `resources/ui/`. `npm run dist` builds the installer with publishing off; it needs Windows (on Linux electron-builder needs Wine). The installer installs per user into `%LOCALAPPDATA%\Programs\EvoScientist` without an administrator prompt. Never change `build.appId` or `build.extraMetadata.name` after the first release: upgrades, uninstall and the install folder depend on them.
 
-Logs: `desktop.log` and `desktop-ui.log` next to the backend's `langgraph_dev.log` (`~/.config/evoscientist` until the core moves its runtime files), with crash reports `desktop-crash-*.txt` beside them.
+Logs: `desktop.log` and `desktop-ui.log` next to the backend's `langgraph_dev.log` once `ready` names it (the server home in the data folder, `~/.evoscientist/server` by default; `~/.config/evoscientist` with older cores); before that, in the server home when it holds a backend log, else in `~/.config/evoscientist`. Crash reports `desktop-crash-*.txt` go beside them.
 
 Keep Electron's `RunAsNode` fuse enabled: the UI server runs as the app's own executable with `ELECTRON_RUN_AS_NODE=1`.
 

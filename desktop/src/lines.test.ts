@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   LineSplitter,
+  detailLogFile,
   isTerminal,
   parseDeployEvent,
   parseJsonLine,
@@ -103,6 +104,23 @@ describe("parseDeployEvent", () => {
 
   it("is null for a line without an event", () => {
     expect(parseDeployEvent('{"stage":"node","status":"done"}')).toBeNull();
+  });
+});
+
+describe("detailLogFile", () => {
+  it("reads the backend's log a failure's detail names", () => {
+    const e = parseDeployEvent(
+      '{"protocol":1,"event":"error","code":"backend_exited","message":"m","detail":{"exit_code":1,"log_file":"/d/server/langgraph_dev.log"}}'
+    );
+    expect(e?.event === "error" && detailLogFile(e.detail)).toBe(
+      "/d/server/langgraph_dev.log"
+    );
+  });
+
+  it("is undefined for a detail without a usable log file", () => {
+    for (const detail of [{}, { log_file: "" }, { log_file: 3 }, null]) {
+      expect(detailLogFile(detail)).toBeUndefined();
+    }
   });
 });
 

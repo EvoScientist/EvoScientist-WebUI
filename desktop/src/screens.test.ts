@@ -162,7 +162,12 @@ describe("errorScreen", () => {
   });
 
   it("says to stop another EvoScientist backend on the port", () => {
-    for (const reason of ["no_record", "record_mismatch"]) {
+    for (const reason of [
+      "no_record",
+      "record_mismatch",
+      "other_data_folder",
+      "older_server",
+    ]) {
       const s = errorScreen(
         err("port_conflict", {
           reason,

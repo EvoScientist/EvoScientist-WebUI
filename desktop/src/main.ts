@@ -68,6 +68,7 @@ import {
   readStartConfig,
   resolveFolders,
   runtimeDir,
+  runtimeDirs,
 } from "./paths";
 import { killTree, runCollect } from "./proc";
 import type { ActionId } from "./screens";
@@ -113,8 +114,10 @@ const INSTALL_VERSION = installVersion(manifest.coreRange);
 const folders = resolveFolders(process.env);
 const childEnv = folderEnv(process.env, folders) as NodeJS.ProcessEnv;
 const echo = app.isPackaged ? undefined : (l: string) => console.log(l);
-const log = new FileLog(runtimeDir(), DESKTOP_LOG, echo);
-const uiLog = new FileLog(runtimeDir(), DESKTOP_UI_LOG);
+const backendLogDirs = runtimeDirs(folders.dataDir);
+const logDir = runtimeDir(backendLogDirs, existsSync);
+const log = new FileLog(logDir, DESKTOP_LOG, echo);
+const uiLog = new FileLog(logDir, DESKTOP_UI_LOG);
 
 const WEB_PREFERENCES = {
   preload: PRELOAD,
@@ -162,7 +165,7 @@ const desktop = createApp({
   uiPort: pkg.evoscientist.uiPort,
   folders,
   childEnv,
-  runtimeDir: runtimeDir(),
+  runtimeDirs: backendLogDirs,
   uiServerJs: UI_SERVER_JS,
   uiEntry: UI_ENTRY,
   execPath: process.execPath,
