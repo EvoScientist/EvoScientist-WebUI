@@ -124,8 +124,9 @@ export function useAutoSkills(
    *  fails or is aborted. */
   readNow: (signal?: AbortSignal) => Promise<DraftList | "unsupported">;
   /** Whether a read of the list is in flight (SWR's own flag for the key).
-   *  A read a newer one replaced keeps it true: only the newest read's end
-   *  clears it, so false means the list shown came from the newest read. */
+   *  A read a newer one replaced keeps it true when it succeeds, but clears
+   *  it when it fails, with the error as the state. So false with a
+   *  "ready" state means the list shown came from the newest read. */
   isValidating: boolean;
 } {
   const { deploymentUrl, apiKey } = useDeployment();
