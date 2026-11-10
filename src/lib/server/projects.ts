@@ -12,7 +12,14 @@ import { promises as fs } from "fs";
 import { resolve } from "path";
 import type { NextRequest } from "next/server";
 import { parseProjects, projectHandle, type Project } from "@/lib/projects";
-import { forwardToBackend, localBackend } from "@/lib/server/settingsRelay";
+import {
+  forwardToBackend,
+  instanceOf,
+  localBackend,
+  readLocalSecret,
+  type ForwardResult,
+  type LocalBackend,
+} from "@/lib/server/settingsRelay";
 
 /** How long one read of the registry answers for: a removed project stops
  *  serving files within this, or, while a read is still running, once it
@@ -77,6 +84,104 @@ export function localProjects(): Promise<Project[]> {
     }
   );
   return projects;
+}
+
+/** The longest folder path taken. */
+const MAX_PATH = 4096;
+
+/** `value` as a folder path a request may name, or null: a non-empty
+ *  string, not too long, without control characters. As named: the backend
+ *  reads the path (a project's key is its exact folder, spaces and all). */
+export function requestFolder(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  // eslint-disable-next-line no-control-regex
+  const control = /[\u0000-\u001f]/.test(value);
+  if (!value.trim() || value.length > MAX_PATH || control) return null;
+  return value;
+}
+
+/** How long the move probe waits for the backend. */
+const MOVE_PROBE_TIMEOUT_MS = 5_000;
+
+/** How long a "no move" answer holds: a core updated in place starts again
+ *  under the same local secret, so as the same instance. */
+const NO_MOVE_CACHE_MS = 60_000;
+
+/** Why the backend couldn't be asked about the move. */
+export type MoveProbeFailure = Extract<ForwardResult, { ok: false }>["refusal"];
+
+let moveProbe: {
+  port: number;
+  instance: string;
+  supported: Promise<boolean | MoveProbeFailure | null>;
+  /** Until when it answers: for good while the probe runs and for a "yes",
+   *  a minute for a "no". */
+  until: number;
+} | null = null;
+
+/** Forget the cached move probe (tests). */
+export function resetMoveProbeCache() {
+  moveProbe = null;
+}
+
+/**
+ * Whether the local backend can move a project (`POST /api/workspaces/move`),
+ * asked without the local secret: a backend with the route refuses that with
+ * 403 `local_secret_required` before anything runs, one without it answers
+ * 404 (a GET can't tell: the backend answers 404 for a method a route doesn't
+ * take). Asked once per backend instance (its port and local secret); a "no"
+ * is asked again after a minute, an answer that is neither is not kept.
+ * False without a local secret: nothing can be moved from here then. Why
+ * not, when the backend can't be reached: whether it can move is unknown.
+ */
+export async function moveSupported(): Promise<boolean | MoveProbeFailure> {
+  const backend = localBackend();
+  const secret = readLocalSecret(backend);
+  if (secret === null) return false;
+  const instance = instanceOf(secret);
+  const entry = moveProbe;
+  if (
+    entry &&
+    entry.port === backend.port &&
+    entry.instance === instance &&
+    Date.now() < entry.until
+  )
+    return (await entry.supported) ?? false;
+  const next: NonNullable<typeof moveProbe> = {
+    port: backend.port,
+    instance,
+    supported: probeMove(backend),
+    until: Infinity,
+  };
+  moveProbe = next;
+  const answer = await next.supported;
+  if (typeof answer !== "boolean") {
+    if (moveProbe === next) moveProbe = null;
+  } else if (!answer) {
+    next.until = Date.now() + NO_MOVE_CACHE_MS;
+  }
+  return answer ?? false;
+}
+
+/** True for the move route's refusal, false for no route, why not when the
+ *  backend can't be reached, null for any other answer. */
+async function probeMove(
+  backend: LocalBackend
+): Promise<boolean | MoveProbeFailure | null> {
+  const result = await forwardToBackend(
+    backend,
+    "POST",
+    "/api/workspaces/move",
+    { body: "{}", timeoutMs: MOVE_PROBE_TIMEOUT_MS }
+  );
+  if (!result.ok) return result.refusal;
+  const { status } = result.response;
+  if (status === 404) return false;
+  if (status !== 403) return null;
+  const body = (await result.response.json().catch(() => null)) as {
+    error?: unknown;
+  } | null;
+  return body?.error === "local_secret_required" ? true : null;
 }
 
 /** A file request for no project this machine's backend serves. */

@@ -469,6 +469,48 @@ describe("project binding", () => {
     expect(projects.selectProject).toHaveBeenCalledWith(OTHER);
   });
 
+  it("follows the open conversation's project to the folder it moved to", async () => {
+    openThread({ graph_id: "EvoScientist", workspace_dir: OTHER });
+    const projects = mockProjects(
+      readyProjects(KEY, { key: OTHER, name: "projB", missing: true }),
+      { current: KEY }
+    );
+    const { result, rerender } = renderChat({ projects });
+    await waitFor(() => expect(result.current.binding.kind).toBe("readOnly"));
+
+    // The move rewrites the thread's folder and registers the new one.
+    const moved = "/srv/projB-moved";
+    getActiveMockClient().setThreadRecord(THREAD, {
+      metadata: { graph_id: "EvoScientist", workspace_dir: moved },
+    });
+    Object.assign(
+      projects,
+      mockProjects(readyProjects(KEY, moved), { current: KEY }),
+      { arrivedMoves: [{ from: OTHER, to: moved }] }
+    );
+    rerender();
+
+    await waitFor(() => expect(result.current.projectKey).toBe(moved));
+    expect(result.current.binding.kind).toBe("open");
+  });
+
+  it("keeps the open conversation's metadata when another project moves", async () => {
+    openThread({ graph_id: "EvoScientist", workspace_dir: KEY });
+    const projects = both();
+    const { result, rerender } = renderChat({ projects });
+    await waitFor(() => expect(result.current.binding.kind).toBe("open"));
+    const reads = getActiveMockClient().threads.get.mock.calls.length;
+
+    Object.assign(projects, {
+      arrivedMoves: [{ from: "/old/projC", to: "/srv/projC" }],
+    });
+    rerender();
+    await act(async () => {});
+
+    expect(getActiveMockClient().threads.get.mock.calls.length).toBe(reads);
+    expect(result.current.projectKey).toBe(KEY);
+  });
+
   it.each(["removed", "missing its folder"])(
     "drops a project %s after a message was sent in it",
     async (state) => {

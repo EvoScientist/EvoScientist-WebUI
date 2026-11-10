@@ -11,6 +11,7 @@
 
 import { createHash } from "crypto";
 import { readFileSync } from "fs";
+import { request as httpRequest } from "http";
 import { join } from "path";
 import { NextResponse, type NextRequest } from "next/server";
 import { isLoopbackHost } from "@/lib/backendBoundary";
@@ -177,6 +178,70 @@ export async function forwardToBackend(
     };
   }
 }
+
+/** As `forwardToBackend`, for a request that may take longer than `fetch`
+ *  waits for an answer to start (5 min in Node). */
+export function forwardSlowToBackend(
+  backend: LocalBackend,
+  method: string,
+  path: string,
+  {
+    secret,
+    body,
+    timeoutMs,
+  }: { secret?: string; body?: string; timeoutMs: number }
+): Promise<ForwardResult> {
+  const headers: Record<string, string> = {};
+  if (secret !== undefined) headers[LOCAL_SECRET_HEADER] = secret;
+  if (body !== undefined) {
+    headers["Content-Type"] = "application/json";
+    headers["Content-Length"] = String(Buffer.byteLength(body));
+  }
+  return new Promise((resolve) => {
+    let settled = false;
+    const settle = (result: ForwardResult) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+    const request = httpRequest(
+      `${backend.url}${path}`,
+      // Its own socket, not a pooled keep-alive one, for a request that can
+      // run up to 30 min: only `timeoutMs` bounds it.
+      { method, headers, agent: false },
+      (response) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk: Buffer) => chunks.push(chunk));
+        response.on("error", () =>
+          settle({ ok: false, refusal: "backend_unreachable" })
+        );
+        response.on("end", () => {
+          const status = response.statusCode ?? 502;
+          const type = response.headers["content-type"];
+          settle({
+            ok: true,
+            response: new Response(
+              NULL_BODY_STATUSES.has(status) ? null : Buffer.concat(chunks),
+              { status, headers: type ? { "Content-Type": type } : {} }
+            ),
+          });
+        });
+      }
+    );
+    const timer = setTimeout(() => {
+      settle({ ok: false, refusal: "backend_timeout" });
+      request.destroy();
+    }, timeoutMs);
+    request.on("error", () =>
+      settle({ ok: false, refusal: "backend_unreachable" })
+    );
+    request.end(body);
+  });
+}
+
+/** Statuses a `Response` can't carry a body with. */
+const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
 
 /** The backend's answer, status and body unchanged. */
 export async function passThrough(response: Response): Promise<NextResponse> {

@@ -2,7 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   addProject,
   exposureWarnings,
+  moveProject,
+  movedText,
   projectsReadOnlyReason,
+  readMoveSupport,
   removeProject,
 } from "./projectActions";
 
@@ -81,6 +84,20 @@ describe("addProject", () => {
     expect(!result.ok && result.message).toContain("disk full");
   });
 
+  it("names the backend's detail when a move of the folder isn't finished", async () => {
+    answer(409, {
+      error: "move_pending",
+      detail: "/old/p is being moved to /new/p; finish the move first.",
+    });
+
+    const result = await addProject("/old/p");
+
+    expect(result).toEqual({
+      ok: false,
+      message: "/old/p is being moved to /new/p; finish the move first.",
+    });
+  });
+
   it("says when the WebUI server can't be reached", async () => {
     vi.stubGlobal(
       "fetch",
@@ -102,6 +119,166 @@ describe("removeProject", () => {
     const result = await removeProject("/p");
 
     expect(result).toMatchObject({ ok: false, cronIds: ["c1", "c2"] });
+  });
+});
+
+describe("moveProject", () => {
+  it("sends both folders to the move relay and returns what moved", async () => {
+    const fetchMock = answer(200, {
+      workspace_dir: "/new/p",
+      threads: 3,
+      tasks: 1,
+      memory: ["P-0123456789abcdef"],
+      proposals: 0,
+      warnings: ["One task kept its old folder."],
+      resumed: false,
+      moved: true,
+    });
+
+    const result = await moveProject("/old/p", ' "/new/p" ');
+
+    expect(result).toMatchObject({
+      ok: true,
+      key: "/new/p",
+      threads: 3,
+      tasks: 1,
+      memory: true,
+      moved: true,
+      warnings: ["One task kept its old folder."],
+    });
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [
+      string,
+      RequestInit
+    ];
+    expect(url).toBe("/api/projects/move");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(String(init.body))).toEqual({
+      old: "/old/p",
+      new: "/new/p",
+    });
+  });
+
+  it("reports no memory when the backend moved no memory project", async () => {
+    answer(200, { workspace_dir: "/new/p", memory: [] });
+
+    const result = await moveProject("/old/p", "/new/p");
+
+    expect(result).toMatchObject({ ok: true, memory: false });
+  });
+
+  it("reports a move that moved nothing as not moved", async () => {
+    answer(200, {
+      workspace_dir: "/old/p",
+      warnings: ["The old folder is a project again."],
+      moved: false,
+    });
+
+    const result = await moveProject("/old/p", "/new/p");
+
+    expect(result).toMatchObject({ ok: true, moved: false });
+  });
+
+  it("shows the backend's detail for a refused move", async () => {
+    answer(409, { error: "busy", detail: "A conversation is running." });
+
+    const result = await moveProject("/old/p", "/new/p");
+
+    expect(result).toEqual({
+      ok: false,
+      message: "A conversation is running.",
+    });
+  });
+
+  it.each([
+    ["waits to be finished", { pending: true }, true],
+    ["may wait to be finished", {}, true],
+    ["waits for nothing", { pending: false }, false],
+  ])(
+    "says whether to try again when a failed move %s",
+    async (_label, pending, again) => {
+      answer(500, { error: "move_failed", detail: "disk full", ...pending });
+
+      const result = await moveProject("/old/p", "/new/p");
+
+      expect(!result.ok && result.message).toContain("disk full");
+      expect(/try again/i.test(!result.ok ? result.message : "")).toBe(again);
+    }
+  );
+
+  it.each([
+    ["doesn't answer in time", 504, "backend_timeout"],
+    ["cuts the connection", 502, "backend_unreachable"],
+  ])(
+    "says the move may still be running when the backend %s",
+    async (_label, status, error) => {
+      answer(status, { error });
+
+      const result = await moveProject("/old/p", "/new/p");
+
+      expect(!result.ok && result.message).toMatch(/still be running/);
+      expect(!result.ok && result.message).toMatch(/try again/);
+    }
+  );
+
+  it("says the move may still be running when the request to the WebUI is cut", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("network");
+      })
+    );
+
+    const result = await moveProject("/old/p", "/new/p");
+
+    expect(!result.ok && result.message).toMatch(/still be running/);
+  });
+
+  it("asks for an update when the backend has no move", async () => {
+    answer(404, { detail: "Not Found" });
+
+    const result = await moveProject("/old/p", "/new/p");
+
+    expect(!result.ok && result.message).toMatch(/Update EvoScientist/);
+  });
+});
+
+describe("readMoveSupport", () => {
+  it("is true only when the WebUI's server says the backend can move", async () => {
+    answer(200, { supported: true });
+    expect(await readMoveSupport()).toBe(true);
+    answer(200, { supported: false });
+    expect(await readMoveSupport()).toBe(false);
+  });
+
+  it("throws when the WebUI's server can't answer", async () => {
+    answer(500, {});
+    await expect(readMoveSupport()).rejects.toThrow("HTTP 500");
+  });
+});
+
+describe("movedText", () => {
+  const report = {
+    key: "/new/p",
+    threads: 2,
+    tasks: 1,
+    memory: true,
+    proposals: 0,
+    warnings: [],
+    resumed: false,
+    moved: true,
+  };
+
+  it("counts what moved", () => {
+    const text = movedText("p", report);
+
+    expect(text).toContain("2 conversations");
+    expect(text).toContain("1 scheduled task");
+    expect(text).toContain("memory");
+    expect(text).not.toContain("AutoSkills");
+  });
+
+  it("says a move asked before is finished", () => {
+    expect(movedText("p", { ...report, resumed: true })).toMatch(/Finished/);
   });
 });
 

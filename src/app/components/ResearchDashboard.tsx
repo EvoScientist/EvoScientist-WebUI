@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Network,
   Activity,
@@ -78,7 +78,7 @@ export function ResearchDashboard({
   onOpenThread,
 }: ResearchDashboardProps) {
   // The current project's pinned threads: a new chat starts in it.
-  const { current, projects } = useProjects();
+  const { current, projects, arrivedMoves } = useProjects();
   const { data: threadPages } = useThreads({
     scope: current ? { project: current.key } : null,
     limit: 100,
@@ -108,12 +108,23 @@ export function ResearchDashboard({
   const [activity, setActivity] = useState<ActivityItem[]>([]);
   const [ready, setReady] = useState(false);
   const reqRef = useRef(0);
+  // The newest read of the scheduled tasks that answered wins: the first
+  // (none when it failed), or one after a move. A move's read that failed
+  // changes nothing.
+  const scheduledReqRef = useRef(0);
+  const scheduledShownRef = useRef(0);
+  const showScheduled = useCallback((req: number, tasks: ScheduledTask[]) => {
+    if (req < scheduledShownRef.current) return;
+    scheduledShownRef.current = req;
+    setScheduled(tasks);
+  }, []);
   // The workspace size counts the current project's folder on this machine,
   // when the page's backend is this machine's.
   const { project } = useProjectFiles();
 
   useEffect(() => {
     const reqId = ++reqRef.current;
+    const scheduledReq = ++scheduledReqRef.current;
     (async () => {
       try {
         const [obsRes, execRes, scheduled] = await Promise.all([
@@ -130,7 +141,7 @@ export function ResearchDashboard({
           ? await readJson<{ entries?: ExecEntry[] }>(execRes)
           : null;
         if (reqRef.current !== reqId) return;
-        setScheduled(scheduled);
+        showScheduled(scheduledReq, scheduled);
 
         const obsNodes = Array.isArray(obs?.nodes) ? obs.nodes : [];
         const execEntries = Array.isArray(exec?.entries) ? exec.entries : [];
@@ -165,7 +176,20 @@ export function ResearchDashboard({
         if (reqRef.current === reqId) setReady(true);
       }
     })();
-  }, []);
+  }, [showScheduled]);
+
+  // A move changed the assistants its tasks run on: count them again.
+  // Moves from before the mount are in the first read.
+  const seenMoves = useRef(arrivedMoves);
+  useEffect(() => {
+    if (seenMoves.current === arrivedMoves) return;
+    seenMoves.current = arrivedMoves;
+    const scheduledReq = ++scheduledReqRef.current;
+    void listScheduledTasks().then(
+      (tasks) => showScheduled(scheduledReq, tasks),
+      () => {}
+    );
+  }, [arrivedMoves, showScheduled]);
 
   // The workspace size, from the current project's folder.
   useEffect(() => {

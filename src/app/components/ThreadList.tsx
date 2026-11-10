@@ -13,6 +13,7 @@ import {
   ChevronRight,
   Clock,
   Download,
+  FolderInput,
   FolderMinus,
   FolderPlus,
   Loader2,
@@ -172,8 +173,9 @@ export function ThreadList({
     () => new Set()
   );
 
-  const { projects, current } = useProjects();
-  const { openAddProject, openRemoveProject } = useProjectDialogs();
+  const { projects, current, arrivedMoves } = useProjects();
+  const { openAddProject, openRemoveProject, openMoveProject, moving } =
+    useProjectDialogs();
   const projectList = useMemo(
     () => (projects.status === "ready" ? projects.projects : []),
     [projects]
@@ -196,6 +198,15 @@ export function ThreadList({
       setRevision((r) => r + 1);
     }, RELOAD_BUNDLE_MS);
   }, []);
+  // A move (into a project that was there already, too) changed which
+  // project its conversations are in. Moves from before the mount are in
+  // the lists already.
+  const seenMoves = useRef(arrivedMoves);
+  useEffect(() => {
+    if (seenMoves.current === arrivedMoves) return;
+    seenMoves.current = arrivedMoves;
+    mutateFn();
+  }, [arrivedMoves, mutateFn]);
   useEffect(
     () => () => {
       if (reloadTimer.current !== null) clearTimeout(reloadTimer.current);
@@ -1008,6 +1019,11 @@ export function ThreadList({
                   : undefined
               }
               onRemove={() => openRemoveProject(project)}
+              onMove={
+                openMoveProject && project.missing && !moving?.has(project.key)
+                  ? () => openMoveProject(project)
+                  : undefined
+              }
             >
               <ThreadGroups
                 scope={{ project: project.key }}
@@ -1187,6 +1203,7 @@ function ProjectSection({
   waiting = 0,
   onNewChat,
   onRemove,
+  onMove,
   children,
 }: {
   project?: Project;
@@ -1202,6 +1219,8 @@ function ProjectSection({
   onNewChat?: () => void;
   /** Remove this project (absent: no such action). */
   onRemove?: () => void;
+  /** Choose the folder this project was moved to (absent: no such action). */
+  onMove?: () => void;
   children: React.ReactNode;
 }) {
   const name = project?.name ?? title ?? "";
@@ -1288,6 +1307,15 @@ function ProjectSection({
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
+              {onMove && (
+                <DropdownMenuItem
+                  className="min-h-11 md:min-h-0"
+                  onSelect={onMove}
+                >
+                  <FolderInput aria-hidden="true" />
+                  Moved? Choose its new folder…
+                </DropdownMenuItem>
+              )}
               <DropdownMenuItem
                 className="min-h-11 md:min-h-0"
                 onSelect={onRemove}

@@ -8,10 +8,16 @@ export interface ProjectDialogsValue {
   openAddProject: (folder?: string) => void;
   /** Confirm removing `project`. */
   openRemoveProject: (project: Project) => void;
+  /** Ask for the folder `project` (one whose folder is missing) was moved
+   *  to; absent when this page can't move projects. */
+  openMoveProject?: (project: Project) => void;
+  /** The keys of the projects being moved: none is offered another move
+   *  until its move ends. */
+  moving?: ReadonlySet<string>;
 }
 
 /** Outside a provider there is nowhere to show the dialogs: the actions do
- *  nothing. */
+ *  nothing, and no move is offered. */
 const NO_DIALOGS: ProjectDialogsValue = {
   openAddProject: () => {},
   openRemoveProject: () => {},

@@ -317,6 +317,7 @@ export function useChat({
     refresh: refreshProjects,
     current,
     selectProject,
+    arrivedMoves,
   } = useProjects();
   const goalSupported = useGoalSupport();
   // The mode of the run a resume continues; null after a reload, which
@@ -372,6 +373,9 @@ export function useChat({
     threadMeta.client === client
       ? threadMeta
       : null;
+  // Counts the reads asked after the thread's project moved (see below):
+  // the move rewrote its folder. The last answer holds meanwhile.
+  const [metaRereads, setMetaRereads] = useState(0);
   useEffect(() => {
     if (!threadId) return;
     // Until it is read the thread stays pending, so a failed read is retried
@@ -396,7 +400,7 @@ export function useChat({
       });
     });
     return () => controller.abort();
-  }, [client, threadId]);
+  }, [client, threadId, metaRereads]);
   // Id of the human message the most recent `sendMessage` submitted. If the
   // submit fails with a thread-gone 404, this is the message that never made
   // it and should be handed back to the user.
@@ -848,6 +852,21 @@ export function useChat({
         : prev
     );
   }, [checkpointFolder, checkpointRunDir, threadId]);
+  // The thread's metadata is read again when its project moved (the move
+  // rewrote its folder), only then: by the folder its metadata names, or,
+  // once its history is in, the one it shows.
+  const foldersRef = useRef<Array<string | null>>([]);
+  foldersRef.current = [
+    typeof openMeta?.metadata["workspace_dir"] === "string"
+      ? openMeta.metadata["workspace_dir"]
+      : null,
+    checkpointFolder,
+  ];
+  useEffect(() => {
+    if (arrivedMoves.some((move) => foldersRef.current.includes(move.from))) {
+      setMetaRereads((n) => n + 1);
+    }
+  }, [arrivedMoves]);
   // The open thread's own project, registered with its folder in place,
   // whether or not the thread may run here: it is the current one, so the
   // files and a new chat follow it.

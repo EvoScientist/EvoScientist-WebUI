@@ -24,7 +24,10 @@ vi.mock("@/app/hooks/useSettings", () => ({
 }));
 vi.mock("@/providers/ClientProvider", () => ({ useClient: () => client }));
 vi.mock("sonner", () => ({
-  toast: { success: vi.fn(), warning: vi.fn(), error: vi.fn() },
+  toast: Object.assign(
+    vi.fn(() => "move-toast"),
+    { success: vi.fn(), warning: vi.fn(), error: vi.fn() }
+  ),
 }));
 
 import { ProjectDialogsProvider } from "./ProjectDialogsProvider";
@@ -47,16 +50,22 @@ function Probe() {
   return null;
 }
 
-function renderDialogs() {
-  const projects = mockProjects(readyProjects(A), { current: A });
-  render(
-    <TestProjectsProvider value={projects}>
+function renderDialogs(
+  projects = mockProjects(readyProjects(A), { current: A })
+) {
+  const tree = (value: typeof projects) => (
+    <TestProjectsProvider value={value}>
       <ProjectDialogsProvider>
         <Probe />
       </ProjectDialogsProvider>
     </TestProjectsProvider>
   );
-  return { projects };
+  const { rerender } = render(tree(projects));
+  return {
+    projects,
+    /** Show another project list, as a refresh does. */
+    showProjects: (value: typeof projects) => rerender(tree(value)),
+  };
 }
 
 /** The confirm button once the project's work is read: it shows earlier,
@@ -96,6 +105,8 @@ beforeEach(() => {
   client.runs.cancel.mockReset();
   vi.mocked(toast.success).mockClear();
   vi.mocked(toast.warning).mockClear();
+  vi.mocked(toast.error).mockClear();
+  vi.mocked(toast).mockClear();
 });
 
 afterEach(() => vi.unstubAllGlobals());
@@ -145,6 +156,456 @@ describe("Add project", () => {
 
     expect(screen.getByText(/machine that runs it/)).toBeTruthy();
     expect(screen.queryByLabelText("Folder")).toBeNull();
+  });
+});
+
+describe("Move project", () => {
+  const GONE = { key: "/old/data/projB", name: "projB", missing: true };
+  const OTHER_GONE = { key: "/old/notes", name: "notes", missing: true };
+
+  function renderWithMissing(canMove = true) {
+    return renderDialogs(
+      mockProjects(readyProjects(A, OTHER_GONE, GONE), {
+        current: A,
+        canMove,
+      })
+    );
+  }
+
+  const moved = {
+    workspace_dir: "/srv/projB",
+    threads: 2,
+    tasks: 1,
+    memory: ["P-0123456789abcdef"],
+    proposals: 0,
+    warnings: [],
+    resumed: false,
+    moved: true,
+  };
+
+  function typeFolder(path: string) {
+    fireEvent.change(screen.getByLabelText("Folder"), {
+      target: { value: path },
+    });
+  }
+
+  it("offers the missing projects when adding, a new project by default", () => {
+    renderWithMissing();
+    act(() => dialogs!.openAddProject());
+    typeFolder("/srv/projB");
+
+    const choices = screen.getAllByRole("radio");
+    expect(choices).toHaveLength(3);
+    expect((choices[0] as HTMLInputElement).checked).toBe(true);
+    expect(choices[0].closest("label")!.textContent).toMatch(/new project/);
+    // The project named like the folder comes first, marked.
+    expect(choices[1].closest("label")!.textContent).toContain(GONE.key);
+    expect(choices[1].closest("label")!.textContent).toMatch(/same name/);
+    expect(choices[2].closest("label")!.textContent).not.toMatch(/same name/);
+  });
+
+  it("adds the folder when no missing project is chosen", async () => {
+    const fetchMock = stubRelay(200, { workspace_dir: "/srv/projB" });
+    renderWithMissing();
+    act(() => dialogs!.openAddProject());
+    typeFolder("/srv/projB");
+
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(fetchMock).toHaveBeenCalledWith("/api/projects", expect.anything());
+  });
+
+  it("moves the chosen project instead of adding, and switches to its new folder", async () => {
+    const fetchMock = stubRelay(200, moved);
+    const { projects } = renderWithMissing();
+    act(() => dialogs!.openAddProject());
+    typeFolder("/srv/projB");
+
+    fireEvent.click(screen.getByRole("radio", { name: /projB/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Move" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [
+      string,
+      RequestInit
+    ];
+    expect(url).toBe("/api/projects/move");
+    expect(JSON.parse(String(init.body))).toEqual({
+      old: GONE.key,
+      new: "/srv/projB",
+    });
+    expect(projects.followMove).toHaveBeenCalledWith(GONE.key, "/srv/projB");
+    expect(projects.refresh).toHaveBeenCalled();
+    expect(vi.mocked(toast.success).mock.calls[0][0]).toContain(
+      "2 conversations, 1 scheduled task, its memory"
+    );
+  });
+
+  it("keeps the chosen project when a refresh drops it before a retry", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: "backend_timeout" }), {
+          status: 504,
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ...moved, resumed: true }), {
+          status: 200,
+        })
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const { showProjects } = renderWithMissing();
+    act(() => dialogs!.openAddProject());
+    typeFolder("/srv/projB");
+    fireEvent.click(screen.getByRole("radio", { name: /projB/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Move" }));
+    await screen.findByRole("alert");
+
+    // The move finished meanwhile: the list no longer has the old folder.
+    showProjects(
+      mockProjects(readyProjects(A, "/srv/projB"), {
+        current: A,
+        canMove: true,
+      })
+    );
+    expect(
+      (screen.getByRole("radio", { name: /projB/ }) as HTMLInputElement).checked
+    ).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Move" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    const [url, init] = fetchMock.mock.lastCall as unknown as [
+      string,
+      RequestInit
+    ];
+    expect(url).toBe("/api/projects/move");
+    expect(JSON.parse(String(init.body))).toEqual({
+      old: GONE.key,
+      new: "/srv/projB",
+    });
+  });
+
+  it("says a move onto a registered project merges into it, and still moves", async () => {
+    const fetchMock = stubRelay(200, { ...moved, workspace_dir: A });
+    renderWithMissing();
+    act(() => dialogs!.openMoveProject!(GONE));
+
+    typeFolder("/srv/other");
+    expect(screen.queryByText(/merged into/)).toBeNull();
+    typeFolder(`${A}/`);
+    expect(screen.getByText(/merged into/).textContent).toContain("projA");
+
+    fireEvent.click(screen.getByRole("button", { name: "Move" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/projects/move",
+      expect.anything()
+    );
+  });
+
+  describe("which typed folder merges into a registered project", () => {
+    function mergeNotice(registered: string, typed: string) {
+      renderDialogs(
+        mockProjects(readyProjects(registered, GONE), {
+          current: registered,
+          canMove: true,
+        })
+      );
+      act(() => dialogs!.openMoveProject!(GONE));
+      typeFolder(typed);
+      return screen.queryByText(/merged into/);
+    }
+
+    it.each([
+      ["a trailing separator", "/data/proj", "/data/proj/"],
+      ["repeated separators", "/data/proj", "/data//proj"],
+      ["the kind of separator", "C:\\Data\\Proj", "C:/Data/Proj"],
+      ["case in a Windows path", "C:\\Data\\Proj", "c:/data/proj/"],
+      ["case in a UNC path", "\\\\srv\\Share\\Proj", "\\\\srv\\share\\proj"],
+    ])("ignores %s", (_label, registered, typed) => {
+      expect(mergeNotice(registered, typed)).not.toBeNull();
+    });
+
+    it("tells apart POSIX paths that differ in case", () => {
+      expect(mergeNotice("/data/Proj", "/data/proj")).toBeNull();
+    });
+  });
+
+  it("says a move chosen when adding merges into a registered project", () => {
+    renderWithMissing();
+    act(() => dialogs!.openAddProject());
+    typeFolder(A);
+    expect(screen.queryByText(/merged into/)).toBeNull();
+
+    fireEvent.click(screen.getByRole("radio", { name: /projB/ }));
+
+    expect(screen.getByText(/merged into/)).toBeTruthy();
+  });
+
+  it("marks a project of the same name in another case", () => {
+    renderWithMissing();
+    act(() => dialogs!.openAddProject());
+    typeFolder("/srv/PROJB");
+
+    expect(
+      screen.getAllByRole("radio")[1].closest("label")!.textContent
+    ).toMatch(/same name/);
+  });
+
+  it("offers no choice when the backend can't move projects", () => {
+    renderWithMissing(false);
+    act(() => dialogs!.openAddProject());
+
+    expect(screen.queryByRole("radio")).toBeNull();
+    expect(dialogs!.openMoveProject).toBeUndefined();
+  });
+
+  it("offers no move on a page that can't change projects", () => {
+    access.value = { writable: false, reason: "other_backend" };
+    renderWithMissing();
+
+    expect(dialogs!.openMoveProject).toBeUndefined();
+  });
+
+  it("moves a missing project to the folder typed for it", async () => {
+    const fetchMock = stubRelay(200, moved);
+    renderWithMissing();
+    act(() => dialogs!.openMoveProject!(GONE));
+
+    expect(screen.queryByRole("radio")).toBeNull();
+    typeFolder("/srv/projB");
+    fireEvent.click(screen.getByRole("button", { name: "Move" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/projects/move",
+      expect.anything()
+    );
+    expect(toast.success).toHaveBeenCalled();
+  });
+
+  it("keeps the dialog open with the reason when the move fails", async () => {
+    stubRelay(500, {
+      error: "move_failed",
+      detail: "disk full",
+      pending: true,
+    });
+    const { projects } = renderWithMissing();
+    act(() => dialogs!.openMoveProject!(GONE));
+    typeFolder("/srv/projB");
+
+    fireEvent.click(screen.getByRole("button", { name: "Move" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("disk full");
+    expect(alert.textContent).toMatch(/try again/i);
+    expect(projects.followMove).not.toHaveBeenCalled();
+  });
+
+  it("warns, without a success, when nothing was moved", async () => {
+    stubRelay(200, {
+      ...moved,
+      workspace_dir: GONE.key,
+      warnings: ["The old folder is back: nothing was moved."],
+      moved: false,
+    });
+    const { projects } = renderWithMissing();
+    act(() => dialogs!.openMoveProject!(GONE));
+    typeFolder("/srv/projB");
+
+    fireEvent.click(screen.getByRole("button", { name: "Move" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(toast.warning).toHaveBeenCalledWith(
+      "The old folder is back: nothing was moved.",
+      expect.anything()
+    );
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(projects.followMove).not.toHaveBeenCalled();
+  });
+
+  /** The relay answers once the returned function is called. */
+  function stubSlowRelay() {
+    let answer: (status: number, body: unknown) => void = () => {};
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        () =>
+          new Promise<Response>((resolve) => {
+            answer = (status, body) =>
+              resolve(new Response(JSON.stringify(body), { status }));
+          })
+      )
+    );
+    return (status: number, body: unknown) => answer(status, body);
+  }
+
+  describe("closed while the move runs", () => {
+    async function startAndClose(folder = "/srv/projB") {
+      const answer = stubSlowRelay();
+      const rendered = renderWithMissing();
+      act(() => dialogs!.openMoveProject!(GONE));
+      typeFolder(folder);
+      fireEvent.click(screen.getByRole("button", { name: "Move" }));
+      await screen.findByText(/Moving projB's/);
+
+      // The footer's button, not the dialog's corner one: it closes, the
+      // move goes on.
+      const close = screen
+        .getAllByRole("button", { name: "Close" })
+        .find((button) => button.querySelector(".sr-only") === null)!;
+      fireEvent.click(close);
+
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      // A plain toast, which can be closed, until the move ends.
+      expect(toast).toHaveBeenCalledWith(expect.stringContaining("projB"), {
+        duration: Infinity,
+      });
+      return { answer, ...rendered };
+    }
+
+    /** The duration an outcome toast ends up with: sonner merges its
+     *  options over the moving toast's. */
+    const durationOver = (options: unknown) =>
+      ({ duration: Infinity, ...(options as object) }.duration);
+
+    it("turns the moving toast into the success, which then goes away", async () => {
+      const { answer, projects } = await startAndClose();
+
+      await act(async () => answer(200, moved));
+
+      expect(toast.success).toHaveBeenCalledWith(
+        expect.stringContaining("2 conversations"),
+        expect.objectContaining({ id: "move-toast" })
+      );
+      expect(durationOver(vi.mocked(toast.success).mock.calls[0][1])).not.toBe(
+        Infinity
+      );
+      expect(projects.followMove).toHaveBeenCalledWith(GONE.key, "/srv/projB");
+      expect(projects.refresh).toHaveBeenCalled();
+    });
+
+    it("turns the moving toast into the failure, naming the folder sent", async () => {
+      const { answer } = await startAndClose('  "/srv/projB"  ');
+
+      await act(async () =>
+        answer(409, { error: "busy", detail: "A conversation is running." })
+      );
+
+      expect(toast.error).toHaveBeenCalledWith(
+        "A conversation is running.",
+        expect.objectContaining({
+          id: "move-toast",
+          description: "projB → /srv/projB",
+        })
+      );
+      expect(durationOver(vi.mocked(toast.error).mock.calls[0][1])).toBe(
+        15_000
+      );
+      expect(toast.success).not.toHaveBeenCalled();
+    });
+
+    it("offers no other move of the project until its move fails", async () => {
+      const { answer } = await startAndClose();
+      expect(dialogs!.moving?.has(GONE.key)).toBe(true);
+
+      await act(async () =>
+        answer(409, { error: "busy", detail: "A conversation is running." })
+      );
+
+      expect(dialogs!.moving?.has(GONE.key)).toBe(false);
+    });
+
+    it("offers no other move of a moved project until the list is read again", async () => {
+      const { answer, projects } = await startAndClose();
+      let listRead: () => void = () => {};
+      vi.mocked(projects.refresh).mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            listRead = () => resolve(projects.projects);
+          })
+      );
+
+      await act(async () => answer(200, moved));
+      expect(dialogs!.moving?.has(GONE.key)).toBe(true);
+
+      await act(async () => listRead());
+      expect(dialogs!.moving?.has(GONE.key)).toBe(false);
+    });
+
+    it("keeps showing the dialog's own choice while it is being moved", async () => {
+      stubSlowRelay();
+      renderWithMissing();
+      act(() => dialogs!.openAddProject());
+      typeFolder("/srv/projB");
+      fireEvent.click(screen.getByRole("radio", { name: /projB/ }));
+      fireEvent.click(screen.getByRole("button", { name: "Move" }));
+      await screen.findByText(/Moving projB's/);
+
+      expect(dialogs!.moving?.has(GONE.key)).toBe(true);
+      expect(
+        (screen.getByRole("radio", { name: /projB/ }) as HTMLInputElement)
+          .checked
+      ).toBe(true);
+    });
+
+    it("doesn't offer a project being moved when adding a folder", async () => {
+      await startAndClose();
+
+      act(() => dialogs!.openAddProject());
+      typeFolder("/srv/projB");
+
+      const choices = screen.getAllByRole("radio");
+      expect(
+        choices.map((choice) => choice.closest("label")!.textContent)
+      ).toEqual([
+        expect.stringMatching(/new project/),
+        expect.stringContaining(OTHER_GONE.key),
+      ]);
+    });
+
+    it("turns the moving toast into the first warning when nothing moved", async () => {
+      const { answer } = await startAndClose();
+
+      await act(async () =>
+        answer(200, {
+          ...moved,
+          workspace_dir: GONE.key,
+          warnings: ["The old folder is back.", "Another note."],
+          moved: false,
+        })
+      );
+
+      const calls = vi.mocked(toast.warning).mock.calls;
+      expect(calls.map(([text]) => text)).toEqual([
+        "The old folder is back.",
+        "Another note.",
+      ]);
+      expect(calls[0][1]).toMatchObject({ id: "move-toast" });
+      expect(durationOver(calls[0][1])).toBe(15_000);
+      expect(calls[1][1]).not.toHaveProperty("id");
+      expect(toast.success).not.toHaveBeenCalled();
+    });
+  });
+
+  it("can't be closed while a project is being added", async () => {
+    stubSlowRelay();
+    renderWithMissing();
+    act(() => dialogs!.openAddProject());
+    typeFolder("/srv/new");
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    await screen.findByText(/Adding the project/);
+
+    expect(
+      screen.getByRole("button", { name: "Cancel" }).hasAttribute("disabled")
+    ).toBe(true);
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+
+    expect(screen.queryByRole("dialog")).not.toBeNull();
+    expect(toast).not.toHaveBeenCalled();
   });
 });
 
