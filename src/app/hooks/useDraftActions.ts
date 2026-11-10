@@ -28,8 +28,9 @@ export interface DecisionResult {
     draft: Draft;
     message: string;
     changed?: boolean;
-    /** Never sent: an earlier draft of the batch drew a failure of the
-     *  relay itself, which would repeat for this one. */
+    /** Never sent: an earlier draft of the batch drew a failure that
+     *  would repeat for this one (the relay's own, or the core refusing
+     *  the relay's secret). */
     unsent?: boolean;
   }>;
 }
@@ -243,13 +244,17 @@ function isScope(value: unknown): value is DraftScope {
   return value === "workspace" || value === "global";
 }
 
-/** Whether a failure is the relay's own (the fetch to the WebUI server
- *  rejected, or one of the relay's refusals): every further draft of the
- *  batch would draw it again, and each request may wait out the relay's
- *  timeout first. */
+/** Whether a failure is the same for every draft: the relay's own (the
+ *  fetch to the WebUI server rejected, or one of the relay's refusals), or
+ *  the core refusing the relay's secret (the WebUI and the core use
+ *  different data folders). Every further draft of the batch would draw it
+ *  again, and each request may wait out the relay's timeout first. */
 function repeatsForEveryDraft(answer: Answer): boolean {
   if (answer === "network") return true;
-  return typeof answer.error === "string" && isRelayRefusal(answer.error);
+  if (typeof answer.error !== "string") return false;
+  return (
+    answer.error === "local_secret_required" || isRelayRefusal(answer.error)
+  );
 }
 
 /** The one line for the drafts a batch cut short never sent. */
@@ -260,8 +265,8 @@ function notSentLine(n: number): string {
 }
 
 /** Send the drafts one after another. The batch ends at the first failure
- *  of the relay itself: the drafts after it are not sent (`unsent`, all
- *  with the one line that counts them). */
+ *  that would repeat for every draft: the drafts after it are not sent
+ *  (`unsent`, all with the one line that counts them). */
 async function decideAll(
   drafts: Draft[],
   bodyOf: (d: Draft) => Parameters<typeof post>[0],

@@ -775,26 +775,28 @@ describe("useDraftActions fixes", () => {
   });
 
   it("failures show one line each, identical lines once", async () => {
-    // The core's own refusals: each draft is asked (a refusal of the relay
-    // itself ends the batch, below).
+    // The core's refusals of one draft: each draft is asked (a failure that
+    // repeats for every draft ends the batch, below). Two drafts of one
+    // name get the same line.
     stubFetch([
-      [403, { error: "local_secret_required" }],
-      [403, { error: "local_secret_required" }],
       [404, { error: "not_found" }],
+      [404, { error: "not_found" }],
+      [409, { error: "no_project" }],
     ]);
     const { result } = setup();
     await act(async () => {
       await result.current.approve([
-        draft({ proposal_id: "a" }),
-        draft({ proposal_id: "b" }),
+        draft({ proposal_id: "a", skill_name: "twin" }),
+        draft({ proposal_id: "b", skill_name: "twin" }),
         draft({ proposal_id: "c" }),
       ]);
     });
+    expect(calls).toHaveLength(3);
     expect(toast.error).toHaveBeenCalledTimes(1);
-    const lines = errorLines();
-    expect(lines).toHaveLength(2);
-    expect(lines[0]).toMatch(/local secret/);
-    expect(lines[1]).toBe("c is no longer there.");
+    expect(errorLines()).toEqual([
+      "twin is no longer there.",
+      "c belongs to no registered project, so it wasn't changed.",
+    ]);
     expect(toast.error.mock.calls[0][1]).toBeUndefined();
   });
 
@@ -1392,7 +1394,7 @@ describe("Undo after a failure that may not have reached the core", () => {
     const undo = await approved();
     stubReverts([
       [200, okRevert],
-      [403, { error: "secret_rejected" }],
+      [503, { error: "secret_missing" }],
     ]);
     await act(async () => {
       await undo();
@@ -1484,6 +1486,36 @@ describe("a bulk decision stops at the first failure of the relay itself", () =>
     expect(errorLines()[0]).not.toMatch(/not sent/);
   });
 
+  // The core's own 403 (the WebUI and the core use different data folders)
+  // is the same for every draft too.
+  it("stops at the core's local_secret_required like a relay refusal", async () => {
+    stubFetch([
+      [403, { error: "local_secret_required" }],
+      [403, { error: "local_secret_required" }],
+      [403, { error: "local_secret_required" }],
+    ]);
+    const { result } = setup();
+    const [a, b, c] = four();
+    let out: DecisionResult | undefined;
+    await act(async () => {
+      out = await result.current.approve([a, b, c]);
+    });
+    expect(calls.map((body) => body.proposal_id)).toEqual(["a"]);
+    const secret =
+      "EvoScientist refused this machine's local secret: the WebUI and EvoScientist use different data folders.";
+    const rest = "2 more drafts were not sent.";
+    expect(out).toEqual({
+      done: [],
+      failed: [
+        { draft: a, message: secret },
+        { draft: b, message: rest, unsent: true },
+        { draft: c, message: rest, unsent: true },
+      ],
+    });
+    expect(toast.error).toHaveBeenCalledTimes(1);
+    expect(errorLines()).toEqual([secret, rest]);
+  });
+
   it("a refusal of the core for one draft doesn't stop the rest", async () => {
     stubFetch([
       [409, { error: "project_not_served" }],
@@ -1551,7 +1583,7 @@ describe("a bulk decision stops at the first failure of the relay itself", () =>
     await act(async () => {
       await result.current.approve(four().slice(0, 2));
     });
-    stubFetch([[403, { error: "secret_rejected" }]]);
+    stubFetch([[503, { error: "secret_missing" }]]);
     await act(async () => {
       await toast.success.mock.calls[0][1].action.onClick();
     });
@@ -1741,15 +1773,17 @@ describe("decisionError", () => {
     expect(decisionError({ status: 500 }, d, labels)).toBe(
       "n couldn't be changed (HTTP 500)."
     );
-    const secret = decisionError(
-      { status: 403, error: "secret_rejected" },
-      d,
-      labels
+    // The relay can't read the secret; the core refuses the one it sent.
+    expect(
+      decisionError({ status: 503, error: "secret_missing" }, d, labels)
+    ).toBe(
+      "The WebUI cannot read EvoScientist's local secret. Start EvoSci once so it creates it, and check that the WebUI and EvoScientist use the same data folder."
     );
-    expect(secret).toMatch(/local secret/);
     expect(
       decisionError({ status: 403, error: "local_secret_required" }, d, labels)
-    ).toBe(secret);
+    ).toBe(
+      "EvoScientist refused this machine's local secret: the WebUI and EvoScientist use different data folders."
+    );
     expect(decisionError({ status: 400, error: "toString" }, d, labels)).toBe(
       "n couldn't be changed (HTTP 400)."
     );

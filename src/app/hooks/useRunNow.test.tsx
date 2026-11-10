@@ -435,13 +435,13 @@ describe("useRunNow", () => {
   });
 
   it("a relay refusal reads as the settings reason", async () => {
-    stubRelay(403, { error: "secret_rejected" });
+    stubRelay(503, { error: "secret_missing" });
     const { result } = renderHook(() => useRunNow(projects));
     await act(async () => {
       await result.current.run(B);
     });
     expect(toast.error).toHaveBeenCalledWith(
-      autoSkillsReadOnlyReason({ writable: false, reason: "secret_rejected" })
+      autoSkillsReadOnlyReason({ writable: false, reason: "secret_missing" })
     );
   });
 
