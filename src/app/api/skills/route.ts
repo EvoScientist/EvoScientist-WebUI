@@ -194,7 +194,8 @@ const skillNotFound = () =>
 
 /** Remove `<project>/skills/<name>`. The project's own tier only: neither the
  *  global tiers nor their manifest (.installed.yaml lists the global tier's
- *  skills, so recordUninstall stays out of it). */
+ *  skills, so recordUninstall stays out of it). A folder goes only when it
+ *  holds a SKILL.md; a link of that name is unlinked whatever it points at. */
 async function uninstallFromProject(req: NextRequest, name: string) {
   try {
     const root = await projectDir(req);
@@ -215,6 +216,12 @@ async function uninstallFromProject(req: NextRequest, name: string) {
     } else if (stat?.isDirectory()) {
       const real = await fs.realpath(entry);
       if (!real.startsWith(realTier + sep)) return skillNotFound();
+      // Only what the listing shows as a skill: a folder whose SKILL.md is
+      // read inside the tier. The project is the user's own repo, and any
+      // other folder under skills/ (skills/data/) is theirs to keep.
+      if ((await readSkillFileIn(realTier, name, "SKILL.md")) === null) {
+        return skillNotFound();
+      }
       await fs.rm(real, { recursive: true, force: true });
     } else {
       return skillNotFound();

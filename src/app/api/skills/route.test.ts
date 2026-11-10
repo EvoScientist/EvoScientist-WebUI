@@ -294,6 +294,44 @@ describe("/api/skills for a project", () => {
     expect(recordUninstall).not.toHaveBeenCalled();
   });
 
+  // A project folder is the user's own repo: only what the listing shows as
+  // a skill (a folder that holds a SKILL.md) is ever removed.
+  it("removes only a folder that holds a SKILL.md", async () => {
+    mkdirSync(join(project, "skills", "data"), { recursive: true });
+    writeFileSync(join(project, "skills", "data", "results.csv"), "a,b\n");
+    const res = await uninstall("data");
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: "Skill not found" });
+    expect(existsSync(join(project, "skills", "data", "results.csv"))).toBe(
+      true
+    );
+    // A real skill beside it still goes, and only that one.
+    skill(join(project, "skills"), "real-skill");
+    expect((await uninstall("real-skill")).status).toBe(200);
+    expect(existsSync(join(project, "skills", "real-skill"))).toBe(false);
+    expect(existsSync(join(project, "skills", "data", "results.csv"))).toBe(
+      true
+    );
+    expect(recordUninstall).not.toHaveBeenCalled();
+  });
+
+  it("keeps a folder whose SKILL.md links out of the project's skills", async () => {
+    // The listing leaves it out, so it is not a skill to remove either.
+    writeFileSync(join(outside, "SECRET.md"), "---\nname: secret\n---\n");
+    mkdirSync(join(project, "skills", "linked-file"), { recursive: true });
+    writeFileSync(join(project, "skills", "linked-file", "notes.txt"), "keep");
+    symlinkSync(
+      join(outside, "SECRET.md"),
+      join(project, "skills", "linked-file", "SKILL.md")
+    );
+    const res = await uninstall("linked-file");
+    expect(res.status).toBe(404);
+    expect(
+      existsSync(join(project, "skills", "linked-file", "notes.txt"))
+    ).toBe(true);
+    expect(existsSync(join(outside, "SECRET.md"))).toBe(true);
+  });
+
   it("removes a linked skill folder as a link and keeps what it points at", async () => {
     skill(outside, "linked");
     mkdirSync(join(project, "skills"));
