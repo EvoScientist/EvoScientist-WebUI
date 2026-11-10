@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -856,6 +857,116 @@ describe("AutoSkillsSettings", () => {
       }
     }
   );
+
+  // That line is about a save the page can't tell the fate of. It goes once
+  // a read shows what is saved now, and only then: SWR's mutate answers with
+  // the payload it had when the read fails.
+  const LOST = /They are being read again\./;
+  const auto = () =>
+    screen.getByLabelText(
+      "Auto — install drafts without asking"
+    ) as HTMLInputElement;
+  /** A save whose answer was lost, with its re-read still out. `settle`
+   *  ends that re-read (an Error rejects it), then renders the panel again
+   *  as a new settings answer would. */
+  const lostSave = async (later: Array<() => Promise<unknown>> = []) => {
+    let end!: (answer: unknown) => void;
+    let fail!: (error: Error) => void;
+    const reads = [
+      () =>
+        new Promise<unknown>((resolve, reject) => {
+          end = resolve;
+          fail = reject;
+        }),
+      ...later,
+    ];
+    // A plain function, as above: a mock would handle a rejection itself.
+    hooks.refresh = (() =>
+      (reads.shift() as () => Promise<unknown>)()) as typeof hooks.refresh;
+    const onOpenChange = vi.fn();
+    const view = panel(onOpenChange);
+    fireEvent.click(auto());
+    fetchMock.mockRejectedValueOnce(new Error("down"));
+    fireEvent.click(save());
+    expect(await screen.findByText(LOST)).toBeTruthy();
+    await waitFor(() =>
+      expect((save() as HTMLButtonElement).disabled).toBe(false)
+    );
+    const settle = async (answer: unknown) => {
+      await act(async () => {
+        if (answer instanceof Error) fail(answer);
+        else end(answer);
+        await new Promise((r) => setTimeout(r, 10));
+      });
+      view.rerender(
+        <AutoSkillsSettings
+          open
+          onOpenChange={onOpenChange}
+        />
+      );
+    };
+    return { settle, onOpenChange };
+  };
+  /** What a read finds once the lost save did reach the core. */
+  const savedAfterAll = () => {
+    hooks.settings = { ...SAVED, memory_skill_synthesis_mode: "auto" };
+    hooks.revision = "rev2";
+    return { ...oldPayload(), settings: hooks.settings, revision: "rev2" };
+  };
+
+  it("that line goes once the re-read answers another revision than the save sent", async () => {
+    const { settle, onOpenChange } = await lostSave();
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).revision).toBe("rev1");
+    // The save did go through: the re-read brings it.
+    await settle(savedAfterAll());
+    // Shown as saved: no edit is left, and nothing says otherwise.
+    expect(auto().checked).toBe(true);
+    expect((save() as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByText(LOST)).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it.each<[string, () => unknown]>([
+    // What SWR answers when the read fails, and what a read that worked
+    // answers when the save never reached the core.
+    ["answers the revision the save sent", () => oldPayload()],
+    ["answers nothing", () => undefined],
+    [
+      "answers a payload without a revision",
+      () => {
+        const { revision: _none, ...rest } = oldPayload();
+        void _none;
+        return rest;
+      },
+    ],
+    ["rejects", () => new Error("down")],
+  ])("that line stays when the re-read %s", async (_how, answer) => {
+    const { settle } = await lostSave();
+    await settle(answer());
+    expect(screen.getByText(LOST)).toBeTruthy();
+    // Still an edit, to save again.
+    expect(auto().checked).toBe(true);
+    expect((save() as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("a line a later save put there isn't taken away by the lost save's re-read", async () => {
+    // The second save meets the first one's change; its own re-read answers.
+    const { settle } = await lostSave([async () => savedAfterAll()]);
+    respond(409, { error: "revision_mismatch", revision: "rev2" });
+    fireEvent.click(save());
+    const conflict =
+      "These settings changed elsewhere. Showing what is saved now.";
+    expect(await screen.findByText(conflict)).toBeTruthy();
+    // The first save's re-read lands after it.
+    await settle({
+      ...oldPayload(),
+      settings: hooks.settings,
+      revision: "rev2",
+    });
+    expect(screen.getByText(conflict)).toBeTruthy();
+  });
 
   it("words any other refusal with the settings wording", async () => {
     panel();

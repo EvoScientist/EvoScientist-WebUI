@@ -138,6 +138,10 @@ function withRevision(value: unknown): value is SettingsPayload {
   );
 }
 
+/** After a save the WebUI's own server never answered. */
+const SAVE_UNANSWERED =
+  "The WebUI server did not answer, so the page can't tell whether the settings were saved. They are being read again.";
+
 const CHECKBOX =
   "size-4 rounded border border-muted-foreground bg-transparent text-[var(--brand-solid)] focus:ring-0 focus:ring-offset-0 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background";
 const TOUCH_ROW = "max-md:min-h-11";
@@ -304,11 +308,22 @@ export function AutoSkillsSettings({
         // lost: never "nothing was saved". The settings are read again, in
         // the background (the browser reads them from the backend itself);
         // a save that did go through then shows as saved, its edits gone.
-        setMessage(
-          "The WebUI server did not answer, so the page can't tell whether the settings were saved. They are being read again."
-        );
+        setMessage(SAVE_UNANSWERED);
         try {
-          void Promise.resolve(refresh()).catch(() => {});
+          void Promise.resolve(refresh())
+            .then((fresh) => {
+              // The panel now shows what is saved, so the line goes, unless
+              // a later save put another one there. Only for a new read:
+              // SWR's mutate answers with the cached payload when the read
+              // fails, so the answer must carry another revision than the
+              // one this save sent (the rule after a conflict, below).
+              if (withRevision(fresh) && fresh.revision !== sentRevision) {
+                setMessage((shown) =>
+                  shown === SAVE_UNANSWERED ? null : shown
+                );
+              }
+            })
+            .catch(() => {});
         } catch {
           // ignore
         }
