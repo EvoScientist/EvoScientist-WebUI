@@ -530,11 +530,17 @@ describe("statusLine", () => {
     expect(line(CADENCE, TIME)).toBe(
       "Every project · drafts install automatically"
     );
-    expect(line(MODE, CADENCE, TIME)).toBe("Every project");
+
+    // With all three hidden nothing is left to say but that: the line never
+    // reads only "Every project".
+    expect(line(MODE, CADENCE, TIME)).toBe(BY_ENV);
 
     // A saved off that nothing hides is still off.
     expect(
       statusLine({ ...saved, [ENABLED]: false }, new Set([MODE, TIME]))
+    ).toBe("AutoSkills is off in every project");
+    expect(
+      statusLine({ ...saved, [ENABLED]: false }, new Set([MODE, CADENCE, TIME]))
     ).toBe("AutoSkills is off in every project");
     // No override: the whole line, as without the argument.
     expect(line()).toBe(

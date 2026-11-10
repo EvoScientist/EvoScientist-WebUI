@@ -371,19 +371,22 @@ const CADENCE_TEXT: Record<string, string> = {
 
 const NO_FIELDS: ReadonlySet<string> = new Set();
 
+const SET_BY_ENV =
+  "AutoSkills is set by an environment variable on the machine that runs EvoScientist.";
+
 /** The one-line summary of the AutoSkills settings, or null before they
  *  are read. `settings` holds the saved values; `shadowed` names the fields
  *  an override hides in the running backend (an environment variable; what
  *  it says isn't sent). Such a value is never stated: with on / off hidden
- *  the line says only that, and a hidden mode, cadence or time is left out. */
+ *  the line says only that, and a hidden mode, cadence or time is left out.
+ *  With all three hidden nothing is left to state, so the line says that
+ *  too. */
 export function statusLine(
   settings: Record<string, unknown> | undefined,
   shadowed: ReadonlySet<string> = NO_FIELDS
 ): string | null {
   if (!settings) return null;
-  if (shadowed.has("memory_skill_synthesis_enabled")) {
-    return "AutoSkills is set by an environment variable on the machine that runs EvoScientist.";
-  }
+  if (shadowed.has("memory_skill_synthesis_enabled")) return SET_BY_ENV;
   if (settings.memory_skill_synthesis_enabled === false) {
     return "AutoSkills is off in every project";
   }
@@ -408,6 +411,8 @@ export function statusLine(
         : "you review each draft"
     );
   }
+  // Only "Every project": the schedule and the mode are all hidden.
+  if (parts.length === 1) return SET_BY_ENV;
   return parts.join(" · ");
 }
 

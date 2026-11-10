@@ -1584,6 +1584,16 @@ describe("DraftsPage", () => {
       screen.getByText("Every project · runs weekly at 03:00")
     ).toBeTruthy();
     expect(screen.queryByText(/drafts install automatically/)).toBeNull();
+
+    // Mode, cadence and time all hidden: nothing is left to state.
+    hooks.sources = {
+      memory_skill_synthesis_mode: env,
+      memory_skill_synthesis_cadence: env,
+      memory_skill_synthesis_time: env,
+    };
+    view.rerender(page());
+    expect(screen.getByText(BY_ENV)).toBeTruthy();
+    expect(screen.queryByText(/^Every project/)).toBeNull();
   });
 
   it("the breadcrumb returns to Research Skills", async () => {
