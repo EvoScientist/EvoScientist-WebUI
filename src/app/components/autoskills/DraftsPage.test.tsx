@@ -2510,26 +2510,33 @@ describe("DraftsPage", () => {
       expect(hooks.reject).not.toHaveBeenCalled();
       expect(screen.queryByRole("dialog")).toBeNull();
 
-      // Another draft opened meanwhile is busy, but isn't the one checked.
+      // Another draft opened meanwhile ends the check: that draft can be
+      // decided at once.
       act(() => q.set("draftId", "y"));
       expect(
         (pane().getByRole("button", { name: "Approve" }) as HTMLButtonElement)
           .disabled
-      ).toBe(true);
-      // Back on x the check still reads, but the click was given up when y
-      // was opened: its answer asks nothing.
+      ).toBe(false);
+      // Back on x it reads Approve again: the click was given up when y was
+      // opened, and the answer its read gets now asks nothing.
       act(() => q.set("draftId", "x"));
+      expect(
+        pane().queryByRole("button", { name: "Checking files…" })
+      ).toBeNull();
+      await act(async () => skillMd(new Response("# skill")));
+      expect(
+        (pane().getByRole("button", { name: "Approve" }) as HTMLButtonElement)
+          .disabled
+      ).toBe(false);
+      expect(screen.queryByRole("dialog")).toBeNull();
+
+      // A new click reads SKILL.md again (the read that was stopped left
+      // nothing behind), then asks.
+      fireEvent.click(pane().getByRole("button", { name: "Approve" }));
       expect(
         pane().getByRole("button", { name: "Checking files…" })
       ).toBeTruthy();
       await act(async () => skillMd(new Response("# skill")));
-      await waitFor(() =>
-        expect(pane().getByRole("button", { name: "Approve" })).toBeTruthy()
-      );
-      expect(screen.queryByRole("dialog")).toBeNull();
-
-      // A new click: SKILL.md was read, so it asks at once.
-      fireEvent.click(pane().getByRole("button", { name: "Approve" }));
       const dialog = await screen.findByRole("dialog", {
         name: "Install files you haven't seen?",
       });
@@ -2749,6 +2756,16 @@ describe("DraftsPage", () => {
       toastSpy = errors;
       return errors;
     };
+    /** Checks that answer only when told, whatever stops them (nothing the
+     *  page can't show): each with what stops it. */
+    function ownChecks() {
+      const checks: Array<{ stop?: AbortSignal; answer: () => void }> = [];
+      hooks.check = (_drafts, stop) =>
+        new Promise((resolve) =>
+          checks.push({ stop, answer: () => resolve(new Map()) })
+        );
+      return checks;
+    }
 
     it("an approval checked while another change is being saved sends nothing, and says so", async () => {
       const errors = spyErrors();
@@ -2861,9 +2878,9 @@ describe("DraftsPage", () => {
 
     it("leaving the open draft or the tab while its files are checked gives the click up for good, though they come back", async () => {
       const errors = spyErrors();
-      const waiting = holdReads();
-      // One draft per round: a file read once is known after, and its next
-      // check wouldn't read.
+      // Leaving stops the check; these answer all the same, and the page
+      // must drop what they say.
+      const checks = ownChecks();
       const [x1, x2, x3] = ["x1", "x2", "x3"].map((id, i) =>
         holding(
           {
@@ -2884,19 +2901,22 @@ describe("DraftsPage", () => {
       const pane = () =>
         within(screen.getByRole("heading", { level: 3 }).parentElement!);
       const place = () => pane().getByLabelText("Install into");
-      const checkEnds = () =>
-        waitFor(() =>
-          expect(
-            screen.queryByRole("button", { name: "Checking files…" })
-          ).toBeNull()
-        );
+      /** The check left behind: stopped, and "Checking files…" gone. */
+      const leftCheck = () => {
+        const check = checks.shift()!;
+        expect(check.stop?.aborted).toBe(true);
+        expect(
+          screen.queryByRole("button", { name: "Checking files…" })
+        ).toBeNull();
+        return check;
+      };
       // The check answers with an Undo in flight: what the page would say
       // then isn't said for a click given up.
       const answerWhileBusy = async () => {
+        const check = leftCheck();
         hooks.busy = true;
         view.rerender(page());
-        await act(async () => waiting.shift()!());
-        await checkEnds();
+        await act(async () => check.answer());
         hooks.busy = false;
         view.rerender(page());
       };
@@ -2924,12 +2944,130 @@ describe("DraftsPage", () => {
       fireEvent.click(pane().getByRole("button", { name: "Approve" }));
       act(() => q.set("draftId", "y"));
       act(() => q.set("draftId", "x3"));
-      await act(async () => waiting.shift()!());
-      await checkEnds();
+      const last = leftCheck();
+      await act(async () => last.answer());
 
+      expect(checks).toEqual([]);
       expect(hooks.approve).not.toHaveBeenCalled();
       expect(screen.queryByRole("dialog")).toBeNull();
       expect(errors).not.toHaveBeenCalled();
+    });
+
+    it("leaving the open draft stops its file check: its reads end, every decision is back at once, and a return shows Approve", async () => {
+      const errors = spyErrors();
+      const waiting: Array<() => void> = [];
+      const fetchMock = serveFiles(
+        () =>
+          new Promise<Response>((r) =>
+            waiting.push(() => r(new Response("text")))
+          )
+      );
+      const [x, y, w] = ["x", "y", "w"].map((id, i) =>
+        holding(
+          { proposal_id: id, created_at: `2026-10-0${i + 1}T09:00:00Z` },
+          [["SKILL.md", 10]]
+        )
+      );
+      const z = draft({ proposal_id: "z", created_at: "2026-09-01T09:00:00Z" });
+      ready([x, y, w, z]);
+      q.values.set("draftId", "x");
+      render(page());
+      pick("z");
+      const pane = () =>
+        within(screen.getByRole("heading", { level: 3 }).parentElement!);
+      const stopped = (call: number) =>
+        (fetchMock.mock.calls[call][1]?.signal as AbortSignal).aborted;
+      const usable = (box: ReturnType<typeof within>) =>
+        ["Approve", "Reject"].map(
+          (name) =>
+            !(box.getByRole("button", { name }) as HTMLButtonElement).disabled
+        );
+      const checkingNow = () =>
+        screen.queryByRole("button", { name: "Checking files…" });
+
+      // Another draft opened: it can be decided at once, and so can the
+      // selection; x's read is stopped.
+      fireEvent.click(pane().getByRole("button", { name: "Approve" }));
+      expect(checkingNow()).toBeTruthy();
+      expect(stopped(0)).toBe(false);
+      act(() => q.set("draftId", "y"));
+      expect(checkingNow()).toBeNull();
+      expect(usable(pane())).toEqual([true, true]);
+      expect(usable(within(selection()!))).toEqual([true, true]);
+      expect(stopped(0)).toBe(true);
+
+      // Back on x: Approve, not "Checking files…". The read that was
+      // stopped answers late, to nobody.
+      act(() => q.set("draftId", "x"));
+      expect(checkingNow()).toBeNull();
+      expect(usable(pane())).toEqual([true, true]);
+      await act(async () => waiting.shift()!());
+      expect(hooks.approve).not.toHaveBeenCalled();
+      expect(screen.queryByRole("dialog")).toBeNull();
+
+      // A new click reads the file again (the stopped read left nothing
+      // behind), and goes.
+      fireEvent.click(pane().getByRole("button", { name: "Approve" }));
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(stopped(1)).toBe(false);
+      await act(async () => waiting.shift()!());
+      await waitFor(() =>
+        expect(hooks.approve.mock.calls).toEqual([[[x], { x: "workspace" }]])
+      );
+      hooks.approve.mockClear();
+
+      // The pane closed.
+      act(() => q.set("draftId", "y"));
+      fireEvent.click(pane().getByRole("button", { name: "Approve" }));
+      expect(checkingNow()).toBeTruthy();
+      act(() => q.set("draftId", null));
+      expect(usable(within(selection()!))).toEqual([true, true]);
+      expect(stopped(2)).toBe(true);
+
+      // Another tab shown.
+      act(() => q.set("draftId", "w"));
+      fireEvent.click(pane().getByRole("button", { name: "Approve" }));
+      expect(checkingNow()).toBeTruthy();
+      fireEvent.click(screen.getByRole("tab", { name: /^Approved/ }));
+      expect(stopped(3)).toBe(true);
+      fireEvent.click(screen.getByRole("tab", { name: /^Pending/ }));
+      expect(checkingNow()).toBeNull();
+      expect(usable(pane())).toEqual([true, true]);
+
+      await act(async () => {
+        while (waiting.length > 0) waiting.shift()!();
+      });
+      expect(hooks.approve).not.toHaveBeenCalled();
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(errors).not.toHaveBeenCalled();
+    });
+
+    it("the bar's check goes on while drafts are opened and closed", async () => {
+      const waiting: Array<() => void> = [];
+      const fetchMock = serveFiles(
+        () =>
+          new Promise<Response>((r) =>
+            waiting.push(() => r(new Response("text")))
+          )
+      );
+      const c = holding({ proposal_id: "c" }, [["SKILL.md", 10]]);
+      const x = draft({ proposal_id: "x", created_at: "2026-10-01T09:00:00Z" });
+      const y = draft({ proposal_id: "y", created_at: "2026-09-01T09:00:00Z" });
+      ready([c, x, y]);
+      render(page());
+      pick("c");
+      approveSelected();
+      for (const id of ["x", "y", null]) {
+        act(() => q.set("draftId", id));
+        expect(
+          within(selection()!).getByRole("button", { name: "Checking files…" })
+        ).toBeTruthy();
+      }
+      expect((fetchMock.mock.calls[0][1]?.signal as AbortSignal).aborted).toBe(
+        false
+      );
+      await act(async () => waiting.shift()!());
+      await waitFor(() => expect(hooks.approve.mock.calls).toEqual([[[c]]]));
     });
 
     it("a check of a backend left and come back to is given up for good", async () => {
@@ -3052,7 +3190,8 @@ describe("DraftsPage", () => {
 
     it("leaving the open draft while its files are checked cancels its approval, silently", async () => {
       const errors = spyErrors();
-      const waiting = holdReads();
+      // Leaving stops the check; these answer all the same.
+      const checks = ownChecks();
       const x = holding({ proposal_id: "x" }, [["SKILL.md", 10]]);
       const y = holding(
         { proposal_id: "y", created_at: "2026-10-01T09:00:00Z" },
@@ -3067,17 +3206,18 @@ describe("DraftsPage", () => {
       const view = render(page());
       const pane = () =>
         within(screen.getByRole("heading", { level: 3 }).parentElement!);
-      // Each time with an Undo in flight when the check answers: what the
-      // page would say then isn't said for a draft the user left.
+      // Each time the check left behind is stopped, and answers with an
+      // Undo in flight: what the page would say then isn't said for a draft
+      // the user left.
       const answerWhileBusy = async () => {
+        const check = checks.shift()!;
+        expect(check.stop?.aborted).toBe(true);
+        expect(
+          screen.queryByRole("button", { name: "Checking files…" })
+        ).toBeNull();
         hooks.busy = true;
         view.rerender(page());
-        await act(async () => waiting.shift()!());
-        await waitFor(() =>
-          expect(
-            screen.queryByRole("button", { name: "Checking files…" })
-          ).toBeNull()
-        );
+        await act(async () => check.answer());
         hooks.busy = false;
         view.rerender(page());
       };

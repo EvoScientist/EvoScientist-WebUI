@@ -324,7 +324,7 @@ export function DraftsPage() {
   // and no decision starts.
   const checkFiles = useDraftFilesCheck();
   const [checking, setChecking] = useState<
-    | (({ from: "bulk" } | { from: "pane"; id: string }) & {
+    | (({ from: "bulk" } | { from: "pane"; id: string; visit: number }) & {
         deployment: string;
       })
     | null
@@ -332,12 +332,13 @@ export function DraftsPage() {
   // Another backend: the page leaves "Checking files…" at once.
   if (checking && checking.deployment !== deployment) setChecking(null);
   const checkSeq = useRef(0);
-  // The check reading now: its token, what stops its reads, and the backend
-  // it reads.
+  // The check reading now: its token, what stops its reads, the backend it
+  // reads, and for the pane's the visit of the draft it was clicked in.
   const checkRun = useRef<{
     token: number;
     stop: AbortController;
     deployment: string;
+    visit: number | null;
   } | null>(null);
   useEffect(
     () => () => {
@@ -363,14 +364,35 @@ export function DraftsPage() {
     [deployment]
   );
   // The draft open and the tab: each change (another draft, the pane closed,
-  // another tab) gives up a pane's check clicked before it for good, even
-  // when that draft and tab come back.
+  // another tab) is a new visit, and ends a pane's check clicked in the one
+  // before for good, even when that draft and tab come back: the page
+  // leaves "Checking files…" at once, so every decision is available again,
+  // and the check's reads are stopped and its answer dropped. The bar's
+  // check isn't tied to a visit and goes on.
   const [opened, setOpened] = useState({ draftId, status, visit: 0 });
   if (opened.draftId !== draftId || opened.status !== status) {
     setOpened({ draftId, status, visit: opened.visit + 1 });
   }
+  if (checking?.from === "pane" && checking.visit !== opened.visit) {
+    setChecking(null);
+  }
   const openedNow = useRef(opened.visit);
   openedNow.current = opened.visit;
+  const visit = opened.visit;
+  useEffect(
+    () => () => {
+      // The visit is over: the pane's check clicked in it stops reading. (It
+      // reads the files itself, not through the Files tab's cache, so a read
+      // cut short leaves nothing there.) A check started in the next visit
+      // before this runs is left alone.
+      if (checkRun.current?.visit === visit) {
+        checkSeq.current += 1;
+        checkRun.current.stop.abort();
+        checkRun.current = null;
+      }
+    },
+    [visit]
+  );
   // The bulk approval the question asks about: only these drafts go, at
   // the versions recorded at the click, whatever is picked meanwhile.
   const [asked, setAsked] = useState<BulkDecision>(NO_DECISION);
@@ -661,17 +683,22 @@ export function DraftsPage() {
 
   /** The files of `drafts` the page can't show: at once when nothing has
    *  to be read; else once read, with `from`'s Approve saying so and the
-   *  page busy meanwhile (null when the page went or talks to another
-   *  backend now). */
+   *  page busy meanwhile (null when the page went, talks to another backend
+   *  now, or left the draft whose pane asked). */
   const checkFor = (
     drafts: readonly Draft[],
-    from: { from: "bulk" } | { from: "pane"; id: string }
+    from: { from: "bulk" } | { from: "pane"; id: string; visit: number }
   ): UnshowableByDraft | Promise<UnshowableByDraft | null> => {
     const stop = new AbortController();
     const out = checkFiles(drafts, stop.signal);
     if (!(out instanceof Promise)) return out;
     const token = ++checkSeq.current;
-    checkRun.current = { token, stop, deployment };
+    checkRun.current = {
+      token,
+      stop,
+      deployment,
+      visit: from.from === "pane" ? from.visit : null,
+    };
     setChecking({ ...from, deployment });
     const done = () => {
       if (token !== checkSeq.current) return false;
@@ -774,8 +801,9 @@ export function DraftsPage() {
   // The open draft's check, for its pane: the files of that draft. Once
   // read, its approval goes on only if that draft stayed open in the tab of
   // the click the whole time (another draft, the pane closed or another tab
-  // is the user's own move: nothing goes, silently, even after coming
-  // back), and only when it can (as the bar's): otherwise nothing goes, the
+  // is the user's own move: the check is stopped and nothing goes, silently,
+  // even after coming back; an answer that lands before the stop is dropped
+  // here), and only when it can (as the bar's): otherwise nothing goes, the
   // click says so, and the pane hears null. The pane itself goes on only
   // with the version clicked.
   const blockedNow = useRef(blockedAfterCheck);
@@ -783,9 +811,8 @@ export function DraftsPage() {
   const checkOpen = (
     d: Draft
   ): UnshowableFile[] | Promise<UnshowableFile[] | null> => {
-    const out = checkFor([d], { from: "pane", id: d.proposal_id });
+    const out = checkFor([d], { from: "pane", id: d.proposal_id, visit });
     if (!(out instanceof Promise)) return out.get(d.proposal_id) ?? [];
-    const visit = opened.visit;
     return out.then((found) => {
       if (!found || openedNow.current !== visit) return null;
       const blocked = blockedNow.current([d]);
