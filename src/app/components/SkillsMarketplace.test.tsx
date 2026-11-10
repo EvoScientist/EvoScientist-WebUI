@@ -454,6 +454,69 @@ describe("SkillsMarketplace skills from memory", () => {
     expect(screen.queryByText("from memory")).toBeNull();
   });
 
+  // A failed re-read comes with the last list read before it, for the
+  // drafts page to keep on screen. The Skills home shows nothing from that
+  // list: no tag in either tier and no banner.
+  it("shows nothing from the list a failed re-read left behind", async () => {
+    mockApi(
+      [],
+      [card("global-skill"), card("global-update")],
+      [card("arxiv-paper-retrieval", "Arxiv Paper Retrieval")]
+    );
+    const drafts = [
+      approved({
+        proposal_id: "g1",
+        scope: "global",
+        approved_skill_path: "/home/you/.evoscientist/skills/global-skill",
+      }),
+      approved({
+        proposal_id: "g2",
+        scope: "global",
+        operation: "update",
+        approved_skill_path: "/home/you/.evoscientist/skills/global-update",
+      }),
+      approved({
+        proposal_id: "p1",
+        approved_skill_path: `${TEST_PROJECT}/skills/arxiv-paper-retrieval`,
+      }),
+      approved({ proposal_id: "w1", status: "pending", approved_at: null }),
+    ];
+    const list = {
+      drafts,
+      counts: { pending: 1, approved: 3, rejected: 0 },
+      byProject: { [TEST_PROJECT]: { pending: 1, approved: 1, rejected: 0 } },
+    };
+    hooks.auto = { status: "ready", list };
+    const view = renderPage();
+
+    // The list as read: the tags and the banner.
+    await screen.findByRole("heading", { name: "This project's skills" });
+    expect(
+      within(titleRow("global-skill")).getByText("from memory")
+    ).toBeTruthy();
+    expect(
+      within(titleRow("global-update")).getByText("updated from memory")
+    ).toBeTruthy();
+    expect(
+      within(titleRow("Arxiv Paper Retrieval")).getByText("from memory")
+    ).toBeTruthy();
+    expect(screen.getByText("1 skill drafted from your memory")).toBeTruthy();
+
+    // Its re-read fails: the skills stay, nothing from the drafts does.
+    hooks.auto = { status: "error", error: new Error("HTTP 500"), list };
+    view.rerender(
+      <TestProjectsProvider value={mockProjects()}>
+        <SkillsMarketplace />
+      </TestProjectsProvider>
+    );
+    expect(screen.getByText("global-skill")).toBeTruthy();
+    expect(screen.getByText("Arxiv Paper Retrieval")).toBeTruthy();
+    expect(screen.queryByText(/from memory/)).toBeNull();
+    expect(screen.queryByText(/drafted from your memory/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Review" })).toBeNull();
+    expect(screen.queryByText(/AutoSkills/)).toBeNull();
+  });
+
   it("tags catalog skills a global draft updated", async () => {
     mockApi(
       [

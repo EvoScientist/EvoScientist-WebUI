@@ -206,4 +206,20 @@ describe("left rail Research Skills count", () => {
     expect(skillsEntry().textContent).toBe("Research Skills");
     expect(screen.queryByLabelText(/drafted skills? to review/)).toBeNull();
   });
+
+  // A failed re-read comes with the last list read before it, for the
+  // drafts page to keep on screen. A count is a claim about now: the rail
+  // shows none from that list, as after a failed read without one.
+  it("no count from the list a failed re-read left behind", () => {
+    ready(9, { [TEST_PROJECT]: 0, [B]: 7, [C]: 2 });
+    const before = nav.auto.list;
+    const view = renderRail();
+    expect(within(skillsEntry()).getByText("9")).toBeTruthy();
+
+    nav.auto = { status: "error", error: new Error("HTTP 500"), list: before };
+    view.rerender(rail());
+    expect(skillsEntry().textContent).toBe("Research Skills");
+    expect(screen.queryByLabelText(/drafted skills? to review/)).toBeNull();
+    expect(screen.queryByTitle(/drafted skills? waits? for review/)).toBeNull();
+  });
 });

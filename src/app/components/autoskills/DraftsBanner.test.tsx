@@ -369,4 +369,61 @@ describe("DraftsBanner", () => {
     );
     expect(view.container.innerHTML).toBe("");
   });
+
+  // A failed re-read comes with the last list read before it, for the
+  // drafts page to keep on screen. The banner's numbers are a claim about
+  // now: it shows nothing from that list, in any of its three states.
+  it("shows nothing from the list a failed re-read left behind", () => {
+    const again = () => (
+      <TestProjectsProvider value={mockProjects(readyProjects(A, B))}>
+        <DraftsBanner />
+      </TestProjectsProvider>
+    );
+    const failedReRead = () => {
+      hooks.auto = {
+        status: "error",
+        error: new Error("HTTP 500"),
+        list: hooks.auto.list,
+      };
+    };
+    const automatic = draft({
+      proposal_id: "b2",
+      workspace_dir: B,
+      status: "approved",
+      approved_by: "auto",
+      approved_at: "2026-11-04T00:00:00Z",
+    });
+
+    // Drafts waiting: the count, the split and Review.
+    ready([
+      draft({ proposal_id: "a1" }),
+      draft({ proposal_id: "b1", workspace_dir: B }),
+      automatic,
+    ]);
+    const view = banner();
+    expect(screen.getByText("2 skills drafted from your memory")).toBeTruthy();
+    failedReRead();
+    view.rerender(again());
+    expect(view.container.innerHTML).toBe("");
+
+    // Automatic installs since the last visit.
+    ready([automatic]);
+    view.rerender(again());
+    expect(
+      screen.getByText("AutoSkills installed 1 skill automatically")
+    ).toBeTruthy();
+    failedReRead();
+    view.rerender(again());
+    expect(view.container.innerHTML).toBe("");
+
+    // Nothing pending or new: the way into the history.
+    ready([draft({ proposal_id: "a3", status: "rejected" })]);
+    view.rerender(again());
+    expect(
+      screen.getByRole("button", { name: "AutoSkills history" })
+    ).toBeTruthy();
+    failedReRead();
+    view.rerender(again());
+    expect(view.container.innerHTML).toBe("");
+  });
 });

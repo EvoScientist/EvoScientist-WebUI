@@ -3376,6 +3376,55 @@ describe("DraftsPage", () => {
       expect(hooks.approve.mock.calls).toEqual([[[c]]]);
     });
 
+    // Both can hold when a check ends: an Undo out, and a re-read of the
+    // drafts that failed. What is being saved reads the drafts again when it
+    // ends, so that is what the click is told to wait for.
+    it("with another change being saved and the drafts unread at once, it says the change is being saved", async () => {
+      const STALE =
+        "Nothing was installed: the drafts couldn't be read again. Approve again once they are.";
+      const errors = spyErrors();
+      const waiting = holdReads();
+      const c = holding({ proposal_id: "c" }, [["SKILL.md", 10]]);
+      const x = holding(
+        { proposal_id: "x", created_at: "2026-10-01T09:00:00Z" },
+        [["SKILL.md", 10]]
+      );
+      const drafts = listOf([c, x]);
+      const fresh = { status: "ready", list: drafts };
+      const stale = { status: "error", error: new Error("500"), list: drafts };
+      hooks.auto = fresh;
+      q.values.set("draftId", "x");
+      const view = render(page());
+      const pane = () =>
+        within(screen.getByRole("heading", { level: 3 }).parentElement!);
+
+      // The bar.
+      pick("c");
+      approveSelected();
+      hooks.busy = true;
+      hooks.auto = stale;
+      view.rerender(page());
+      await act(async () => waiting.shift()!());
+      await waitFor(() => expect(errors).toHaveBeenCalledTimes(1));
+      expect(errors).toHaveBeenLastCalledWith(BUSY);
+      expect(hooks.approve).not.toHaveBeenCalled();
+
+      // The pane: the same.
+      hooks.busy = false;
+      hooks.auto = fresh;
+      view.rerender(page());
+      fireEvent.click(pane().getByRole("button", { name: "Approve" }));
+      hooks.busy = true;
+      hooks.auto = stale;
+      view.rerender(page());
+      await act(async () => waiting.shift()!());
+      await waitFor(() => expect(errors).toHaveBeenCalledTimes(2));
+      expect(errors).toHaveBeenLastCalledWith(BUSY);
+      expect(errors).not.toHaveBeenCalledWith(STALE);
+      expect(hooks.approve).not.toHaveBeenCalled();
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+
     it("an approval whose drafts changed while their files were checked sends nothing, and says so", async () => {
       const errors = spyErrors();
       const waiting = holdReads();
