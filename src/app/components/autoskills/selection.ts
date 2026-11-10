@@ -33,9 +33,9 @@ export function stillPending(
 }
 
 /** The drafts as they were picked: each with the updated_at recorded then,
- *  so an approval installs that version only (the core answers
- *  draft_changed for one rewritten since). A draft with no stamp recorded,
- *  or not rewritten, goes as listed. */
+ *  so an approval installs, and a rejection rejects, that version only (the
+ *  core answers draft_changed for one rewritten since). A draft with no
+ *  stamp recorded, or not rewritten, goes as listed. */
 export function asSelected(
   drafts: readonly Draft[],
   selected: ReadonlyMap<string, string>

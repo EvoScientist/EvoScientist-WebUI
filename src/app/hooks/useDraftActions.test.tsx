@@ -380,6 +380,73 @@ describe("useDraftActions", () => {
     expect(refresh).toHaveBeenCalledTimes(1);
   });
 
+  it("every reject sends the draft's updated_at as the page read it, and no scope", async () => {
+    stubFetch([
+      [200, { rejected: true }],
+      [200, { rejected: true }],
+      [200, { rejected: true }],
+    ]);
+    const { result } = setup();
+    const a = draft({ proposal_id: "a", updated_at: "2026-11-06T09:00:00Z" });
+    const b = draft({
+      proposal_id: "b",
+      scope: "global",
+      updated_at: "2026-11-06T10:00:00.123Z",
+    });
+    // Read without one: nothing to check against.
+    const c = draft({ proposal_id: "c", updated_at: "" });
+    // The pane's reject: the draft it shows.
+    await act(async () => {
+      await result.current.reject([a]);
+    });
+    // A bulk reject: each draft as the page hands it over.
+    await act(async () => {
+      await result.current.reject([b, c]);
+    });
+    expect(calls).toEqual([
+      {
+        action: "reject",
+        proposal_id: "a",
+        expected_updated_at: "2026-11-06T09:00:00Z",
+      },
+      {
+        action: "reject",
+        proposal_id: "b",
+        expected_updated_at: "2026-11-06T10:00:00.123Z",
+      },
+      { action: "reject", proposal_id: "c", expected_updated_at: null },
+    ]);
+  });
+
+  it("a draft changed since the page read it is not rejected and says so", async () => {
+    stubFetch([
+      [200, { rejected: true }],
+      [409, { error: "draft_changed", updated_at: "2026-11-06T11:00:00Z" }],
+    ]);
+    const { result } = setup();
+    const a = draft({ proposal_id: "a" });
+    const b = draft({ proposal_id: "b", skill_name: "data-cleaning" });
+    let out: DecisionResult | undefined;
+    await act(async () => {
+      out = await result.current.reject([a, b]);
+    });
+    const line =
+      "data-cleaning changed since the page read it, so it wasn't rejected. Read the new version, then decide.";
+    // Not done (still pending), and marked so the page drops it from the
+    // selection, as an approve's draft_changed.
+    expect(out).toEqual({
+      done: [a],
+      failed: [{ draft: b, message: line, changed: true }],
+    });
+    expect(errorLines()).toEqual([line]);
+    expect(toast.success).toHaveBeenCalledWith(
+      "Rejected a.",
+      expect.objectContaining({ action: expect.anything() })
+    );
+    // The re-read brings its new version.
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
   it("mixed bulk approve reports each draft", async () => {
     stubFetch([
       [200, okApprove],
@@ -497,7 +564,9 @@ describe("useDraftActions", () => {
     });
     expect(refresh).toHaveBeenCalledTimes(1);
     expect(notify).toHaveBeenCalledTimes(1);
-    expect(calls).toEqual([{ action: "reject", proposal_id: "r" }]);
+    expect(calls).toEqual([
+      { action: "reject", proposal_id: "r", expected_updated_at: null },
+    ]);
     expect(toast.success).toHaveBeenCalledWith(
       "Rejected r.",
       expect.objectContaining({ duration: 10_000 })
@@ -995,6 +1064,16 @@ describe("decisionError", () => {
       decisionError({ status: 409, error: "draft_changed" }, d, labels)
     ).toBe(
       "n changed since the page read it, so nothing was installed. Read the new version, then decide."
+    );
+    expect(
+      decisionError(
+        { status: 409, error: "draft_changed" },
+        d,
+        labels,
+        "reject"
+      )
+    ).toBe(
+      "n changed since the page read it, so it wasn't rejected. Read the new version, then decide."
     );
     expect(
       decisionError(

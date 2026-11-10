@@ -52,12 +52,8 @@ function planOf(raw: unknown): Plan | null {
   const id = body.proposal_id;
   if (typeof id !== "string" || !isValidSkillName(id)) return null;
   const path = `/api/autoskills/proposals/${encodeURIComponent(id)}/${action}`;
-  if (action !== "approve") return { path, body: {} };
-  const scope = body.scope ?? null;
-  if (scope !== null && scope !== "workspace" && scope !== "global") {
-    return null;
-  }
-  // The draft's updated_at as the page read it: the core installs only that
+  if (action === "revert") return { path, body: {} };
+  // The draft's updated_at as the page read it: the core decides only that
   // version (409 draft_changed otherwise). Null checks nothing.
   const expected = body.expected_updated_at ?? null;
   if (
@@ -66,6 +62,14 @@ function planOf(raw: unknown): Plan | null {
       expected.length > MAX_STAMP ||
       hasControl(expected))
   ) {
+    return null;
+  }
+  // A reject installs nothing, so it never carries a scope.
+  if (action === "reject") {
+    return { path, body: { expected_updated_at: expected } };
+  }
+  const scope = body.scope ?? null;
+  if (scope !== null && scope !== "workspace" && scope !== "global") {
     return null;
   }
   return { path, body: { scope, expected_updated_at: expected } };

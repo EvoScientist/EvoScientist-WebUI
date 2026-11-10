@@ -567,8 +567,9 @@ export function DraftsPage() {
 
   // A decision's answers are in: what went through leaves the selection
   // and waits for the list. A draft that changed since the page read it
-  // (nothing installed) leaves the selection too, so a second click can't
-  // approve its new version unread, but stays decidable: it is pending.
+  // (nothing installed, nothing rejected) leaves the selection too, so a
+  // second click can't decide its new version unread, but stays decidable:
+  // it is pending.
   const settle = ({ done, failed }: DecisionResult) => {
     const ids = done.map((d) => d.proposal_id);
     const changed = failed
@@ -612,9 +613,10 @@ export function DraftsPage() {
     ]
   );
 
-  // A pick records the draft's updated_at as listed now: a bulk approve
-  // sends that version, so a draft rewritten since draws draft_changed
-  // instead of installing unread. One picked already keeps its own.
+  // A pick records the draft's updated_at as listed now: a bulk approve or
+  // reject sends that version, so a draft rewritten since draws
+  // draft_changed instead of being decided unread. One picked already keeps
+  // its own.
   const toggle = (ids: string[], on: boolean) => {
     const listed = new Map(shown.map((d) => [d.proposal_id, d.updated_at]));
     setSelected((prev) => {
@@ -763,10 +765,15 @@ export function DraftsPage() {
       return found.get(d.proposal_id) ?? [];
     });
   };
+  // A bulk reject goes at once, each draft at the version it was picked at
+  // (as a bulk approve): one rewritten since draws draft_changed instead of
+  // being rejected unread.
   const rejectSelection = () => {
     if (!isReady()) return;
     const send = sendable(selectedDrafts);
-    if (send.length > 0) void reject(send).then(settle);
+    if (send.length > 0) {
+      void reject(asSelected(send, selected)).then(settle);
+    }
   };
   const runNow = (key: string) => {
     if (isReady()) void run(key);

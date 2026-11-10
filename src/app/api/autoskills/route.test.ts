@@ -123,16 +123,45 @@ describe("/api/autoskills", () => {
     }
   );
 
-  it("sends expected_updated_at with approve only", async () => {
+  // Reject carries the version too (the core answers 409 draft_changed for
+  // a draft rewritten since), never a scope; revert takes no body.
+  it.each([
+    [{}, null],
+    [{ expected_updated_at: null }, null],
+    [
+      { expected_updated_at: "2026-11-06T09:00:00.123Z" },
+      "2026-11-06T09:00:00.123Z",
+    ],
+    [{ expected_updated_at: "x".repeat(64) }, "x".repeat(64)],
+    [
+      { expected_updated_at: "2026-11-06T09:00:00Z", scope: "global" },
+      "2026-11-06T09:00:00Z",
+    ],
+  ])(
+    "rejects with expected_updated_at %j forwarded as %j, and no scope",
+    async (extra, expected) => {
+      fetchMock.mockResolvedValue(answer(200, {}));
+
+      await POST(request({ action: "reject", proposal_id: "a-b", ...extra }));
+
+      expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+        expected_updated_at: expected,
+      });
+    }
+  );
+
+  it("a revert sends no expected_updated_at", async () => {
     fetchMock.mockImplementation(async () => answer(200, {}));
-    const stamp = { expected_updated_at: "2026-11-06T09:00:00+00:00" };
 
-    await POST(request({ action: "reject", proposal_id: "a-b", ...stamp }));
-    await POST(request({ action: "revert", proposal_id: "a-b", ...stamp }));
+    await POST(
+      request({
+        action: "revert",
+        proposal_id: "a-b",
+        expected_updated_at: "2026-11-06T09:00:00+00:00",
+      })
+    );
 
-    expect(
-      fetchMock.mock.calls.map(([, init]) => JSON.parse(init.body))
-    ).toEqual([{}, {}]);
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({});
   });
 
   it("rejects, reverts and runs on their core paths", async () => {
@@ -149,7 +178,7 @@ describe("/api/autoskills", () => {
       "http://127.0.0.1:6606/api/autoskills/run",
     ]);
     expect(calls.map(([, init]) => JSON.parse(init.body))).toEqual([
-      {},
+      { expected_updated_at: null },
       {},
       { workspace_dir: "/home/you/my proj" },
     ]);
@@ -193,6 +222,30 @@ describe("/api/autoskills", () => {
       "an expected_updated_at with a control character",
       {
         action: "approve",
+        proposal_id: "a-b",
+        expected_updated_at: "2026-11-06\n",
+      },
+    ],
+    [
+      "a reject with a numeric expected_updated_at",
+      { action: "reject", proposal_id: "a-b", expected_updated_at: 1 },
+    ],
+    [
+      "a reject with an expected_updated_at that is an object",
+      { action: "reject", proposal_id: "a-b", expected_updated_at: {} },
+    ],
+    [
+      "a reject with an expected_updated_at over 64 characters",
+      {
+        action: "reject",
+        proposal_id: "a-b",
+        expected_updated_at: "x".repeat(65),
+      },
+    ],
+    [
+      "a reject with a control character in expected_updated_at",
+      {
+        action: "reject",
         proposal_id: "a-b",
         expected_updated_at: "2026-11-06\n",
       },

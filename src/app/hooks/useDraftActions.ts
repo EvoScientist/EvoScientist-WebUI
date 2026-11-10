@@ -21,8 +21,9 @@ import {
 
 export interface DecisionResult {
   done: Draft[];
-  /** `changed`: the core installed nothing because the draft changed since
-   *  the page read it (approve's `draft_changed`); it is still pending. */
+  /** `changed`: the core decided nothing because the draft changed since
+   *  the page read it (`draft_changed`, for an approve and a reject alike);
+   *  it is still pending. */
   failed: Array<{ draft: Draft; message: string; changed?: boolean }>;
 }
 
@@ -82,11 +83,13 @@ export function decisionToast(
   return `Installed ${skills(n)}.`;
 }
 
-/** The line for one draft the core or the relay refused. */
+/** The line for one draft the core or the relay refused. `action` words
+ *  the refusals that depend on what was asked (`draft_changed`). */
 export function decisionError(
   answer: Answer,
   draft: Draft,
-  labels: Map<string, string>
+  labels: Map<string, string>,
+  action: "approve" | "reject" = "approve"
 ): string {
   const name = draft.skill_name;
   if (answer === "network") {
@@ -97,7 +100,9 @@ export function decisionError(
     case "not_pending":
       return `${name} was already decided elsewhere.`;
     case "draft_changed":
-      return `${name} changed since the page read it, so nothing was installed. Read the new version, then decide.`;
+      return action === "reject"
+        ? `${name} changed since the page read it, so it wasn't rejected. Read the new version, then decide.`
+        : `${name} changed since the page read it, so nothing was installed. Read the new version, then decide.`;
     case "not_found":
       return `${name} is no longer there.`;
     case "project_not_served":
@@ -367,9 +372,15 @@ export function useDraftActions(
                   // draft read without one checks nothing.
                   expected_updated_at: d.updated_at || null,
                 }
-              : { action, proposal_id: d.proposal_id },
+              : {
+                  action,
+                  proposal_id: d.proposal_id,
+                  // The same for a reject: the version read, never a
+                  // rewrite nobody saw. It installs nothing, so no scope.
+                  expected_updated_at: d.updated_at || null,
+                },
           labels,
-          (answer, d) => decisionError(answer, d, labels)
+          (answer, d) => decisionError(answer, d, labels, action)
         );
         reread();
         if (result.done.length > 0) {

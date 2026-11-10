@@ -1619,6 +1619,112 @@ describe("DraftsPage", () => {
     expect(box("y").disabled).toBe(false);
   });
 
+  it("a bulk reject sends each draft as it was picked, so a rewrite since draws draft_changed", async () => {
+    // The real decision hook, down to the relay's POST.
+    hooks.realActions = true;
+    const errors = vi.spyOn(toast, "error");
+    toastSpy = errors;
+    const x = draft({ proposal_id: "x", updated_at: "2026-11-06T08:00:00Z" });
+    const y = draft({
+      proposal_id: "y",
+      created_at: "2026-10-01T09:00:00Z",
+      updated_at: "2026-11-06T09:00:00Z",
+    });
+    ready([x, y]);
+    const view = render(page());
+    pick("x");
+    pick("y");
+    // A run resubmitted y after the pick; the next poll lists the new
+    // version, and y stays picked.
+    const y2 = { ...y, updated_at: "2026-11-06T10:00:00Z" };
+    ready([x, y2]);
+    view.rerender(page());
+    expect(selection()?.textContent).toContain("2 selected");
+
+    const bodies: Array<Record<string, unknown>> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+        bodies.push(body);
+        const [status, answer] =
+          body.proposal_id === "x"
+            ? [200, { rejected: true }]
+            : [409, { error: "draft_changed", updated_at: y2.updated_at }];
+        return new Response(JSON.stringify(answer), {
+          status,
+          headers: { "Content-Type": "application/json" },
+        });
+      })
+    );
+    fireEvent.click(
+      within(selection()!).getByRole("button", { name: "Reject" })
+    );
+    await waitFor(() => expect(errors).toHaveBeenCalled());
+    expect(bodies).toEqual([
+      // Not rewritten: the stamp it was picked at is the listed one.
+      {
+        action: "reject",
+        proposal_id: "x",
+        expected_updated_at: "2026-11-06T08:00:00Z",
+      },
+      // Rewritten since the pick: the version picked, which the core
+      // refuses rather than reject the new one unread.
+      {
+        action: "reject",
+        proposal_id: "y",
+        expected_updated_at: "2026-11-06T09:00:00Z",
+      },
+    ]);
+    const node = errors.mock.calls.at(-1)?.[0] as {
+      props: { children: Array<{ props: { children: string } }> };
+    };
+    expect(node.props.children.map((c) => c.props.children)).toEqual([
+      "y changed since the page read it, so it wasn't rejected. Read the new version, then decide.",
+    ]);
+    // y stays pending, out of the selection and decidable; x waits as
+    // decided.
+    await waitFor(() => expect(selection()).toBeNull());
+    const box = (id: string) =>
+      screen.getByRole("checkbox", {
+        name: `Select ${id}`,
+      }) as HTMLInputElement;
+    expect(box("x").disabled).toBe(true);
+    expect(box("y").checked).toBe(false);
+    expect(box("y").disabled).toBe(false);
+  });
+
+  it("the pane's reject sends the version of the draft it shows", async () => {
+    hooks.realActions = true;
+    const x = draft({ proposal_id: "x", updated_at: "2026-11-06T08:00:00Z" });
+    ready([x]);
+    q.values.set("draftId", "x");
+    render(page());
+    const bodies: Array<Record<string, unknown>> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        bodies.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+        return new Response(JSON.stringify({ rejected: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      })
+    );
+    const pane = within(
+      screen.getByRole("heading", { level: 3 }).parentElement!
+    );
+    fireEvent.click(pane.getByRole("button", { name: "Reject" }));
+    await waitFor(() => expect(bodies).toHaveLength(1));
+    expect(bodies).toEqual([
+      {
+        action: "reject",
+        proposal_id: "x",
+        expected_updated_at: "2026-11-06T08:00:00Z",
+      },
+    ]);
+  });
+
   it("a group's select-all records each draft's stamp", () => {
     const x = draft({ proposal_id: "x", updated_at: "T1-x" });
     const y = draft({
