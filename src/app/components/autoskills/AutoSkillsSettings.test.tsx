@@ -1144,6 +1144,47 @@ describe("AutoSkillsSettings with a value an override hides", () => {
     });
   });
 
+  // The panel keeps the last real answer for a read that answers nothing.
+  // An override can come or go with config.yaml untouched (EvoScientist
+  // restarted with or without the variable): the same settings and revision.
+  it("an override that showed with the same settings and revision holds through a read that answers nothing", async () => {
+    const view = panel();
+    fireEvent.click(auto());
+    fireEvent.change(time(), { target: { value: "05:30" } });
+    hooks.sources = { memory_skill_synthesis_mode: ENV };
+    again(view);
+    expect(auto().disabled).toBe(true);
+
+    hooks.noPayload = true;
+    again(view);
+    expect(auto().disabled).toBe(true);
+    expect(auto().checked).toBe(false);
+    expect(review().checked).toBe(true);
+    expect(screen.getAllByText(NOTE)).toHaveLength(1);
+
+    respond(200, {});
+    fireEvent.click(save());
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      memory_skill_synthesis_time: "05:30",
+      revision: "rev1",
+    });
+  });
+
+  it("an override that went away with the same settings and revision stays away through a read that answers nothing", () => {
+    hooks.sources = { memory_skill_synthesis_mode: ENV };
+    const view = panel();
+    expect(auto().disabled).toBe(true);
+    hooks.sources = {};
+    again(view);
+    expect(auto().disabled).toBe(false);
+
+    hooks.noPayload = true;
+    again(view);
+    expect(auto().disabled).toBe(false);
+    expect(screen.queryByText(NOTE)).toBeNull();
+  });
+
   it("with only an overridden field edited there is nothing to save", () => {
     const view = panel();
     fireEvent.click(auto());

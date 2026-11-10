@@ -157,9 +157,13 @@ export function AutoSkillsSettings({
   const { access } = useSettingsAccess();
   // The saved snapshot is the last real settings payload seen: a re-read
   // that answers nothing (404, an error) or a malformed body must not swap
-  // it for defaults.
+  // it for defaults. Its key holds the sources too: an override comes and
+  // goes with the same settings and revision (config.yaml untouched), and
+  // an older snapshot would open a control the override has closed.
   const real = withRevision(payload) ? payload : null;
-  const realKey = real ? JSON.stringify([real.settings, real.revision]) : null;
+  const realKey = real
+    ? JSON.stringify([real.settings, real.revision, real.sources])
+    : null;
   const [snap, setSnap] = useState({ key: realKey, payload: real });
   if (real && realKey !== snap.key) setSnap({ key: realKey, payload: real });
   const current = real ?? snap.payload;
