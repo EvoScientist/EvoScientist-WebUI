@@ -390,57 +390,74 @@ describe("useAutoSkills", () => {
     // would have brought the list was lost to a minute's read that failed.
     it("skips its minute while a read of the list is in flight, and that read's answer is what shows", async () => {
       vi.useFakeTimers();
+      const start = Date.now();
+      /** Run to `ms` after the mount (the timer's minutes are counted from
+       *  it). */
+      const until = (ms: number) => settle(start + ms - Date.now());
+      // A read answers at once, unless the test holds it; while one is
+      // held, any other read fails.
+      let holdNext = false;
       let held: ((res: Response) => void) | null = null;
-      let reads = 0;
       const fetchMock = stubFetch(() => {
-        reads += 1;
-        // The first read on the mount answers; the second is held; any read
-        // started while it is out would fail.
-        if (reads === 1) return json(list(["a"]));
-        if (reads === 2) {
+        if (holdNext) {
+          holdNext = false;
           return new Promise<Response>((resolve) => {
             held = resolve;
           });
         }
-        return held ? json({}, 500) : json(list(["a", "b"]));
+        return held ? json({}, 500) : json(list(["a"]));
       });
       const { result } = renderHook(() => useAutoSkills(), { wrapper });
-      await settle(10);
+      await until(10);
       expect(result.current.status).toBe("ready");
       expect(fetchMock).toHaveBeenCalledTimes(1);
-
-      // The window is focused 10 ms before the minute: SWR's focus read
-      // starts and doesn't answer yet.
-      await settle(AUTOSKILLS_REFRESH_MS - 20);
-      act(() => {
-        window.dispatchEvent(new Event("focus"));
-      });
-      await settle(5);
-      expect(fetchMock).toHaveBeenCalledTimes(2);
-      expect(held).not.toBeNull();
-
-      // The minute comes round with that read out: nothing else is asked.
-      await settle(1_000);
-      expect(fetchMock).toHaveBeenCalledTimes(2);
-
-      // The held read answers, and its list is what shows.
-      const answer = held as unknown as (res: Response) => void;
-      held = null;
-      await act(async () => {
-        answer(json(list(["a", "b"])));
-        await vi.advanceTimersByTimeAsync(10);
-      });
-      expect(fetchMock).toHaveBeenCalledTimes(2);
-      expect(result.current.status).toBe("ready");
-      expect(
+      /** The window is focused: SWR's focus read starts, and stays out. */
+      const focus = async () => {
+        holdNext = true;
+        act(() => {
+          window.dispatchEvent(new Event("focus"));
+        });
+        await settle(5);
+        expect(held).not.toBeNull();
+      };
+      const answerHeld = async (ids: string[]) => {
+        const answer = held as unknown as (res: Response) => void;
+        held = null;
+        await act(async () => {
+          answer(json(list(ids)));
+          await vi.advanceTimersByTimeAsync(10);
+        });
+      };
+      const shown = () =>
         result.current.status === "ready" &&
-          result.current.list.drafts.map((d) => d.proposal_id)
-      ).toEqual(["a", "b"]);
+        result.current.list.drafts.map((d) => d.proposal_id);
+
+      // Focused 10 ms before the first minute.
+      await until(AUTOSKILLS_REFRESH_MS - 10);
+      await focus();
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      // The minute comes round with that read out: nothing else is asked.
+      await until(AUTOSKILLS_REFRESH_MS + 1_000);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      // The held read answers, and its list is what shows.
+      await answerHeld(["a", "b"]);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(shown()).toEqual(["a", "b"]);
 
       // Only that minute was skipped: the next one reads.
-      await settle(AUTOSKILLS_REFRESH_MS);
+      await until(AUTOSKILLS_REFRESH_MS * 2 + 1_000);
       expect(fetchMock).toHaveBeenCalledTimes(3);
-      expect(result.current.status).toBe("ready");
+      expect(shown()).toEqual(["a"]);
+
+      // A read out across a later minute is waited for as well.
+      await until(AUTOSKILLS_REFRESH_MS * 3 - 10);
+      await focus();
+      expect(fetchMock).toHaveBeenCalledTimes(4);
+      await until(AUTOSKILLS_REFRESH_MS * 3 + 1_000);
+      expect(fetchMock).toHaveBeenCalledTimes(4);
+      await answerHeld(["a", "c"]);
+      expect(fetchMock).toHaveBeenCalledTimes(4);
+      expect(shown()).toEqual(["a", "c"]);
     });
 
     // SWR writes `isValidating: false` only when a read it kept ends. A read
