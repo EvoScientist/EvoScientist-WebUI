@@ -1,5 +1,13 @@
 import type { MessageBoxOptions } from "electron";
-import { homedir } from "node:os";
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+} from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createApp, type AppDeps, type AppLog, type AppWindow } from "./app";
@@ -196,6 +204,7 @@ function harness(over: Partial<AppDeps> = {}) {
     documentsDir: () => "/docs",
     exit,
     fileExists: () => true,
+    isFolder: () => true,
     ensureDir: () => {},
     recordEvoSci: () => {},
     readUiRecord: () => null,
@@ -896,10 +905,12 @@ describe("restart from the page (bridge)", () => {
           first ? READY : { ...READY, workspace: "/elsewhere" }
         );
         first = false;
-        h.sessions.push(s);
         return s;
       },
     });
+    expect(h.app.projectFoldersFor("http://127.0.0.1:4718")?.launch).toBe(
+      folderKey(READY.workspace)
+    );
     await expect(h.app.restartFromPage()).resolves.toEqual({ ok: true });
     expect(h.app.projectFoldersFor("http://127.0.0.1:4718")?.launch).toBe(
       folderKey("/elsewhere")
@@ -956,6 +967,53 @@ describe("restart from the page (bridge)", () => {
       h.app.pickFolderFor("http://127.0.0.1:4718", undefined)
     ).resolves.toBeNull();
     expect(h.log.lines.at(-1)).toMatch(/^WARN folder dialog/);
+    chooseFolder.mockResolvedValueOnce("/after");
+    await expect(
+      h.app.pickFolderFor("http://127.0.0.1:4718", undefined)
+    ).resolves.toBe("/after");
+  });
+
+  it("projectFolders spells the page's folder as a key once, while it exists", async () => {
+    const dir = realpathSync.native(mkdtempSync(join(tmpdir(), "evo-app-")));
+    try {
+      mkdirSync(join(dir, "real", "work"), { recursive: true });
+      symlinkSync(join(dir, "real"), join(dir, "link"), "junction");
+      const h = await launched({
+        startDeploy: () =>
+          fakeSession({ ...READY, workspace: join(dir, "link", "work") }),
+      });
+      const key = join(dir, "real", "work").replaceAll("\\", "/");
+      expect(h.app.projectFoldersFor("http://127.0.0.1:4718")?.launch).toBe(
+        key
+      );
+      unlinkSync(join(dir, "link"));
+      expect(h.app.projectFoldersFor("http://127.0.0.1:4718")?.launch).toBe(
+        key
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("pickFolder opens a missing start folder at its nearest existing parent", async () => {
+    const chooseFolder = vi.fn(async () => null);
+    const existing = resolve("/srv");
+    const h = await launched({
+      chooseFolder,
+      isFolder: (p) => p === existing || p === resolve("/"),
+    });
+    await h.app.pickFolderFor(
+      "http://127.0.0.1:4718",
+      resolve("/srv/new/deeper")
+    );
+    expect(chooseFolder).toHaveBeenLastCalledWith("Choose a folder", existing);
+  });
+
+  it("pickFolder passes no start folder when nothing on the way up exists", async () => {
+    const chooseFolder = vi.fn(async () => null);
+    const h = await launched({ chooseFolder, isFolder: () => false });
+    await h.app.pickFolderFor("http://127.0.0.1:4718", resolve("/srv/new"));
+    expect(chooseFolder).toHaveBeenLastCalledWith("Choose a folder", undefined);
   });
 
   it("pickFolder serves only the UI's origin and a string or no argument", async () => {

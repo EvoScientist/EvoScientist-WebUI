@@ -134,6 +134,8 @@ export interface AppDeps {
 
   // Files
   fileExists(path: string): boolean;
+  /** `path` is an existing folder. */
+  isFolder(path: string): boolean;
   ensureDir(path: string): void;
   recordEvoSci(found: Located): void;
   readUiRecord(): UiRecord | null;
@@ -341,6 +343,8 @@ export function createApp(deps: AppDeps): App {
    *  bring the user back to it. */
   let lastUiUrl: string | null = null;
   let lastUiWorkspace: string | null = null;
+  /** `lastUiWorkspace` in the core's key form, spelled while it exists. */
+  let lastUiKey: string | null = null;
   /** A folder dialog from the page is open. */
   let picking = false;
   /** A launch, restart or action on the error screen is running. */
@@ -414,6 +418,15 @@ export function createApp(deps: AppDeps): App {
     }
   }
 
+  /** The nearest existing folder at or above `path`: a dialog given a
+   *  missing one would offer its last part as the name to create. */
+  function existingFolder(path: string): string | undefined {
+    for (let current = path; ; current = dirname(current)) {
+      if (deps.isFolder(current)) return current;
+      if (dirname(current) === current) return undefined;
+    }
+  }
+
   async function pickFolder(defaultPath: string | undefined) {
     if (picking) return null;
     picking = true;
@@ -423,7 +436,7 @@ export function createApp(deps: AppDeps): App {
       // key-form path (forward slashes on Windows) become a native one.
       return await deps.chooseFolder(
         "Choose a folder",
-        start ? expandWorkdir(start) : undefined
+        start ? existingFolder(expandWorkdir(start)) : undefined
       );
     } catch (e) {
       log.warn(`folder dialog: ${e}`);
@@ -875,6 +888,7 @@ export function createApp(deps: AppDeps): App {
       showingUi = true;
       lastUiUrl = page.href;
       lastUiWorkspace = r.workspace;
+      lastUiKey = folderKey(r.workspace);
       try {
         await win.loadUrl(page.href);
       } catch (e) {
@@ -1573,7 +1587,7 @@ export function createApp(deps: AppDeps): App {
       const folder = defaultFolderOrNull();
       return {
         default: folder ? folderKey(folder) : null,
-        launch: lastUiWorkspace ? folderKey(lastUiWorkspace) : null,
+        launch: lastUiKey,
       };
     },
     pickFolderFor: async (senderOrigin, defaultPath) => {

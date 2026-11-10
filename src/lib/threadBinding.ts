@@ -140,8 +140,10 @@ export function threadBinding(
       : { kind: "readOnly", reason: noProjectReason };
   }
   const project = findProject(projects, folders.workspaceDir);
-  const label = `${folderName(folders.workspaceDir)} (${folders.workspaceDir})`;
   if (!project) {
+    const label = `${folderName(folders.workspaceDir)} (${
+      folders.workspaceDir
+    })`;
     return {
       kind: "readOnly",
       reason: `This conversation belongs to ${label}, which isn't a project on this backend.`,
@@ -151,7 +153,7 @@ export function threadBinding(
   if (project.missing) {
     return {
       kind: "readOnly",
-      reason: `This conversation's project folder, ${label}, is missing.`,
+      reason: `This conversation's project folder, ${project.name} (${folders.workspaceDir}), is missing.`,
     };
   }
   return { kind: "open", key: project.key };

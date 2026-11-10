@@ -27,7 +27,13 @@ import {
   type WebContents,
 } from "electron";
 import { autoUpdater, CancellationToken } from "electron-updater";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import {
   QUIT_FOR_INSTALL,
@@ -199,6 +205,13 @@ const desktop = createApp({
   },
 
   fileExists: existsSync,
+  isFolder: (p) => {
+    try {
+      return statSync(p, { throwIfNoEntry: false })?.isDirectory() === true;
+    } catch {
+      return false;
+    }
+  },
   ensureDir: (p) => void mkdirSync(p, { recursive: true }),
   recordEvoSci: (found) => {
     try {
