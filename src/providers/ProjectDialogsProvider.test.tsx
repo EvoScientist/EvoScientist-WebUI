@@ -24,12 +24,10 @@ vi.mock("@/app/hooks/useSettings", () => ({
 }));
 vi.mock("@/providers/ClientProvider", () => ({ useClient: () => client }));
 vi.mock("sonner", () => ({
-  toast: {
-    success: vi.fn(),
-    warning: vi.fn(),
-    error: vi.fn(),
-    loading: vi.fn(() => "move-toast"),
-  },
+  toast: Object.assign(
+    vi.fn(() => "move-toast"),
+    { success: vi.fn(), warning: vi.fn(), error: vi.fn() }
+  ),
 }));
 
 import { ProjectDialogsProvider } from "./ProjectDialogsProvider";
@@ -108,7 +106,7 @@ beforeEach(() => {
   vi.mocked(toast.success).mockClear();
   vi.mocked(toast.warning).mockClear();
   vi.mocked(toast.error).mockClear();
-  vi.mocked(toast.loading).mockClear();
+  vi.mocked(toast).mockClear();
 });
 
 afterEach(() => vi.unstubAllGlobals());
@@ -297,7 +295,7 @@ describe("Move project", () => {
 
     typeFolder("/srv/other");
     expect(screen.queryByText(/merged into/)).toBeNull();
-    typeFolder(`${A.toUpperCase()}/`);
+    typeFolder(`${A}/`);
     expect(screen.getByText(/merged into/).textContent).toContain("projA");
 
     fireEvent.click(screen.getByRole("button", { name: "Move" }));
@@ -306,6 +304,34 @@ describe("Move project", () => {
       "/api/projects/move",
       expect.anything()
     );
+  });
+
+  describe("which typed folder merges into a registered project", () => {
+    function mergeNotice(registered: string, typed: string) {
+      renderDialogs(
+        mockProjects(readyProjects(registered, GONE), {
+          current: registered,
+          canMove: true,
+        })
+      );
+      act(() => dialogs!.openMoveProject!(GONE));
+      typeFolder(typed);
+      return screen.queryByText(/merged into/);
+    }
+
+    it.each([
+      ["a trailing separator", "/data/proj", "/data/proj/"],
+      ["repeated separators", "/data/proj", "/data//proj"],
+      ["the kind of separator", "C:\\Data\\Proj", "C:/Data/Proj"],
+      ["case in a Windows path", "C:\\Data\\Proj", "c:/data/proj/"],
+      ["case in a UNC path", "\\\\srv\\Share\\Proj", "\\\\srv\\share\\proj"],
+    ])("ignores %s", (_label, registered, typed) => {
+      expect(mergeNotice(registered, typed)).not.toBeNull();
+    });
+
+    it("tells apart POSIX paths that differ in case", () => {
+      expect(mergeNotice("/data/Proj", "/data/proj")).toBeNull();
+    });
   });
 
   it("says a move chosen when adding merges into a registered project", () => {
@@ -418,11 +444,11 @@ describe("Move project", () => {
   }
 
   describe("closed while the move runs", () => {
-    async function startAndClose() {
+    async function startAndClose(folder = "/srv/projB") {
       const answer = stubSlowRelay();
       const rendered = renderWithMissing();
       act(() => dialogs!.openMoveProject!(GONE));
-      typeFolder("/srv/projB");
+      typeFolder(folder);
       fireEvent.click(screen.getByRole("button", { name: "Move" }));
       await screen.findByText(/Moving projB's/);
 
@@ -434,13 +460,19 @@ describe("Move project", () => {
       fireEvent.click(close);
 
       await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-      expect(toast.loading).toHaveBeenCalledWith(
-        expect.stringContaining("projB")
-      );
+      // A plain toast, which can be closed, until the move ends.
+      expect(toast).toHaveBeenCalledWith(expect.stringContaining("projB"), {
+        duration: Infinity,
+      });
       return { answer, ...rendered };
     }
 
-    it("turns the loading toast into the success", async () => {
+    /** The duration an outcome toast ends up with: sonner merges its
+     *  options over the moving toast's. */
+    const durationOver = (options: unknown) =>
+      ({ duration: Infinity, ...(options as object) }.duration);
+
+    it("turns the moving toast into the success, which then goes away", async () => {
       const { answer, projects } = await startAndClose();
 
       await act(async () => answer(200, moved));
@@ -449,12 +481,15 @@ describe("Move project", () => {
         expect.stringContaining("2 conversations"),
         expect.objectContaining({ id: "move-toast" })
       );
+      expect(durationOver(vi.mocked(toast.success).mock.calls[0][1])).not.toBe(
+        Infinity
+      );
       expect(projects.followMove).toHaveBeenCalledWith(GONE.key, "/srv/projB");
       expect(projects.refresh).toHaveBeenCalled();
     });
 
-    it("turns the loading toast into the failure", async () => {
-      const { answer } = await startAndClose();
+    it("turns the moving toast into the failure, naming the folder sent", async () => {
+      const { answer } = await startAndClose('  "/srv/projB"  ');
 
       await act(async () =>
         answer(409, { error: "busy", detail: "A conversation is running." })
@@ -462,12 +497,77 @@ describe("Move project", () => {
 
       expect(toast.error).toHaveBeenCalledWith(
         "A conversation is running.",
-        expect.objectContaining({ id: "move-toast" })
+        expect.objectContaining({
+          id: "move-toast",
+          description: "projB → /srv/projB",
+        })
+      );
+      expect(durationOver(vi.mocked(toast.error).mock.calls[0][1])).toBe(
+        15_000
       );
       expect(toast.success).not.toHaveBeenCalled();
     });
 
-    it("turns the loading toast into the first warning when nothing moved", async () => {
+    it("offers no other move of the project until its move fails", async () => {
+      const { answer } = await startAndClose();
+      expect(dialogs!.moving?.has(GONE.key)).toBe(true);
+
+      await act(async () =>
+        answer(409, { error: "busy", detail: "A conversation is running." })
+      );
+
+      expect(dialogs!.moving?.has(GONE.key)).toBe(false);
+    });
+
+    it("offers no other move of a moved project until the list is read again", async () => {
+      const { answer, projects } = await startAndClose();
+      let listRead: () => void = () => {};
+      vi.mocked(projects.refresh).mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            listRead = () => resolve(projects.projects);
+          })
+      );
+
+      await act(async () => answer(200, moved));
+      expect(dialogs!.moving?.has(GONE.key)).toBe(true);
+
+      await act(async () => listRead());
+      expect(dialogs!.moving?.has(GONE.key)).toBe(false);
+    });
+
+    it("keeps showing the dialog's own choice while it is being moved", async () => {
+      stubSlowRelay();
+      renderWithMissing();
+      act(() => dialogs!.openAddProject());
+      typeFolder("/srv/projB");
+      fireEvent.click(screen.getByRole("radio", { name: /projB/ }));
+      fireEvent.click(screen.getByRole("button", { name: "Move" }));
+      await screen.findByText(/Moving projB's/);
+
+      expect(dialogs!.moving?.has(GONE.key)).toBe(true);
+      expect(
+        (screen.getByRole("radio", { name: /projB/ }) as HTMLInputElement)
+          .checked
+      ).toBe(true);
+    });
+
+    it("doesn't offer a project being moved when adding a folder", async () => {
+      await startAndClose();
+
+      act(() => dialogs!.openAddProject());
+      typeFolder("/srv/projB");
+
+      const choices = screen.getAllByRole("radio");
+      expect(
+        choices.map((choice) => choice.closest("label")!.textContent)
+      ).toEqual([
+        expect.stringMatching(/new project/),
+        expect.stringContaining(OTHER_GONE.key),
+      ]);
+    });
+
+    it("turns the moving toast into the first warning when nothing moved", async () => {
       const { answer } = await startAndClose();
 
       await act(async () =>
@@ -485,6 +585,7 @@ describe("Move project", () => {
         "Another note.",
       ]);
       expect(calls[0][1]).toMatchObject({ id: "move-toast" });
+      expect(durationOver(calls[0][1])).toBe(15_000);
       expect(calls[1][1]).not.toHaveProperty("id");
       expect(toast.success).not.toHaveBeenCalled();
     });
@@ -504,7 +605,7 @@ describe("Move project", () => {
     fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
 
     expect(screen.queryByRole("dialog")).not.toBeNull();
-    expect(toast.loading).not.toHaveBeenCalled();
+    expect(toast).not.toHaveBeenCalled();
   });
 });
 

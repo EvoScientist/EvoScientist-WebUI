@@ -174,7 +174,7 @@ export function ThreadList({
   );
 
   const { projects, current, arrivedMoves } = useProjects();
-  const { openAddProject, openRemoveProject, openMoveProject } =
+  const { openAddProject, openRemoveProject, openMoveProject, moving } =
     useProjectDialogs();
   const projectList = useMemo(
     () => (projects.status === "ready" ? projects.projects : []),
@@ -1020,7 +1020,7 @@ export function ThreadList({
               }
               onRemove={() => openRemoveProject(project)}
               onMove={
-                openMoveProject && project.missing
+                openMoveProject && project.missing && !moving?.has(project.key)
                   ? () => openMoveProject(project)
                   : undefined
               }

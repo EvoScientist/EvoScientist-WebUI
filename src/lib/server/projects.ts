@@ -17,6 +17,7 @@ import {
   instanceOf,
   localBackend,
   readLocalSecret,
+  type ForwardResult,
   type LocalBackend,
 } from "@/lib/server/settingsRelay";
 
@@ -106,10 +107,13 @@ const MOVE_PROBE_TIMEOUT_MS = 5_000;
  *  under the same local secret, so as the same instance. */
 const NO_MOVE_CACHE_MS = 60_000;
 
+/** Why the backend couldn't be asked about the move. */
+export type MoveProbeFailure = Extract<ForwardResult, { ok: false }>["refusal"];
+
 let moveProbe: {
   port: number;
   instance: string;
-  supported: Promise<boolean | null>;
+  supported: Promise<boolean | MoveProbeFailure | null>;
   /** Until when it answers: for good while the probe runs and for a "yes",
    *  a minute for a "no". */
   until: number;
@@ -127,9 +131,10 @@ export function resetMoveProbeCache() {
  * 404 (a GET can't tell: the backend answers 404 for a method a route doesn't
  * take). Asked once per backend instance (its port and local secret); a "no"
  * is asked again after a minute, an answer that is neither is not kept.
- * False without a local secret: nothing can be moved from here then.
+ * False without a local secret: nothing can be moved from here then. Why
+ * not, when the backend can't be reached: whether it can move is unknown.
  */
-export async function moveSupported(): Promise<boolean> {
+export async function moveSupported(): Promise<boolean | MoveProbeFailure> {
   const backend = localBackend();
   const secret = readLocalSecret(backend);
   if (secret === null) return false;
@@ -150,7 +155,7 @@ export async function moveSupported(): Promise<boolean> {
   };
   moveProbe = next;
   const answer = await next.supported;
-  if (answer === null) {
+  if (typeof answer !== "boolean") {
     if (moveProbe === next) moveProbe = null;
   } else if (!answer) {
     next.until = Date.now() + NO_MOVE_CACHE_MS;
@@ -158,16 +163,18 @@ export async function moveSupported(): Promise<boolean> {
   return answer ?? false;
 }
 
-/** True for the move route's refusal, false for no route, null for any
- *  other answer (or none). */
-async function probeMove(backend: LocalBackend): Promise<boolean | null> {
+/** True for the move route's refusal, false for no route, why not when the
+ *  backend can't be reached, null for any other answer. */
+async function probeMove(
+  backend: LocalBackend
+): Promise<boolean | MoveProbeFailure | null> {
   const result = await forwardToBackend(
     backend,
     "POST",
     "/api/workspaces/move",
     { body: "{}", timeoutMs: MOVE_PROBE_TIMEOUT_MS }
   );
-  if (!result.ok) return null;
+  if (!result.ok) return result.refusal;
   const { status } = result.response;
   if (status === 404) return false;
   if (status !== 403) return null;

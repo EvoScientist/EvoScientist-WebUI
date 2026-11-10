@@ -220,28 +220,66 @@ describe("ProjectsProvider", () => {
     });
   });
 
-  it("carries whether this machine's backend can move a project with the list", async () => {
+  /** As `stubBackends`, with `/api/projects/move` answered by `move`. */
+  function stubMoveCheck(move: () => Promise<Response>) {
     stubBackends({ [A]: { projects: () => listing("/home/you/alpha") } });
     const backends = globalThis.fetch;
-    let supported = true;
     vi.stubGlobal(
       "fetch",
       vi.fn((input: RequestInfo | URL, init?: RequestInit) =>
-        String(input) === "/api/projects/move"
-          ? json(200, { supported })
-          : backends(input, init)
+        String(input) === "/api/projects/move" ? move() : backends(input, init)
       )
     );
+  }
+
+  it("asks whether this machine's backend can move a project with each read of the list", async () => {
+    let supported = true;
+    stubMoveCheck(() => json(200, { supported }));
     const { result } = renderProjects();
 
-    await waitFor(() => expect(result.current.isReady()).toBe(true));
-    expect(result.current.canMove).toBe(true);
+    await waitFor(() => expect(result.current.canMove).toBe(true));
 
     supported = false;
     await act(async () => {
       await result.current.refresh();
     });
+    await waitFor(() => expect(result.current.canMove).toBe(false));
+  });
+
+  it("doesn't hold the project list up while the move check hangs", async () => {
+    let answer: (response: Promise<Response>) => void = () => {};
+    stubMoveCheck(
+      () =>
+        new Promise<Response>((resolve) => {
+          answer = (response) => resolve(response);
+        })
+    );
+    const { result } = renderProjects();
+
+    await waitFor(() => expect(result.current.isReady()).toBe(true), {
+      timeout: 1_000,
+    });
+    expect(result.current.projects.status).toBe("ready");
     expect(result.current.canMove).toBe(false);
+
+    answer(json(200, { supported: true }));
+    await waitFor(() => expect(result.current.canMove).toBe(true));
+  });
+
+  it("asks again while this machine's backend can't be reached", async () => {
+    let checks = 0;
+    stubMoveCheck(() => {
+      checks += 1;
+      return checks === 1
+        ? json(502, { error: "backend_unreachable" })
+        : json(200, { supported: true });
+    });
+    const { result } = renderProjects();
+
+    await waitFor(() => expect(result.current.canMove).toBe(true), {
+      timeout: 3_000,
+    });
+    expect(checks).toBe(2);
   });
 
   it("says a core without the project list is unsupported", async () => {

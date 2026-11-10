@@ -273,6 +273,22 @@ describe("GET /api/projects/move", () => {
     expect(await next.json()).toEqual({ supported: true });
   });
 
+  it("says the backend can't be reached rather than that it can't move", async () => {
+    const closed = createServer();
+    await new Promise<void>((resolve) =>
+      closed.listen(0, "127.0.0.1", () => resolve())
+    );
+    const { port } = closed.address() as AddressInfo;
+    await new Promise((resolve) => closed.close(resolve));
+    vi.stubEnv("EVOSCIENTIST_LANGGRAPH_DEV_PORT", String(port));
+    resetCoreConfigCache();
+
+    const res = await GET(request("GET"));
+
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({ error: "backend_unreachable" });
+  });
+
   it("offers no move to a page the relay refuses", async () => {
     respond = secretRefusal;
     vi.stubEnv("HOSTNAME", "0.0.0.0");

@@ -698,5 +698,25 @@ describe("ThreadList by project", () => {
 
       expect(screen.queryByRole("menuitem", { name: /new folder/ })).toBeNull();
     });
+
+    it("offers no other move while the project is being moved", async () => {
+      const dialogs = {
+        openAddProject: vi.fn(),
+        openRemoveProject: vi.fn(),
+        openMoveProject: vi.fn(),
+        moving: new Set([OTHER]),
+      };
+      render(
+        <TestProjectsProvider value={withMissing()}>
+          <ProjectDialogsContext.Provider value={dialogs}>
+            <ThreadList onThreadSelect={vi.fn()} />
+          </ProjectDialogsContext.Provider>
+        </TestProjectsProvider>
+      );
+
+      await openMenu("projB");
+
+      expect(screen.queryByRole("menuitem", { name: /new folder/ })).toBeNull();
+    });
   });
 });

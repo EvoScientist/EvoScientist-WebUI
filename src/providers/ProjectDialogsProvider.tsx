@@ -40,7 +40,10 @@ import {
 import type { Project } from "@/lib/projects";
 import { folderName } from "@/lib/workspaceAssistant";
 import { cn } from "@/lib/utils";
-import { ProjectDialogsContext } from "@/providers/projectDialogsContext";
+import {
+  ProjectDialogsContext,
+  useProjectDialogs,
+} from "@/providers/projectDialogsContext";
 
 /**
  * The dialogs that add, move and remove projects, for every surface (the
@@ -54,6 +57,18 @@ export function ProjectDialogsProvider({ children }: { children: ReactNode }) {
     moving: Project | null;
   } | null>(null);
   const [removing, setRemoving] = useState<Project | null>(null);
+  // The keys of the projects being moved, with the dialog open or not.
+  const [moving, setMoving] = useState<ReadonlySet<string>>(NO_MOVES);
+  const trackMove = useCallback(
+    (key: string, running: boolean) =>
+      setMoving((prev) => {
+        const next = new Set(prev);
+        if (running) next.add(key);
+        else next.delete(key);
+        return next;
+      }),
+    []
+  );
   const canMove = useCanMoveProjects();
   const openAddProject = useCallback(
     (folder?: string) => setAdding({ folder: folder ?? "", moving: null }),
@@ -72,8 +87,9 @@ export function ProjectDialogsProvider({ children }: { children: ReactNode }) {
       openAddProject,
       openRemoveProject,
       openMoveProject: canMove ? openMoveProject : undefined,
+      moving,
     }),
-    [openAddProject, openRemoveProject, openMoveProject, canMove]
+    [openAddProject, openRemoveProject, openMoveProject, canMove, moving]
   );
   return (
     <ProjectDialogsContext.Provider value={value}>
@@ -82,6 +98,7 @@ export function ProjectDialogsProvider({ children }: { children: ReactNode }) {
         <ProjectFolderDialog
           initialFolder={adding.folder}
           moving={adding.moving}
+          onMove={trackMove}
           onClose={() => setAdding(null)}
         />
       )}
@@ -94,6 +111,8 @@ export function ProjectDialogsProvider({ children }: { children: ReactNode }) {
     </ProjectDialogsContext.Provider>
   );
 }
+
+const NO_MOVES: ReadonlySet<string> = new Set();
 
 /** Why this page can't change projects, or null when it can. */
 function useProjectsReadOnlyReason(): string | null {
@@ -112,16 +131,22 @@ function useCanMoveProjects(): boolean {
 const RADIO_CLASS =
   "size-4 shrink-0 border border-muted-foreground bg-transparent text-[var(--brand-solid)] focus:ring-0 focus:ring-offset-0 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background";
 
-/** The projects whose folder is missing, and `chosen` while it is chosen
- *  (a move cut short may finish and drop it from the list), those named like
- *  `folder` first. Names compare ignoring case, as folders may. */
+/** The projects whose folder is missing, other than those being moved
+ *  (`inFlight`), and `chosen` while it is chosen (a move cut short may finish
+ *  and drop it from the list), those named like `folder` first. Names
+ *  compare ignoring case, as folders may. */
 function moveCandidates(
   projects: readonly Project[],
   folder: string,
-  chosen: Project | null
+  chosen: Project | null,
+  inFlight: ReadonlySet<string>
 ): Array<{ project: Project; sameName: boolean }> {
   const name = folderName(typedFolder(folder)).toLowerCase();
-  const missing = projects.filter((project) => project.missing);
+  const missing = projects.filter(
+    (project) =>
+      project.missing &&
+      (!inFlight.has(project.key) || project.key === chosen?.key)
+  );
   if (chosen && !missing.some((project) => project.key === chosen.key)) {
     missing.push(chosen);
   }
@@ -133,24 +158,31 @@ function moveCandidates(
     .sort((a, b) => Number(b.sameName) - Number(a.sameName));
 }
 
+/** Whether `path` looks like a Windows one: a drive letter or a backslash. */
+function windowsPath(path: string): boolean {
+  return /^[a-z]:/i.test(path) || path.includes("\\");
+}
+
 /** The registered project, other than `moving`, at the typed `folder`: a
- *  move there merges into it. Paths compare ignoring case, the kind of
- *  separator and a trailing one, as folders may. */
+ *  move there merges into it. Paths compare ignoring the kind of separator
+ *  and a trailing one; Windows paths also ignore case, as the backend does
+ *  there. */
 function mergeTarget(
   projects: readonly Project[],
   folder: string,
   moving: Project
 ): Project | null {
-  const path = (key: string) =>
-    key
-      .replace(/[\\/]+/g, "/")
-      .replace(/\/$/, "")
-      .toLowerCase();
-  const typed = path(typedFolder(folder));
+  const path = (key: string) => key.replace(/[\\/]+/g, "/").replace(/\/$/, "");
+  const raw = typedFolder(folder);
+  const typed = path(raw);
   if (!typed) return null;
+  const same = (key: string) =>
+    windowsPath(raw) || windowsPath(key)
+      ? path(key).toLowerCase() === typed.toLowerCase()
+      : path(key) === typed;
   return (
     projects.find(
-      (project) => project.key !== moving.key && path(project.key) === typed
+      (project) => project.key !== moving.key && same(project.key)
     ) ?? null
   );
 }
@@ -164,20 +196,24 @@ function movingText(name: string): string {
  * Ask for a folder: to add as a project, or, for `moving` (a project whose
  * folder is missing), the folder it was moved to. Adding offers the missing
  * projects too, when the backend can move one: the folder may be one of them,
- * moved. Nothing is moved unless one is chosen.
+ * moved. Nothing is moved unless one is chosen. `onMove` hears when a move
+ * starts and ends.
  */
 function ProjectFolderDialog({
   initialFolder,
   moving,
+  onMove,
   onClose,
 }: {
   initialFolder: string;
   moving: Project | null;
+  onMove: (key: string, running: boolean) => void;
   onClose: () => void;
 }) {
   const { projects, refresh, followMove } = useProjects();
   const readOnly = useProjectsReadOnlyReason();
   const canMove = useCanMoveProjects();
+  const inFlight = useProjectDialogs().moving ?? NO_MOVES;
   const [folder, setFolder] = useState(initialFolder);
   // The missing project this folder is; null: a new project.
   const [choice, setChoice] = useState<Project | null>(null);
@@ -186,7 +222,7 @@ function ProjectFolderDialog({
 
   const candidates =
     !moving && canMove && projects.status === "ready"
-      ? moveCandidates(projects.projects, folder, choice)
+      ? moveCandidates(projects.projects, folder, choice, inFlight)
       : [];
   const target = moving ?? (candidates.length > 0 ? choice : null);
   const mergeInto =
@@ -217,10 +253,20 @@ function ProjectFolderDialog({
   const closedToastRef = useRef<string | number | null>(null);
 
   const move = async (project: Project, path: string) => {
-    const result = await moveProject(project.key, path);
+    onMove(project.key, true);
+    const done = () => onMove(project.key, false);
+    const result = await moveProject(project.key, path).catch((error) => {
+      done();
+      throw error;
+    });
+    // Once moved, the old key stays listed missing until the list is read
+    // again: it is offered no other move until then.
+    if (!result.ok || !result.moved) done();
     const id = closedToastRef.current;
-    // The outcome toast takes the closed dialog's place.
-    const outcome = id === null ? undefined : { id };
+    // The outcome toast takes the closed dialog's place. Sonner keeps an
+    // updated toast's options: an unset duration drops the moving toast's
+    // Infinity for the toaster's own.
+    const outcome = id === null ? undefined : { id, duration: undefined };
     if (!result.ok) {
       if (id === null) {
         setBusy(null);
@@ -229,7 +275,7 @@ function ProjectFolderDialog({
         // Without the dialog, the toast names what it was about.
         toast.error(result.message, {
           id,
-          description: `${project.name} → ${path}`,
+          description: `${project.name} → ${typedFolder(path)}`,
           duration: 15_000,
         });
       }
@@ -244,8 +290,8 @@ function ProjectFolderDialog({
           : [`${project.name} was not moved.`];
       warnings.forEach((warning, i) =>
         toast.warning(warning, {
-          duration: 15_000,
           ...(i === 0 && outcome),
+          duration: 15_000,
         })
       );
       if (id === null) onClose();
@@ -254,7 +300,7 @@ function ProjectFolderDialog({
     // Its old key names nothing now: a selection or stored choice of it
     // moves to the new folder, before the list that drops it is read.
     followMove(project.key, result.key);
-    void refresh();
+    void refresh().finally(done);
     toast.success(movedText(project.name, result), outcome);
     for (const warning of result.warnings) {
       toast.warning(warning, { duration: 15_000 });
@@ -271,13 +317,14 @@ function ProjectFolderDialog({
     await (target ? move(target, path) : add(path));
   };
 
-  // Adding can't be left; a move goes on in the background.
+  // Adding can't be left; a move goes on in the background. Its toast stays
+  // until the move ends, and can be closed as any other.
   const close = () => {
     if (busy === "add") return;
     if (busy === "move" && movingRef.current) {
-      closedToastRef.current = toast.loading(
-        movingText(movingRef.current.name)
-      );
+      closedToastRef.current = toast(movingText(movingRef.current.name), {
+        duration: Infinity,
+      });
     }
     onClose();
   };

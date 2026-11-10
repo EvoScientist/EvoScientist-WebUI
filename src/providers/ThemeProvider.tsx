@@ -89,8 +89,7 @@ export function useTheme(): ThemeContextValue {
 // a file preview, any toast there while Reconnect shows, or any toast in the
 // phone drawer), so they get a close button and can be swiped away up or
 // sideways (sonner draws no close button on loading or custom toasts, and
-// loading toasts can't be swiped; the app's one loading toast is a project
-// move whose dialog was closed, until the move ends).
+// loading toasts can't be swiped; the app shows neither kind).
 const TOAST_TOP = "var(--toast-top)";
 
 /** Sonner toaster that follows the resolved theme (must render inside ThemeProvider). */

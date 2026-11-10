@@ -177,19 +177,15 @@ export async function removeProject(key: string): Promise<RemoveProjectResult> {
 }
 
 /** Whether this machine's backend can move a project, as the WebUI's server
- *  finds it; false when that can't be read. */
+ *  finds it. Throws when that can't be read. */
 export async function readMoveSupport(signal?: AbortSignal): Promise<boolean> {
-  try {
-    const res = await fetch("/api/projects/move", {
-      cache: "no-store",
-      signal,
-    });
-    if (!res.ok) return false;
-    const body = (await res.json()) as { supported?: unknown } | null;
-    return body?.supported === true;
-  } catch {
-    return false;
-  }
+  const res = await fetch("/api/projects/move", {
+    cache: "no-store",
+    signal,
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const body = (await res.json()) as { supported?: unknown } | null;
+  return body?.supported === true;
 }
 
 /** What the backend reports moving. */

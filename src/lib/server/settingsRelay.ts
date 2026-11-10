@@ -207,7 +207,9 @@ export function forwardSlowToBackend(
     };
     const request = httpRequest(
       `${backend.url}${path}`,
-      { method, headers },
+      // Its own socket, not a pooled keep-alive one, for a request that can
+      // run up to 30 min: only `timeoutMs` bounds it.
+      { method, headers, agent: false },
       (response) => {
         const chunks: Buffer[] = [];
         response.on("data", (chunk: Buffer) => chunks.push(chunk));

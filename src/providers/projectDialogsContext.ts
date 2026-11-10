@@ -11,6 +11,9 @@ export interface ProjectDialogsValue {
   /** Ask for the folder `project` (one whose folder is missing) was moved
    *  to; absent when this page can't move projects. */
   openMoveProject?: (project: Project) => void;
+  /** The keys of the projects being moved: none is offered another move
+   *  until its move ends. */
+  moving?: ReadonlySet<string>;
 }
 
 /** Outside a provider there is nowhere to show the dialogs: the actions do

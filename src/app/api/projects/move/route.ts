@@ -21,12 +21,15 @@ const NO_STORE = { "Cache-Control": "no-store" };
 /**
  * Whether this page can move projects on the local backend:
  * `{"supported": <bool>}`, false when the relay would refuse the page (as
- * for adding and removing) or the backend has no move.
+ * for adding and removing) or the backend has no move. A backend that can't
+ * be reached is a refusal: whether it can move isn't known yet.
  */
 export async function GET(request: NextRequest) {
-  const supported =
-    relayGate(request, { requireJson: false }) === null &&
-    (await moveSupported());
+  if (relayGate(request, { requireJson: false }) !== null) {
+    return NextResponse.json({ supported: false }, { headers: NO_STORE });
+  }
+  const supported = await moveSupported();
+  if (typeof supported !== "boolean") return refusal(supported);
   return NextResponse.json({ supported }, { headers: NO_STORE });
 }
 

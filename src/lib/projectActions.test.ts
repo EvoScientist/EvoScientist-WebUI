@@ -248,8 +248,11 @@ describe("readMoveSupport", () => {
     expect(await readMoveSupport()).toBe(true);
     answer(200, { supported: false });
     expect(await readMoveSupport()).toBe(false);
+  });
+
+  it("throws when the WebUI's server can't answer", async () => {
     answer(500, {});
-    expect(await readMoveSupport()).toBe(false);
+    await expect(readMoveSupport()).rejects.toThrow("HTTP 500");
   });
 });
 

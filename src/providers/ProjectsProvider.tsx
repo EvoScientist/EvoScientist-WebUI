@@ -32,8 +32,9 @@ export type FilesAccess = "pending" | "here" | "elsewhere";
 export interface ProjectsContextValue {
   /** The last project list the backend gave. */
   projects: ProjectsState;
-  /** Read with the list: whether this machine's backend can move a project
-   *  (whether this page may is the settings access's to say). */
+  /** Whether this machine's backend can move a project (whether this page
+   *  may is the settings access's to say): asked with each read of the list,
+   *  apart from it. */
   canMove: boolean;
   /** True while the list is being read again; nothing runs meanwhile. */
   refreshing: boolean;
@@ -144,26 +145,13 @@ async function checkFiles(
   return remote === local ? "here" : "elsewhere";
 }
 
-interface ProjectsRead {
-  projects: ProjectsState;
-  canMove: boolean;
-}
-
 async function readProjects(
   deploymentUrl: string,
   apiKey: string,
   signal: AbortSignal
-): Promise<ProjectsRead> {
-  const [projects, canMove] = await Promise.all([
-    fetchProjects(deploymentUrl, apiKey, signal),
-    readMoveSupport(signal),
-  ]);
-  return {
-    projects: projects
-      ? { status: "ready", projects }
-      : { status: "unsupported" },
-    canMove,
-  };
+): Promise<ProjectsState> {
+  const projects = await fetchProjects(deploymentUrl, apiKey, signal);
+  return projects ? { status: "ready", projects } : { status: "unsupported" };
 }
 
 interface ProviderState {
@@ -229,12 +217,38 @@ export function ProjectsProvider({
   // the published answer is never older than the latest request.
   const runningRef = useRef<{ promise: Promise<ProjectsState> } | null>(null);
   const againRef = useRef(false);
+  // The move check running, if any: a read meanwhile doesn't start another.
+  const moveCheckRef = useRef<Promise<void> | null>(null);
   // Made per mount and per backend: the last one's read is aborted, as is
   // the first mount's under React's development double mount.
   const controllerRef = useRef<{
     backend: string;
     controller: AbortController;
   } | null>(null);
+
+  // Whether this machine's backend can move a project, asked with each read
+  // of the list but apart from it: a backend slow to answer never holds the
+  // list up. A failed read is asked again, with backoff.
+  const checkMove = useCallback(
+    (signal: AbortSignal) => {
+      if (moveCheckRef.current) return;
+      const check = retryWithBackoff(
+        () => readMoveSupport(signal),
+        signal,
+        MAX_RETRY_MS
+      ).then((canMove) => {
+        if (moveCheckRef.current === check) moveCheckRef.current = null;
+        if (canMove === null || signal.aborted) return;
+        setState((prev) =>
+          prev.backend !== backend || prev.canMove === canMove
+            ? prev
+            : { ...prev, canMove }
+        );
+      });
+      moveCheckRef.current = check;
+    },
+    [backend]
+  );
 
   const refresh = useCallback((): Promise<ProjectsState> => {
     // A `refresh` kept from before a switch to another backend (a request
@@ -244,6 +258,7 @@ export function ProjectsProvider({
       return Promise.resolve({ status: "pending" });
     }
     const { controller } = current;
+    checkMove(controller.signal);
     gateRef.current = false;
     setState((prev) =>
       prev.refreshing ? prev : { ...prev, refreshing: true }
@@ -256,7 +271,7 @@ export function ProjectsProvider({
       promise: Promise.resolve({ status: "pending" }),
     };
     run.promise = (async () => {
-      let answer: ProjectsRead | null = null;
+      let answer: ProjectsState | null = null;
       do {
         againRef.current = false;
         answer = await retryWithBackoff(
@@ -276,8 +291,7 @@ export function ProjectsProvider({
       if (!answer || controller.signal.aborted) {
         return { status: "pending" } as ProjectsState;
       }
-      const published = answer.projects;
-      const { canMove } = answer;
+      const published = answer;
       // A project no longer on the list is forgotten: added again, it is a
       // new project, current only when picked. The stored one only when it
       // is this page's: another tab may have just picked one this list
@@ -297,7 +311,6 @@ export function ProjectsProvider({
         return {
           ...prev,
           projects: published,
-          canMove,
           refreshing: false,
           error: null,
           selected: forget(prev.selected) ? null : prev.selected,
@@ -314,13 +327,14 @@ export function ProjectsProvider({
     })();
     runningRef.current = run;
     return run.promise;
-  }, [deploymentUrl, apiKey, backend]);
+  }, [deploymentUrl, apiKey, backend, checkMove]);
 
   useEffect(() => {
     const controller = new AbortController();
     controllerRef.current = { backend, controller };
     runningRef.current = null;
     againRef.current = false;
+    moveCheckRef.current = null;
     void refresh();
     return () => {
       controller.abort();
