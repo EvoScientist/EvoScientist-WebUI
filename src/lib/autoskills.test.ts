@@ -13,6 +13,7 @@ import {
   MAX_SHOWN_BYTES,
   parseDraftList,
   projectLabels,
+  secondOf,
   statusLine,
   unshowableFiles,
   updatesOwnCopy,
@@ -485,6 +486,48 @@ describe("statusLine", () => {
       "Every project · runs every night at 02:30 · drafts install automatically"
     );
     expect(statusLine(undefined, new Set([ENABLED]))).toBeNull();
+  });
+});
+
+describe("secondOf", () => {
+  const NINE = Date.UTC(2026, 10, 10, 9, 0, 0);
+
+  it("reads the core's stamps and LangGraph's as the same instant", () => {
+    // The core: seconds, Z.
+    expect(secondOf("2026-11-10T09:00:00Z")).toBe(NINE);
+    // LangGraph: microseconds, +00:00.
+    expect(secondOf("2026-11-10T09:00:00.654321+00:00")).toBe(NINE);
+    expect(secondOf("2026-11-10T09:00:00+00:00")).toBe(NINE);
+    // Other offsets name the same instant.
+    expect(secondOf("2026-11-10T10:00:00+01:00")).toBe(NINE);
+    expect(secondOf("2026-11-10T04:00:00.123-05:00")).toBe(NINE);
+  });
+
+  it("cuts the fraction: down to the second, never up", () => {
+    expect(secondOf("2026-11-10T09:00:00.999999+00:00")).toBe(NINE);
+    expect(secondOf("2026-11-10T09:00:00.5Z")).toBe(NINE);
+    expect(secondOf("2026-11-10T09:00:01.000001+00:00")).toBe(NINE + 1000);
+  });
+
+  it("is null for anything that isn't such a stamp", () => {
+    for (const value of [
+      "",
+      "soon",
+      "2026-11-10",
+      // No zone: not an instant.
+      "2026-11-10T09:00:00",
+      "2026-11-10T09:00:00.654321",
+      "2026-11-10 09:00:00Z",
+      "2026-11-10T09:00:00Z trailing",
+      // Shaped like one, but no such date.
+      "2026-13-40T09:00:00Z",
+      5,
+      null,
+      undefined,
+      {},
+    ]) {
+      expect(secondOf(value), String(value)).toBeNull();
+    }
   });
 });
 

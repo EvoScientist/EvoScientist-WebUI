@@ -9,6 +9,7 @@ import {
   autoSkillsReadOnlyReason,
   labelFor,
   projectLabels,
+  secondOf,
   type DraftList,
   type DraftStatus,
 } from "@/lib/autoskills";
@@ -34,6 +35,9 @@ const NO_POLL = { poll: false } as const;
 const END_STATES = new Set(["success", "error", "timeout", "interrupted"]);
 
 type Drafts = Pick<DraftList, "drafts">;
+/** What a poll reads of the run: how it stands, and when it was created
+ *  (LangGraph's stamp: microseconds, `+00:00`). */
+type RunPoll = { status: string; created_at?: unknown };
 
 /** The project's drafts by id, with their status. */
 function snapshotOf(list: Drafts, key: string): Map<string, DraftStatus> {
@@ -44,8 +48,41 @@ function snapshotOf(list: Drafts, key: string): Map<string, DraftStatus> {
   );
 }
 
-/** What a run added to the project: drafts pending now that weren't, and
- *  the ones auto mode approved (at submission) that weren't approved. */
+/** What a run that started at `since` (its `created_at`, cut to the second
+ *  as the core's stamps are) added to the project: the drafts pending now
+ *  that were created at or after it, and the ones auto mode approved at or
+ *  after it. By the drafts' own stamps, not by what a list read earlier
+ *  held: that list can be a minute old (a cron run's drafts since would
+ *  count), and one read when the page joined a run already holds what the
+ *  run made before. A pending draft the run resubmitted keeps its
+ *  created_at: not new. Known limit: another run in the project at the same
+ *  time (a cron run) is counted too. */
+function addedAfter(
+  since: number,
+  list: Drafts,
+  key: string
+): { drafts: number; installed: number } {
+  const sinceThen = (stamp: string | null) => {
+    const at = secondOf(stamp);
+    return at !== null && at >= since;
+  };
+  let drafts = 0;
+  let installed = 0;
+  for (const d of list.drafts) {
+    if (d.workspace_dir !== key) continue;
+    if (d.status === "pending") {
+      if (sinceThen(d.created_at)) drafts += 1;
+    } else if (d.status === "approved" && d.approved_by === "auto") {
+      if (sinceThen(d.approved_at)) installed += 1;
+    }
+  }
+  return { drafts, installed };
+}
+
+/** The same without the run's start (a run whose `created_at` can't be
+ *  read), against the project's drafts as a list read before held them:
+ *  drafts pending now that weren't, and the ones auto mode approved (at
+ *  submission) that weren't approved. */
 function addedSince(
   before: ReadonlyMap<string, DraftStatus>,
   list: Drafts,
@@ -174,7 +211,7 @@ export function useRunNow(projects: readonly Project[]): {
    *  RUN_GET_TIMEOUT_MS, and at once on a cleanup. */
   const getRun = useCallback(
     (threadId: string, runId: string) =>
-      new Promise<{ status: string }>((resolve, reject) => {
+      new Promise<RunPoll>((resolve, reject) => {
         const controller = new AbortController();
         const limit = pause(RUN_GET_TIMEOUT_MS);
         void limit.promise.then(() => {
@@ -253,7 +290,12 @@ export function useRunNow(projects: readonly Project[]): {
       const epoch = epochRef.current;
       const cancelled = () => epochRef.current !== epoch;
       const label = labelFor(key, projectLabels(projectsRef.current));
-      // Only a list that was read can say what is new afterwards.
+      // When the run started, to the second, from the first poll that
+      // answers: the end counts what the drafts say was made since.
+      let startedAt: number | null = null;
+      // Only for a run whose start can't be read: the project's drafts as
+      // the page's list holds them now, to compare with afterwards (only a
+      // list that was read can say what is new).
       const snapshot = () =>
         listRef.current ? snapshotOf(listRef.current, key) : null;
       let before = snapshot();
@@ -276,6 +318,7 @@ export function useRunNow(projects: readonly Project[]): {
             const r = await getRun(threadId, runId);
             if (cancelled()) return "cancelled";
             failed = 0;
+            startedAt ??= secondOf(r.created_at);
             if (END_STATES.has(r.status)) {
               return r.status === "success" ? "success" : "failed";
             }
@@ -296,7 +339,8 @@ export function useRunNow(projects: readonly Project[]): {
         const named = typeof threadId === "string" && typeof runId === "string";
         // A manual run of this project is already going (another tab, an
         // earlier page): the core names it instead of starting a second
-        // one, and it is followed like one started here, counted from now.
+        // one, and it is followed like one started here, counted from its
+        // own start (without one, from now).
         const joined =
           start !== "network" &&
           start.status === 409 &&
@@ -341,14 +385,12 @@ export function useRunNow(projects: readonly Project[]): {
         }
         const list = await readWithin(REREAD_WAIT_MS);
         if (cancelled()) return;
-        toast.success(
-          finishedText(
-            label,
-            before !== null && typeof list === "object"
-              ? addedSince(before, list, key)
-              : null
-          )
-        );
+        let added: { drafts: number; installed: number } | null = null;
+        if (typeof list === "object") {
+          if (startedAt !== null) added = addedAfter(startedAt, list, key);
+          else if (before !== null) added = addedSince(before, list, key);
+        }
+        toast.success(finishedText(label, added));
       } finally {
         // Only the run that holds the key may release it.
         if (activeRef.current.get(key) === token) {

@@ -243,6 +243,22 @@ export function timeOf(value: string): number | null {
   return Number.isNaN(t) ? null : t;
 }
 
+/** A timestamp's instant cut to the whole second, in milliseconds, or null
+ *  when it isn't one with a zone. The core's stamps are
+ *  `YYYY-MM-DDTHH:MM:SSZ`; LangGraph's carry microseconds and `+00:00`. The
+ *  fraction is cut, not parsed (engines differ past three digits), so two
+ *  stamps of the same second compare equal whichever wrote them. */
+export function secondOf(value: unknown): number | null {
+  if (typeof value !== "string") return null;
+  const stamp =
+    /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.\d+)?(Z|[+-]\d{2}:\d{2})$/.exec(
+      value
+    );
+  if (!stamp) return null;
+  const t = Date.parse(stamp[1] + stamp[2]);
+  return Number.isNaN(t) ? null : t;
+}
+
 function newestFirst(a: Draft, b: Draft): number {
   const ta = timeOf(a.created_at);
   const tb = timeOf(b.created_at);

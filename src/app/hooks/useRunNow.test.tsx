@@ -69,6 +69,24 @@ function draft(
     approved_by: approvedBy,
   } as unknown as Draft;
 }
+/** A draft with the core's stamps (`YYYY-MM-DDTHH:MM:SSZ`). */
+function stamped(
+  id: string,
+  dir: string,
+  over: Partial<
+    Pick<Draft, "status" | "created_at" | "approved_at" | "approved_by">
+  > = {}
+): Draft {
+  return {
+    proposal_id: id,
+    status: "pending",
+    workspace_dir: dir,
+    created_at: "2026-11-09T03:00:00Z",
+    approved_at: null,
+    approved_by: null,
+    ...over,
+  } as unknown as Draft;
+}
 function listOf(drafts: Draft[]): DraftList {
   return { drafts, counts: {}, byProject: {} } as unknown as DraftList;
 }
@@ -899,5 +917,266 @@ describe("useRunNow", () => {
     expect(runsGet).toHaveBeenCalledTimes(1);
     expect(toast.success).not.toHaveBeenCalled();
     expect(toast.error).not.toHaveBeenCalled();
+  });
+});
+
+// The end toast counts by time: what the project's drafts say was made at or
+// after the run's start (LangGraph's `created_at`, floored to the second, as
+// the core's stamps are), not what a list read earlier didn't hold yet.
+describe("useRunNow counts by the run's start", () => {
+  // LangGraph's stamp: microseconds and +00:00.
+  const STARTED = "2026-11-10T09:00:00.654321+00:00";
+  const ended = { status: "success", created_at: STARTED };
+
+  async function finish(key = B) {
+    const hook = renderHook(() => useRunNow(projects));
+    await act(async () => {
+      void hook.result.current.run(key);
+    });
+    await flush();
+    await tick();
+    return hook;
+  }
+
+  it("counts the drafts created and the automatic installs made since, to the second", async () => {
+    stubRelay(200, started);
+    runsGet.mockResolvedValue(ended);
+    state.list = listOf([stamped("old", B)]);
+    state.readNow.mockResolvedValue(
+      listOf([
+        stamped("old", B),
+        // A cron run's, a second before this run: the list read before the
+        // run (up to a minute old) didn't hold it yet.
+        stamped("cron", B, { created_at: "2026-11-10T08:59:59Z" }),
+        // In the run's first second: the core's stamps have no fraction.
+        stamped("first", B, { created_at: "2026-11-10T09:00:00Z" }),
+        stamped("later", B, { created_at: "2026-11-10T09:03:10Z" }),
+        stamped("other", A, { created_at: "2026-11-10T09:01:00Z" }),
+        stamped("auto", B, {
+          status: "approved",
+          approved_by: "auto",
+          created_at: "2026-11-10T09:02:00Z",
+          approved_at: "2026-11-10T09:02:00Z",
+        }),
+        stamped("auto-before", B, {
+          status: "approved",
+          approved_by: "auto",
+          approved_at: "2026-11-10T08:00:00Z",
+        }),
+        // Approved by the user meanwhile: not the run's install.
+        stamped("mine", B, {
+          status: "approved",
+          approved_by: "user",
+          created_at: "2026-11-10T09:01:00Z",
+          approved_at: "2026-11-10T09:02:30Z",
+        }),
+        stamped("auto-other", A, {
+          status: "approved",
+          approved_by: "auto",
+          approved_at: "2026-11-10T09:02:00Z",
+        }),
+        stamped("no", B, {
+          status: "rejected",
+          created_at: "2026-11-10T09:01:00Z",
+        }),
+      ])
+    );
+    await finish();
+    expect(toast.success.mock.calls).toEqual([
+      [
+        "AutoSkills finished in project_B: 2 new drafts, 1 skill installed automatically.",
+      ],
+    ]);
+  });
+
+  it("a joined run counts the drafts it made before the page joined", async () => {
+    stubRelay(409, {
+      error: "already_running",
+      thread_id: "t9",
+      run_id: "r9",
+    });
+    runsGet.mockResolvedValue(ended);
+    // Made two minutes into the run, before the join: the list the page
+    // holds at the join already has it.
+    const early = stamped("n0", B, { created_at: "2026-11-10T09:02:00Z" });
+    const autoEarly = stamped("a0", B, {
+      status: "approved",
+      approved_by: "auto",
+      created_at: "2026-11-10T09:01:00Z",
+      approved_at: "2026-11-10T09:01:00Z",
+    });
+    state.list = listOf([stamped("old", B), early, autoEarly]);
+    state.readNow.mockResolvedValue(
+      listOf([
+        stamped("old", B),
+        early,
+        autoEarly,
+        stamped("n1", B, { created_at: "2026-11-10T09:05:00Z" }),
+      ])
+    );
+    await finish();
+    expect(toast.success.mock.calls).toEqual([
+      [
+        "AutoSkills finished in project_B: 2 new drafts, 1 skill installed automatically.",
+      ],
+    ]);
+  });
+
+  it("a pending draft the run resubmitted keeps its created_at and isn't new", async () => {
+    stubRelay(200, started);
+    runsGet.mockResolvedValue(ended);
+    state.readNow.mockResolvedValue(
+      listOf([
+        {
+          ...stamped("old", B),
+          updated_at: "2026-11-10T09:04:00Z",
+        } as Draft,
+      ])
+    );
+    await finish();
+    expect(toast.success).toHaveBeenCalledWith(
+      "AutoSkills finished in project_B: no new patterns this time."
+    );
+  });
+
+  it("an automatic approval of a draft that was pending counts as installed, by when it was approved", async () => {
+    stubRelay(200, started);
+    runsGet.mockResolvedValue(ended);
+    state.list = listOf([stamped("p", B)]);
+    state.readNow.mockResolvedValue(
+      listOf([
+        stamped("p", B, {
+          status: "approved",
+          approved_by: "auto",
+          approved_at: "2026-11-10T09:04:00Z",
+        }),
+      ])
+    );
+    await finish();
+    expect(toast.success).toHaveBeenCalledWith(
+      "AutoSkills finished in project_B: 1 skill installed automatically."
+    );
+  });
+
+  it("compares instants, whatever the offset the stamps are written in", async () => {
+    stubRelay(200, started);
+    // 09:00:00Z.
+    runsGet.mockResolvedValue({
+      status: "success",
+      created_at: "2026-11-10T10:00:00.25+01:00",
+    });
+    state.readNow.mockResolvedValue(
+      listOf([
+        stamped("before", B, { created_at: "2026-11-10T09:30:00+01:00" }),
+        stamped("after", B, { created_at: "2026-11-10T04:00:01-05:00" }),
+      ])
+    );
+    await finish();
+    expect(toast.success).toHaveBeenCalledWith(
+      "AutoSkills finished in project_B: 1 new draft."
+    );
+  });
+
+  it("takes the start from the first poll that answers", async () => {
+    stubRelay(200, started);
+    runsGet
+      .mockRejectedValueOnce(new Error("down"))
+      .mockResolvedValueOnce({ status: "running", created_at: STARTED })
+      // Not read again: this one names another start.
+      .mockResolvedValueOnce({
+        status: "success",
+        created_at: "2026-11-10T09:10:00+00:00",
+      });
+    // Made between the two starts, and already in the list the page holds.
+    const n = stamped("n", B, { created_at: "2026-11-10T09:05:00Z" });
+    state.list = listOf([n]);
+    state.readNow.mockResolvedValue(listOf([n]));
+    const hook = renderHook(() => useRunNow(projects));
+    await act(async () => {
+      void hook.result.current.run(B);
+    });
+    await flush();
+    await tick();
+    await tick();
+    await tick();
+    expect(toast.success).toHaveBeenCalledWith(
+      "AutoSkills finished in project_B: 1 new draft."
+    );
+  });
+
+  it("needs no list read before the run", async () => {
+    state.status = "loading";
+    state.list = null;
+    stubRelay(200, started);
+    runsGet.mockResolvedValue(ended);
+    state.readNow.mockResolvedValue(
+      listOf([
+        stamped("old", B),
+        stamped("n", B, { created_at: "2026-11-10T09:05:00Z" }),
+      ])
+    );
+    await finish();
+    expect(toast.success).toHaveBeenCalledWith(
+      "AutoSkills finished in project_B: 1 new draft."
+    );
+  });
+
+  it("a draft whose stamp can't be read isn't counted", async () => {
+    stubRelay(200, started);
+    runsGet.mockResolvedValue(ended);
+    state.readNow.mockResolvedValue(
+      listOf([
+        stamped("blank", B, { created_at: "" }),
+        stamped("odd", B, { created_at: "today" }),
+        stamped("auto", B, {
+          status: "approved",
+          approved_by: "auto",
+          approved_at: null,
+        }),
+      ])
+    );
+    await finish();
+    expect(toast.success).toHaveBeenCalledWith(
+      "AutoSkills finished in project_B: no new patterns this time."
+    );
+  });
+
+  it("a start that can't be read falls back to what the list held before the run", async () => {
+    for (const created_at of [
+      undefined,
+      null,
+      5,
+      "",
+      "soon",
+      // No zone: not an instant.
+      "2026-11-10T09:00:00",
+      "2026-11-10 09:00:00+00:00",
+    ]) {
+      toast.success.mockClear();
+      stubRelay(200, started);
+      runsGet.mockResolvedValue({ status: "success", created_at });
+      state.list = listOf([stamped("old", B)]);
+      state.readNow.mockResolvedValue(
+        // Not in the list before the run, whatever its stamp says.
+        listOf([stamped("old", B), stamped("n", B)])
+      );
+      const { unmount } = await finish();
+      expect(toast.success.mock.calls, String(created_at)).toEqual([
+        ["AutoSkills finished in project_B: 1 new draft."],
+      ]);
+      unmount();
+    }
+  });
+
+  it("without a start and without a list before the run there is no count", async () => {
+    state.status = "loading";
+    state.list = null;
+    stubRelay(200, started);
+    runsGet.mockResolvedValue({ status: "success" });
+    state.readNow.mockResolvedValue(listOf([stamped("n", B)]));
+    await finish();
+    expect(toast.success).toHaveBeenCalledWith(
+      "AutoSkills finished in project_B."
+    );
   });
 });
