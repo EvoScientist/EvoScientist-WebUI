@@ -124,7 +124,7 @@ describe("/api/autoskills", () => {
   );
 
   // Reject carries the version too (the core answers 409 draft_changed for
-  // a draft rewritten since), never a scope; revert takes no body.
+  // a draft rewritten since), never a scope.
   it.each([
     [{}, null],
     [{ expected_updated_at: null }, null],
@@ -150,19 +150,37 @@ describe("/api/autoskills", () => {
     }
   );
 
-  it("a revert sends no expected_updated_at", async () => {
-    fetchMock.mockImplementation(async () => answer(200, {}));
+  // A revert carries the version its decision wrote (the core answers 409
+  // draft_changed for a draft changed since, and moves nothing), and
+  // nothing else.
+  it.each([
+    [{}, null],
+    [{ expected_updated_at: null }, null],
+    [
+      { expected_updated_at: "2026-11-06T09:00:00.123456+00:00" },
+      "2026-11-06T09:00:00.123456+00:00",
+    ],
+    [{ expected_updated_at: "x".repeat(64) }, "x".repeat(64)],
+    [
+      {
+        expected_updated_at: "2026-11-06T09:00:00Z",
+        scope: "global",
+        status: "pending",
+      },
+      "2026-11-06T09:00:00Z",
+    ],
+  ])(
+    "reverts with expected_updated_at %j forwarded as %j, and no other field",
+    async (extra, expected) => {
+      fetchMock.mockResolvedValue(answer(200, {}));
 
-    await POST(
-      request({
-        action: "revert",
-        proposal_id: "a-b",
-        expected_updated_at: "2026-11-06T09:00:00+00:00",
-      })
-    );
+      await POST(request({ action: "revert", proposal_id: "a-b", ...extra }));
 
-    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({});
-  });
+      expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+        expected_updated_at: expected,
+      });
+    }
+  );
 
   it("rejects, reverts and runs on their core paths", async () => {
     fetchMock.mockImplementation(async () => answer(200, {}));
@@ -179,7 +197,7 @@ describe("/api/autoskills", () => {
     ]);
     expect(calls.map(([, init]) => JSON.parse(init.body))).toEqual([
       { expected_updated_at: null },
-      {},
+      { expected_updated_at: null },
       { workspace_dir: "/home/you/my proj" },
     ]);
     for (const [, init] of calls) {
@@ -246,6 +264,30 @@ describe("/api/autoskills", () => {
       "a reject with a control character in expected_updated_at",
       {
         action: "reject",
+        proposal_id: "a-b",
+        expected_updated_at: "2026-11-06\n",
+      },
+    ],
+    [
+      "a revert with a numeric expected_updated_at",
+      { action: "revert", proposal_id: "a-b", expected_updated_at: 1 },
+    ],
+    [
+      "a revert with an expected_updated_at that is an object",
+      { action: "revert", proposal_id: "a-b", expected_updated_at: {} },
+    ],
+    [
+      "a revert with an expected_updated_at over 64 characters",
+      {
+        action: "revert",
+        proposal_id: "a-b",
+        expected_updated_at: "x".repeat(65),
+      },
+    ],
+    [
+      "a revert with a control character in expected_updated_at",
+      {
+        action: "revert",
         proposal_id: "a-b",
         expected_updated_at: "2026-11-06\n",
       },

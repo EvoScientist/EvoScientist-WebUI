@@ -52,9 +52,9 @@ function planOf(raw: unknown): Plan | null {
   const id = body.proposal_id;
   if (typeof id !== "string" || !isValidSkillName(id)) return null;
   const path = `/api/autoskills/proposals/${encodeURIComponent(id)}/${action}`;
-  if (action === "revert") return { path, body: {} };
-  // The draft's updated_at as the page read it: the core decides only that
-  // version (409 draft_changed otherwise). Null checks nothing.
+  // The draft's updated_at: as the page read it for an approve or a reject,
+  // as the decision being undone wrote it for a revert. The core acts only
+  // on that version (409 draft_changed otherwise). Null checks nothing.
   const expected = body.expected_updated_at ?? null;
   if (
     expected !== null &&
@@ -64,8 +64,8 @@ function planOf(raw: unknown): Plan | null {
   ) {
     return null;
   }
-  // A reject installs nothing, so it never carries a scope.
-  if (action === "reject") {
+  // A reject and a revert install nothing, so they never carry a scope.
+  if (action === "reject" || action === "revert") {
     return { path, body: { expected_updated_at: expected } };
   }
   const scope = body.scope ?? null;

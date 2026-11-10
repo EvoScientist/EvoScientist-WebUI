@@ -86,6 +86,13 @@ function stubFetch(answers: Array<[number, Record<string, unknown>]>) {
 const okApprove = { approved: true, scope: "workspace" };
 const okGlobal = { approved: true, scope: "global" };
 const okRevert = { reverted: true, status: "pending" };
+/** The revert an Undo sends for a draft whose decision's answer named no
+ *  updated_at (an EvoScientist before the answers carried one). */
+const revertOf = (id: string, stamp: string | null = null) => ({
+  action: "revert",
+  proposal_id: id,
+  expected_updated_at: stamp,
+});
 
 /** The lines of the last error toast's title node. */
 function errorLines(): string[] {
@@ -393,7 +400,7 @@ describe("useDraftActions", () => {
     await act(async () => {
       await options.action.onClick();
     });
-    expect(calls).toEqual([{ action: "revert", proposal_id: "b" }]);
+    expect(calls).toEqual([revertOf("b")]);
   });
 
   it("not_pending is reported per draft and gets no Undo", async () => {
@@ -596,7 +603,7 @@ describe("useDraftActions", () => {
     await act(async () => {
       await options.action.onClick();
     });
-    expect(calls).toEqual([{ action: "revert", proposal_id: "c" }]);
+    expect(calls).toEqual([revertOf("c")]);
   });
 
   it("undo reverts the drafts it was given", async () => {
@@ -621,10 +628,7 @@ describe("useDraftActions", () => {
     await act(async () => {
       await action.onClick();
     });
-    expect(calls).toEqual([
-      { action: "revert", proposal_id: "a" },
-      { action: "revert", proposal_id: "b" },
-    ]);
+    expect(calls).toEqual([revertOf("a"), revertOf("b")]);
     expect(toast.success).toHaveBeenLastCalledWith(
       "Moved 2 skills back to Pending."
     );
@@ -987,7 +991,7 @@ describe("useDraftActions fixes", () => {
     await act(async () => {
       await toast.success.mock.calls[0][1].action.onClick();
     });
-    expect(calls).toEqual([{ action: "revert", proposal_id: "r" }]);
+    expect(calls).toEqual([revertOf("r")]);
     expect(toast.success).toHaveBeenLastCalledWith("Moved r back to Pending.");
   });
 });
@@ -1241,7 +1245,7 @@ describe("Undo after revert_failed", () => {
     await act(async () => {
       await retry();
     });
-    expect(calls).toEqual([{ action: "revert", proposal_id: "a" }]);
+    expect(calls).toEqual([revertOf("a")]);
     expect(toast.success).toHaveBeenLastCalledWith("Moved a back to Pending.");
     stubFetch([]);
     await act(async () => {
@@ -1352,7 +1356,7 @@ describe("Undo after a failure that may not have reached the core", () => {
     await act(async () => {
       await retry();
     });
-    expect(calls).toEqual([{ action: "revert", proposal_id: "b" }]);
+    expect(calls).toEqual([revertOf("b")]);
     expect(toast.success).toHaveBeenLastCalledWith("Moved b back to Pending.");
     stubReverts([]);
     await act(async () => {
@@ -1556,7 +1560,7 @@ describe("a bulk decision stops at the first failure of the relay itself", () =>
     await act(async () => {
       await toast.success.mock.calls[0][1].action.onClick();
     });
-    expect(calls).toEqual([{ action: "revert", proposal_id: "a" }]);
+    expect(calls).toEqual([revertOf("a")]);
     expect(errorLines().at(-1)).toBe("2 more drafts were not sent.");
     // The Undo isn't spent for any of the three.
     const retry = toast.error.mock.calls[0][1].action.onClick;
@@ -1675,7 +1679,7 @@ describe("an Undo never takes back a newer decision", () => {
     await act(async () => {
       await again();
     });
-    expect(calls).toEqual([{ action: "revert", proposal_id: "b" }]);
+    expect(calls).toEqual([revertOf("b")]);
     expect(toast.success).toHaveBeenLastCalledWith("Moved b back to Pending.");
   });
 
@@ -1701,7 +1705,7 @@ describe("an Undo never takes back a newer decision", () => {
     await act(async () => {
       await undoOf(toast.success.mock.calls[1])();
     });
-    expect(calls).toEqual([{ action: "revert", proposal_id: "a" }]);
+    expect(calls).toEqual([revertOf("a")]);
     expect(toast.success).toHaveBeenLastCalledWith("Moved a back to Pending.");
   });
 
@@ -1808,7 +1812,7 @@ describe("an Undo never takes back a newer decision", () => {
     await act(async () => {
       await undoOf(toast.success.mock.calls[0])();
     });
-    expect(calls).toEqual([{ action: "revert", proposal_id: "a" }]);
+    expect(calls).toEqual([revertOf("a")]);
   });
 
   it("another draft's decision leaves the Undo as it was", async () => {
@@ -1827,7 +1831,309 @@ describe("an Undo never takes back a newer decision", () => {
     await act(async () => {
       await undoOf(toast.success.mock.calls[0])();
     });
-    expect(calls).toEqual([{ action: "revert", proposal_id: "a" }]);
+    expect(calls).toEqual([revertOf("a")]);
+  });
+});
+
+// Every decision's answer carries the updated_at that decision wrote. The
+// Undo sends it back, so the core moves the draft only while it is still as
+// that decision left it (409 draft_changed otherwise, before not_decided).
+describe("an Undo is for the version its decision wrote", () => {
+  const STAMP_A = "2026-11-10T09:00:00.123456+00:00";
+  const STAMP_B = "2026-11-10T09:00:01.654321+00:00";
+  /** The reverts answer in turn: `[status, body]`, or "network" for a
+   *  fetch that rejects. */
+  function stubReverts(
+    answers: Array<[number, Record<string, unknown>] | "network">
+  ) {
+    calls = [];
+    let i = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: string, init: RequestInit) => {
+        calls.push(JSON.parse(String(init.body)));
+        const next = answers[i++];
+        return next === "network"
+          ? Promise.reject(new TypeError("Failed to fetch"))
+          : reply(next[0], next[1]);
+      })
+    );
+  }
+  const undoOf = (call = 0) =>
+    toast.success.mock.calls[call][1].action.onClick as () => Promise<void>;
+
+  it("an approval's Undo sends the updated_at each approval's answer named", async () => {
+    stubFetch([
+      [200, { ...okApprove, updated_at: STAMP_A }],
+      [200, { ...okApprove, updated_at: STAMP_B }],
+    ]);
+    const { result } = setup();
+    await act(async () => {
+      await result.current.approve([
+        // The stamp the page read is the draft before the decision: never
+        // the one to send back.
+        draft({ proposal_id: "a", updated_at: "2026-11-01T00:00:00Z" }),
+        draft({ proposal_id: "b", updated_at: "2026-11-02T00:00:00Z" }),
+      ]);
+    });
+    stubFetch([
+      [200, { ...okRevert, updated_at: "2026-11-10T09:05:00+00:00" }],
+      [200, { ...okRevert, updated_at: "2026-11-10T09:05:01+00:00" }],
+    ]);
+    await act(async () => {
+      await undoOf()();
+    });
+    expect(calls).toEqual([revertOf("a", STAMP_A), revertOf("b", STAMP_B)]);
+    expect(toast.success).toHaveBeenLastCalledWith(
+      "Moved 2 skills back to Pending."
+    );
+  });
+
+  it("a rejection's Undo sends the updated_at its answer named", async () => {
+    stubFetch([[200, { rejected: true, updated_at: STAMP_A }]]);
+    const { result } = setup();
+    await act(async () => {
+      await result.current.reject([
+        draft({ proposal_id: "r", updated_at: "2026-11-01T00:00:00Z" }),
+      ]);
+    });
+    stubFetch([[200, okRevert]]);
+    await act(async () => {
+      await undoOf()();
+    });
+    expect(calls).toEqual([revertOf("r", STAMP_A)]);
+  });
+
+  it.each([
+    ["names none", {}],
+    ["names an empty one", { updated_at: "" }],
+    ["names one that isn't text", { updated_at: 1762765200 }],
+    ["names null", { updated_at: null }],
+  ])(
+    "sends null for a draft whose answer %s, never the stamp the page read",
+    async (_label, extra) => {
+      stubFetch([
+        [200, { ...okApprove, ...extra }],
+        [200, { ...okApprove, updated_at: STAMP_B }],
+      ]);
+      const { result } = setup();
+      await act(async () => {
+        await result.current.approve([
+          draft({ proposal_id: "a", updated_at: "2026-11-01T00:00:00Z" }),
+          draft({ proposal_id: "b", updated_at: "2026-11-02T00:00:00Z" }),
+        ]);
+      });
+      stubFetch([
+        [200, okRevert],
+        [200, okRevert],
+      ]);
+      await act(async () => {
+        await undoOf()();
+      });
+      expect(calls).toEqual([revertOf("a", null), revertOf("b", STAMP_B)]);
+    }
+  );
+
+  it("keeps the stamp as the core wrote it", async () => {
+    // Opaque: not trimmed, not parsed as a date.
+    const odd = " 2026-11-10 09:00:00,5 ";
+    stubFetch([[200, { rejected: true, updated_at: odd }]]);
+    const { result } = setup();
+    await act(async () => {
+      await result.current.reject([draft({ proposal_id: "r" })]);
+    });
+    stubFetch([[200, okRevert]]);
+    await act(async () => {
+      await undoOf()();
+    });
+    expect(calls).toEqual([revertOf("r", odd)]);
+  });
+
+  it.each([
+    [
+      "the core couldn't finish the revert",
+      [409, { error: "revert_failed", detail: "busy" }] as [
+        number,
+        Record<string, unknown>
+      ],
+    ],
+    ["the fetch rejected", "network" as const],
+    [
+      "the backend did not answer in time",
+      [504, { error: "backend_timeout" }] as [number, Record<string, unknown>],
+    ],
+    [
+      "the backend could not be reached",
+      [502, { error: "backend_unreachable" }] as [
+        number,
+        Record<string, unknown>
+      ],
+    ],
+  ])(
+    "an Undo offered again after %s sends the same stamp",
+    async (_label, failure) => {
+      stubFetch([[200, { ...okApprove, updated_at: STAMP_A }]]);
+      const { result } = setup();
+      await act(async () => {
+        await result.current.approve([draft({ proposal_id: "a" })]);
+      });
+      stubReverts([failure]);
+      await act(async () => {
+        await undoOf()();
+      });
+      expect(calls).toEqual([revertOf("a", STAMP_A)]);
+      // Offered again, and again after a second failure: the decision's
+      // stamp each time (the core changes it only when a revert is written).
+      stubReverts([failure]);
+      await act(async () => {
+        await toast.error.mock.calls[0][1].action.onClick();
+      });
+      expect(calls).toEqual([revertOf("a", STAMP_A)]);
+      stubReverts([[200, { ...okRevert, updated_at: STAMP_B }]]);
+      await act(async () => {
+        await toast.error.mock.calls[1][1].action.onClick();
+      });
+      expect(calls).toEqual([revertOf("a", STAMP_A)]);
+      expect(toast.success).toHaveBeenLastCalledWith(
+        "Moved a back to Pending."
+      );
+    }
+  );
+
+  it("an Undo cut short offers the drafts it didn't send again, each with its own stamp", async () => {
+    stubFetch([
+      [200, { ...okApprove, updated_at: STAMP_A }],
+      [200, okApprove],
+      [200, { ...okApprove, updated_at: STAMP_B }],
+    ]);
+    const { result } = setup();
+    await act(async () => {
+      await result.current.approve([
+        draft({ proposal_id: "a" }),
+        draft({ proposal_id: "b" }),
+        draft({ proposal_id: "c" }),
+      ]);
+    });
+    // The first revert's fetch rejects: b and c are never sent.
+    stubReverts(["network"]);
+    await act(async () => {
+      await undoOf()();
+    });
+    expect(calls).toEqual([revertOf("a", STAMP_A)]);
+    stubReverts([
+      [200, okRevert],
+      [200, okRevert],
+      [200, okRevert],
+    ]);
+    await act(async () => {
+      await toast.error.mock.calls[0][1].action.onClick();
+    });
+    expect(calls).toEqual([
+      revertOf("a", STAMP_A),
+      revertOf("b", null),
+      revertOf("c", STAMP_B),
+    ]);
+  });
+
+  const CHANGED =
+    "a changed since this Undo was offered, so nothing was moved. The drafts are being read again.";
+
+  it("a revert answered draft_changed says so, moves nothing and offers no other Undo", async () => {
+    const onReverted = vi.fn();
+    stubFetch([[200, { ...okApprove, updated_at: STAMP_A }]]);
+    const { result } = renderHook(() =>
+      useDraftActions(projects, { onReverted })
+    );
+    await act(async () => {
+      await result.current.approve([draft({ proposal_id: "a" })]);
+    });
+    expect(refresh).toHaveBeenCalledTimes(1);
+    stubFetch([[409, { error: "draft_changed", updated_at: STAMP_B }]]);
+    await act(async () => {
+      await undoOf()();
+    });
+    expect(calls).toEqual([revertOf("a", STAMP_A)]);
+    expect(errorLines()).toEqual([CHANGED]);
+    // No toast options: Undo isn't offered again.
+    expect(toast.error).toHaveBeenCalledTimes(1);
+    expect(toast.error.mock.calls[0]).toHaveLength(1);
+    // Not reported as moved back: the page holds nothing for it.
+    expect(onReverted).not.toHaveBeenCalled();
+    expect(toast.success).toHaveBeenCalledTimes(1);
+    // The drafts are read again, as the line says.
+    expect(refresh).toHaveBeenCalledTimes(2);
+  });
+
+  it("in a batch, only the drafts the core moved are reported as moved", async () => {
+    const onReverted = vi.fn();
+    stubFetch([
+      [200, { ...okApprove, updated_at: STAMP_A }],
+      [200, { ...okApprove, updated_at: STAMP_B }],
+    ]);
+    const { result } = renderHook(() =>
+      useDraftActions(projects, { onReverted })
+    );
+    const a = draft({ proposal_id: "a" });
+    const b = draft({ proposal_id: "b" });
+    await act(async () => {
+      await result.current.approve([a, b]);
+    });
+    stubFetch([
+      [409, { error: "draft_changed", updated_at: "2026-11-10T10:00:00Z" }],
+      [200, okRevert],
+    ]);
+    await act(async () => {
+      await undoOf()();
+    });
+    // The changed draft doesn't end the batch.
+    expect(calls).toEqual([revertOf("a", STAMP_A), revertOf("b", STAMP_B)]);
+    expect(errorLines()).toEqual([CHANGED]);
+    expect(toast.error.mock.calls[0]).toHaveLength(1);
+    expect(onReverted.mock.calls).toEqual([[[b], expect.any(Promise)]]);
+    expect(toast.success).toHaveBeenLastCalledWith("Moved b back to Pending.");
+  });
+
+  it("an Undo offered again that then meets draft_changed stops there", async () => {
+    stubFetch([[200, { ...okApprove, updated_at: STAMP_A }]]);
+    const { result } = setup();
+    await act(async () => {
+      await result.current.approve([draft({ proposal_id: "a" })]);
+    });
+    // The revert reached the core, but its answer was lost.
+    stubReverts(["network"]);
+    await act(async () => {
+      await undoOf()();
+    });
+    // The retry carries the decision's stamp; the draft has the revert's.
+    stubReverts([[409, { error: "draft_changed", updated_at: STAMP_B }]]);
+    await act(async () => {
+      await toast.error.mock.calls[0][1].action.onClick();
+    });
+    expect(calls).toEqual([revertOf("a", STAMP_A)]);
+    expect(errorLines()).toEqual([CHANGED]);
+    expect(toast.error.mock.calls[1]).toHaveLength(1);
+  });
+
+  // An EvoScientist whose answers carry no updated_at checks nothing on a
+  // revert: there the count of decisions made through this hook still keeps
+  // an Undo from taking back a newer one.
+  it("without a stamp, a draft decided again is still left out of an older Undo", async () => {
+    stubFetch([[200, { rejected: true }]]);
+    const { result } = setup();
+    const a = draft({ proposal_id: "a" });
+    await act(async () => {
+      await result.current.reject([a]);
+    });
+    stubFetch([[200, okApprove]]);
+    await act(async () => {
+      await result.current.approve([a]);
+    });
+    stubFetch([]);
+    await act(async () => {
+      await undoOf(0)();
+    });
+    expect(calls).toEqual([]);
+    expect(toast.error).not.toHaveBeenCalled();
   });
 });
 

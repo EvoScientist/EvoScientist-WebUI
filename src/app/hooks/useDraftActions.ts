@@ -221,13 +221,25 @@ const SUCCESS_FLAG = {
 async function post(
   body: Record<string, unknown> & { action: keyof typeof SUCCESS_FLAG }
 ): Promise<
-  { ok: true; data: Record<string, unknown> } | { ok: false; answer: Answer }
+  | {
+      ok: true;
+      data: Record<string, unknown>;
+      /** The `updated_at` this decision wrote, verbatim; null when the
+       *  answer names none (an EvoScientist before the answers had one). */
+      updatedAt: string | null;
+    }
+  | { ok: false; answer: Answer }
 > {
   const reply: RelayReply = await postRelay(body);
   if (reply === "network") return { ok: false, answer: "network" };
   const data = reply.data;
   if (reply.ok && data[SUCCESS_FLAG[body.action]] === true) {
-    return { ok: true, data };
+    const stamp = data.updated_at;
+    return {
+      ok: true,
+      data,
+      updatedAt: typeof stamp === "string" && stamp ? stamp : null,
+    };
   }
   return {
     ok: false,
@@ -281,6 +293,7 @@ async function decideAll(
     operations: Record<string, Draft["operation"]>;
     statuses: Map<string, string>;
     kept: Set<string>;
+    stamps: Map<string, string>;
   }
 > {
   const result: DecisionResult = { done: [], failed: [] };
@@ -295,12 +308,16 @@ async function decideAll(
   // The approvals that left the project's own copy of the skill in place
   // (`workspace_shadow`, its path): the core updated the global one only.
   const kept = new Set<string>();
+  // The updated_at each decision wrote, for the answers that name one: the
+  // version an Undo of that decision is for.
+  const stamps = new Map<string, string>();
   for (const [index, draft] of drafts.entries()) {
     const body = bodyOf(draft);
     const out = await post(body);
     if (out.ok) {
       result.done.push(draft);
       onDone?.(draft);
+      if (out.updatedAt !== null) stamps.set(draft.proposal_id, out.updatedAt);
       const scope = isScope(out.data.scope) ? out.data.scope : body.scope;
       if (isScope(scope)) placed[draft.proposal_id] = scope;
       const operation = out.data.operation;
@@ -331,7 +348,7 @@ async function decideAll(
       }
     }
   }
-  return { ...result, placed, operations, statuses, kept };
+  return { ...result, placed, operations, statuses, kept, stamps };
 }
 
 /** The success lines of an Undo, by where the core says each draft went:
@@ -448,6 +465,12 @@ export function useDraftActions(
     (
       revertible: Draft[],
       labels: Map<string, string>,
+      // The updated_at each draft's decision wrote, as its answer named it.
+      // The revert sends it, and the core moves the draft only while it is
+      // still as that decision left it. A draft without one (an older
+      // EvoScientist) sends null, which checks nothing. An Undo offered
+      // again sends the same: a revert the core couldn't finish wrote none.
+      stamps: ReadonlyMap<string, string>,
       // The decisions this Undo is for: each draft's count as its decision
       // left it. An Undo offered again gets the counts of the Undo that
       // offered it, since a draft may be decided again while a revert is out.
@@ -480,7 +503,11 @@ export function useDraftActions(
           let lost = false;
           const { done, failed, statuses } = await decideAll(
             mine,
-            (d) => ({ action: "revert", proposal_id: d.proposal_id }),
+            (d) => ({
+              action: "revert",
+              proposal_id: d.proposal_id,
+              expected_updated_at: stamps.get(d.proposal_id) ?? null,
+            }),
             labels,
             (answer, d) => {
               const code =
@@ -492,6 +519,12 @@ export function useDraftActions(
               }
               if (code === "not_decided") {
                 return `${d.skill_name} is already back in Pending.`;
+              }
+              // The draft isn't as the decision left it (the core checks
+              // this before not_decided): nothing was moved, the draft is
+              // not reported as moved back, and no other Undo is offered.
+              if (code === "draft_changed") {
+                return `${d.skill_name} changed since this Undo was offered, so nothing was moved. The drafts are being read again.`;
               }
               if (code === "revert_failed") {
                 retryable.push(d);
@@ -536,7 +569,7 @@ export function useDraftActions(
                   duration: UNDO_MS,
                   action: {
                     label: "Undo",
-                    onClick: undoer(retryable, labels, made),
+                    onClick: undoer(retryable, labels, stamps, made),
                   },
                 }
               : undefined
@@ -555,7 +588,7 @@ export function useDraftActions(
     ) =>
       track(async () => {
         const labels = projectLabels(projectsRef.current);
-        const { placed, operations, kept, done, failed } = await decideAll(
+        const decided = await decideAll(
           drafts,
           (d) =>
             action === "approve"
@@ -587,6 +620,7 @@ export function useDraftActions(
             counts.set(d.proposal_id, (counts.get(d.proposal_id) ?? 0) + 1);
           }
         );
+        const { placed, operations, kept, stamps, done, failed } = decided;
         const result: DecisionResult = { done, failed };
         reread();
         if (result.done.length > 0) {
@@ -604,7 +638,10 @@ export function useDraftActions(
           if (revertible.length > 0) {
             toast.success(text, {
               duration: UNDO_MS,
-              action: { label: "Undo", onClick: undoer(revertible, labels) },
+              action: {
+                label: "Undo",
+                onClick: undoer(revertible, labels, stamps),
+              },
             });
           } else {
             toast.success(text);
