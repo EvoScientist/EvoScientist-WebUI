@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { act, render, renderHook, waitFor } from "@testing-library/react";
-import { SWRConfig } from "swr";
+import { SWRConfig, unstable_serialize } from "swr";
 import {
   AUTOSKILLS_REFRESH_MS,
   CHECK_DEADLINE_MS,
@@ -383,6 +383,101 @@ describe("useAutoSkills", () => {
       const answered = fetchMock.mock.calls.length;
       await settle(AUTOSKILLS_REFRESH_MS * 2);
       expect(fetchMock.mock.calls.length).toBe(answered + 2);
+    });
+
+    // SWR 2.4.1 starts a second request for a `mutate(key)` made while a read
+    // of the key is out, and drops the first one's answer: a focus read that
+    // would have brought the list was lost to a minute's read that failed.
+    it("skips its minute while a read of the list is in flight, and that read's answer is what shows", async () => {
+      vi.useFakeTimers();
+      let held: ((res: Response) => void) | null = null;
+      let reads = 0;
+      const fetchMock = stubFetch(() => {
+        reads += 1;
+        // The first read on the mount answers; the second is held; any read
+        // started while it is out would fail.
+        if (reads === 1) return json(list(["a"]));
+        if (reads === 2) {
+          return new Promise<Response>((resolve) => {
+            held = resolve;
+          });
+        }
+        return held ? json({}, 500) : json(list(["a", "b"]));
+      });
+      const { result } = renderHook(() => useAutoSkills(), { wrapper });
+      await settle(10);
+      expect(result.current.status).toBe("ready");
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      // The window is focused 10 ms before the minute: SWR's focus read
+      // starts and doesn't answer yet.
+      await settle(AUTOSKILLS_REFRESH_MS - 20);
+      act(() => {
+        window.dispatchEvent(new Event("focus"));
+      });
+      await settle(5);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(held).not.toBeNull();
+
+      // The minute comes round with that read out: nothing else is asked.
+      await settle(1_000);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+
+      // The held read answers, and its list is what shows.
+      const answer = held as unknown as (res: Response) => void;
+      held = null;
+      await act(async () => {
+        answer(json(list(["a", "b"])));
+        await vi.advanceTimersByTimeAsync(10);
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(result.current.status).toBe("ready");
+      expect(
+        result.current.status === "ready" &&
+          result.current.list.drafts.map((d) => d.proposal_id)
+      ).toEqual(["a", "b"]);
+
+      // Only that minute was skipped: the next one reads.
+      await settle(AUTOSKILLS_REFRESH_MS);
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      expect(result.current.status).toBe("ready");
+    });
+
+    // SWR writes `isValidating: false` only when a read it kept ends. A read
+    // it discarded, with none started in its place, leaves the flag true in
+    // the cache: a timer that waited for it would never read again.
+    it("never skips two minutes in a row: with the flag left true, the minute after the skipped one reads", async () => {
+      vi.useFakeTimers();
+      const fetchMock = stubFetch(() => json(list()));
+      const cache = new Map<string, Record<string, unknown>>();
+      const { result } = renderHook(() => useAutoSkills(), {
+        wrapper: ({ children }: { children: ReactNode }) => (
+          <SWRConfig value={{ provider: () => cache, dedupingInterval: 0 }}>
+            {children}
+          </SWRConfig>
+        ),
+      });
+      await settle(10);
+      expect(result.current.status).toBe("ready");
+      const asked = fetchMock.mock.calls.length;
+      // The state SWR leaves behind: validating, with no read out.
+      const id = unstable_serialize([
+        "autoskills",
+        "http://127.0.0.1:6174",
+        "",
+      ]);
+      expect(cache.get(id)?.isValidating).toBe(false);
+      cache.set(id, { ...cache.get(id), isValidating: true });
+
+      // The first minute waits for the read it takes to be out.
+      await settle(AUTOSKILLS_REFRESH_MS);
+      expect(fetchMock.mock.calls.length).toBe(asked);
+      // The second reads whatever the flag says, and its read clears it.
+      await settle(AUTOSKILLS_REFRESH_MS);
+      expect(fetchMock.mock.calls.length).toBe(asked + 1);
+      expect(cache.get(id)?.isValidating).toBe(false);
+      await settle(AUTOSKILLS_REFRESH_MS);
+      expect(fetchMock.mock.calls.length).toBe(asked + 2);
     });
 
     it("a deployment switch moves the timer to the new backend's list", async () => {

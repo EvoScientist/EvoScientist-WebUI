@@ -121,7 +121,13 @@ const polls = new WeakMap<Cache, Map<string, Poll>>();
  *  while the latest read failed (SWR's error retry reads then), and while
  *  the latest answer is "unsupported": an EvoScientist without the route
  *  isn't asked every minute by every page (the rail is on all of them).
- *  Focus still reads, and once a read finds a list the timer reads again. */
+ *  Focus still reads, and once a read finds a list the timer reads again.
+ *  A minute is also skipped while a read of the list is out (one that focus
+ *  or a reconnect started a moment before): SWR starts a second request for
+ *  a `mutate(key)` made then and drops the first one's answer, so a read
+ *  that would have brought the list was lost to one that failed. Never two
+ *  minutes in a row, though: SWR clears the key's `isValidating` only when
+ *  a read it kept ends, so a read it discarded can leave the flag true. */
 function joinPoll(
   cache: Cache,
   mutate: ScopedMutator,
@@ -135,6 +141,8 @@ function joinPoll(
   }
   let poll = byKey.get(id);
   if (!poll) {
+    // Whether the last minute was skipped for a read in flight.
+    let waited = false;
     const tick = () => {
       if (
         typeof document !== "undefined" &&
@@ -149,6 +157,11 @@ function joinPoll(
       if (latest?.data === "unsupported" || latest?.error !== undefined) {
         return;
       }
+      if (latest?.isValidating && !waited) {
+        waited = true;
+        return;
+      }
+      waited = false;
       try {
         void Promise.resolve(mutate(key)).catch(() => {});
       } catch {
