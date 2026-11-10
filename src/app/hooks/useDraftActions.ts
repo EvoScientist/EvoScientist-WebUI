@@ -496,7 +496,11 @@ export function useDraftActions(
         return track(async () => {
           // The drafts Undo is offered for again: a revert the core
           // couldn't finish, or one the page can't tell reached the core.
-          // A second revert of a draft already back answers not_decided.
+          // A revert that went through wrote a new stamp, so a second Undo,
+          // which carries the same stamp as the first, is refused with
+          // draft_changed (the core checks the stamp before not_decided).
+          // Without a stamp, a second revert of a draft already back in
+          // Pending answers not_decided.
           const retryable: Draft[] = [];
           // Such a failure also ends the batch: the drafts after it were
           // never sent, and get their Undo back with it.
