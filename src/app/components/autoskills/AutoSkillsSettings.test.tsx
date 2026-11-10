@@ -813,43 +813,49 @@ describe("AutoSkillsSettings", () => {
     );
   });
 
-  it("that re-read failing or never answering leaves the panel usable", async () => {
-    const unhandled = vi.fn();
-    process.on("unhandledRejection", unhandled);
-    for (const refresh of [
-      vi.fn().mockRejectedValue(new Error("down")),
-      vi.fn(() => {
+  // One case each: a panel takes a while to render on a loaded machine.
+  // Plain functions, not mocks: a mock handles the promise it returns, which
+  // would hide a rejection nobody else handles.
+  it.each<[string, () => Promise<unknown>]>([
+    ["rejects", () => Promise.reject(new Error("down"))],
+    [
+      "throws",
+      () => {
         throw new Error("down");
-      }),
-      vi.fn(() => new Promise(() => {})),
-    ]) {
-      const view = panel();
-      hooks.refresh = refresh;
-      // Rendered again so the panel holds this refresh.
-      view.rerender(
-        <AutoSkillsSettings
-          open
-          onOpenChange={vi.fn()}
-        />
-      );
-      fireEvent.click(
-        screen.getByLabelText("Auto — install drafts without asking")
-      );
-      fetchMock.mockRejectedValueOnce(new Error("down"));
-      fireEvent.click(save());
-      expect(
-        await screen.findByText(/They are being read again\./)
-      ).toBeTruthy();
-      expect(refresh).toHaveBeenCalledTimes(1);
-      await waitFor(() =>
-        expect((save() as HTMLButtonElement).disabled).toBe(false)
-      );
-      view.unmount();
+      },
+    ],
+    ["never answers", () => new Promise(() => {})],
+  ])(
+    "that re-read leaves the panel usable when it %s",
+    async (_how, reread) => {
+      const unhandled = vi.fn();
+      process.on("unhandledRejection", unhandled);
+      try {
+        let reads = 0;
+        hooks.refresh = (() => {
+          reads += 1;
+          return reread();
+        }) as unknown as typeof hooks.refresh;
+        panel();
+        fireEvent.click(
+          screen.getByLabelText("Auto — install drafts without asking")
+        );
+        fetchMock.mockRejectedValueOnce(new Error("down"));
+        fireEvent.click(save());
+        expect(
+          await screen.findByText(/They are being read again\./)
+        ).toBeTruthy();
+        expect(reads).toBe(1);
+        await waitFor(() =>
+          expect((save() as HTMLButtonElement).disabled).toBe(false)
+        );
+        await new Promise((r) => setTimeout(r, 10));
+        expect(unhandled).not.toHaveBeenCalled();
+      } finally {
+        process.off("unhandledRejection", unhandled);
+      }
     }
-    await new Promise((r) => setTimeout(r, 10));
-    expect(unhandled).not.toHaveBeenCalled();
-    process.off("unhandledRejection", unhandled);
-  });
+  );
 
   it("words any other refusal with the settings wording", async () => {
     panel();
