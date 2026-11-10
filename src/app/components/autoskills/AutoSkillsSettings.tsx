@@ -285,7 +285,18 @@ export function AutoSkillsSettings({
           body: JSON.stringify(body),
         });
       } catch {
-        setMessage("The WebUI server did not answer. Nothing was saved.");
+        // The relay may have passed the save on before its answer was
+        // lost: never "nothing was saved". The settings are read again, in
+        // the background (the browser reads them from the backend itself);
+        // a save that did go through then shows as saved, its edits gone.
+        setMessage(
+          "The WebUI server did not answer, so the page can't tell whether the settings were saved. They are being read again."
+        );
+        try {
+          void Promise.resolve(refresh()).catch(() => {});
+        } catch {
+          // ignore
+        }
         return;
       }
       const answer: unknown = await res.json().catch(() => null);

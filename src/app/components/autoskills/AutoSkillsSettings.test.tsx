@@ -782,8 +782,10 @@ describe("AutoSkillsSettings", () => {
     expect(await screen.findByText("Not a mode.")).toBeTruthy();
   });
 
-  it("says nothing was saved when the server does not answer", async () => {
-    panel();
+  // The relay may have passed the save on before its answer was lost.
+  it("a save the server never answered isn't called unsaved, and the settings are read again", async () => {
+    const onOpenChange = vi.fn();
+    panel(onOpenChange);
     fireEvent.click(
       screen.getByLabelText("Auto — install drafts without asking")
     );
@@ -791,9 +793,62 @@ describe("AutoSkillsSettings", () => {
     fireEvent.click(save());
     expect(
       await screen.findByText(
-        "The WebUI server did not answer. Nothing was saved."
+        "The WebUI server did not answer, so the page can't tell whether the settings were saved. They are being read again."
       )
     ).toBeTruthy();
+    expect(screen.queryByText(/Nothing was saved/)).toBeNull();
+    expect(hooks.refresh).toHaveBeenCalledTimes(1);
+    // The panel stays, with the edit, and nothing claims a save.
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(
+      (
+        screen.getByLabelText(
+          "Auto — install drafts without asking"
+        ) as HTMLInputElement
+      ).checked
+    ).toBe(true);
+    await waitFor(() =>
+      expect((save() as HTMLButtonElement).disabled).toBe(false)
+    );
+  });
+
+  it("that re-read failing or never answering leaves the panel usable", async () => {
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+    for (const refresh of [
+      vi.fn().mockRejectedValue(new Error("down")),
+      vi.fn(() => {
+        throw new Error("down");
+      }),
+      vi.fn(() => new Promise(() => {})),
+    ]) {
+      const view = panel();
+      hooks.refresh = refresh;
+      // Rendered again so the panel holds this refresh.
+      view.rerender(
+        <AutoSkillsSettings
+          open
+          onOpenChange={vi.fn()}
+        />
+      );
+      fireEvent.click(
+        screen.getByLabelText("Auto — install drafts without asking")
+      );
+      fetchMock.mockRejectedValueOnce(new Error("down"));
+      fireEvent.click(save());
+      expect(
+        await screen.findByText(/They are being read again\./)
+      ).toBeTruthy();
+      expect(refresh).toHaveBeenCalledTimes(1);
+      await waitFor(() =>
+        expect((save() as HTMLButtonElement).disabled).toBe(false)
+      );
+      view.unmount();
+    }
+    await new Promise((r) => setTimeout(r, 10));
+    expect(unhandled).not.toHaveBeenCalled();
+    process.off("unhandledRejection", unhandled);
   });
 
   it("words any other refusal with the settings wording", async () => {
