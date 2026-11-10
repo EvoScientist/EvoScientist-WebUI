@@ -24,7 +24,14 @@ export interface DecisionResult {
   /** `changed`: the core decided nothing because the draft changed since
    *  the page read it (`draft_changed`, for an approve and a reject alike);
    *  it is still pending. */
-  failed: Array<{ draft: Draft; message: string; changed?: boolean }>;
+  failed: Array<{
+    draft: Draft;
+    message: string;
+    changed?: boolean;
+    /** Never sent: an earlier draft of the batch drew a failure of the
+     *  relay itself, which would repeat for this one. */
+    unsent?: boolean;
+  }>;
 }
 
 type Answer = { status: number; error?: string; detail?: string } | "network";
@@ -175,6 +182,25 @@ function isScope(value: unknown): value is DraftScope {
   return value === "workspace" || value === "global";
 }
 
+/** Whether a failure is the relay's own (the fetch to the WebUI server
+ *  rejected, or one of the relay's refusals): every further draft of the
+ *  batch would draw it again, and each request may wait out the relay's
+ *  timeout first. */
+function repeatsForEveryDraft(answer: Answer): boolean {
+  if (answer === "network") return true;
+  return typeof answer.error === "string" && isRelayRefusal(answer.error);
+}
+
+/** The one line for the drafts a batch cut short never sent. */
+function notSentLine(n: number): string {
+  return n === 1
+    ? "1 more draft was not sent."
+    : `${n} more drafts were not sent.`;
+}
+
+/** Send the drafts one after another. The batch ends at the first failure
+ *  of the relay itself: the drafts after it are not sent (`unsent`, all
+ *  with the one line that counts them). */
 async function decideAll(
   drafts: Draft[],
   bodyOf: (d: Draft) => Parameters<typeof post>[0],
@@ -196,7 +222,7 @@ async function decideAll(
   const operations: Record<string, Draft["operation"]> = {};
   // The status each answer names: a revert says where the draft went.
   const statuses = new Map<string, string>();
-  for (const draft of drafts) {
+  for (const [index, draft] of drafts.entries()) {
     const body = bodyOf(draft);
     const out = await post(body);
     if (out.ok) {
@@ -216,6 +242,14 @@ async function decideAll(
         result.failed.push({ draft, message, changed: true });
       } else {
         result.failed.push({ draft, message });
+      }
+      if (repeatsForEveryDraft(out.answer)) {
+        const rest = drafts.slice(index + 1);
+        const line = notSentLine(rest.length);
+        for (const d of rest) {
+          result.failed.push({ draft: d, message: line, unsent: true });
+        }
+        break;
       }
     }
   }
@@ -340,6 +374,9 @@ export function useDraftActions(
           // couldn't finish, or one the page can't tell reached the core.
           // A second revert of a draft already back answers not_decided.
           const retryable: Draft[] = [];
+          // Such a failure also ends the batch: the drafts after it were
+          // never sent, and get their Undo back with it.
+          let lost = false;
           const { done, failed, statuses } = await decideAll(
             revertible,
             (d) => ({ action: "revert", proposal_id: d.proposal_id }),
@@ -359,10 +396,18 @@ export function useDraftActions(
                 retryable.push(d);
                 return `${d.skill_name} couldn't be moved back to Pending: a file is in use. Try Undo again in a moment.`;
               }
-              if (mayNotHaveArrived(answer)) retryable.push(d);
+              if (mayNotHaveArrived(answer)) {
+                retryable.push(d);
+                lost = true;
+              }
               return decisionError(answer, d, labels);
             }
           );
+          if (lost) {
+            retryable.push(
+              ...failed.filter((f) => f.unsent).map((f) => f.draft)
+            );
+          }
           // The re-read starts here, after the revert answered and BEFORE
           // the page hears of the Undo, which gets its promise. The page
           // holds the drafts and, once this read has settled, releases them

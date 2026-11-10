@@ -655,9 +655,11 @@ describe("useDraftActions fixes", () => {
   });
 
   it("failures show one line each, identical lines once", async () => {
+    // The core's own refusals: each draft is asked (a refusal of the relay
+    // itself ends the batch, below).
     stubFetch([
-      [403, { error: "secret_rejected" }],
-      [403, { error: "secret_rejected" }],
+      [403, { error: "local_secret_required" }],
+      [403, { error: "local_secret_required" }],
       [404, { error: "not_found" }],
     ]);
     const { result } = setup();
@@ -1222,6 +1224,165 @@ describe("Undo after a failure that may not have reached the core", () => {
       await undo();
     });
     expect(toast.error).toHaveBeenCalledTimes(1);
+    expect(toast.error.mock.calls[0]).toHaveLength(1);
+  });
+});
+
+// A failure of the relay itself (the fetch to the WebUI server rejected, or
+// one of the relay's refusals) repeats for every draft, and each request
+// can wait two minutes: the batch ends there.
+describe("a bulk decision stops at the first failure of the relay itself", () => {
+  const UNREACHABLE =
+    "The WebUI server cannot reach EvoScientist on this machine.";
+  const four = () =>
+    ["a", "b", "c", "d"].map((id) => draft({ proposal_id: id }));
+
+  it("sends nothing after a relay refusal and says how many were not sent", async () => {
+    stubFetch([
+      [200, okApprove],
+      [502, { error: "backend_unreachable" }],
+    ]);
+    const { result } = setup();
+    const [a, b, c, d] = four();
+    let out: DecisionResult | undefined;
+    await act(async () => {
+      out = await result.current.approve([a, b, c, d]);
+    });
+    expect(calls.map((body) => body.proposal_id)).toEqual(["a", "b"]);
+    const rest = "2 more drafts were not sent.";
+    expect(out).toEqual({
+      done: [a],
+      failed: [
+        { draft: b, message: UNREACHABLE },
+        { draft: c, message: rest, unsent: true },
+        { draft: d, message: rest, unsent: true },
+      ],
+    });
+    // One line for the failure, one for all the drafts not sent.
+    expect(toast.error).toHaveBeenCalledTimes(1);
+    expect(errorLines()).toEqual([UNREACHABLE, rest]);
+    // What did go through is still reported, with its Undo.
+    expect(toast.success).toHaveBeenCalledWith(
+      "Installed a into EvoSci_test/skills.",
+      expect.objectContaining({ action: expect.anything() })
+    );
+    expect(result.current.busy).toBe(false);
+  });
+
+  it("stops after a fetch that rejects, one draft left", async () => {
+    calls = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: string, init: RequestInit) => {
+        calls.push(JSON.parse(String(init.body)));
+        return Promise.reject(new TypeError("Failed to fetch"));
+      })
+    );
+    const { result } = setup();
+    const a = draft({ proposal_id: "a" });
+    const b = draft({ proposal_id: "b" });
+    let out: DecisionResult | undefined;
+    await act(async () => {
+      out = await result.current.reject([a, b]);
+    });
+    expect(calls.map((body) => body.proposal_id)).toEqual(["a"]);
+    expect(out?.failed.map((f) => [f.draft, f.unsent])).toEqual([
+      [a, undefined],
+      [b, true],
+    ]);
+    expect(errorLines().at(-1)).toBe("1 more draft was not sent.");
+    expect(errorLines()).toHaveLength(2);
+  });
+
+  it("the last draft's failure leaves none to name", async () => {
+    stubFetch([
+      [200, okApprove],
+      [504, { error: "backend_timeout" }],
+    ]);
+    const { result } = setup();
+    await act(async () => {
+      await result.current.approve([
+        draft({ proposal_id: "a" }),
+        draft({ proposal_id: "b" }),
+      ]);
+    });
+    expect(errorLines()).toHaveLength(1);
+    expect(errorLines()[0]).not.toMatch(/not sent/);
+  });
+
+  it("a refusal of the core for one draft doesn't stop the rest", async () => {
+    stubFetch([
+      [409, { error: "project_not_served" }],
+      [409, { error: "approve_failed", detail: "boom" }],
+      [404, { error: "not_found" }],
+      [200, okApprove],
+    ]);
+    const { result } = setup();
+    const [a, b, c, d] = four();
+    let out: DecisionResult | undefined;
+    await act(async () => {
+      out = await result.current.approve([a, b, c, d]);
+    });
+    expect(calls).toHaveLength(4);
+    expect(out?.done).toEqual([d]);
+    expect(out?.failed.some((f) => f.unsent)).toBe(false);
+  });
+
+  it("an Undo cut short offers Undo again for the drafts it didn't send", async () => {
+    stubFetch([
+      [200, okApprove],
+      [200, okApprove],
+      [200, okApprove],
+    ]);
+    const { result } = setup();
+    await act(async () => {
+      await result.current.approve(four().slice(0, 3));
+    });
+    // The first revert's fetch rejects: b and c are never sent.
+    calls = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: string, init: RequestInit) => {
+        calls.push(JSON.parse(String(init.body)));
+        return Promise.reject(new TypeError("Failed to fetch"));
+      })
+    );
+    await act(async () => {
+      await toast.success.mock.calls[0][1].action.onClick();
+    });
+    expect(calls).toEqual([{ action: "revert", proposal_id: "a" }]);
+    expect(errorLines().at(-1)).toBe("2 more drafts were not sent.");
+    // The Undo isn't spent for any of the three.
+    const retry = toast.error.mock.calls[0][1].action.onClick;
+    stubFetch([
+      [200, okRevert],
+      [200, okRevert],
+      [200, okRevert],
+    ]);
+    await act(async () => {
+      await retry();
+    });
+    expect(calls.map((body) => body.proposal_id)).toEqual(["a", "b", "c"]);
+    expect(toast.success).toHaveBeenLastCalledWith(
+      "Moved 3 skills back to Pending."
+    );
+  });
+
+  it("an Undo cut short by a refusal a retry can't change offers none", async () => {
+    stubFetch([
+      [200, okApprove],
+      [200, okApprove],
+    ]);
+    const { result } = setup();
+    await act(async () => {
+      await result.current.approve(four().slice(0, 2));
+    });
+    stubFetch([[403, { error: "secret_rejected" }]]);
+    await act(async () => {
+      await toast.success.mock.calls[0][1].action.onClick();
+    });
+    expect(calls).toHaveLength(1);
+    expect(errorLines().at(-1)).toBe("1 more draft was not sent.");
     expect(toast.error.mock.calls[0]).toHaveLength(1);
   });
 });

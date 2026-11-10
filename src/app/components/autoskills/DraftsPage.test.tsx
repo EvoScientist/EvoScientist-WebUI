@@ -1694,6 +1694,63 @@ describe("DraftsPage", () => {
     expect(box("y").disabled).toBe(false);
   });
 
+  it("a bulk decision cut short leaves the drafts not sent selected and decidable", async () => {
+    hooks.realActions = true;
+    const errors = vi.spyOn(toast, "error");
+    toastSpy = errors;
+    const x = draft({ proposal_id: "x" });
+    const y = draft({ proposal_id: "y", created_at: "2026-10-01T09:00:00Z" });
+    const z = draft({ proposal_id: "z", created_at: "2026-09-01T09:00:00Z" });
+    ready([x, y, z]);
+    render(page());
+    pick("x");
+    pick("y");
+    pick("z");
+    // x is rejected; the relay can't reach the backend for y; z never goes.
+    const sent: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        const body = JSON.parse(String(init.body)) as { proposal_id: string };
+        sent.push(body.proposal_id);
+        const [status, answer] =
+          body.proposal_id === "x"
+            ? [200, { rejected: true }]
+            : [502, { error: "backend_unreachable" }];
+        return new Response(JSON.stringify(answer), {
+          status,
+          headers: { "Content-Type": "application/json" },
+        });
+      })
+    );
+    fireEvent.click(
+      within(selection()!).getByRole("button", { name: "Reject" })
+    );
+    await waitFor(() => expect(errors).toHaveBeenCalled());
+    expect(sent).toEqual(["x", "y"]);
+    const node = errors.mock.calls.at(-1)?.[0] as {
+      props: { children: Array<{ props: { children: string } }> };
+    };
+    expect(node.props.children.map((c) => c.props.children)).toEqual([
+      "The WebUI server cannot reach EvoScientist on this machine.",
+      "1 more draft was not sent.",
+    ]);
+    // x waits as decided; y (failed) and z (not sent) stay picked and can
+    // be decided again.
+    await waitFor(() =>
+      expect(selection()?.textContent).toContain("2 selected")
+    );
+    const box = (id: string) =>
+      screen.getByRole("checkbox", {
+        name: `Select ${id}`,
+      }) as HTMLInputElement;
+    expect(box("x").disabled).toBe(true);
+    for (const id of ["y", "z"]) {
+      expect(box(id).checked).toBe(true);
+      expect(box(id).disabled).toBe(false);
+    }
+  });
+
   it("the pane's reject sends the version of the draft it shows", async () => {
     hooks.realActions = true;
     const x = draft({ proposal_id: "x", updated_at: "2026-11-06T08:00:00Z" });
