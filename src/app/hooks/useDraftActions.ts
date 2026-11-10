@@ -90,8 +90,9 @@ export function decisionToast(
   return `Installed ${skills(n)}.`;
 }
 
-/** The line for one draft the core or the relay refused. `action` words
- *  the refusals that depend on what was asked (`draft_changed`). */
+/** The line for one draft the core or the relay refused, for a decision or
+ *  an Undo. `action` words the refusals that depend on what was asked
+ *  (`draft_changed`). */
 export function decisionError(
   answer: Answer,
   draft: Draft,
@@ -99,8 +100,11 @@ export function decisionError(
   action: "approve" | "reject" = "approve"
 ): string {
   const name = draft.skill_name;
+  // The relay may have passed the request on before its answer was lost,
+  // and a core that answers late may still decide: never "nothing changed".
+  // Every decision and Undo reads the drafts again when it ends.
   if (answer === "network") {
-    return "The WebUI server did not answer. Nothing was changed.";
+    return `The WebUI server did not answer, so the page can't tell whether ${name} changed. The drafts are being read again.`;
   }
   const code = typeof answer.error === "string" ? answer.error : "";
   switch (code) {
@@ -121,6 +125,8 @@ export function decisionError(
     case "reject_failed":
       if (answer.detail?.trim()) return `${name}: ${answer.detail}`;
       return `${name} couldn't be changed (HTTP ${answer.status}).`;
+    case "backend_timeout":
+      return `EvoScientist did not answer in time, so the page can't tell whether ${name} changed. The drafts are being read again.`;
     case "local_secret_required":
       return (
         autoSkillsReadOnlyReason({

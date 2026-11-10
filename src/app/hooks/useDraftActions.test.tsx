@@ -796,9 +796,63 @@ describe("useDraftActions fixes", () => {
     await act(async () => {
       await result.current.approve([draft({ proposal_id: "a" })]);
     });
+    // The relay may have passed the decision on before the answer was
+    // lost: the page doesn't say nothing changed, and reads the list again.
     expect(errorLines()).toEqual([
-      "The WebUI server did not answer. Nothing was changed.",
+      "The WebUI server did not answer, so the page can't tell whether a changed. The drafts are being read again.",
     ]);
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("a backend that did not answer in time is reported the same way", async () => {
+    stubFetch([[504, { error: "backend_timeout" }]]);
+    const { result } = setup();
+    await act(async () => {
+      await result.current.reject([
+        draft({ proposal_id: "r", skill_name: "data-cleaning" }),
+      ]);
+    });
+    expect(errorLines()).toEqual([
+      "EvoScientist did not answer in time, so the page can't tell whether data-cleaning changed. The drafts are being read again.",
+    ]);
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("an Undo that can't tell says so and reads the drafts again", async () => {
+    for (const [failure, line] of [
+      [
+        "network",
+        "The WebUI server did not answer, so the page can't tell whether a changed. The drafts are being read again.",
+      ],
+      [
+        "backend_timeout",
+        "EvoScientist did not answer in time, so the page can't tell whether a changed. The drafts are being read again.",
+      ],
+    ] as const) {
+      vi.clearAllMocks();
+      stubFetch([[200, okApprove]]);
+      const { result, unmount } = setup();
+      await act(async () => {
+        await result.current.approve([draft({ proposal_id: "a" })]);
+      });
+      expect(refresh).toHaveBeenCalledTimes(1);
+      if (failure === "network") {
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(() => Promise.reject(new TypeError("fail")))
+        );
+      } else {
+        stubFetch([[504, { error: failure }]]);
+      }
+      await act(async () => {
+        await toast.success.mock.calls[0][1].action.onClick();
+      });
+      expect(errorLines()).toEqual([line]);
+      // The Undo's own re-read.
+      expect(refresh).toHaveBeenCalledTimes(2);
+      unmount();
+    }
   });
 
   it("a reject can be undone", async () => {
@@ -1470,8 +1524,17 @@ describe("decisionError", () => {
       )
     ).toBe("n: bang");
     expect(decisionError("network", d, labels)).toBe(
-      "The WebUI server did not answer. Nothing was changed."
+      "The WebUI server did not answer, so the page can't tell whether n changed. The drafts are being read again."
     );
+    expect(
+      decisionError({ status: 504, error: "backend_timeout" }, d, labels)
+    ).toBe(
+      "EvoScientist did not answer in time, so the page can't tell whether n changed. The drafts are being read again."
+    );
+    // The other refusals of the relay keep their own words.
+    expect(
+      decisionError({ status: 502, error: "backend_unreachable" }, d, labels)
+    ).toBe("The WebUI server cannot reach EvoScientist on this machine.");
     expect(decisionError({ status: 500 }, d, labels)).toBe(
       "n couldn't be changed (HTTP 500)."
     );
