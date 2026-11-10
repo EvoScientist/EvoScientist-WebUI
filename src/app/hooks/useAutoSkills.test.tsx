@@ -503,6 +503,27 @@ describe("useAutoSkills", () => {
     ).toBe("b");
   });
 
+  // What the drafts page counts on: through a failed read and a recovery
+  // with equal drafts the list is one object, so nothing that compares
+  // lists (its picks, its holds) sees a change.
+  it("a read that answers equal drafts after a failed one gives the same list object back", async () => {
+    const answers = [json(list(["a"])), json({}, 500), json(list(["a"]))];
+    stubFetch(() => answers.shift()!);
+    const { result } = renderHook(() => useAutoSkills(), { wrapper });
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+    const read = result.current.status === "ready" ? result.current.list : null;
+    await act(async () => {
+      await result.current.refresh().catch(() => {});
+    });
+    await waitFor(() => expect(result.current.status).toBe("error"));
+    expect(result.current.status === "error" && result.current.list).toBe(read);
+    await act(async () => {
+      await result.current.refresh();
+    });
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+    expect(result.current.status === "ready" && result.current.list).toBe(read);
+  });
+
   it("an error without a list read before it has none", async () => {
     // A first read that fails.
     stubFetch(() => json({}, 500));

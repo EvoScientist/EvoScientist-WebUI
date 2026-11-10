@@ -94,6 +94,8 @@ const hooks = vi.hoisted(() => ({
   // The real useDraftActions, for a test that follows a decision to the
   // relay.
   realActions: false,
+  // The real useAutoSkills, reading the drafts through a stubbed fetch.
+  realAuto: false,
   busy: false,
   running: new Set<string>() as ReadonlySet<string>,
   run: vi.fn(async (_key: string) => undefined),
@@ -113,7 +115,11 @@ vi.mock("@/app/hooks/useAutoSkills", async (importOriginal) => {
     typeof import("@/app/hooks/useAutoSkills")
   >();
   return {
-    useAutoSkills: () => ({ ...hooks.auto, refresh: hooks.refresh }),
+    // The same for a whole test, so the hooks called never change.
+    useAutoSkills: (options?: { poll?: boolean }) =>
+      hooks.realAuto
+        ? actual.useAutoSkills(options)
+        : { ...hooks.auto, refresh: hooks.refresh },
     markAutoSeen: hooks.mark,
     refreshAutoSkills: hooks.refresh,
     // The real check of a draft's files, reading through a stubbed fetch,
@@ -257,6 +263,7 @@ beforeEach(() => {
   hooks.sources = {};
   hooks.access = { writable: true };
   hooks.realActions = false;
+  hooks.realAuto = false;
   hooks.deployment = { deploymentUrl: URL_, apiKey: "" };
   hooks.check = undefined;
 });
@@ -1312,6 +1319,73 @@ describe("DraftsPage", () => {
       view.rerender(page());
       expect(selection()?.textContent).toContain("2 selected");
       expect(screen.queryByRole("checkbox", { name: "Select z" })).toBeNull();
+    });
+
+    // The page and its real reader together: the tests above hand the page
+    // the reader's state; this one reads it from a backend that goes down.
+    it("with the real reader: a read that fails keeps the page as it was, and Retry's answer brings the decisions back", async () => {
+      hooks.realAuto = true;
+      const x = draft({
+        proposal_id: "x",
+        skill_name: "arxiv-paper-retrieval",
+      });
+      const z = draft({ proposal_id: "z", workspace_dir: B });
+      let down = false;
+      const fetchMock = vi.fn(
+        async (_input: RequestInfo | URL, _init?: RequestInit) =>
+          down
+            ? new Response("", { status: 500 })
+            : new Response(
+                JSON.stringify({
+                  proposals: [x, z],
+                  counts: { pending: 2, approved: 0, rejected: 0 },
+                  by_project: {},
+                })
+              )
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      q.values.set("draftId", "x");
+      render(page());
+      await screen.findByRole("tab", { name: /^Pending 2/ });
+      pick("z");
+      fireEvent.click(pane().getByLabelText("Install into"));
+      fireEvent.click(
+        screen.getByRole("option", { name: "All projects (global)" })
+      );
+      const reads = fetchMock.mock.calls.length;
+
+      // The backend goes down, and SWR reads again: on the browser coming
+      // back online here (a focus read is throttled for 5 s after the mount).
+      down = true;
+      act(() => {
+        window.dispatchEvent(new Event("online"));
+      });
+      expect((await screen.findByRole("alert")).textContent).toBe(AGAIN);
+      expect(fetchMock.mock.calls.length).toBe(reads + 1);
+      // All of it is still there, and nothing can be decided.
+      expect(screen.getByRole("tab", { name: /^Pending 2/ })).toBeTruthy();
+      expect(selection()?.textContent).toContain("1 selected");
+      expect(pane().getByLabelText("Install into").textContent).toBe(
+        "All projects (global)"
+      );
+      for (const box of [within(selection()!), pane()]) {
+        for (const name of ["Approve", "Reject"]) {
+          expect(off(box.getByRole("button", { name }))).toBe(true);
+        }
+      }
+
+      // It is back: Retry reads, the line goes, and the page is as it was
+      // left, with the place picked.
+      down = false;
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+      expect(selection()?.textContent).toContain("1 selected");
+      fireEvent.click(pane().getByRole("button", { name: "Approve" }));
+      expect(hooks.approve.mock.calls).toEqual([[[x], { x: "global" }]]);
+      fireEvent.click(
+        within(selection()!).getByRole("button", { name: "Reject" })
+      );
+      expect(hooks.reject.mock.calls).toEqual([[[z]]]);
     });
 
     it("an Undo's hold waits through the failed read, and goes with the read that answers", async () => {
