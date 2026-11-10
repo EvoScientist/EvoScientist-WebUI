@@ -300,12 +300,14 @@ export function useRunNow(projects: readonly Project[]): {
         listRef.current ? snapshotOf(listRef.current, key) : null;
       let before = snapshot();
 
-      /** How the run ended for this page: its own end, three failed (or
-       *  timed-out) polls in a row, the ceiling, or a cleanup. */
+      /** How the run ended for this page: its own end ("failed": it ended
+       *  in error, timed out or was interrupted), three failed (or
+       *  timed-out) polls in a row ("unknown": the page couldn't check, and
+       *  the run may well go on), the ceiling, or a cleanup. */
       async function poll(
         threadId: string,
         runId: string
-      ): Promise<"success" | "failed" | "ceiling" | "cancelled"> {
+      ): Promise<"success" | "failed" | "unknown" | "ceiling" | "cancelled"> {
         const since = Date.now();
         // By the clock, before and after each poll: a slow one can cross it.
         const late = () => Date.now() - since >= RUN_CEILING_MS;
@@ -324,7 +326,7 @@ export function useRunNow(projects: readonly Project[]): {
             }
           } catch {
             if (cancelled()) return "cancelled";
-            if (++failed >= MAX_FAILED_POLLS) return "failed";
+            if (++failed >= MAX_FAILED_POLLS) return "unknown";
           }
           if (late()) return "ceiling";
         }
@@ -377,7 +379,18 @@ export function useRunNow(projects: readonly Project[]): {
           );
           return;
         }
+        if (end === "unknown") {
+          // Not "didn't finish": only the page's checks failed (a backend
+          // reached through a tunnel that dropped), and the run goes on.
+          rereadInBackground();
+          toast.error(
+            `Couldn't check on AutoSkills in ${label}. It may still be running; the drafts update when it finishes.`
+          );
+          return;
+        }
         if (end === "failed") {
+          // It may have written drafts before it failed.
+          rereadInBackground();
           toast.error(
             `AutoSkills didn't finish in ${label}. Try Run now again later.`
           );

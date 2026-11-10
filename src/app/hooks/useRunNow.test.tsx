@@ -578,23 +578,61 @@ describe("useRunNow", () => {
     expect(toast.error).not.toHaveBeenCalled();
   });
 
-  it("a run that errors says it didn't finish", async () => {
-    stubRelay(200, started);
-    runsGet.mockResolvedValue({ status: "error" });
-    const { result } = renderHook(() => useRunNow(projects));
-    await act(async () => {
-      void result.current.run(B);
-    });
-    await flush();
-    await tick();
-    expect(toast.error).toHaveBeenCalledWith(
-      "AutoSkills didn't finish in project_B. Try Run now again later."
-    );
-    expect(result.current.running.has(B)).toBe(false);
+  it("a run that errors says it didn't finish, and the drafts are read again", async () => {
+    for (const status of ["error", "timeout", "interrupted"]) {
+      toast.error.mockClear();
+      state.refresh.mockClear();
+      stubRelay(200, started);
+      runsGet.mockResolvedValue({ status });
+      const { result, unmount } = renderHook(() => useRunNow(projects));
+      await act(async () => {
+        void result.current.run(B);
+      });
+      await flush();
+      await tick();
+      expect(toast.error.mock.calls, status).toEqual([
+        ["AutoSkills didn't finish in project_B. Try Run now again later."],
+      ]);
+      // It may have written drafts before it failed.
+      expect(state.refresh, status).toHaveBeenCalledTimes(1);
+      // In the background: not the direct read a finished run counts from.
+      expect(state.readNow, status).not.toHaveBeenCalled();
+      expect(toast.success).not.toHaveBeenCalled();
+      expect(result.current.running.has(B)).toBe(false);
+      unmount();
+    }
   });
 
-  it("three failed polls in a row end it as not finished", async () => {
+  it("a failed run's re-read that fails or never answers holds nothing", async () => {
+    for (const reread of [
+      () => Promise.reject(new Error("HTTP 500")),
+      () => new Promise(() => {}),
+      () => {
+        throw new Error("no cache");
+      },
+    ]) {
+      toast.error.mockClear();
+      state.refresh.mockReset();
+      state.refresh.mockImplementation(reread);
+      stubRelay(200, started);
+      runsGet.mockResolvedValue({ status: "error" });
+      const { result, unmount } = renderHook(() => useRunNow(projects));
+      await act(async () => {
+        void result.current.run(B);
+      });
+      await flush();
+      await tick();
+      expect(toast.error).toHaveBeenCalledWith(
+        "AutoSkills didn't finish in project_B. Try Run now again later."
+      );
+      expect(result.current.running.has(B)).toBe(false);
+      unmount();
+    }
+  });
+
+  it("three failed polls in a row say the page couldn't check, not that the run didn't finish", async () => {
     stubRelay(200, started);
+    // The backend can't be reached (a tunnel that dropped); the run goes on.
     runsGet.mockRejectedValue(new Error("down"));
     const { result } = renderHook(() => useRunNow(projects));
     await act(async () => {
@@ -604,11 +642,26 @@ describe("useRunNow", () => {
     await tick();
     await tick();
     expect(toast.error).not.toHaveBeenCalled();
+    expect(state.refresh).not.toHaveBeenCalled();
     await tick();
     expect(runsGet).toHaveBeenCalledTimes(3);
-    expect(toast.error).toHaveBeenCalledWith(
-      "AutoSkills didn't finish in project_B. Try Run now again later."
-    );
+    // No fixed id: the text alone.
+    expect(toast.error.mock.calls).toEqual([
+      [
+        "Couldn't check on AutoSkills in project_B. It may still be running; the drafts update when it finishes.",
+      ],
+    ]);
+    // The drafts are read again, in the background.
+    expect(state.refresh).toHaveBeenCalledTimes(1);
+    expect(state.readNow).not.toHaveBeenCalled();
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.info).not.toHaveBeenCalled();
+    expect(result.current.running.has(B)).toBe(false);
+    // The page stops asking; Run now can be clicked again (it joins).
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(RUN_POLL_MS * 5);
+    });
+    expect(runsGet).toHaveBeenCalledTimes(3);
   });
 
   it("a good poll resets the failure count", async () => {
@@ -704,8 +757,9 @@ describe("useRunNow", () => {
     });
     expect(runsGet).toHaveBeenCalledTimes(3);
     expect(toast.error).toHaveBeenCalledWith(
-      "AutoSkills didn't finish in project_B. Try Run now again later."
+      "Couldn't check on AutoSkills in project_B. It may still be running; the drafts update when it finishes."
     );
+    expect(state.refresh).toHaveBeenCalledTimes(1);
     expect(result.current.running.has(B)).toBe(false);
   });
 
