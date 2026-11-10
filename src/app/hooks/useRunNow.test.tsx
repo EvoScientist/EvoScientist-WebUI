@@ -664,6 +664,90 @@ describe("useRunNow", () => {
     expect(runsGet).toHaveBeenCalledTimes(3);
   });
 
+  // The SDK's HTTPError: an Error with the numeric status.
+  const httpError = (status: number) =>
+    Object.assign(new Error(`HTTP ${status}: Not Found`), { status });
+  const DID_NOT_FINISH =
+    "AutoSkills didn't finish in project_B. Try Run now again later.";
+
+  it("a run the backend no longer knows (HTTP 404) ends at once as one that didn't finish", async () => {
+    stubRelay(200, started);
+    // The backend restarted: the run is gone, not out of reach.
+    runsGet.mockRejectedValue(httpError(404));
+    const { result } = renderHook(() => useRunNow(projects));
+    await act(async () => {
+      void result.current.run(B);
+    });
+    await flush();
+    await tick();
+    expect(runsGet).toHaveBeenCalledTimes(1);
+    expect(toast.error.mock.calls).toEqual([[DID_NOT_FINISH]]);
+    // With the failed run's re-read, in the background.
+    expect(state.refresh).toHaveBeenCalledTimes(1);
+    expect(state.readNow).not.toHaveBeenCalled();
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.info).not.toHaveBeenCalled();
+    expect(result.current.running.has(B)).toBe(false);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(RUN_POLL_MS * 5);
+    });
+    expect(runsGet).toHaveBeenCalledTimes(1);
+    expect(toast.error).toHaveBeenCalledTimes(1);
+  });
+
+  it("a 404 after polls that answered or failed ends the run the same way", async () => {
+    stubRelay(200, started);
+    runsGet
+      .mockResolvedValueOnce({ status: "running" })
+      .mockRejectedValueOnce(new Error("down"))
+      .mockRejectedValueOnce(httpError(404));
+    const { result } = renderHook(() => useRunNow(projects));
+    await act(async () => {
+      void result.current.run(B);
+    });
+    await flush();
+    await tick();
+    await tick();
+    expect(toast.error).not.toHaveBeenCalled();
+    await tick();
+    expect(runsGet).toHaveBeenCalledTimes(3);
+    expect(toast.error.mock.calls).toEqual([[DID_NOT_FINISH]]);
+    expect(result.current.running.has(B)).toBe(false);
+  });
+
+  it("a joined run that is gone ends the same way", async () => {
+    stubRelay(409, { error: "already_running", ...started });
+    runsGet.mockRejectedValue(httpError(404));
+    const { result } = renderHook(() => useRunNow(projects));
+    await act(async () => {
+      void result.current.run(B);
+    });
+    await flush();
+    await tick();
+    expect(runsGet).toHaveBeenCalledTimes(1);
+    expect(toast.error.mock.calls).toEqual([[DID_NOT_FINISH]]);
+  });
+
+  it("any other HTTP error is a check that failed, not a run that is gone", async () => {
+    stubRelay(200, started);
+    runsGet.mockRejectedValue(httpError(500));
+    const { result } = renderHook(() => useRunNow(projects));
+    await act(async () => {
+      void result.current.run(B);
+    });
+    await flush();
+    await tick();
+    await tick();
+    expect(toast.error).not.toHaveBeenCalled();
+    await tick();
+    expect(runsGet).toHaveBeenCalledTimes(3);
+    expect(toast.error.mock.calls).toEqual([
+      [
+        "Couldn't check on AutoSkills in project_B. It may still be running; the drafts update when it finishes.",
+      ],
+    ]);
+  });
+
   it("a good poll resets the failure count", async () => {
     stubRelay(200, started);
     runsGet

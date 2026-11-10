@@ -15,6 +15,7 @@ import {
 } from "@/lib/autoskills";
 import type { Project } from "@/lib/projects";
 import { shadowedSource } from "@/lib/settingsForm";
+import { getHttpStatus } from "@/lib/streamError";
 import { useClient } from "@/providers/ClientProvider";
 
 export const RUN_POLL_MS = 3_000;
@@ -301,9 +302,10 @@ export function useRunNow(projects: readonly Project[]): {
       let before = snapshot();
 
       /** How the run ended for this page: its own end ("failed": it ended
-       *  in error, timed out or was interrupted), three failed (or
-       *  timed-out) polls in a row ("unknown": the page couldn't check, and
-       *  the run may well go on), the ceiling, or a cleanup. */
+       *  in error, timed out or was interrupted, or the backend no longer
+       *  knows it), three failed (or timed-out) polls in a row ("unknown":
+       *  the page couldn't check, and the run may well go on), the ceiling,
+       *  or a cleanup. */
       async function poll(
         threadId: string,
         runId: string
@@ -324,8 +326,12 @@ export function useRunNow(projects: readonly Project[]): {
             if (END_STATES.has(r.status)) {
               return r.status === "success" ? "success" : "failed";
             }
-          } catch {
+          } catch (error) {
             if (cancelled()) return "cancelled";
+            // The backend answered that there is no such run (it restarted
+            // and lost it): the run is gone, not out of reach, and no
+            // later poll will find it.
+            if (getHttpStatus(error) === 404) return "failed";
             if (++failed >= MAX_FAILED_POLLS) return "unknown";
           }
           if (late()) return "ceiling";
@@ -389,7 +395,8 @@ export function useRunNow(projects: readonly Project[]): {
           return;
         }
         if (end === "failed") {
-          // It may have written drafts before it failed.
+          // It may have written drafts before it failed, or before the
+          // backend lost it.
           rereadInBackground();
           toast.error(
             `AutoSkills didn't finish in ${label}. Try Run now again later.`
