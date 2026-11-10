@@ -110,7 +110,7 @@ describe("useAutoSkills", () => {
         await vi.advanceTimersByTimeAsync(ms);
       });
 
-    it("asks an old core at most once more, then never", async () => {
+    it("never asks an old core on the interval, however often its caller renders", async () => {
       vi.useFakeTimers();
       const fetchMock = stubFetch(() => json({}, 404));
       const { result, rerender } = renderHook(() => useAutoSkills(), {
@@ -119,19 +119,12 @@ describe("useAutoSkills", () => {
       await settle(10);
       expect(result.current.status).toBe("unsupported");
       const asked = fetchMock.mock.calls.length;
-      // The interval that started with the page may ask once more; a
-      // caller's renders don't start it again.
-      for (let i = 0; i < 6; i++) {
+      // Six minutes, with a render every 30 s.
+      for (let i = 0; i < 12; i++) {
         await settle(AUTOSKILLS_REFRESH_MS / 2);
         rerender();
       }
-      const later = fetchMock.mock.calls.length;
-      expect(later).toBeLessThanOrEqual(asked + 1);
-      for (let i = 0; i < 6; i++) {
-        await settle(AUTOSKILLS_REFRESH_MS / 2);
-        rerender();
-      }
-      expect(fetchMock.mock.calls.length).toBe(later);
+      expect(fetchMock.mock.calls.length).toBe(asked);
       expect(result.current.status).toBe("unsupported");
     });
 
@@ -219,6 +212,200 @@ describe("useAutoSkills", () => {
       await settle(AUTOSKILLS_REFRESH_MS * 5);
       expect(fetchMock.mock.calls.length).toBe(asked + 5);
       view.unmount();
+    });
+
+    // The rail, the Skills page, the banner and the drafts page each read
+    // the list. With an interval per reader, readers mounted at different
+    // times read it as many times a minute: one timer per list reads once.
+    it("readers mounted at different times read once a minute together, on one timer", async () => {
+      vi.useFakeTimers();
+      const fetchMock = stubFetch(() => json(list()));
+      function Reader() {
+        useAutoSkills();
+        return null;
+      }
+      const tree = (readers: number) => (
+        <SWRConfig value={{ provider: () => new Map() }}>
+          {Array.from({ length: readers }, (_, i) => (
+            <Reader key={i} />
+          ))}
+        </SWRConfig>
+      );
+      const view = render(tree(1));
+      await settle(20_000);
+      view.rerender(tree(2));
+      await settle(20_000);
+      view.rerender(tree(3));
+      // Each reader's own first read (on its mount) has landed.
+      await settle(1_000);
+      const asked = fetchMock.mock.calls.length;
+      await settle(AUTOSKILLS_REFRESH_MS * 5);
+      expect(fetchMock.mock.calls.length).toBe(asked + 5);
+      expect(vi.getTimerCount()).toBe(1);
+
+      // Two of them go: the timer stays for the third, at its rhythm.
+      view.rerender(tree(1));
+      await settle(AUTOSKILLS_REFRESH_MS * 2);
+      expect(fetchMock.mock.calls.length).toBe(asked + 7);
+      expect(vi.getTimerCount()).toBe(1);
+      view.unmount();
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("with no polling reader mounted there is no timer, and one that mounts again starts it", async () => {
+      vi.useFakeTimers();
+      const fetchMock = stubFetch(() => json(list()));
+      function Quiet() {
+        useAutoSkills({ poll: false });
+        return null;
+      }
+      function Rail() {
+        useAutoSkills();
+        return null;
+      }
+      const tree = (rail: boolean) => (
+        <SWRConfig value={{ provider: () => new Map() }}>
+          <Quiet />
+          {rail && <Rail />}
+        </SWRConfig>
+      );
+      // Run now's reader alone: it doesn't count.
+      const view = render(tree(false));
+      await settle(5_000);
+      expect(vi.getTimerCount()).toBe(0);
+      view.rerender(tree(true));
+      await settle(5_000);
+      expect(vi.getTimerCount()).toBe(1);
+
+      // The sidebar closes: the rail's reader goes, and the timer with it.
+      view.rerender(tree(false));
+      await settle(5_000);
+      expect(vi.getTimerCount()).toBe(0);
+      const asked = fetchMock.mock.calls.length;
+      await settle(AUTOSKILLS_REFRESH_MS * 5);
+      expect(fetchMock.mock.calls.length).toBe(asked);
+
+      // It opens again: read on the mount, then a minute apart.
+      view.rerender(tree(true));
+      await settle(1_000);
+      const again = fetchMock.mock.calls.length;
+      expect(again).toBe(asked + 1);
+      await settle(AUTOSKILLS_REFRESH_MS * 3);
+      expect(fetchMock.mock.calls.length).toBe(again + 3);
+      // (Past SWR's own short timers after a read.)
+      await settle(5_000);
+      expect(vi.getTimerCount()).toBe(1);
+      view.unmount();
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("an old core isn't asked on the interval; once a read finds it updated, the list is polled again", async () => {
+      vi.useFakeTimers();
+      let updated = false;
+      const fetchMock = stubFetch(() =>
+        updated ? json(list()) : json({}, 404)
+      );
+      const { result } = renderHook(() => useAutoSkills(), { wrapper });
+      await settle(10);
+      expect(result.current.status).toBe("unsupported");
+      const asked = fetchMock.mock.calls.length;
+      await settle(AUTOSKILLS_REFRESH_MS * 5);
+      expect(fetchMock.mock.calls.length).toBe(asked);
+
+      // A read on focus finds the routes.
+      updated = true;
+      await act(async () => {
+        await result.current.refresh();
+      });
+      expect(result.current.status).toBe("ready");
+      const found = fetchMock.mock.calls.length;
+      await settle(AUTOSKILLS_REFRESH_MS * 3);
+      expect(fetchMock.mock.calls.length).toBe(found + 3);
+    });
+
+    it("skips its minute while the tab is hidden or the browser is offline", async () => {
+      vi.useFakeTimers();
+      const fetchMock = stubFetch(() => json(list()));
+      renderHook(() => useAutoSkills(), { wrapper });
+      await settle(10);
+      const asked = fetchMock.mock.calls.length;
+      const hidden = vi
+        .spyOn(document, "visibilityState", "get")
+        .mockReturnValue("hidden");
+      const offline = vi.spyOn(navigator, "onLine", "get");
+      try {
+        await settle(AUTOSKILLS_REFRESH_MS * 3);
+        expect(fetchMock.mock.calls.length).toBe(asked);
+        hidden.mockReturnValue("visible");
+        offline.mockReturnValue(false);
+        await settle(AUTOSKILLS_REFRESH_MS * 2);
+        expect(fetchMock.mock.calls.length).toBe(asked);
+        // Visible and online: the next minute reads.
+        offline.mockReturnValue(true);
+        await settle(AUTOSKILLS_REFRESH_MS);
+        expect(fetchMock.mock.calls.length).toBe(asked + 1);
+      } finally {
+        hidden.mockRestore();
+        offline.mockRestore();
+      }
+    });
+
+    it("leaves a failed read to SWR's retry, and reads again once one answers", async () => {
+      vi.useFakeTimers();
+      let down = false;
+      const fetchMock = stubFetch(() => (down ? json({}, 500) : json(list())));
+      // Without SWR's retry, so every read counted here is the timer's.
+      const { result } = renderHook(() => useAutoSkills(), {
+        wrapper: ({ children }: { children: ReactNode }) => (
+          <SWRConfig
+            value={{ provider: () => new Map(), shouldRetryOnError: false }}
+          >
+            {children}
+          </SWRConfig>
+        ),
+      });
+      await settle(10);
+      expect(result.current.status).toBe("ready");
+      down = true;
+      // The minute's read fails.
+      await settle(AUTOSKILLS_REFRESH_MS);
+      expect(result.current.status).toBe("error");
+      const asked = fetchMock.mock.calls.length;
+      await settle(AUTOSKILLS_REFRESH_MS * 5);
+      expect(fetchMock.mock.calls.length).toBe(asked);
+
+      // A read answers (the retry, a focus read, the page's Retry).
+      down = false;
+      await act(async () => {
+        await result.current.refresh();
+      });
+      expect(result.current.status).toBe("ready");
+      const answered = fetchMock.mock.calls.length;
+      await settle(AUTOSKILLS_REFRESH_MS * 2);
+      expect(fetchMock.mock.calls.length).toBe(answered + 2);
+    });
+
+    it("a deployment switch moves the timer to the new backend's list", async () => {
+      vi.useFakeTimers();
+      const fetchMock = stubFetch(() => json(list()));
+      const { rerender, unmount } = renderHook(() => useAutoSkills(), {
+        wrapper,
+      });
+      await settle(10);
+      deployment.deploymentUrl = "http://127.0.0.1:7000";
+      rerender();
+      await settle(10);
+      const asked = fetchMock.mock.calls.length;
+      await settle(AUTOSKILLS_REFRESH_MS * 3);
+      expect(
+        fetchMock.mock.calls.slice(asked).map((call) => String(call[0]))
+      ).toEqual(
+        Array(3).fill("http://127.0.0.1:7000/api/autoskills/proposals")
+      );
+      await settle(5_000);
+      expect(vi.getTimerCount()).toBe(1);
+      unmount();
+      expect(vi.getTimerCount()).toBe(0);
     });
 
     // The rail re-renders on its own 60 s clock: a render must not start the

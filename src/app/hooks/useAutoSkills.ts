@@ -1,10 +1,12 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useEffect } from "react";
 import useSWR, {
   mutate as globalMutate,
   unstable_serialize,
   useSWRConfig,
+  type Cache,
+  type ScopedMutator,
 } from "swr";
 import { useDeployment } from "@/providers/ClientProvider";
 import {
@@ -101,20 +103,78 @@ function baseOf(deploymentUrl: string): string | null {
   return deploymentUrl ? deploymentUrl.replace(/\/$/, "") : null;
 }
 
-/** An EvoScientist without the route isn't asked again on the interval:
- *  every page mounts the rail's count. The one that started with the page
- *  may ask once more; focus still reads again, so an updated core is found.
- *  Module scope on purpose: SWR starts its timer over whenever this
- *  function changes, and the rail re-renders on its own clock. */
-function refreshEvery(latest: DraftList | "unsupported" | undefined): number {
-  return latest === "unsupported" ? 0 : AUTOSKILLS_REFRESH_MS;
+/** A list's poll: its timer, and how many polling readers are mounted. */
+interface Poll {
+  readers: number;
+  timer: ReturnType<typeof setInterval>;
+}
+/** The polls running, by SWR cache and by the list's serialized key. */
+const polls = new WeakMap<Cache, Map<string, Poll>>();
+
+/** Count a polling reader of `key` in; the answer counts it out again. One
+ *  timer per list, in module scope, runs while any polling reader of it is
+ *  mounted, and reads the list once every AUTOSKILLS_REFRESH_MS for all of
+ *  them. SWR's own `refreshInterval` is per reader and dedupes only reads a
+ *  moment apart, so the rail, the Skills page, the banner and the drafts
+ *  page, mounted at different times, each read the list every minute.
+ *  A minute is skipped while the tab is hidden or the browser is offline,
+ *  while the latest read failed (SWR's error retry reads then), and while
+ *  the latest answer is "unsupported": an EvoScientist without the route
+ *  isn't asked every minute by every page (the rail is on all of them).
+ *  Focus still reads, and once a read finds a list the timer reads again. */
+function joinPoll(
+  cache: Cache,
+  mutate: ScopedMutator,
+  key: ListKey
+): () => void {
+  const id = unstable_serialize(key);
+  let byKey = polls.get(cache);
+  if (!byKey) {
+    byKey = new Map();
+    polls.set(cache, byKey);
+  }
+  let poll = byKey.get(id);
+  if (!poll) {
+    const tick = () => {
+      if (
+        typeof document !== "undefined" &&
+        document.visibilityState === "hidden"
+      ) {
+        return;
+      }
+      if (typeof navigator !== "undefined" && navigator.onLine === false) {
+        return;
+      }
+      const latest = cache.get(id);
+      if (latest?.data === "unsupported" || latest?.error !== undefined) {
+        return;
+      }
+      try {
+        void Promise.resolve(mutate(key)).catch(() => {});
+      } catch {
+        // The next minute reads again.
+      }
+    };
+    poll = { readers: 0, timer: setInterval(tick, AUTOSKILLS_REFRESH_MS) };
+    byKey.set(id, poll);
+  }
+  poll.readers += 1;
+  const joined = poll;
+  const lists = byKey;
+  return () => {
+    joined.readers -= 1;
+    if (joined.readers > 0) return;
+    clearInterval(joined.timer);
+    if (lists.get(id) === joined) lists.delete(id);
+  };
 }
 
-/** The current deployment's drafts. `poll: false` is for a reader that only
- *  needs the list the others keep fresh (Run now's, mounted for the whole
- *  page): SWR runs an interval per reader and dedupes only reads a moment
- *  apart, so its own would double the reads. Focus and reconnect reads stay
- *  on: SWR sends them to a key's first reader only, which may be this one. */
+/** The current deployment's drafts, read once a minute while any reader
+ *  that polls is mounted (`joinPoll`). `poll: false` is for a reader that
+ *  only needs the list the others keep fresh (Run now's, mounted for the
+ *  whole page): it doesn't count, so on its own nothing is read on the
+ *  interval. Focus and reconnect reads stay on for every reader: SWR sends
+ *  them to a key's first reader only, which may be that one. */
 export function useAutoSkills(
   options: { poll?: boolean } = {}
 ): AutoSkillsState & {
@@ -134,12 +194,14 @@ export function useAutoSkills(
   const { deploymentUrl, apiKey } = useDeployment();
   const base = baseOf(deploymentUrl);
   const key: ListKey | null = base ? ["autoskills", base, apiKey] : null;
-  const swr = useSWR(key, fetchDrafts, {
-    refreshInterval: options.poll === false ? 0 : refreshEvery,
-    revalidateOnFocus: true,
-  });
+  const swr = useSWR(key, fetchDrafts, { revalidateOnFocus: true });
   const { data, error, mutate } = swr;
-  const { mutate: mutateCache } = useSWRConfig();
+  const { cache, mutate: mutateCache } = useSWRConfig();
+  const polling = options.poll !== false;
+  useEffect(() => {
+    if (!polling || !base) return;
+    return joinPoll(cache, mutateCache, ["autoskills", base, apiKey]);
+  }, [polling, base, apiKey, cache, mutateCache]);
   const readNow = useCallback(
     async (signal?: AbortSignal) => {
       if (!base) throw new Error("No deployment to read the drafts from.");

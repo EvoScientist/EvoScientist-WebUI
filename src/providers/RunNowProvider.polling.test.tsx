@@ -13,9 +13,9 @@ import {
 } from "@/test/mockProjects";
 
 // The Run-now provider reads the drafts for the whole page; the readers that
-// show them (the rail, the Skills page) keep them fresh. Its reader adds no
-// interval of its own: SWR runs one per reader and dedupes only reads a
-// moment apart, so a second one doubled the reads.
+// show them (the rail, the Skills page) keep them fresh, on one timer for
+// the list between them. Its own reader doesn't count for that timer: alone,
+// it reads nothing on the interval.
 
 const client = vi.hoisted(() => ({ runs: { get: vi.fn() } }));
 vi.mock("@/providers/ClientProvider", () => ({
@@ -30,15 +30,33 @@ function Rail() {
   return null;
 }
 
-function tree(rail: boolean) {
+function SkillsPage() {
+  useAutoSkills();
+  return null;
+}
+
+function tree(rail: boolean, skillsPage = false) {
   return (
     <SWRConfig value={{ provider: () => new Map() }}>
       <TestProjectsProvider value={mockProjects(readyProjects("/work/A"))}>
-        <RunNowProvider>{rail && <Rail />}</RunNowProvider>
+        <RunNowProvider>
+          {rail && <Rail />}
+          {skillsPage && <SkillsPage />}
+        </RunNowProvider>
       </TestProjectsProvider>
     </SWRConfig>
   );
 }
+
+const drafts = () =>
+  new Response(
+    JSON.stringify({
+      proposals: [],
+      counts: { pending: 0, approved: 0, rejected: 0 },
+      by_project: {},
+    }),
+    { status: 200 }
+  );
 
 const reads = (fetchMock: ReturnType<typeof vi.fn>) =>
   fetchMock.mock.calls.filter(([url]) =>
@@ -59,17 +77,7 @@ afterEach(() => {
 describe("RunNowProvider reads", () => {
   it("with the rail mounted, the drafts are read once a minute", async () => {
     vi.useFakeTimers();
-    const fetchMock = vi.fn(
-      async () =>
-        new Response(
-          JSON.stringify({
-            proposals: [],
-            counts: { pending: 0, approved: 0, rejected: 0 },
-            by_project: {},
-          }),
-          { status: 200 }
-        )
-    );
+    const fetchMock = vi.fn(async () => drafts());
     vi.stubGlobal("fetch", fetchMock);
     // The page opens with the sidebar closed; the rail mounts 20 s later.
     const view = render(tree(false));
@@ -80,6 +88,36 @@ describe("RunNowProvider reads", () => {
     const asked = reads(fetchMock);
     await settle(AUTOSKILLS_REFRESH_MS * 5);
     expect(reads(fetchMock)).toBe(asked + 5);
+    view.unmount();
+  });
+
+  it("with the rail and the Skills page mounted at different times, still once a minute", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn(async () => drafts());
+    vi.stubGlobal("fetch", fetchMock);
+    const view = render(tree(false));
+    await settle(20_000);
+    view.rerender(tree(true));
+    // The Skills page is opened 25 s after the sidebar.
+    await settle(25_000);
+    view.rerender(tree(true, true));
+    await settle(1_000);
+    const asked = reads(fetchMock);
+    await settle(AUTOSKILLS_REFRESH_MS * 5);
+    expect(reads(fetchMock)).toBe(asked + 5);
+    view.unmount();
+  });
+
+  it("alone, the provider's reader reads nothing on the interval", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn(async () => drafts());
+    vi.stubGlobal("fetch", fetchMock);
+    const view = render(tree(false));
+    await settle(1_000);
+    const asked = reads(fetchMock);
+    expect(asked).toBe(1);
+    await settle(AUTOSKILLS_REFRESH_MS * 5);
+    expect(reads(fetchMock)).toBe(asked);
     view.unmount();
   });
 });
