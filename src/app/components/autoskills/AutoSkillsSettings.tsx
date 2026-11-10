@@ -23,13 +23,19 @@ import {
 } from "@/components/ui/select";
 import { autoSkillsReadOnlyReason } from "@/lib/autoskills";
 import { INPUT_LIKE_TRIGGER, LIST_MAX_HEIGHT } from "@/lib/fieldStyles";
-import { isSettingsPayload, type SettingsPayload } from "@/lib/settings";
-import { saveErrorText } from "@/lib/settingsForm";
+import {
+  isSettingsPayload,
+  type SettingSource,
+  type SettingsPayload,
+} from "@/lib/settings";
+import { saveErrorText, shadowedSource, sourceNote } from "@/lib/settingsForm";
 import { cn } from "@/lib/utils";
 
 // The AutoSkills settings from the drafts page's Settings button: a panel on
 // the right. Saves go through the WebUI's relay like the Settings page, and
-// the core applies them at once (no restart).
+// the core applies them at once (no restart). A field an environment
+// variable overrides in the running core is off here, as on the Settings
+// page: saving it would change nothing there.
 
 const F_ENABLED = "memory_skill_synthesis_enabled";
 const F_MODE = "memory_skill_synthesis_mode";
@@ -77,6 +83,47 @@ function savedValues(settings: Record<string, unknown> | undefined): Values {
 
 function validTime(value: string): boolean {
   return /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
+}
+
+/** The fields an override hides in the running core, with where each
+ *  override comes from. */
+function overridesOf(
+  payload: SettingsPayload | null
+): Partial<Record<Field, SettingSource>> {
+  const out: Partial<Record<Field, SettingSource>> = {};
+  if (!payload) return out;
+  for (const f of FIELDS) {
+    const source = shadowedSource(payload, f);
+    if (source) out[f] = source;
+  }
+  return out;
+}
+
+const NOTE_ID: Record<Field, string> = {
+  [F_ENABLED]: "autoskills-enabled-override",
+  [F_MODE]: "autoskills-mode-override",
+  [F_CADENCE]: "autoskills-cadence-override",
+  [F_TIME]: "autoskills-time-override",
+};
+
+/** The Setup page's note under a field an override hides, in its words. */
+function OverrideNote({
+  field,
+  source,
+}: {
+  field: Field;
+  source: SettingSource | undefined;
+}) {
+  if (!source) return null;
+  return (
+    <p
+      id={NOTE_ID[field]}
+      className="text-xs text-muted-foreground"
+    >
+      Set by {sourceNote(source)}, which overrides the saved value. Change it
+      there.
+    </p>
+  );
 }
 
 /** A settings answer the panel takes as what is saved: the real core always
@@ -164,14 +211,26 @@ export function AutoSkillsSettings({
     }
   }
 
-  const values: Values = { ...saved, ...edits };
+  // What an override hides in the running core. Such a field shows what is
+  // saved and takes no input; an edit made before the override showed
+  // doesn't count, so it is never sent.
+  const overrides = overridesOf(current);
+  const live: Partial<Values> = {};
+  for (const f of FIELDS) {
+    if (f in edits && !overrides[f]) {
+      (live as Record<string, unknown>)[f] = edits[f];
+    }
+  }
+  const values: Values = { ...saved, ...live };
   const changed = FIELDS.filter((f) => values[f] !== saved[f]);
-  const off = !values[F_ENABLED];
-  // With drafting on a bad time blocks Save. With it off the time field is
-  // disabled and can't be fixed, so it doesn't, and a changed time goes out
-  // only when it is valid.
+  // Off as far as the page knows: with on / off overridden it doesn't, and
+  // the other fields stay open.
+  const off = !values[F_ENABLED] && !overrides[F_ENABLED];
+  // With drafting on a bad time blocks Save. With it off, or overridden,
+  // the time field is disabled and can't be fixed, so it doesn't, and a
+  // changed time goes out only when it is valid.
   const timeBad = !validTime(values[F_TIME]);
-  const timeBlocks = timeBad && !off;
+  const timeBlocks = timeBad && !off && !overrides[F_TIME];
   const timeError = timeBlocks
     ? "Enter a time like 03:00."
     : serverErrors[F_TIME];
@@ -331,19 +390,35 @@ export function AutoSkillsSettings({
         </DialogHeader>
 
         <div className="space-y-5">
-          <label className={cn("flex items-center gap-2 text-sm", TOUCH_ROW)}>
-            <input
-              type="checkbox"
-              checked={values[F_ENABLED]}
-              disabled={locked}
-              onChange={(e) => edit(F_ENABLED, e.target.checked)}
-              className={CHECKBOX}
+          <div className="space-y-1">
+            <label
+              className={cn(
+                "flex items-center gap-2 text-sm",
+                TOUCH_ROW,
+                overrides[F_ENABLED] && "opacity-60"
+              )}
+            >
+              <input
+                type="checkbox"
+                checked={values[F_ENABLED]}
+                disabled={locked || !!overrides[F_ENABLED]}
+                onChange={(e) => edit(F_ENABLED, e.target.checked)}
+                aria-describedby={
+                  overrides[F_ENABLED] ? NOTE_ID[F_ENABLED] : undefined
+                }
+                className={CHECKBOX}
+              />
+              Draft skills from memory
+            </label>
+            <OverrideNote
+              field={F_ENABLED}
+              source={overrides[F_ENABLED]}
             />
-            Draft skills from memory
-          </label>
+          </div>
 
           <fieldset
-            disabled={locked || off}
+            disabled={locked || off || !!overrides[F_MODE]}
+            aria-describedby={overrides[F_MODE] ? NOTE_ID[F_MODE] : undefined}
             className="m-0 min-w-0 space-y-1 border-0 p-0"
           >
             <legend className="mb-1 text-sm font-medium">Mode</legend>
@@ -353,7 +428,7 @@ export function AutoSkillsSettings({
                 className={cn(
                   "flex items-center gap-2 text-sm",
                   TOUCH_ROW,
-                  (locked || off) && "opacity-60"
+                  (locked || off || overrides[F_MODE]) && "opacity-60"
                 )}
               >
                 <input
@@ -361,13 +436,17 @@ export function AutoSkillsSettings({
                   name="autoskills-mode"
                   value={m.value}
                   checked={values[F_MODE] === m.value}
-                  disabled={locked || off}
+                  disabled={locked || off || !!overrides[F_MODE]}
                   onChange={() => edit(F_MODE, m.value)}
                   className="size-4 border border-muted-foreground bg-transparent text-[var(--brand-solid)] focus:ring-0 focus:ring-offset-0 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
                 />
                 {m.label}
               </label>
             ))}
+            <OverrideNote
+              field={F_MODE}
+              source={overrides[F_MODE]}
+            />
             {serverErrors[F_MODE] && (
               <p
                 role="alert"
@@ -382,13 +461,16 @@ export function AutoSkillsSettings({
             <Label htmlFor="autoskills-cadence">How often</Label>
             <Select
               value={values[F_CADENCE]}
-              disabled={locked || off}
+              disabled={locked || off || !!overrides[F_CADENCE]}
               onValueChange={(next) => {
                 if (next) edit(F_CADENCE, next as Cadence);
               }}
             >
               <SelectTrigger
                 id="autoskills-cadence"
+                aria-describedby={
+                  overrides[F_CADENCE] ? NOTE_ID[F_CADENCE] : undefined
+                }
                 className={cn(INPUT_LIKE_TRIGGER, "w-full max-md:min-h-11")}
               >
                 <SelectValue />
@@ -404,6 +486,10 @@ export function AutoSkillsSettings({
                 ))}
               </SelectContent>
             </Select>
+            <OverrideNote
+              field={F_CADENCE}
+              source={overrides[F_CADENCE]}
+            />
             {serverErrors[F_CADENCE] && (
               <p
                 role="alert"
@@ -422,11 +508,22 @@ export function AutoSkillsSettings({
               id="autoskills-time"
               type="time"
               value={values[F_TIME]}
-              disabled={locked || off}
+              disabled={locked || off || !!overrides[F_TIME]}
               onChange={(e) => edit(F_TIME, e.target.value)}
               aria-invalid={timeError ? true : undefined}
-              aria-describedby={timeError ? "autoskills-time-error" : undefined}
+              aria-describedby={
+                [
+                  overrides[F_TIME] ? NOTE_ID[F_TIME] : null,
+                  timeError ? "autoskills-time-error" : null,
+                ]
+                  .filter(Boolean)
+                  .join(" ") || undefined
+              }
               className="h-9 w-full rounded-md border border-solid border-input bg-transparent px-3 py-1 text-base shadow-xs focus:ring-0 focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-60 max-md:min-h-11 md:text-sm"
+            />
+            <OverrideNote
+              field={F_TIME}
+              source={overrides[F_TIME]}
             />
             {timeError && (
               <p

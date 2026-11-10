@@ -47,6 +47,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
+  AUTOSKILLS_FIELDS,
   autoSkillsReadOnlyReason,
   groupDrafts,
   isProjectCopy,
@@ -58,6 +59,7 @@ import {
   type UnshowableFile,
 } from "@/lib/autoskills";
 import type { Project } from "@/lib/projects";
+import { shadowedSource } from "@/lib/settingsForm";
 import { cn } from "@/lib/utils";
 import { useDeployment } from "@/providers/ClientProvider";
 import { useProjects } from "@/providers/ProjectsProvider";
@@ -474,10 +476,24 @@ export function DraftsPage() {
   // waits, without a box that goes again a moment later.
   const readOnlyReason =
     access && !access.writable ? autoSkillsReadOnlyReason(access) : null;
-  const line = statusLine(payload?.settings);
-  // Only settings that say so: unknown ones leave Run now to the core.
+  // The AutoSkills settings an override hides in the running backend (an
+  // environment variable): the payload has the saved values only, so the
+  // page doesn't know what is in use for them.
+  const overridden = useMemo(
+    () =>
+      new Set(
+        payload
+          ? AUTOSKILLS_FIELDS.filter((f) => shadowedSource(payload, f) !== null)
+          : []
+      ),
+    [payload]
+  );
+  const line = statusLine(payload?.settings, overridden);
+  // Only settings that say so: unknown ones (not read, or on / off
+  // overridden) leave Run now to the core.
   const autoSkillsOff =
-    payload?.settings?.memory_skill_synthesis_enabled === false;
+    payload?.settings?.memory_skill_synthesis_enabled === false &&
+    !overridden.has("memory_skill_synthesis_enabled");
 
   const baseId = useId();
   const tabId = (s: DraftStatus) => `${baseId}-tab-${s}`;

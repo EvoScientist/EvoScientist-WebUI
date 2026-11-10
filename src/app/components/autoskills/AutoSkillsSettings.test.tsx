@@ -8,7 +8,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { toast } from "sonner";
-import type { SettingsWriteAccess } from "@/lib/settings";
+import type { SettingSource, SettingsWriteAccess } from "@/lib/settings";
 
 // jsdom has no scrollIntoView; Radix Select calls it when its list opens.
 if (!Element.prototype.scrollIntoView) {
@@ -17,6 +17,8 @@ if (!Element.prototype.scrollIntoView) {
 
 const hooks = vi.hoisted(() => ({
   settings: {} as Record<string, unknown>,
+  /** Where each value comes from; an override hides the saved one. */
+  sources: {} as Record<string, SettingSource>,
   revision: "rev1" as string | null,
   /** A payload without the `revision` key (a malformed answer). */
   noRevision: false,
@@ -31,7 +33,7 @@ vi.mock("@/app/hooks/useSettings", () => ({
       ? undefined
       : {
           settings: hooks.settings,
-          sources: {},
+          sources: hooks.sources,
           providers: {},
           read_only: [],
           setup_needed: false,
@@ -78,6 +80,7 @@ const save = () => screen.getByRole("button", { name: "Save" });
 
 beforeEach(() => {
   hooks.settings = { ...SAVED };
+  hooks.sources = {};
   hooks.revision = "rev1";
   hooks.noRevision = false;
   hooks.noPayload = false;
@@ -912,5 +915,204 @@ describe("AutoSkillsSettings", () => {
         ) as HTMLInputElement
       ).checked
     ).toBe(true);
+  });
+});
+
+// The core applies EVOSCIENTIST_MEMORY_SKILL_SYNTHESIS_* over config.yaml:
+// GET /api/settings marks such a field `shadowed`, with the saved value only.
+describe("AutoSkillsSettings with a value an override hides", () => {
+  const ENV: SettingSource = { source: "env", shadowed: true };
+  const NOTE =
+    "Set by an environment variable, which overrides the saved value. Change it there.";
+  const enabled = () =>
+    screen.getByLabelText("Draft skills from memory") as HTMLInputElement;
+  const review = () =>
+    screen.getByLabelText("Review — I approve each skill") as HTMLInputElement;
+  const auto = () =>
+    screen.getByLabelText(
+      "Auto — install drafts without asking"
+    ) as HTMLInputElement;
+  const cadence = () => screen.getByLabelText("How often") as HTMLButtonElement;
+  const time = () =>
+    screen.getByLabelText("At (local time)") as HTMLInputElement;
+  /** The note a control is described by. */
+  const describedBy = (el: HTMLElement) =>
+    (el.getAttribute("aria-describedby") ?? "")
+      .split(" ")
+      .map((id) => document.getElementById(id)?.textContent ?? "")
+      .join(" ");
+  const again = (view: ReturnType<typeof panel>) =>
+    view.rerender(
+      <AutoSkillsSettings
+        open
+        onOpenChange={vi.fn()}
+      />
+    );
+
+  it("the control is off and carries the Setup page's note", () => {
+    const cases: Array<{
+      field: string;
+      off: () => boolean[];
+      on: () => boolean[];
+      described: () => HTMLElement;
+    }> = [
+      {
+        field: "memory_skill_synthesis_enabled",
+        off: () => [enabled().disabled],
+        on: () => [
+          review().disabled,
+          auto().disabled,
+          cadence().disabled,
+          time().disabled,
+        ],
+        described: enabled,
+      },
+      {
+        field: "memory_skill_synthesis_mode",
+        off: () => [review().disabled, auto().disabled],
+        on: () => [enabled().disabled, cadence().disabled, time().disabled],
+        described: () => review().closest("fieldset") as HTMLElement,
+      },
+      {
+        field: "memory_skill_synthesis_cadence",
+        off: () => [cadence().disabled],
+        on: () => [
+          enabled().disabled,
+          review().disabled,
+          auto().disabled,
+          time().disabled,
+        ],
+        described: cadence,
+      },
+      {
+        field: "memory_skill_synthesis_time",
+        off: () => [time().disabled],
+        on: () => [
+          enabled().disabled,
+          review().disabled,
+          auto().disabled,
+          cadence().disabled,
+        ],
+        described: time,
+      },
+    ];
+    for (const c of cases) {
+      hooks.sources = { [c.field]: ENV };
+      const view = panel();
+      expect(c.off(), c.field).not.toContain(false);
+      expect(c.on(), c.field).not.toContain(true);
+      expect(screen.getAllByText(NOTE), c.field).toHaveLength(1);
+      expect(describedBy(c.described()), c.field).toBe(NOTE);
+      view.unmount();
+    }
+  });
+
+  it("no note without an override, also for a source that hides nothing", () => {
+    hooks.sources = {
+      memory_skill_synthesis_enabled: { source: "config", shadowed: false },
+    };
+    panel();
+    expect(screen.queryByText(/overrides the saved value/)).toBeNull();
+    expect(enabled().disabled).toBe(false);
+    expect(enabled().getAttribute("aria-describedby")).toBeNull();
+  });
+
+  it("names where the override comes from, as the Setup page does", () => {
+    hooks.sources = {
+      memory_skill_synthesis_time: {
+        source: "dotenv",
+        path: "/w/.env",
+        shadowed: true,
+      },
+    };
+    panel();
+    expect(
+      screen.getByText(
+        "Set by the .env file at /w/.env, which overrides the saved value. Change it there."
+      )
+    ).toBeTruthy();
+  });
+
+  it("says so on a page that can't save, too", () => {
+    hooks.access = { writable: false, reason: "not_loopback" };
+    hooks.sources = { memory_skill_synthesis_enabled: ENV };
+    panel();
+    expect(screen.getByText(NOTE)).toBeTruthy();
+  });
+
+  it("a saved off that an override hides doesn't turn the other controls off", async () => {
+    // Whether drafting is on isn't known: the schedule stays editable.
+    hooks.settings = { ...SAVED, memory_skill_synthesis_enabled: false };
+    hooks.sources = { memory_skill_synthesis_enabled: ENV };
+    panel();
+    expect(enabled().checked).toBe(false);
+    expect(enabled().disabled).toBe(true);
+    expect(review().disabled).toBe(false);
+    expect(cadence().disabled).toBe(false);
+    expect(time().disabled).toBe(false);
+
+    // A bad time blocks Save there, as with drafting on.
+    fireEvent.change(time(), { target: { value: "" } });
+    expect(screen.getByText("Enter a time like 03:00.")).toBeTruthy();
+    expect((save() as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.change(time(), { target: { value: "05:30" } });
+    respond(200, {});
+    fireEvent.click(save());
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      memory_skill_synthesis_time: "05:30",
+      revision: "rev1",
+    });
+  });
+
+  it("an overridden field is never sent, also when it was edited before the override showed", async () => {
+    const view = panel();
+    fireEvent.click(auto());
+    fireEvent.change(time(), { target: { value: "05:30" } });
+    expect((save() as HTMLButtonElement).disabled).toBe(false);
+
+    // The settings are read again (EvoScientist restarted with the
+    // variable): the mode shows what is saved, and its edit doesn't go.
+    hooks.sources = { memory_skill_synthesis_mode: ENV };
+    again(view);
+    expect(auto().disabled).toBe(true);
+    expect(auto().checked).toBe(false);
+    expect(review().checked).toBe(true);
+
+    respond(200, {});
+    fireEvent.click(save());
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      memory_skill_synthesis_time: "05:30",
+      revision: "rev1",
+    });
+  });
+
+  it("with only an overridden field edited there is nothing to save", () => {
+    const view = panel();
+    fireEvent.click(auto());
+    expect((save() as HTMLButtonElement).disabled).toBe(false);
+    hooks.sources = { memory_skill_synthesis_mode: ENV };
+    again(view);
+    expect((save() as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(save());
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("an overridden time that isn't one doesn't block the other fields", async () => {
+    // Saved by hand; the field is off, so it can't be fixed here.
+    hooks.settings = { ...SAVED, memory_skill_synthesis_time: "3am" };
+    hooks.sources = { memory_skill_synthesis_time: ENV };
+    panel();
+    expect(screen.queryByText("Enter a time like 03:00.")).toBeNull();
+    fireEvent.click(auto());
+    respond(200, {});
+    fireEvent.click(save());
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      memory_skill_synthesis_mode: "auto",
+      revision: "rev1",
+    });
   });
 });

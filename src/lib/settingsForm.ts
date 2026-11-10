@@ -259,6 +259,18 @@ export function fieldLabel(
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
+/** The override (environment, CLI, `.env`) that hides a field's saved
+ *  value in the running backend, or null when the saved value is the one in
+ *  use. The payload carries the saved value only: what the override says is
+ *  not sent. */
+export function shadowedSource(
+  payload: Pick<SettingsPayload, "sources">,
+  field: string
+): SettingSource | null {
+  const source = payload.sources[field];
+  return source?.shadowed ? source : null;
+}
+
 /** Where an override of a shadowed field comes from. */
 export function sourceNote(source: SettingSource): string {
   switch (source.source) {

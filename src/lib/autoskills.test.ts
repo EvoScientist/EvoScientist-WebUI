@@ -439,6 +439,52 @@ describe("statusLine", () => {
       "AutoSkills is off in every project"
     );
   });
+
+  it("never states a value an override hides", () => {
+    const ENABLED = "memory_skill_synthesis_enabled";
+    const MODE = "memory_skill_synthesis_mode";
+    const CADENCE = "memory_skill_synthesis_cadence";
+    const TIME = "memory_skill_synthesis_time";
+    const saved = {
+      [ENABLED]: true,
+      [MODE]: "auto",
+      [CADENCE]: "nightly",
+      [TIME]: "02:30",
+    };
+    const line = (...fields: string[]) => statusLine(saved, new Set(fields));
+    const BY_ENV =
+      "AutoSkills is set by an environment variable on the machine that runs EvoScientist.";
+
+    // Whether it is on at all isn't known, whatever is saved.
+    expect(line(ENABLED)).toBe(BY_ENV);
+    expect(line(ENABLED, MODE, CADENCE, TIME)).toBe(BY_ENV);
+    expect(statusLine({ ...saved, [ENABLED]: false }, new Set([ENABLED]))).toBe(
+      BY_ENV
+    );
+
+    // Only the part that is hidden goes.
+    expect(line(MODE)).toBe("Every project · runs every night at 02:30");
+    expect(line(CADENCE)).toBe(
+      "Every project · runs at 02:30 · drafts install automatically"
+    );
+    expect(line(TIME)).toBe(
+      "Every project · runs every night · drafts install automatically"
+    );
+    expect(line(CADENCE, TIME)).toBe(
+      "Every project · drafts install automatically"
+    );
+    expect(line(MODE, CADENCE, TIME)).toBe("Every project");
+
+    // A saved off that nothing hides is still off.
+    expect(
+      statusLine({ ...saved, [ENABLED]: false }, new Set([MODE, TIME]))
+    ).toBe("AutoSkills is off in every project");
+    // No override: the whole line, as without the argument.
+    expect(line()).toBe(
+      "Every project · runs every night at 02:30 · drafts install automatically"
+    );
+    expect(statusLine(undefined, new Set([ENABLED]))).toBeNull();
+  });
 });
 
 describe("fromMemorySkills", () => {

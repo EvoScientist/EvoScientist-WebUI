@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useAutoSkills } from "@/app/hooks/useAutoSkills";
+import { useSettings } from "@/app/hooks/useSettings";
 import { isRelayRefusal, postRelay } from "@/lib/autoskillsRelay";
 import {
   autoSkillsReadOnlyReason,
@@ -12,6 +13,7 @@ import {
   type DraftStatus,
 } from "@/lib/autoskills";
 import type { Project } from "@/lib/projects";
+import { shadowedSource } from "@/lib/settingsForm";
 import { useClient } from "@/providers/ClientProvider";
 
 export const RUN_POLL_MS = 3_000;
@@ -111,6 +113,10 @@ export function useRunNow(projects: readonly Project[]): {
   refreshRef.current = auto.refresh;
   const readNowRef = useRef(auto.readNow);
   readNowRef.current = auto.readNow;
+  // The settings as read now: a refusal is worded by them when it comes.
+  const { payload } = useSettings();
+  const settingsRef = useRef(payload);
+  settingsRef.current = payload;
 
   // The token of the run that holds each project key.
   const activeRef = useRef(new Map<string, object>());
@@ -303,7 +309,15 @@ export function useRunNow(projects: readonly Project[]): {
             start !== "network" && !start.ok && typeof data.error === "string"
               ? data.error
               : "";
-          toast.error(startFailure(code, label));
+          // Off by an environment variable: the page's Settings can't turn
+          // it on (the core refuses by the value in use).
+          const offByOverride =
+            !!settingsRef.current &&
+            shadowedSource(
+              settingsRef.current,
+              "memory_skill_synthesis_enabled"
+            ) !== null;
+          toast.error(startFailure(code, label, offByOverride));
           return;
         }
         if (joined) {
@@ -349,9 +363,15 @@ export function useRunNow(projects: readonly Project[]): {
   return { running, run };
 }
 
-function startFailure(code: string, label: string): string {
+function startFailure(
+  code: string,
+  label: string,
+  offByOverride: boolean
+): string {
   if (code === "autoskills_off") {
-    return "AutoSkills is off. Turn it on in Settings first.";
+    return offByOverride
+      ? "AutoSkills is off: an environment variable on the machine that runs EvoScientist turns it off."
+      : "AutoSkills is off. Turn it on in Settings first.";
   }
   if (code === "not_served") {
     return `${label} isn't served by this backend right now.`;

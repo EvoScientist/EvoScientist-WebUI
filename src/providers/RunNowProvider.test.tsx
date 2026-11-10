@@ -70,7 +70,10 @@ vi.mock("@/app/hooks/useDraftActions", () => ({
 }));
 vi.mock("@/app/hooks/useSettings", () => ({
   useSettings: () => ({
-    payload: { settings: { memory_skill_synthesis_enabled: true } },
+    payload: {
+      settings: { memory_skill_synthesis_enabled: true },
+      sources: {},
+    },
   }),
   useSettingsAccess: () => ({ access: { writable: true }, refresh: vi.fn() }),
 }));

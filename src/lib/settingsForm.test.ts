@@ -12,6 +12,7 @@ import {
   restartFieldsShown,
   saveErrorText,
   sendableEdits,
+  shadowedSource,
   sourceNote,
   stepOfField,
   testKeyErrorText,
@@ -306,6 +307,25 @@ describe("labels", () => {
       sourceNote({ source: "dotenv", path: "/w/.env", shadowed: true })
     ).toBe("the .env file at /w/.env");
     expect(sourceNote({ source: "cli", shadowed: true })).toMatch(/flag/);
+  });
+
+  it("finds the override that hides a field's saved value", () => {
+    const env = { source: "env", shadowed: true };
+    const overridden: SettingsPayload = {
+      ...payload,
+      sources: {
+        memory_skill_synthesis_enabled: env,
+        // Where the value comes from, with nothing hidden.
+        provider: { source: "config", shadowed: false },
+      },
+    };
+    expect(
+      shadowedSource(overridden, "memory_skill_synthesis_enabled")
+    ).toEqual(env);
+    expect(shadowedSource(overridden, "provider")).toBeNull();
+    // No source recorded for the field.
+    expect(shadowedSource(overridden, "model")).toBeNull();
+    expect(shadowedSource(payload, "provider")).toBeNull();
   });
 });
 

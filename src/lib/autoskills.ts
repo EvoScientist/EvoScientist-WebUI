@@ -339,30 +339,51 @@ export function installedLabel(
 }
 
 const CADENCE_TEXT: Record<string, string> = {
-  nightly: "runs every night at",
-  weekly: "runs weekly at",
-  monthly: "runs monthly at",
+  nightly: "runs every night",
+  weekly: "runs weekly",
+  monthly: "runs monthly",
 };
 
+const NO_FIELDS: ReadonlySet<string> = new Set();
+
 /** The one-line summary of the AutoSkills settings, or null before they
- *  are read. */
+ *  are read. `settings` holds the saved values; `shadowed` names the fields
+ *  an override hides in the running backend (an environment variable; what
+ *  it says isn't sent). Such a value is never stated: with on / off hidden
+ *  the line says only that, and a hidden mode, cadence or time is left out. */
 export function statusLine(
-  settings: Record<string, unknown> | undefined
+  settings: Record<string, unknown> | undefined,
+  shadowed: ReadonlySet<string> = NO_FIELDS
 ): string | null {
   if (!settings) return null;
+  if (shadowed.has("memory_skill_synthesis_enabled")) {
+    return "AutoSkills is set by an environment variable on the machine that runs EvoScientist.";
+  }
   if (settings.memory_skill_synthesis_enabled === false) {
     return "AutoSkills is off in every project";
   }
-  const cadence =
-    CADENCE_TEXT[String(settings.memory_skill_synthesis_cadence)] ??
-    CADENCE_TEXT.weekly;
+  const parts = ["Every project"];
+  const cadence = shadowed.has("memory_skill_synthesis_cadence")
+    ? null
+    : CADENCE_TEXT[String(settings.memory_skill_synthesis_cadence)] ??
+      CADENCE_TEXT.weekly;
   const rawTime = settings.memory_skill_synthesis_time;
-  const time = typeof rawTime === "string" && rawTime ? rawTime : "03:00";
-  const mode =
-    settings.memory_skill_synthesis_mode === "auto"
-      ? "drafts install automatically"
-      : "you review each draft";
-  return `Every project · ${cadence} ${time} · ${mode}`;
+  const time = shadowed.has("memory_skill_synthesis_time")
+    ? null
+    : typeof rawTime === "string" && rawTime
+    ? rawTime
+    : "03:00";
+  if (cadence && time) parts.push(`${cadence} at ${time}`);
+  else if (cadence) parts.push(cadence);
+  else if (time) parts.push(`runs at ${time}`);
+  if (!shadowed.has("memory_skill_synthesis_mode")) {
+    parts.push(
+      settings.memory_skill_synthesis_mode === "auto"
+        ? "drafts install automatically"
+        : "you review each draft"
+    );
+  }
+  return parts.join(" · ");
 }
 
 /** The installed skills that came from approved drafts, by folder name. */

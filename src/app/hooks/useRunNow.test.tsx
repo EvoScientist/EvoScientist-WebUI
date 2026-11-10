@@ -35,6 +35,12 @@ vi.mock("@/app/hooks/useAutoSkills", () => ({
   }),
 }));
 
+// The settings as the page read them: Run now's refusals are worded by them.
+const settings = vi.hoisted(() => ({ payload: undefined as unknown }));
+vi.mock("@/app/hooks/useSettings", () => ({
+  useSettings: () => ({ payload: settings.payload }),
+}));
+
 import {
   REREAD_WAIT_MS,
   RUN_CEILING_MS,
@@ -109,6 +115,10 @@ beforeEach(() => {
   state.refresh.mockResolvedValue(listOf([draft("old", B)]));
   state.readNow.mockReset();
   state.readNow.mockResolvedValue(listOf([draft("old", B)]));
+  settings.payload = {
+    settings: { memory_skill_synthesis_enabled: true },
+    sources: {},
+  };
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -281,6 +291,89 @@ describe("useRunNow", () => {
     );
     expect(runsGet).not.toHaveBeenCalled();
     expect(result.current.running.size).toBe(0);
+  });
+
+  it("autoskills_off under an override says the variable turns it off", async () => {
+    // The page's Settings can't turn it on: an environment variable decides.
+    settings.payload = {
+      settings: { memory_skill_synthesis_enabled: true },
+      sources: {
+        memory_skill_synthesis_enabled: { source: "env", shadowed: true },
+      },
+    };
+    stubRelay(409, { error: "autoskills_off" });
+    const { result } = renderHook(() => useRunNow(projects));
+    await act(async () => {
+      await result.current.run(B);
+    });
+    expect(toast.error.mock.calls).toEqual([
+      [
+        "AutoSkills is off: an environment variable on the machine that runs EvoScientist turns it off.",
+      ],
+    ]);
+    expect(result.current.running.size).toBe(0);
+  });
+
+  it("autoskills_off reads the settings as they are when the answer comes", async () => {
+    let answer!: (r: Response) => void;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        () =>
+          new Promise<Response>((resolve) => {
+            answer = resolve;
+          })
+      )
+    );
+    const { result, rerender } = renderHook(() => useRunNow(projects));
+    await act(async () => {
+      void result.current.run(B);
+    });
+    // Read meanwhile: the override shows only now.
+    settings.payload = {
+      settings: { memory_skill_synthesis_enabled: false },
+      sources: {
+        memory_skill_synthesis_enabled: { source: "env", shadowed: true },
+      },
+    };
+    rerender();
+    await act(async () => {
+      answer(
+        new Response(JSON.stringify({ error: "autoskills_off" }), {
+          status: 409,
+          headers: { "Content-Type": "application/json" },
+        })
+      );
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(toast.error).toHaveBeenCalledWith(
+      "AutoSkills is off: an environment variable on the machine that runs EvoScientist turns it off."
+    );
+  });
+
+  it("autoskills_off without settings, or with another field overridden, asks to turn it on", async () => {
+    for (const payload of [
+      undefined,
+      {
+        settings: {},
+        sources: {
+          memory_skill_synthesis_mode: { source: "env", shadowed: true },
+          memory_skill_synthesis_enabled: { source: "config", shadowed: false },
+        },
+      },
+    ]) {
+      settings.payload = payload;
+      toast.error.mockClear();
+      stubRelay(409, { error: "autoskills_off" });
+      const { result, unmount } = renderHook(() => useRunNow(projects));
+      await act(async () => {
+        await result.current.run(B);
+      });
+      expect(toast.error).toHaveBeenCalledWith(
+        "AutoSkills is off. Turn it on in Settings first."
+      );
+      unmount();
+    }
   });
 
   it("not_served names the project", async () => {

@@ -14,7 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Draft, DraftList } from "@/lib/autoskills";
 import type { ProjectsState } from "@/lib/projects";
 import type { ProjectsContextValue } from "@/providers/ProjectsProvider";
-import type { SettingsWriteAccess } from "@/lib/settings";
+import type { SettingSource, SettingsWriteAccess } from "@/lib/settings";
 import { animateDialogs, dialogWords } from "@/test/animateDialogs";
 import {
   mockProjects,
@@ -98,6 +98,8 @@ const hooks = vi.hoisted(() => ({
   running: new Set<string>() as ReadonlySet<string>,
   run: vi.fn(async (_key: string) => undefined),
   settings: undefined as Record<string, unknown> | undefined,
+  // Where each setting comes from; an override hides the saved value.
+  sources: {} as Record<string, SettingSource>,
   access: undefined as SettingsWriteAccess | undefined,
   deployment: { deploymentUrl: "http://127.0.0.1:6174", apiKey: "" },
   // A check of the test's own in place of the real one, when set.
@@ -147,7 +149,9 @@ vi.mock("@/app/hooks/useDraftActions", async (importOriginal) => {
 });
 vi.mock("@/app/hooks/useSettings", () => ({
   useSettings: () => ({
-    payload: hooks.settings ? { settings: hooks.settings } : undefined,
+    payload: hooks.settings
+      ? { settings: hooks.settings, sources: hooks.sources }
+      : undefined,
   }),
   useSettingsAccess: () => ({ access: hooks.access, refresh: vi.fn() }),
 }));
@@ -250,6 +254,7 @@ beforeEach(() => {
     memory_skill_synthesis_cadence: "weekly",
     memory_skill_synthesis_time: "03:00",
   };
+  hooks.sources = {};
   hooks.access = { writable: true };
   hooks.realActions = false;
   hooks.deployment = { deploymentUrl: URL_, apiKey: "" };
@@ -1208,6 +1213,68 @@ describe("DraftsPage", () => {
     expect(run().closest("[title]")).toBeNull();
     fireEvent.click(run());
     expect(hooks.run).toHaveBeenCalledWith(B);
+  });
+
+  it("Run now is left to the core while an override hides whether AutoSkills is on", () => {
+    // Saved off, but EVOSCIENTIST_MEMORY_SKILL_SYNTHESIS_ENABLED decides,
+    // and the page isn't told what it says.
+    ready([]);
+    hooks.settings = { memory_skill_synthesis_enabled: false };
+    hooks.sources = {
+      memory_skill_synthesis_enabled: { source: "env", shadowed: true },
+    };
+    const view = render(page());
+    const run = () =>
+      within(screen.getByRole("group", { name: "project_B" })).getByRole(
+        "button",
+        { name: "Run now" }
+      ) as HTMLButtonElement;
+    expect(run().disabled).toBe(false);
+    expect(run().closest("[title]")).toBeNull();
+    expect(run().getAttribute("aria-describedby")).toBeNull();
+    expect(
+      screen.queryByText("AutoSkills is off. Turn it on in Settings first.")
+    ).toBeNull();
+    fireEvent.click(run());
+    expect(hooks.run).toHaveBeenCalledWith(B);
+
+    // A source that hides nothing leaves the saved off in charge.
+    hooks.sources = {
+      memory_skill_synthesis_enabled: { source: "config", shadowed: false },
+    };
+    view.rerender(page());
+    expect(run().disabled).toBe(true);
+  });
+
+  it("the status line never states a value an override hides", () => {
+    ready([]);
+    const BY_ENV =
+      "AutoSkills is set by an environment variable on the machine that runs EvoScientist.";
+    const env: SettingSource = { source: "env", shadowed: true };
+
+    // Saved on or off: the line says neither.
+    hooks.sources = { memory_skill_synthesis_enabled: env };
+    const view = render(page());
+    expect(screen.getByText(BY_ENV)).toBeTruthy();
+    expect(screen.queryByText(/^Every project/)).toBeNull();
+    hooks.settings = { memory_skill_synthesis_enabled: false };
+    view.rerender(page());
+    expect(screen.getByText(BY_ENV)).toBeTruthy();
+    expect(screen.queryByText("AutoSkills is off in every project")).toBeNull();
+
+    // Only the mode hidden: the line leaves it out.
+    hooks.settings = {
+      memory_skill_synthesis_enabled: true,
+      memory_skill_synthesis_mode: "auto",
+      memory_skill_synthesis_cadence: "weekly",
+      memory_skill_synthesis_time: "03:00",
+    };
+    hooks.sources = { memory_skill_synthesis_mode: env };
+    view.rerender(page());
+    expect(
+      screen.getByText("Every project · runs weekly at 03:00")
+    ).toBeTruthy();
+    expect(screen.queryByText(/drafts install automatically/)).toBeNull();
   });
 
   it("the breadcrumb returns to Research Skills", async () => {
