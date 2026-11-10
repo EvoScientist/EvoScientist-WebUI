@@ -481,7 +481,7 @@ describe("DraftDetail", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
 
-  it("an update installed into all projects instead of its own says what it installs there", async () => {
+  it("an update installed into all projects instead of its own says the global skill is updated", async () => {
     const copy = draft({
       proposal_id: "data-cleaning",
       operation: "update",
@@ -490,7 +490,8 @@ describe("DraftDetail", () => {
       install_base: "/home/u/.evoscientist/skills/data-cleaning",
     });
     render(detail(copy));
-    // What is installed at the place picked isn't known.
+    // The core updates the global skill in place and writes no project's
+    // own copy, which that project goes on using.
     pickScope("All projects (global)");
     fireEvent.click(screen.getByRole("button", { name: "Approve" }));
     const dialog = screen.getByRole("dialog", {
@@ -498,7 +499,7 @@ describe("DraftDetail", () => {
     });
     expect(
       within(dialog).getByText(
-        "This installs the updated data-cleaning into all projects (global), in place of any copy already there."
+        "This updates the global data-cleaning. Projects with their own data-cleaning keep theirs."
       )
     ).toBeTruthy();
     fireEvent.click(within(dialog).getByRole("button", { name: "Install" }));
@@ -534,6 +535,138 @@ describe("DraftDetail", () => {
     ).toBeNull();
     fireEvent.click(within(dialog).getByRole("button", { name: "Install" }));
     expect(onApprove).toHaveBeenCalledWith(replace, "workspace");
+  });
+
+  describe("an update of the project's own copy", () => {
+    const OWN = "/work/EvoSci_test/skills/paper-review";
+    const GLOBAL = "/home/u/.evoscientist/skills/paper-review";
+    // Recorded for the project, which has its own paper-review: with
+    // "global" the core would update only the global copy (or refuse without
+    // one), and the project would go on using its own.
+    const own = draft({
+      proposal_id: "paper-review-v2",
+      operation: "update",
+      target_skill_name: "paper-review",
+      install_target: OWN,
+      install_base: OWN,
+    });
+    const picker = () => screen.queryByRole("combobox");
+    const NOTE =
+      "This project has its own paper-review, so the update goes there.";
+
+    it("goes into the project, with no other place offered", async () => {
+      render(detail(own));
+      expect(picker()).toBeNull();
+      const place = screen.getByRole("group", { name: "Install into" });
+      expect(
+        within(place).getByText("EvoSci_test/skills (this project)")
+      ).toBeTruthy();
+      expect(within(place).getByText(NOTE)).toBeTruthy();
+      expect(screen.queryByText("All projects (global)")).toBeNull();
+
+      fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+      const dialog = screen.getByRole("dialog", {
+        name: "Replace an installed skill?",
+      });
+      expect(
+        within(dialog).getByText("This replaces the installed paper-review.")
+      ).toBeTruthy();
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: "Replace and install" })
+      );
+      expect(onApprove).toHaveBeenCalledTimes(1);
+      expect(onApprove).toHaveBeenCalledWith(own, "workspace");
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    });
+
+    it("names the skill it updates, not the draft, and the project by its label", () => {
+      render(detail(own, { projectLabel: "EvoSci_test (work)" }));
+      expect(
+        screen.getByText("EvoSci_test (work)/skills (this project)")
+      ).toBeTruthy();
+      expect(screen.getByText(NOTE)).toBeTruthy();
+      expect(screen.queryByText(/paper-review-v2, so the update/)).toBeNull();
+    });
+
+    it("every other draft still picks its place", () => {
+      const others: Array<[string, Draft]> = [
+        [
+          "an update of a global skill",
+          draft({
+            proposal_id: "g",
+            operation: "update",
+            target_skill_name: "paper-review",
+            scope: "global",
+            install_target: GLOBAL,
+            install_base: GLOBAL,
+          }),
+        ],
+        [
+          "a project copy of a global skill",
+          draft({
+            proposal_id: "c",
+            operation: "update",
+            target_skill_name: "paper-review",
+            install_target: OWN,
+            install_base: GLOBAL,
+          }),
+        ],
+        ["a new skill", draft({ proposal_id: "n" })],
+        [
+          // The same folder for both, but nothing is updated in it.
+          "a new skill with a target",
+          draft({ proposal_id: "n2", install_target: OWN, install_base: OWN }),
+        ],
+        [
+          // The project's copy is gone: nothing says it has its own.
+          "an update whose place the core can't find",
+          draft({
+            proposal_id: "e",
+            operation: "update",
+            target_skill_name: "paper-review",
+            install_error: "No installed workspace skill named 'paper-review'",
+          }),
+        ],
+      ];
+      for (const [name, d] of others) {
+        const view = render(detail(d));
+        expect(picker(), name).not.toBeNull();
+        expect(screen.queryByText(/so the update goes there/), name).toBeNull();
+        fireEvent.click(scopeTrigger());
+        expect(
+          screen.getAllByRole("option").map((o) => o.textContent),
+          name
+        ).toEqual([
+          "EvoSci_test/skills (this project)",
+          "All projects (global)",
+        ]);
+        view.unmount();
+      }
+    });
+
+    it("a place picked before the project had its own copy isn't sent", () => {
+      const files = [{ path: "SKILL.md", size: 10, installed: true }];
+      const mine = { ...own, files };
+      // Listed first as a project copy of a global skill, and global picked.
+      const view = render(detail({ ...mine, install_base: GLOBAL }));
+      pickScope("All projects (global)");
+      expect(scopeTrigger().textContent).toBe("All projects (global)");
+      // The same version, listed again: the project has its own copy now.
+      view.rerender(detail(mine));
+      expect(picker()).toBeNull();
+      // Its files compare with that copy, the place it goes to.
+      fireEvent.click(tab("Files"));
+      expect(screen.getByRole("list", { name: "Changes" })).toBeTruthy();
+
+      fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+      fireEvent.click(
+        within(
+          screen.getByRole("dialog", { name: "Replace an installed skill?" })
+        ).getByRole("button", { name: "Replace and install" })
+      );
+      expect(onApprove).toHaveBeenCalledTimes(1);
+      expect(onApprove).toHaveBeenCalledWith(mine, "workspace");
+    });
   });
 
   /** An update's question asked, with dialogs that fade out as in a

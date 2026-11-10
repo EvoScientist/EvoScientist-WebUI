@@ -47,14 +47,20 @@ function skills(n: number): string {
   return `${n} skills`;
 }
 
+const NO_IDS: ReadonlySet<string> = new Set();
+
 /** The success line of a decision. `placed` holds where each approved
  *  draft went as the core answered it (never the list's recorded scope,
- *  which may be stale); a draft without an entry is named without a place. */
+ *  which may be stale); a draft without an entry is named without a place.
+ *  `kept` holds the approved drafts whose project keeps its own copy of the
+ *  skill, as the core answered (`workspace_shadow`): the approval updated
+ *  the global one, and that project goes on using its own. */
 export function decisionToast(
   action: "approve" | "reject",
   done: Draft[],
   placed: Record<string, DraftScope>,
-  labels: Map<string, string>
+  labels: Map<string, string>,
+  kept: ReadonlySet<string> = NO_IDS
 ): string {
   const n = done.length;
   if (action === "reject") {
@@ -62,6 +68,15 @@ export function decisionToast(
       ? `Rejected ${done[0].skill_name}.`
       : `Rejected ${skills(n)}.`;
   }
+  return installedLine(done, placed, labels) + keptLine(done, labels, kept);
+}
+
+function installedLine(
+  done: Draft[],
+  placed: Record<string, DraftScope>,
+  labels: Map<string, string>
+): string {
+  const n = done.length;
   const scopeOf = (d: Draft): DraftScope | undefined =>
     Object.hasOwn(placed, d.proposal_id) ? placed[d.proposal_id] : undefined;
   if (n === 1) {
@@ -93,6 +108,27 @@ export function decisionToast(
     )}/skills.`;
   }
   return `Installed ${skills(n)}.`;
+}
+
+/** " {project} keeps its own copy." for each project that keeps one, in the
+ *  drafts' order ("copies" for several of one project's); "" for none. */
+function keptLine(
+  done: Draft[],
+  labels: Map<string, string>,
+  kept: ReadonlySet<string>
+): string {
+  const byProject = new Map<string, number>();
+  for (const d of done) {
+    if (!kept.has(d.proposal_id)) continue;
+    byProject.set(d.workspace_dir, (byProject.get(d.workspace_dir) ?? 0) + 1);
+  }
+  let line = "";
+  for (const [key, count] of byProject) {
+    line += ` ${labelFor(key, labels)} keeps its own ${
+      count === 1 ? "copy" : "copies"
+    }.`;
+  }
+  return line;
 }
 
 /** The line for one draft the core or the relay refused, for a decision or
@@ -236,6 +272,7 @@ async function decideAll(
     placed: Record<string, DraftScope>;
     operations: Record<string, Draft["operation"]>;
     statuses: Map<string, string>;
+    kept: Set<string>;
   }
 > {
   const result: DecisionResult = { done: [], failed: [] };
@@ -247,6 +284,9 @@ async function decideAll(
   const operations: Record<string, Draft["operation"]> = {};
   // The status each answer names: a revert says where the draft went.
   const statuses = new Map<string, string>();
+  // The approvals that left the project's own copy of the skill in place
+  // (`workspace_shadow`, its path): the core updated the global one only.
+  const kept = new Set<string>();
   for (const [index, draft] of drafts.entries()) {
     const body = bodyOf(draft);
     const out = await post(body);
@@ -260,6 +300,10 @@ async function decideAll(
       }
       if (typeof out.data.status === "string") {
         statuses.set(draft.proposal_id, out.data.status);
+      }
+      const shadow = out.data.workspace_shadow;
+      if (typeof shadow === "string" && shadow.trim()) {
+        kept.add(draft.proposal_id);
       }
     } else {
       const message = failure(out.answer, draft);
@@ -278,7 +322,7 @@ async function decideAll(
       }
     }
   }
-  return { ...result, placed, operations, statuses };
+  return { ...result, placed, operations, statuses, kept };
 }
 
 /** The success lines of an Undo, by where the core says each draft went:
@@ -476,7 +520,7 @@ export function useDraftActions(
     ) =>
       track(async () => {
         const labels = projectLabels(projectsRef.current);
-        const { placed, operations, done, failed } = await decideAll(
+        const { placed, operations, kept, done, failed } = await decideAll(
           drafts,
           (d) =>
             action === "approve"
@@ -517,7 +561,7 @@ export function useDraftActions(
               action
             )
           );
-          const text = decisionToast(action, result.done, placed, labels);
+          const text = decisionToast(action, result.done, placed, labels, kept);
           if (revertible.length > 0) {
             toast.success(text, {
               duration: UNDO_MS,

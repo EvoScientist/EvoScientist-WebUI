@@ -35,6 +35,7 @@ import {
 import {
   installedLabel,
   isProjectCopy,
+  updatesOwnCopy,
   type Draft,
   type DraftScope,
   type UnshowableFile,
@@ -191,7 +192,10 @@ function Sources({ draft, here }: { draft: Draft; here: boolean }) {
  *  tells the recorded place apart (a project's own copy of a global skill,
  *  or a replace). A global update put into this project instead is the
  *  project's own copy too: the core refuses rather than replace a copy the
- *  project has. What is installed for all projects isn't known. */
+ *  project has. An update recorded for the project and put into all
+ *  projects instead updates the global skill in place (the core refuses
+ *  without one) and writes no project's own copy, which that project goes
+ *  on using. */
 function updateQuestion(
   draft: Draft,
   scope: DraftScope,
@@ -201,7 +205,7 @@ function updateQuestion(
   if (scope !== draft.scope && scope === "global") {
     return {
       title: "Install an updated skill?",
-      description: `This installs the updated ${name} into all projects (global), in place of any copy already there.`,
+      description: `This updates the global ${name}. Projects with their own ${name} keep theirs.`,
       action: "Install",
     };
   }
@@ -288,7 +292,14 @@ export function DraftDetail({
   if (shown.id !== draft.proposal_id) {
     setShown({ id: draft.proposal_id, visit: shown.visit + 1 });
   }
-  const scope = pick.version === version ? pick.scope : draft.scope;
+  // An update of the project's own copy goes there, whatever was picked
+  // while the list read it otherwise: no other place is offered for it.
+  const ownCopy = updatesOwnCopy(draft);
+  const scope: DraftScope = ownCopy
+    ? "workspace"
+    : pick.version === version
+    ? pick.scope
+    : draft.scope;
 
   const confirming = pending && asked?.version === version;
 
@@ -296,6 +307,7 @@ export function DraftDetail({
   const tabId = (key: TabKey) => `${baseId}-tab-${key}`;
   const panelId = `${baseId}-panel`;
   const scopeId = `${baseId}-scope`;
+  const scopeLabelId = `${baseId}-scope-label`;
   const errorId = `${baseId}-install-error`;
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const headingRef = useRef<HTMLHeadingElement>(null);
@@ -461,45 +473,71 @@ export function DraftDetail({
 
       {pending ? (
         <div className="mt-4 space-y-3">
-          <div className="space-y-1.5">
-            <Label htmlFor={scopeId}>Install into</Label>
-            <Select
-              value={scope}
-              // The check before an approval goes on with the place shown
-              // at the click: none is picked meanwhile.
-              disabled={checking}
-              onValueChange={(next) => {
-                if (next === "workspace" || next === "global") {
-                  setPick({ version, scope: next });
-                }
-              }}
+          {ownCopy ? (
+            // Plain text, no choice: "global" would update only the global
+            // skill and leave this project on its own copy.
+            <div
+              role="group"
+              aria-labelledby={scopeLabelId}
+              className="space-y-1.5"
             >
-              <SelectTrigger
-                id={scopeId}
-                aria-describedby={installError ? errorId : undefined}
-                className={cn(
-                  INPUT_LIKE_TRIGGER,
-                  "w-full max-md:h-11 sm:max-w-sm"
-                )}
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent className={LIST_MAX_HEIGHT}>
-                <SelectItem value="workspace">
-                  {projectLabel}/skills (this project)
-                </SelectItem>
-                <SelectItem value="global">All projects (global)</SelectItem>
-              </SelectContent>
-            </Select>
-            {installError && (
               <p
-                id={errorId}
-                className="text-xs text-destructive"
+                id={scopeLabelId}
+                className="text-sm font-medium leading-none"
               >
-                {installError}
+                Install into
               </p>
-            )}
-          </div>
+              <p className="text-sm">{projectLabel}/skills (this project)</p>
+              <p className="text-xs text-muted-foreground">
+                This project has its own{" "}
+                {draft.target_skill_name ?? draft.skill_name}, so the update
+                goes there.
+              </p>
+              {installError && (
+                <p className="text-xs text-destructive">{installError}</p>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-1.5">
+              <Label htmlFor={scopeId}>Install into</Label>
+              <Select
+                value={scope}
+                // The check before an approval goes on with the place shown
+                // at the click: none is picked meanwhile.
+                disabled={checking}
+                onValueChange={(next) => {
+                  if (next === "workspace" || next === "global") {
+                    setPick({ version, scope: next });
+                  }
+                }}
+              >
+                <SelectTrigger
+                  id={scopeId}
+                  aria-describedby={installError ? errorId : undefined}
+                  className={cn(
+                    INPUT_LIKE_TRIGGER,
+                    "w-full max-md:h-11 sm:max-w-sm"
+                  )}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className={LIST_MAX_HEIGHT}>
+                  <SelectItem value="workspace">
+                    {projectLabel}/skills (this project)
+                  </SelectItem>
+                  <SelectItem value="global">All projects (global)</SelectItem>
+                </SelectContent>
+              </Select>
+              {installError && (
+                <p
+                  id={errorId}
+                  className="text-xs text-destructive"
+                >
+                  {installError}
+                </p>
+              )}
+            </div>
+          )}
           <div className="flex flex-wrap gap-2">
             <Button
               type="button"

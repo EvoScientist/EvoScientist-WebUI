@@ -269,6 +269,67 @@ describe("useDraftActions", () => {
     );
   });
 
+  it("an approval that left a project's own copy in place says the project keeps it", async () => {
+    const { result } = setup();
+    // An update of the global skill: the core writes only that one and
+    // names the project's own copy it left (`workspace_shadow`).
+    const kept = (id: string, dir = A) => ({
+      ...okGlobal,
+      workspace_shadow: `${dir}/skills/${id}`,
+    });
+    const u = (id: string, dir = A) =>
+      draft({ proposal_id: id, operation: "update", workspace_dir: dir });
+
+    stubFetch([[200, kept("a")]]);
+    await act(async () => {
+      await result.current.approve([u("a")], { a: "global" });
+    });
+    expect(toast.success.mock.calls[0]).toEqual([
+      "Installed a into all projects (global). EvoSci_test keeps its own copy.",
+    ]);
+
+    // A bulk approve too: each project that keeps one, in the drafts' order.
+    stubFetch([
+      [200, kept("b", B)],
+      [200, okGlobal],
+      [200, kept("d")],
+    ]);
+    await act(async () => {
+      await result.current.approve([u("b", B), u("c"), u("d")]);
+    });
+    expect(toast.success.mock.calls[1]).toEqual([
+      "Installed 3 skills into all projects (global). project_B keeps its own copy. EvoSci_test keeps its own copy.",
+    ]);
+
+    // Two of one project's.
+    stubFetch([
+      [200, kept("e")],
+      [200, kept("f")],
+    ]);
+    await act(async () => {
+      await result.current.approve([u("e"), u("f")]);
+    });
+    expect(toast.success.mock.calls[2]).toEqual([
+      "Installed 2 skills into all projects (global). EvoSci_test keeps its own copies.",
+    ]);
+  });
+
+  it("an approval that names no copy left in place adds nothing", async () => {
+    const { result } = setup();
+    for (const shadow of [null, "", "  ", 5, ["/x"], undefined]) {
+      toast.success.mockClear();
+      stubFetch([[200, { ...okGlobal, workspace_shadow: shadow }]]);
+      await act(async () => {
+        await result.current.approve([
+          draft({ proposal_id: "a", operation: "update" }),
+        ]);
+      });
+      expect(toast.success.mock.calls).toEqual([
+        ["Installed a into all projects (global)."],
+      ]);
+    }
+  });
+
   it("a single approval toasts where it went with Undo", async () => {
     stubFetch([[200, okApprove]]);
     const { result } = setup();
@@ -1543,6 +1604,66 @@ describe("decisionToast", () => {
     expect(decisionToast("reject", [w("a")], {}, labels)).toBe("Rejected a.");
     expect(decisionToast("reject", [w("a"), w("b")], {}, labels)).toBe(
       "Rejected 2 skills."
+    );
+  });
+
+  it("adds the projects that keep their own copy", () => {
+    expect(
+      decisionToast(
+        "approve",
+        [w("a")],
+        { a: "global" },
+        labels,
+        new Set(["a"])
+      )
+    ).toBe(
+      "Installed a into all projects (global). EvoSci_test keeps its own copy."
+    );
+    // Only for the drafts the core named one for.
+    expect(
+      decisionToast(
+        "approve",
+        [w("a"), w("b", B)],
+        { a: "global", b: "global" },
+        labels,
+        new Set(["b"])
+      )
+    ).toBe(
+      "Installed 2 skills into all projects (global). project_B keeps its own copy."
+    );
+    expect(
+      decisionToast(
+        "approve",
+        [w("a"), w("b", B), w("c")],
+        { a: "global", b: "global" },
+        labels,
+        new Set(["a", "b", "c"])
+      )
+    ).toBe(
+      "Installed 3 skills. EvoSci_test keeps its own copies. project_B keeps its own copy."
+    );
+    // A project the page doesn't list goes by its folder name.
+    expect(
+      decisionToast(
+        "approve",
+        [w("a", "/work/gone")],
+        { a: "global" },
+        labels,
+        new Set(["a"])
+      )
+    ).toBe("Installed a into all projects (global). gone keeps its own copy.");
+    // An id that isn't among the drafts, and a reject, add nothing.
+    expect(
+      decisionToast(
+        "approve",
+        [w("a")],
+        { a: "global" },
+        labels,
+        new Set(["zz"])
+      )
+    ).toBe("Installed a into all projects (global).");
+    expect(decisionToast("reject", [w("a")], {}, labels, new Set(["a"]))).toBe(
+      "Rejected a."
     );
   });
 });

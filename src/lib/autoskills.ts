@@ -422,6 +422,22 @@ export function isProjectCopy(draft: Draft): boolean {
   );
 }
 
+/** Whether a pending update goes to the project's own copy of the skill:
+ *  recorded for the project, and the core writes it over the folder it
+ *  starts from, in the project. Installed "global" instead, the core would
+ *  update only the global skill (or refuse without one) and leave the
+ *  project's copy, which the project goes on using: the page offers no
+ *  other place for it. An update the core can't place (both null) isn't
+ *  one: nothing says the project has its own copy. */
+export function updatesOwnCopy(draft: Draft): boolean {
+  return (
+    draft.operation === "update" &&
+    draft.scope === "workspace" &&
+    draft.install_target !== null &&
+    draft.install_target === draft.install_base
+  );
+}
+
 /** The largest file the core shows (its MAX_FILE_BYTES): a larger one
  *  answers 413, so it is known before it is read. */
 export const MAX_SHOWN_BYTES = 1_048_576;

@@ -15,6 +15,7 @@ import {
   projectLabels,
   statusLine,
   unshowableFiles,
+  updatesOwnCopy,
   type Draft,
   type DraftFile,
   type DraftList,
@@ -560,6 +561,46 @@ describe("isProjectCopy", () => {
           install_base: global,
         })
       )
+    ).toBe(false);
+  });
+});
+
+describe("updatesOwnCopy", () => {
+  const global = "/home/u/.evoscientist/skills/data-cleaning";
+  const project = "/work/A/skills/data-cleaning";
+  const update = (over: Partial<Draft>) =>
+    draft({ operation: "update", target_skill_name: "data-cleaning", ...over });
+
+  it("is an update recorded for the project that the core writes over the project's copy", () => {
+    expect(
+      updatesOwnCopy(update({ install_target: project, install_base: project }))
+    ).toBe(true);
+  });
+
+  it("is no other draft", () => {
+    // A project copy of a global skill: the project has none of its own yet.
+    expect(
+      updatesOwnCopy(update({ install_target: project, install_base: global }))
+    ).toBe(false);
+    // An update of the global skill, in place.
+    expect(
+      updatesOwnCopy(
+        update({
+          scope: "global",
+          install_target: global,
+          install_base: global,
+        })
+      )
+    ).toBe(false);
+    // The core can't place it (the copy is gone), or it is decided: nothing
+    // says the project has its own.
+    expect(updatesOwnCopy(update({}))).toBe(false);
+    expect(
+      updatesOwnCopy(update({ install_target: project, install_base: null }))
+    ).toBe(false);
+    // A new skill.
+    expect(
+      updatesOwnCopy(draft({ install_target: project, install_base: project }))
     ).toBe(false);
   });
 });

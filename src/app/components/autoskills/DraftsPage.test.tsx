@@ -1849,6 +1849,110 @@ describe("DraftsPage", () => {
     ]);
   });
 
+  it("an update of the project's own copy is approved into the project, with no other place to pick", async () => {
+    // The real decision hook, down to the relay's POST.
+    hooks.realActions = true;
+    const own = "/work/EvoSci_test/skills/paper-review";
+    const x = draft({
+      proposal_id: "x",
+      operation: "update",
+      target_skill_name: "paper-review",
+      updated_at: "2026-11-06T08:00:00Z",
+      install_target: own,
+      install_base: own,
+    });
+    ready([x]);
+    q.values.set("draftId", "x");
+    render(page());
+    const bodies: Array<Record<string, unknown>> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        bodies.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+        return new Response(
+          JSON.stringify({
+            approved: true,
+            scope: "workspace",
+            operation: "update",
+            workspace_shadow: null,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      })
+    );
+    const pane = within(
+      screen.getByRole("heading", { level: 3 }).parentElement!
+    );
+    expect(pane.queryByRole("combobox")).toBeNull();
+    expect(
+      pane.getByText(
+        "This project has its own paper-review, so the update goes there."
+      )
+    ).toBeTruthy();
+    fireEvent.click(pane.getByRole("button", { name: "Approve" }));
+    fireEvent.click(
+      within(
+        screen.getByRole("dialog", { name: "Replace an installed skill?" })
+      ).getByRole("button", { name: "Replace and install" })
+    );
+    await waitFor(() => expect(bodies).toHaveLength(1));
+    expect(bodies).toEqual([
+      {
+        action: "approve",
+        proposal_id: "x",
+        scope: "workspace",
+        expected_updated_at: "2026-11-06T08:00:00Z",
+      },
+    ]);
+  });
+
+  it("an approval that left the project's own copy in place says the project keeps it", async () => {
+    hooks.realActions = true;
+    const done = vi.spyOn(toast, "success");
+    toastSpy = done;
+    const global = "/home/u/.evoscientist/skills/paper-review";
+    // An update of the global skill; the project got its own copy since.
+    const x = draft({
+      proposal_id: "x",
+      skill_name: "paper-review",
+      operation: "update",
+      target_skill_name: "paper-review",
+      scope: "global",
+      install_target: global,
+      install_base: global,
+    });
+    ready([x]);
+    render(page());
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              approved: true,
+              scope: "global",
+              operation: "update",
+              workspace_shadow: "/work/EvoSci_test/skills/paper-review",
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          )
+      )
+    );
+    pick("paper-review");
+    approveSelected();
+    fireEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: "Replace and install",
+      })
+    );
+    await waitFor(() => expect(done).toHaveBeenCalled());
+    expect(done.mock.calls).toEqual([
+      [
+        "Installed paper-review into all projects (global). EvoSci_test keeps its own copy.",
+      ],
+    ]);
+  });
+
   it("a group's select-all records each draft's stamp", () => {
     const x = draft({ proposal_id: "x", updated_at: "T1-x" });
     const y = draft({
