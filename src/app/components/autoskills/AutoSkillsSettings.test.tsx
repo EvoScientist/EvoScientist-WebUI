@@ -868,7 +868,8 @@ describe("AutoSkillsSettings", () => {
     ) as HTMLInputElement;
   /** A save whose answer was lost, with its re-read still out. `settle`
    *  ends that re-read (an Error rejects it), then renders the panel again
-   *  as a new settings answer would. */
+   *  as a new settings answer would; `landed` does the same for a re-read
+   *  the test holds itself (one of `later`). */
   const lostSave = async (later: Array<() => Promise<unknown>> = []) => {
     let end!: (answer: unknown) => void;
     let fail!: (error: Error) => void;
@@ -892,10 +893,9 @@ describe("AutoSkillsSettings", () => {
     await waitFor(() =>
       expect((save() as HTMLButtonElement).disabled).toBe(false)
     );
-    const settle = async (answer: unknown) => {
+    const landed = async (land: () => void) => {
       await act(async () => {
-        if (answer instanceof Error) fail(answer);
-        else end(answer);
+        land();
         await new Promise((r) => setTimeout(r, 10));
       });
       view.rerender(
@@ -905,7 +905,9 @@ describe("AutoSkillsSettings", () => {
         />
       );
     };
-    return { settle, onOpenChange };
+    const settle = (answer: unknown) =>
+      landed(() => (answer instanceof Error ? fail(answer) : end(answer)));
+    return { settle, landed, onOpenChange };
   };
   /** What a read finds once the lost save did reach the core. */
   const savedAfterAll = () => {
@@ -966,6 +968,40 @@ describe("AutoSkillsSettings", () => {
       revision: "rev2",
     });
     expect(screen.getByText(conflict)).toBeTruthy();
+  });
+
+  // Two saves unanswered show the one line. The first one's re-read says
+  // nothing of the second save, whose own re-read is still out.
+  it("with two saves unanswered, the line waits for the later save's re-read", async () => {
+    let endLater!: (answer: unknown) => void;
+    const { settle, landed } = await lostSave([
+      () =>
+        new Promise<unknown>((resolve) => {
+          endLater = resolve;
+        }),
+    ]);
+    // The second save's answer is lost too.
+    fetchMock.mockRejectedValueOnce(new Error("down"));
+    fireEvent.click(save());
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText(LOST)).toBeTruthy();
+    await waitFor(() =>
+      expect((save() as HTMLButtonElement).disabled).toBe(false)
+    );
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body).revision).toBe("rev1");
+    expect(endLater).toBeTypeOf("function");
+
+    // The first save's re-read ends first, with another revision than it
+    // sent: what it shows is taken, and the line stays for the second.
+    const now = savedAfterAll();
+    await settle(now);
+    expect((save() as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText(LOST)).toBeTruthy();
+
+    // The second save's re-read answers another revision than that one sent.
+    await landed(() => endLater(now));
+    expect(screen.queryByText(LOST)).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
   });
 
   it("words any other refusal with the settings wording", async () => {

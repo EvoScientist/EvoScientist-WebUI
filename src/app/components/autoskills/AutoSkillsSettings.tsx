@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type RefObject } from "react";
+import { useRef, useState, type RefObject } from "react";
 import { toast } from "sonner";
 import { focusFirst } from "@/app/components/autoskills/focus";
 import { useSettings, useSettingsAccess } from "@/app/hooks/useSettings";
@@ -190,6 +190,9 @@ export function AutoSkillsSettings({
   const [message, setMessage] = useState<string | null>(null);
   const [serverErrors, setServerErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
+  // How many saves went unanswered. Each shows the same line, so the line
+  // is the latest one's: an earlier save's re-read says nothing of it.
+  const unanswered = useRef(0);
   // The revision each pending edit started from, in the order they began: a
   // re-read in between must not let the save overwrite what changed
   // elsewhere. The save sends the earliest still-pending one.
@@ -308,16 +311,23 @@ export function AutoSkillsSettings({
         // lost: never "nothing was saved". The settings are read again, in
         // the background (the browser reads them from the backend itself);
         // a save that did go through then shows as saved, its edits gone.
+        const mine = (unanswered.current += 1);
         setMessage(SAVE_UNANSWERED);
         try {
           void Promise.resolve(refresh())
             .then((fresh) => {
               // The panel now shows what is saved, so the line goes, unless
-              // a later save put another one there. Only for a new read:
-              // SWR's mutate answers with the cached payload when the read
-              // fails, so the answer must carry another revision than the
-              // one this save sent (the rule after a conflict, below).
-              if (withRevision(fresh) && fresh.revision !== sentRevision) {
+              // a later save put a line there: another one, or this one
+              // again (a second save unanswered, whose own re-read is still
+              // out). Only for a new read: SWR's mutate answers with the
+              // cached payload when the read fails, so the answer must
+              // carry another revision than the one this save sent (the
+              // rule after a conflict, below).
+              if (
+                mine === unanswered.current &&
+                withRevision(fresh) &&
+                fresh.revision !== sentRevision
+              ) {
                 setMessage((shown) =>
                   shown === SAVE_UNANSWERED ? null : shown
                 );
