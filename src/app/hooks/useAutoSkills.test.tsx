@@ -539,6 +539,63 @@ describe("useDraftFile", () => {
     }
   });
 
+  // A decided draft's rationale is its own RATIONALE.md, never the installed
+  // skill's; a draft without one answers 404, which the pane words itself.
+  it("reads a draft's RATIONALE.md, and says which status a failed read answered", async () => {
+    const fetchMock = stubFetch((url) => {
+      const path = new URL(url).searchParams.get("path");
+      if (path === "RATIONALE.md") return json({ error: "not_found" }, 404);
+      if (path === "big.md") return new Response("", { status: 413 });
+      if (path === "offline.md") throw new TypeError("Failed to fetch");
+      return new Response("# skill", { status: 200 });
+    });
+    const noRetry = ({ children }: { children: ReactNode }) => (
+      <SWRConfig
+        value={{
+          provider: () => new Map(),
+          dedupingInterval: 0,
+          shouldRetryOnError: false,
+        }}
+      >
+        {children}
+      </SWRConfig>
+    );
+    const why = renderHook(() => useDraftFile(d, "RATIONALE.md", false), {
+      wrapper: noRetry,
+    });
+    await waitFor(() => expect(why.result.current.status).toBe(404));
+    expect(why.result.current.error).toBe(
+      "This file is gone or can't be read."
+    );
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "http://127.0.0.1:6174/api/autoskills/proposals/p%201/file?path=RATIONALE.md"
+    );
+    why.unmount();
+
+    const big = renderHook(() => useDraftFile(d, "big.md", false), {
+      wrapper: noRetry,
+    });
+    await waitFor(() => expect(big.result.current.status).toBe(413));
+    big.unmount();
+
+    // No answer at all: an error without a status.
+    const offline = renderHook(() => useDraftFile(d, "offline.md", false), {
+      wrapper: noRetry,
+    });
+    await waitFor(() =>
+      expect(offline.result.current.error).toBe("Couldn't read this file.")
+    );
+    expect(offline.result.current.status).toBeNull();
+    offline.unmount();
+
+    // A read that answers has none either.
+    const skill = renderHook(() => useDraftFile(d, "SKILL.md", false), {
+      wrapper: noRetry,
+    });
+    await waitFor(() => expect(skill.result.current.text).toBe("# skill"));
+    expect(skill.result.current.status).toBeNull();
+  });
+
   it("a rejected fetch reads as the plain message", async () => {
     stubFetch(() => {
       throw new TypeError("Failed to fetch");

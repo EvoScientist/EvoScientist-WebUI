@@ -4,7 +4,13 @@ import { useEffect, useId, useRef, useState } from "react";
 import { useQueryState } from "nuqs";
 import { toast } from "sonner";
 import useSWR from "swr";
-import { DraftFiles, FileText } from "@/app/components/autoskills/DraftFiles";
+import {
+  DraftFiles,
+  DraftText,
+  FileText,
+  ReadError,
+  Reading,
+} from "@/app/components/autoskills/DraftFiles";
 import { focusFirst } from "@/app/components/autoskills/focus";
 import {
   APPROVE_CHANGED,
@@ -16,6 +22,7 @@ import {
 } from "@/app/components/autoskills/question";
 import { QuestionDescription } from "@/app/components/autoskills/QuestionDescription";
 import { MarkdownContent } from "@/app/components/MarkdownContent";
+import { useDraftFile } from "@/app/hooks/useAutoSkills";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -49,6 +56,9 @@ import { useProjects } from "@/providers/ProjectsProvider";
 // it and from what, and for a pending one where to install it and the
 // decision. Agent text is untrusted: files are plain text, the rationale
 // goes through the Markdown pipeline's sanitizer.
+// SKILL.md and the rationale come with the list for a pending draft. For a
+// decided one the list leaves them out (null): each is read through the
+// core's file route when its tab shows.
 
 type TabKey = "skill" | "why" | "sources" | "files";
 
@@ -185,6 +195,45 @@ function Sources({ draft, here }: { draft: Draft; here: boolean }) {
         </li>
       ))}
     </ul>
+  );
+}
+
+/** Why EvoMemory drafted the skill, through the Markdown pipeline. */
+function Rationale({ text, truncated }: { text: string; truncated: boolean }) {
+  if (!text.trim()) {
+    return (
+      <p className="text-sm text-muted-foreground">No rationale was written.</p>
+    );
+  }
+  return (
+    <>
+      <MarkdownContent content={text} />
+      {truncated && (
+        <p className="mt-2 text-xs text-muted-foreground">{TRUNCATED}</p>
+      )}
+    </>
+  );
+}
+
+/** The rationale of a draft whose list entry leaves it out: the draft's
+ *  own RATIONALE.md, whole. A draft without one answers 404. */
+function RationaleFile({ draft }: { draft: Draft }) {
+  const { text, error, status } = useDraftFile(draft, "RATIONALE.md", false);
+  if (status === 404) {
+    return (
+      <Rationale
+        text=""
+        truncated={false}
+      />
+    );
+  }
+  if (error) return <ReadError message={error} />;
+  if (text === null) return <Reading />;
+  return (
+    <Rationale
+      text={text}
+      truncated={false}
+    />
   );
 }
 
@@ -626,28 +675,30 @@ export function DraftDetail({
         tabIndex={panelHoldsNoButtons ? 0 : undefined}
         className="mt-3 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
-        {tab === "skill" && (
-          <>
-            <FileText text={draft.skill_md} />
-            {draft.skill_md_truncated && (
-              <p className="mt-2 text-xs text-muted-foreground">{TRUNCATED}</p>
-            )}
-          </>
-        )}
-        {tab === "why" &&
-          (draft.rationale_md.trim() ? (
+        {tab === "skill" &&
+          (draft.skill_md === null ? (
+            <DraftText
+              draft={draft}
+              path="SKILL.md"
+            />
+          ) : (
             <>
-              <MarkdownContent content={draft.rationale_md} />
-              {draft.rationale_md_truncated && (
+              <FileText text={draft.skill_md} />
+              {draft.skill_md_truncated && (
                 <p className="mt-2 text-xs text-muted-foreground">
                   {TRUNCATED}
                 </p>
               )}
             </>
+          ))}
+        {tab === "why" &&
+          (draft.rationale_md === null ? (
+            <RationaleFile draft={draft} />
           ) : (
-            <p className="text-sm text-muted-foreground">
-              No rationale was written.
-            </p>
+            <Rationale
+              text={draft.rationale_md}
+              truncated={draft.rationale_md_truncated}
+            />
           ))}
         {tab === "sources" && (
           <Sources

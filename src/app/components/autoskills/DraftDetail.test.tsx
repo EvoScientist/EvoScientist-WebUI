@@ -60,19 +60,49 @@ vi.mock("nuqs", async () => {
   };
 });
 
-// Every file read, as [path, installed].
+// What a file read gives the pane.
+interface FileRead {
+  text: string | null;
+  error: string | null;
+  loading: boolean;
+  status: number | null;
+}
+// Every file read, as [path, installed]. A read answers its text at once,
+// unless the test brings its own answer for a path (`answer`), or reads
+// through the real hook and a stubbed fetch (`real`).
 const fileReads = vi.hoisted(() => ({
   calls: [] as Array<[string | null, boolean]>,
+  answer: undefined as
+    | ((path: string | null) => Partial<FileRead> | undefined)
+    | undefined,
+  real: false,
 }));
-vi.mock("@/app/hooks/useAutoSkills", () => ({
-  useDraftFile: (_draft: unknown, path: string | null, installed: boolean) => {
-    fileReads.calls.push([path, installed]);
-    return {
-      text: installed ? `installed text of ${path}` : `draft text of ${path}`,
-      error: null,
-      loading: false,
-    };
-  },
+vi.mock("@/app/hooks/useAutoSkills", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("@/app/hooks/useAutoSkills")
+  >();
+  return {
+    useDraftFile: (
+      draft: Draft | null,
+      path: string | null,
+      installed: boolean
+    ): FileRead => {
+      fileReads.calls.push([path, installed]);
+      // The same for a whole test, so the hooks called never change.
+      if (fileReads.real) return actual.useDraftFile(draft, path, installed);
+      return {
+        text: installed ? `installed text of ${path}` : `draft text of ${path}`,
+        error: null,
+        loading: false,
+        status: null,
+        ...fileReads.answer?.(path),
+      };
+    },
+  };
+});
+vi.mock("@/providers/ClientProvider", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  useDeployment: () => ({ deploymentUrl: "http://127.0.0.1:6174", apiKey: "" }),
 }));
 
 import { DraftDetail } from "./DraftDetail";
@@ -161,6 +191,8 @@ function pickScope(option: string) {
 beforeEach(() => {
   q.values.clear();
   fileReads.calls = [];
+  fileReads.answer = undefined;
+  fileReads.real = false;
   checkFiles.mockImplementation(() => []);
 });
 afterEach(() => {
@@ -1186,6 +1218,179 @@ describe("DraftDetail", () => {
       `Rejected · ${formatTime(new Date(rejectedAt))}`
     );
     expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+  });
+
+  // The list carries the texts of pending drafts only (it is polled, and
+  // decided drafts only grow in number): a decided draft's are null there.
+  describe("a decided draft, whose texts the list doesn't carry", () => {
+    const decided = (over: Partial<Draft> = {}) =>
+      draft({
+        proposal_id: "arxiv-paper-retrieval",
+        status: "approved",
+        approved_at: "2026-11-03T10:00:00Z",
+        approved_by: "user",
+        skill_md: null,
+        rationale_md: null,
+        ...over,
+      });
+    const answers = (byPath: Record<string, Partial<FileRead>>) => {
+      fileReads.answer = (path) => byPath[path ?? ""];
+    };
+    const panel = () => screen.getByRole("tabpanel");
+    const CUT = "Showing the first 200,000 characters.";
+
+    it("reads SKILL.md and the rationale through the file route, each when its tab shows", () => {
+      const skill = "---\nname: x\n---\n\n# Retrieval <b>now</b>\n";
+      answers({
+        "SKILL.md": { text: skill },
+        "RATIONALE.md": { text: "## Why\n\nSeen **seven** times.\n" },
+      });
+      render(detail(decided()));
+
+      // SKILL.md as written; the rationale isn't read before its tab shows.
+      const pre = panel().querySelector("pre");
+      expect(pre?.textContent).toBe(skill);
+      expect(panel().querySelector("b, h1")).toBeNull();
+      expect(fileReads.calls).toContainEqual(["SKILL.md", false]);
+      expect(fileReads.calls.some(([path]) => path === "RATIONALE.md")).toBe(
+        false
+      );
+      // The whole file: nothing was cut.
+      expect(screen.queryByText(CUT)).toBeNull();
+
+      fireEvent.click(tab("Why this skill"));
+      expect(
+        within(panel()).getByRole("heading", { level: 2, name: "Why" })
+      ).toBeTruthy();
+      expect(within(panel()).getByText("seven").tagName).toBe("STRONG");
+      expect(screen.queryByText(CUT)).toBeNull();
+      // The draft's own copies, never the installed skill's.
+      expect(new Set(fileReads.calls.map((c) => c.join("|")))).toEqual(
+        new Set(["SKILL.md|false", "RATIONALE.md|false"])
+      );
+    });
+
+    it("says so while a text is read", () => {
+      answers({
+        "SKILL.md": { text: null, loading: true },
+        "RATIONALE.md": { text: null, loading: true },
+      });
+      render(detail(decided({ status: "rejected" })));
+      expect(within(panel()).getByText("Loading…")).toBeTruthy();
+      expect(panel().querySelector("pre")).toBeNull();
+      fireEvent.click(tab("Why this skill"));
+      expect(within(panel()).getByText("Loading…")).toBeTruthy();
+      expect(screen.queryByText("No rationale was written.")).toBeNull();
+    });
+
+    it("says what the file route answered when a text can't be shown", () => {
+      const cases: Array<[number | null, string]> = [
+        [413, "This file is too large to show here."],
+        [415, "This file isn't text, so it isn't shown."],
+        [500, "Couldn't read this file."],
+        [null, "Couldn't read this file."],
+      ];
+      for (const [status, message] of cases) {
+        answers({
+          "SKILL.md": { text: null, error: message, status },
+          "RATIONALE.md": { text: null, error: message, status },
+        });
+        const view = render(detail(decided()));
+        expect(within(panel()).getByText(message)).toBeTruthy();
+        expect(panel().querySelector("pre")).toBeNull();
+        fireEvent.click(tab("Why this skill"));
+        expect(within(panel()).getByText(message)).toBeTruthy();
+        expect(screen.queryByText("No rationale was written.")).toBeNull();
+        view.unmount();
+      }
+
+      // A SKILL.md that is gone says so.
+      const gone = "This file is gone or can't be read.";
+      answers({ "SKILL.md": { text: null, error: gone, status: 404 } });
+      render(detail(decided()));
+      expect(within(panel()).getByText(gone)).toBeTruthy();
+    });
+
+    it("a draft without a RATIONALE.md says no rationale was written", () => {
+      answers({
+        "RATIONALE.md": {
+          text: null,
+          error: "This file is gone or can't be read.",
+          status: 404,
+        },
+      });
+      const view = render(detail(decided()));
+      fireEvent.click(tab("Why this skill"));
+      expect(panel().textContent).toBe("No rationale was written.");
+
+      // A blank one says the same.
+      answers({ "RATIONALE.md": { text: "  \n" } });
+      view.rerender(detail(decided()));
+      expect(panel().textContent).toBe("No rationale was written.");
+    });
+
+    it("an older core's texts in the list are shown as before, and nothing is read", () => {
+      const view = render(
+        detail(
+          decided({
+            skill_md: "# from the list",
+            skill_md_truncated: true,
+            rationale_md: "Because **twice**.",
+            rationale_md_truncated: true,
+          })
+        )
+      );
+      expect(panel().querySelector("pre")?.textContent).toBe("# from the list");
+      expect(screen.getByText(CUT)).toBeTruthy();
+      fireEvent.click(tab("Why this skill"));
+      expect(within(panel()).getByText("twice").tagName).toBe("STRONG");
+      expect(screen.getByText(CUT)).toBeTruthy();
+
+      // Each text on its own: the one the list has is shown from the list.
+      view.rerender(detail(decided({ rationale_md: "" })));
+      expect(panel().textContent).toBe("No rationale was written.");
+      expect(fileReads.calls).toEqual([]);
+    });
+
+    it("a pending draft's texts come from the list, and nothing is read", () => {
+      render(
+        detail(
+          draft({ proposal_id: "x", skill_md: "# s", rationale_md: "Why." })
+        )
+      );
+      expect(panel().querySelector("pre")?.textContent).toBe("# s");
+      fireEvent.click(tab("Why this skill"));
+      expect(within(panel()).getByText("Why.")).toBeTruthy();
+      expect(fileReads.calls).toEqual([]);
+    });
+
+    it("asks the core's file route for the draft's own SKILL.md and RATIONALE.md", async () => {
+      fileReads.real = true;
+      const fetchMock = vi.fn(
+        async (input: RequestInfo | URL, _init?: RequestInit) =>
+          new URL(String(input)).searchParams.get("path") === "RATIONALE.md"
+            ? new Response(JSON.stringify({ error: "not_found" }), {
+                status: 404,
+              })
+            : new Response("# as installed\n")
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      render(detail(decided({ proposal_id: "p 1" })));
+      expect(within(panel()).getByText("Loading…")).toBeTruthy();
+      await waitFor(() =>
+        expect(panel().querySelector("pre")?.textContent).toBe(
+          "# as installed\n"
+        )
+      );
+      fireEvent.click(tab("Why this skill"));
+      // No RATIONALE.md: the core's 404.
+      expect(await screen.findByText("No rationale was written.")).toBeTruthy();
+      const file = "http://127.0.0.1:6174/api/autoskills/proposals/p%201/file";
+      expect(fetchMock.mock.calls.map((c) => String(c[0]))).toEqual([
+        `${file}?path=SKILL.md`,
+        `${file}?path=RATIONALE.md`,
+      ]);
+    });
   });
 
   it("the tabs move with arrows, Home and End and show the files", () => {

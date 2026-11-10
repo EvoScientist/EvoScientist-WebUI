@@ -28,16 +28,16 @@ export function FileText({ text }: { text: string }) {
   );
 }
 
-function Reading() {
+export function Reading() {
   return <p className="text-sm text-muted-foreground">Loading…</p>;
 }
 
-function ReadError({ message }: { message: string }) {
+export function ReadError({ message }: { message: string }) {
   return <p className="text-sm text-destructive">{message}</p>;
 }
 
 /** The draft's own copy of a file. */
-function DraftText({ draft, path }: { draft: Draft; path: string }) {
+export function DraftText({ draft, path }: { draft: Draft; path: string }) {
   const { text, error } = useDraftFile(draft, path, false);
   if (error) return <ReadError message={error} />;
   if (text === null) return <Reading />;

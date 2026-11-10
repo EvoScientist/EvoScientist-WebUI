@@ -272,7 +272,14 @@ export function useDraftFile(
   draft: Draft | null,
   path: string | null,
   installed: boolean
-): { text: string | null; error: string | null; loading: boolean } {
+): {
+  text: string | null;
+  error: string | null;
+  loading: boolean;
+  /** The core's answer to a read that failed (404, 413, …); null when the
+   *  read didn't fail, or failed without one (network, timeout). */
+  status: number | null;
+} {
   const { deploymentUrl, apiKey } = useDeployment();
   const base = baseOf(deploymentUrl);
   const key: FileKey | null =
@@ -287,6 +294,7 @@ export function useDraftFile(
     text: data ?? null,
     error: error ? (error as Error).message : null,
     loading: isLoading,
+    status: error instanceof DraftFileError ? error.status : null,
   };
 }
 

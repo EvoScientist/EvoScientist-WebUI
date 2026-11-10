@@ -147,6 +147,61 @@ describe("parseDraftList", () => {
     });
   });
 
+  // The list carries the texts of pending drafts only: a decided draft's
+  // are null, and the page reads them through the file route. An older core
+  // still sends them.
+  it("keeps a null SKILL.md and rationale as null, and a text as the text", () => {
+    const row = (over: Record<string, unknown>) => ({
+      skill_name: "s",
+      workspace_dir: "/w",
+      status: "approved",
+      operation: "create",
+      scope: "workspace",
+      ...over,
+    });
+    const parsed = parseDraftList({
+      proposals: [
+        row({
+          proposal_id: "read-on-demand",
+          skill_md: null,
+          skill_md_truncated: null,
+          rationale_md: null,
+          rationale_md_truncated: null,
+        }),
+        row({
+          proposal_id: "older-core",
+          skill_md: "# s\n",
+          skill_md_truncated: true,
+          rationale_md: "Because.\n",
+          rationale_md_truncated: false,
+        }),
+        row({ proposal_id: "empty", skill_md: "", rationale_md: "" }),
+        // Neither null nor a text: read as before, an empty text.
+        row({ proposal_id: "missing" }),
+        row({ proposal_id: "odd", skill_md: 7, rationale_md: ["x"] }),
+      ],
+      counts: { pending: 0, approved: 5, rejected: 0 },
+    });
+    const texts = Object.fromEntries(
+      parsed!.drafts.map((d) => [
+        d.proposal_id,
+        [
+          d.skill_md,
+          d.skill_md_truncated,
+          d.rationale_md,
+          d.rationale_md_truncated,
+        ],
+      ])
+    );
+    expect(texts).toEqual({
+      "read-on-demand": [null, false, null, false],
+      "older-core": ["# s\n", true, "Because.\n", false],
+      empty: ["", false, "", false],
+      missing: ["", false, "", false],
+      odd: ["", false, "", false],
+    });
+  });
+
   it("returns null without a proposals array", () => {
     expect(parseDraftList(null)).toBeNull();
     expect(parseDraftList({ counts: {} })).toBeNull();

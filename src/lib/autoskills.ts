@@ -33,9 +33,13 @@ export interface Draft {
   approved_skill_path: string | null;
   approved_skill_present: boolean | null;
   source_observation_ids: string[];
-  skill_md: string;
+  /** The start of SKILL.md and of the rationale, in the list for a pending
+   *  draft; null for a decided one, whose texts the core's file route
+   *  serves (`SKILL.md`, `RATIONALE.md`). An older core lists them for
+   *  every draft. */
+  skill_md: string | null;
   skill_md_truncated: boolean;
-  rationale_md: string;
+  rationale_md: string | null;
   rationale_md_truncated: boolean;
   files: DraftFile[];
   install_target: string | null;
@@ -77,6 +81,11 @@ function text(value: unknown): string {
 
 function textOrNull(value: unknown): string | null {
   return typeof value === "string" ? value : null;
+}
+
+/** A text the list may leave out: null only where the payload says null. */
+function textUnlessNull(value: unknown): string | null {
+  return value === null ? null : text(value);
 }
 
 function count(value: unknown): number {
@@ -154,9 +163,9 @@ function parseDraft(row: unknown): Draft | null {
           (id): id is string => typeof id === "string"
         )
       : [],
-    skill_md: text(r.skill_md),
+    skill_md: textUnlessNull(r.skill_md),
     skill_md_truncated: r.skill_md_truncated === true,
-    rationale_md: text(r.rationale_md),
+    rationale_md: textUnlessNull(r.rationale_md),
     rationale_md_truncated: r.rationale_md_truncated === true,
     files,
     install_target: textOrNull(r.install_target),
