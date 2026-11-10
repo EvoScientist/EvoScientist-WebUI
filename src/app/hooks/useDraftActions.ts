@@ -174,6 +174,7 @@ async function decideAll(
   DecisionResult & {
     placed: Record<string, DraftScope>;
     operations: Record<string, Draft["operation"]>;
+    statuses: Map<string, string>;
   }
 > {
   const result: DecisionResult = { done: [], failed: [] };
@@ -183,6 +184,8 @@ async function decideAll(
   // What each approval did, as the core answered: a draft rewritten after
   // the list was read may have become an update, or stopped being one.
   const operations: Record<string, Draft["operation"]> = {};
+  // The status each answer names: a revert says where the draft went.
+  const statuses = new Map<string, string>();
   for (const draft of drafts) {
     const body = bodyOf(draft);
     const out = await post(body);
@@ -194,6 +197,9 @@ async function decideAll(
       if (operation === "create" || operation === "update") {
         operations[draft.proposal_id] = operation;
       }
+      if (typeof out.data.status === "string") {
+        statuses.set(draft.proposal_id, out.data.status);
+      }
     } else {
       const message = failure(out.answer, draft);
       if (out.answer !== "network" && out.answer.error === "draft_changed") {
@@ -203,7 +209,38 @@ async function decideAll(
       }
     }
   }
-  return { ...result, placed, operations };
+  return { ...result, placed, operations, statuses };
+}
+
+/** The success lines of an Undo, by where the core says each draft went:
+ *  back to pending (also an answer that names no status), or to rejected
+ *  (an approval auto mode made is never pending again without a review). */
+export function revertToasts(
+  done: Draft[],
+  statuses: ReadonlyMap<string, string>
+): string[] {
+  const rejected = done.filter(
+    (d) => statuses.get(d.proposal_id) === "rejected"
+  );
+  const pending = done.filter(
+    (d) => statuses.get(d.proposal_id) !== "rejected"
+  );
+  const lines: string[] = [];
+  if (pending.length > 0) {
+    lines.push(
+      pending.length === 1
+        ? `Moved ${pending[0].skill_name} back to Pending.`
+        : `Moved ${skills(pending.length)} back to Pending.`
+    );
+  }
+  if (rejected.length > 0) {
+    lines.push(
+      rejected.length === 1
+        ? `Moved ${rejected[0].skill_name} to Rejected.`
+        : `Moved ${skills(rejected.length)} to Rejected.`
+    );
+  }
+  return lines;
 }
 
 /** Read the drafts and experts again, in the background: the drafts GET has
@@ -248,8 +285,9 @@ function toastErrors(
 }
 
 /** Approve and reject drafts through the relay, with the toasts and Undo.
- *  `onReverted` hears which drafts an Undo moved back to Pending, with that
- *  Undo's own re-read of the drafts (settling when it does). */
+ *  `onReverted` hears which drafts an Undo moved back (to Pending, or to
+ *  Rejected when the core says so), with that Undo's own re-read of the
+ *  drafts (settling when it does). */
 export function useDraftActions(
   projects: readonly Project[],
   options: {
@@ -289,7 +327,7 @@ export function useDraftActions(
         used = true;
         return track(async () => {
           const inUse: Draft[] = [];
-          const { done, failed } = await decideAll(
+          const { done, failed, statuses } = await decideAll(
             revertible,
             (d) => ({ action: "revert", proposal_id: d.proposal_id }),
             labels,
@@ -325,11 +363,11 @@ export function useDraftActions(
             } catch {
               // The toasts below still say what happened.
             }
-            toast.success(
-              done.length === 1
-                ? `Moved ${done[0].skill_name} back to Pending.`
-                : `Moved ${skills(done.length)} back to Pending.`
-            );
+            // As the core answered: one line for the drafts back in
+            // Pending, one for those it moved to Rejected.
+            for (const line of revertToasts(done, statuses)) {
+              toast.success(line);
+            }
           }
           toastErrors(
             failed,
@@ -354,7 +392,7 @@ export function useDraftActions(
     ) =>
       track(async () => {
         const labels = projectLabels(projectsRef.current);
-        const { placed, operations, ...result } = await decideAll(
+        const { placed, operations, done, failed } = await decideAll(
           drafts,
           (d) =>
             action === "approve"
@@ -382,6 +420,7 @@ export function useDraftActions(
           labels,
           (answer, d) => decisionError(answer, d, labels, action)
         );
+        const result: DecisionResult = { done, failed };
         reread();
         if (result.done.length > 0) {
           // Undo needs a backup the core keeps for a create only: as the core

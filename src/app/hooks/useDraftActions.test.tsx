@@ -918,6 +918,102 @@ describe("Undo tells the page", () => {
   });
 });
 
+// A revert answers where the draft went: back to pending, or to rejected
+// (an approval auto mode made). The toast follows the answer.
+describe("Undo says where the core moved the drafts", () => {
+  async function approved(ids: string[]) {
+    stubFetch(ids.map(() => [200, okApprove]));
+    const { result } = setup();
+    await act(async () => {
+      await result.current.approve(ids.map((id) => draft({ proposal_id: id })));
+    });
+    return toast.success.mock.calls[0][1].action.onClick as () => Promise<void>;
+  }
+  const toRejected = { reverted: true, status: "rejected" };
+
+  it("one draft the core moved to rejected", async () => {
+    const undo = await approved(["a"]);
+    stubFetch([[200, toRejected]]);
+    await act(async () => {
+      await undo();
+    });
+    expect(toast.success).toHaveBeenCalledTimes(2);
+    expect(toast.success).toHaveBeenLastCalledWith("Moved a to Rejected.");
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("several the core moved to rejected", async () => {
+    const undo = await approved(["a", "b"]);
+    stubFetch([
+      [200, toRejected],
+      [200, toRejected],
+    ]);
+    await act(async () => {
+      await undo();
+    });
+    expect(toast.success).toHaveBeenCalledTimes(2);
+    expect(toast.success).toHaveBeenLastCalledWith(
+      "Moved 2 skills to Rejected."
+    );
+  });
+
+  it("a batch with both gets a toast for each", async () => {
+    const undo = await approved(["a", "b", "c"]);
+    stubFetch([
+      [200, toRejected],
+      [200, okRevert],
+      [200, toRejected],
+    ]);
+    await act(async () => {
+      await undo();
+    });
+    expect(toast.success.mock.calls.slice(1)).toEqual([
+      ["Moved b back to Pending."],
+      ["Moved 2 skills to Rejected."],
+    ]);
+  });
+
+  it("an answer without a status, or with another one, reads as pending", async () => {
+    const undo = await approved(["a", "b"]);
+    stubFetch([
+      [200, { reverted: true }],
+      [200, { reverted: true, status: "approved" }],
+    ]);
+    await act(async () => {
+      await undo();
+    });
+    expect(toast.success).toHaveBeenCalledTimes(2);
+    expect(toast.success).toHaveBeenLastCalledWith(
+      "Moved 2 skills back to Pending."
+    );
+  });
+
+  it("the page hears every draft the Undo moved, wherever it went", async () => {
+    const onReverted = vi.fn();
+    stubFetch([
+      [200, okApprove],
+      [200, okApprove],
+    ]);
+    const { result } = renderHook(() =>
+      useDraftActions(projects, { onReverted })
+    );
+    const a = draft({ proposal_id: "a" });
+    const b = draft({ proposal_id: "b" });
+    await act(async () => {
+      await result.current.approve([a, b]);
+    });
+    stubFetch([
+      [200, toRejected],
+      [200, okRevert],
+    ]);
+    await act(async () => {
+      await toast.success.mock.calls[0][1].action.onClick();
+    });
+    // Both changed in the core, so the page holds both until the next list.
+    expect(onReverted.mock.calls).toEqual([[[a, b], expect.any(Promise)]]);
+  });
+});
+
 describe("Undo after revert_failed", () => {
   async function approved() {
     stubFetch([
