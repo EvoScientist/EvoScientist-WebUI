@@ -391,7 +391,7 @@ describe("installedLabel", () => {
       )
     ).toBe("No longer installed");
     expect(installedLabel(draft({ status: "rejected" }), labels)).toBe(
-      "Rejected. EvoMemory won't draft this pattern again."
+      "Rejected. EvoMemory won't suggest it again unless the observations behind it change."
     );
     expect(installedLabel(draft(), labels)).toBe("");
   });

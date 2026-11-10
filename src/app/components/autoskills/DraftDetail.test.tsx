@@ -1042,7 +1042,9 @@ describe("DraftDetail", () => {
     });
     view.rerender(detail(rejected));
     expect(
-      screen.getByText("Rejected. EvoMemory won't draft this pattern again.")
+      screen.getByText(
+        "Rejected. EvoMemory won't suggest it again unless the observations behind it change."
+      )
     ).toBeTruthy();
     const rejectedAt = "2026-10-20T08:00:00Z";
     const whenRejected = screen.getByText(formatTime(new Date(rejectedAt)));

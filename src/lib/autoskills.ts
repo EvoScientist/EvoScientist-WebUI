@@ -328,7 +328,9 @@ export function installedLabel(
   labels: Map<string, string>
 ): string {
   if (draft.status === "rejected") {
-    return "Rejected. EvoMemory won't draft this pattern again.";
+    // Not "never again": the core marks the cluster of observations as
+    // processed by its hash, which a new related observation changes.
+    return "Rejected. EvoMemory won't suggest it again unless the observations behind it change.";
   }
   if (draft.status !== "approved") return "";
   if (draft.approved_skill_present === false) return "No longer installed";
