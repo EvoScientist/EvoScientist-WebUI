@@ -271,7 +271,10 @@ async function decideAll(
   drafts: Draft[],
   bodyOf: (d: Draft) => Parameters<typeof post>[0],
   labels: Map<string, string>,
-  failure: (answer: Answer, d: Draft) => string
+  failure: (answer: Answer, d: Draft) => string,
+  // Hears of each draft as its own answer says it went through, while the
+  // rest of the batch is still out.
+  onDone?: (d: Draft) => void
 ): Promise<
   DecisionResult & {
     placed: Record<string, DraftScope>;
@@ -297,6 +300,7 @@ async function decideAll(
     const out = await post(body);
     if (out.ok) {
       result.done.push(draft);
+      onDone?.(draft);
       const scope = isScope(out.data.scope) ? out.data.scope : body.scope;
       if (isScope(scope)) placed[draft.proposal_id] = scope;
       const operation = out.data.operation;
@@ -405,7 +409,8 @@ function toastErrors(
 /** Approve and reject drafts through the relay, with the toasts and Undo.
  *  `onReverted` hears which drafts an Undo moved back (to Pending, or to
  *  Rejected when the core says so), with that Undo's own re-read of the
- *  drafts (settling when it does). */
+ *  drafts (settling when it does). An Undo moves back only the decision it
+ *  was offered for, never a later one of the same draft. */
 export function useDraftActions(
   projects: readonly Project[],
   options: {
@@ -424,6 +429,11 @@ export function useDraftActions(
   projectsRef.current = projects;
   const onRevertedRef = useRef(options.onReverted);
   onRevertedRef.current = options.onReverted;
+  // How many approvals and rejections of each draft went through this hook.
+  // An Undo is for the decision that offered it: a draft decided again since
+  // was pending once more in between (a revert whose answer was lost, or one
+  // made elsewhere), and a revert now would take back the newer decision.
+  const decidedRef = useRef(new Map<string, number>());
 
   const track = useCallback(async <T>(run: () => Promise<T>): Promise<T> => {
     setRunning((n) => n + 1);
@@ -437,12 +447,29 @@ export function useDraftActions(
   const undoer = useCallback(
     (
       revertible: Draft[],
-      labels: Map<string, string>
+      labels: Map<string, string>,
+      // The decisions this Undo is for: each draft's count as its decision
+      // left it. An Undo offered again gets the counts of the Undo that
+      // offered it, since a draft may be decided again while a revert is out.
+      made: ReadonlyMap<string, number> = new Map(
+        revertible.map((d) => [
+          d.proposal_id,
+          decidedRef.current.get(d.proposal_id) ?? 0,
+        ])
+      )
     ): (() => Promise<void>) => {
       let used = false;
       return () => {
         if (used) return Promise.resolve();
         used = true;
+        // Checked at each click: the drafts decided again since are left
+        // out, and with none left nothing is sent or said.
+        const mine = revertible.filter(
+          (d) =>
+            (decidedRef.current.get(d.proposal_id) ?? 0) ===
+            made.get(d.proposal_id)
+        );
+        if (mine.length === 0) return Promise.resolve();
         return track(async () => {
           // The drafts Undo is offered for again: a revert the core
           // couldn't finish, or one the page can't tell reached the core.
@@ -452,7 +479,7 @@ export function useDraftActions(
           // never sent, and get their Undo back with it.
           let lost = false;
           const { done, failed, statuses } = await decideAll(
-            revertible,
+            mine,
             (d) => ({ action: "revert", proposal_id: d.proposal_id }),
             labels,
             (answer, d) => {
@@ -507,7 +534,10 @@ export function useDraftActions(
             retryable.length > 0
               ? {
                   duration: UNDO_MS,
-                  action: { label: "Undo", onClick: undoer(retryable, labels) },
+                  action: {
+                    label: "Undo",
+                    onClick: undoer(retryable, labels, made),
+                  },
                 }
               : undefined
           );
@@ -551,7 +581,11 @@ export function useDraftActions(
                   expected_updated_at: d.updated_at || null,
                 },
           labels,
-          (answer, d) => decisionError(answer, d, labels, action)
+          (answer, d) => decisionError(answer, d, labels, action),
+          (d) => {
+            const counts = decidedRef.current;
+            counts.set(d.proposal_id, (counts.get(d.proposal_id) ?? 0) + 1);
+          }
         );
         const result: DecisionResult = { done, failed };
         reread();

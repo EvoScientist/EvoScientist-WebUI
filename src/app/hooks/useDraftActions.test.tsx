@@ -1593,6 +1593,244 @@ describe("a bulk decision stops at the first failure of the relay itself", () =>
   });
 });
 
+// An Undo is for one decision. A draft decided again through the page since
+// (the list showed it pending once more: a revert whose answer was lost, or
+// one made elsewhere) is no longer that Undo's to move back.
+describe("an Undo never takes back a newer decision", () => {
+  const okReject = { rejected: true };
+  type Answer = [number, Record<string, unknown>] | "network";
+  /** The requests answer in turn: `[status, body]`, or "network" for a
+   *  fetch that rejects. */
+  function stubAnswers(answers: Answer[]) {
+    calls = [];
+    let i = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: string, init: RequestInit) => {
+        calls.push(JSON.parse(String(init.body)));
+        const next = answers[i++];
+        return next === "network"
+          ? Promise.reject(new TypeError("Failed to fetch"))
+          : reply(next[0], next[1]);
+      })
+    );
+  }
+  const toasts = () =>
+    toast.success.mock.calls.length + toast.error.mock.calls.length;
+  const undoOf = (call: unknown[]) =>
+    (call[1] as { action: { onClick(): Promise<void> } }).action.onClick;
+
+  it("an Undo offered again leaves out a draft decided again since: no request, no toast", async () => {
+    const a = draft({ proposal_id: "a" });
+    stubAnswers([[200, okReject]]);
+    const { result } = setup();
+    await act(async () => {
+      await result.current.reject([a]);
+    });
+    // The revert's answer is lost, though the core applied it.
+    stubAnswers(["network"]);
+    await act(async () => {
+      await undoOf(toast.success.mock.calls[0])();
+    });
+    const again = undoOf(toast.error.mock.calls[0]);
+    // The list shows a pending again, and it is approved.
+    stubAnswers([[200, okApprove]]);
+    await act(async () => {
+      await result.current.approve([a]);
+    });
+    const shown = toasts();
+    const reads = refresh.mock.calls.length;
+    stubAnswers([[200, okRevert]]);
+    await act(async () => {
+      await again();
+    });
+    expect(calls).toEqual([]);
+    expect(toasts()).toBe(shown);
+    expect(refresh).toHaveBeenCalledTimes(reads);
+    expect(result.current.busy).toBe(false);
+  });
+
+  it("reverts only the drafts not decided again", async () => {
+    const a = draft({ proposal_id: "a" });
+    const b = draft({ proposal_id: "b" });
+    stubAnswers([
+      [200, okApprove],
+      [200, okApprove],
+    ]);
+    const { result } = setup();
+    await act(async () => {
+      await result.current.approve([a, b]);
+    });
+    // a's revert is lost (the core applied it); b's is never sent.
+    stubAnswers(["network"]);
+    await act(async () => {
+      await undoOf(toast.success.mock.calls[0])();
+    });
+    const again = undoOf(toast.error.mock.calls[0]);
+    stubAnswers([[200, okReject]]);
+    await act(async () => {
+      await result.current.reject([a]);
+    });
+    stubAnswers([[200, okRevert]]);
+    await act(async () => {
+      await again();
+    });
+    expect(calls).toEqual([{ action: "revert", proposal_id: "b" }]);
+    expect(toast.success).toHaveBeenLastCalledWith("Moved b back to Pending.");
+  });
+
+  it("a decision's first Undo too, and the newer decision's own Undo still works", async () => {
+    const a = draft({ proposal_id: "a" });
+    stubAnswers([[200, okReject]]);
+    const { result } = setup();
+    await act(async () => {
+      await result.current.reject([a]);
+    });
+    // Moved back elsewhere: the list shows a pending, and it is approved.
+    stubAnswers([[200, okApprove]]);
+    await act(async () => {
+      await result.current.approve([a]);
+    });
+    const shown = toasts();
+    stubAnswers([[200, okRevert]]);
+    await act(async () => {
+      await undoOf(toast.success.mock.calls[0])();
+    });
+    expect(calls).toEqual([]);
+    expect(toasts()).toBe(shown);
+    await act(async () => {
+      await undoOf(toast.success.mock.calls[1])();
+    });
+    expect(calls).toEqual([{ action: "revert", proposal_id: "a" }]);
+    expect(toast.success).toHaveBeenLastCalledWith("Moved a back to Pending.");
+  });
+
+  it("an Undo offered again is for the decision its first Undo was for", async () => {
+    const a = draft({ proposal_id: "a" });
+    stubAnswers([[200, okReject]]);
+    const { result } = setup();
+    await act(async () => {
+      await result.current.reject([a]);
+    });
+    // The revert reaches the core, and its answer is held.
+    let answer!: (res: Response) => void;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        () =>
+          new Promise<Response>((resolve) => {
+            answer = resolve;
+          })
+      )
+    );
+    let undoing!: Promise<void>;
+    act(() => {
+      undoing = undoOf(toast.success.mock.calls[0])();
+    });
+    // Meanwhile a, pending again, is approved.
+    stubAnswers([[200, okApprove]]);
+    await act(async () => {
+      await result.current.approve([a]);
+    });
+    // The relay gave up waiting for the revert's answer.
+    await act(async () => {
+      answer(
+        new Response(JSON.stringify({ error: "backend_timeout" }), {
+          status: 504,
+          headers: { "Content-Type": "application/json" },
+        })
+      );
+      await undoing;
+    });
+    const again = undoOf(toast.error.mock.calls.at(-1)!);
+    stubAnswers([[200, okRevert]]);
+    await act(async () => {
+      await again();
+    });
+    expect(calls).toEqual([]);
+  });
+
+  it("a draft counts as decided again once its own answer is in, while the rest of the batch waits", async () => {
+    const a = draft({ proposal_id: "a" });
+    const b = draft({ proposal_id: "b" });
+    stubAnswers([[200, okReject]]);
+    const { result } = setup();
+    await act(async () => {
+      await result.current.reject([a]);
+    });
+    // a and b are approved together: a's answer is in, b's is held.
+    let answerB!: (res: Response) => void;
+    calls = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: string, init: RequestInit) => {
+        const body = JSON.parse(String(init.body));
+        calls.push(body);
+        if (body.action === "revert") return reply(200, okRevert);
+        if (body.proposal_id === "a") return reply(200, okApprove);
+        return new Promise<Response>((resolve) => {
+          answerB = resolve;
+        });
+      })
+    );
+    let approving!: Promise<DecisionResult>;
+    act(() => {
+      approving = result.current.approve([a, b]);
+    });
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    await act(async () => {
+      await undoOf(toast.success.mock.calls[0])();
+    });
+    expect(calls.map((body) => body.action)).toEqual(["approve", "approve"]);
+    await act(async () => {
+      answerB(
+        new Response(JSON.stringify(okApprove), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        })
+      );
+      await approving;
+    });
+  });
+
+  it("a decision the core refused leaves the Undo as it was", async () => {
+    const a = draft({ proposal_id: "a" });
+    stubAnswers([[200, okReject]]);
+    const { result } = setup();
+    await act(async () => {
+      await result.current.reject([a]);
+    });
+    stubAnswers([[409, { error: "not_pending", status: "rejected" }]]);
+    await act(async () => {
+      await result.current.approve([a]);
+    });
+    stubAnswers([[200, okRevert]]);
+    await act(async () => {
+      await undoOf(toast.success.mock.calls[0])();
+    });
+    expect(calls).toEqual([{ action: "revert", proposal_id: "a" }]);
+  });
+
+  it("another draft's decision leaves the Undo as it was", async () => {
+    const a = draft({ proposal_id: "a" });
+    const b = draft({ proposal_id: "b" });
+    stubAnswers([[200, okApprove]]);
+    const { result } = setup();
+    await act(async () => {
+      await result.current.approve([a]);
+    });
+    stubAnswers([[200, okApprove]]);
+    await act(async () => {
+      await result.current.approve([b]);
+    });
+    stubAnswers([[200, okRevert]]);
+    await act(async () => {
+      await undoOf(toast.success.mock.calls[0])();
+    });
+    expect(calls).toEqual([{ action: "revert", proposal_id: "a" }]);
+  });
+});
+
 describe("decisionToast", () => {
   const w = (id: string, dir = A) =>
     draft({ proposal_id: id, workspace_dir: dir });
