@@ -134,6 +134,16 @@ export function decisionError(
   }
 }
 
+/** Whether the page can't tell that a request reached the core: the fetch
+ *  to the WebUI server rejected, or the relay couldn't reach the backend or
+ *  gave up waiting for its answer. */
+function mayNotHaveArrived(answer: Answer): boolean {
+  if (answer === "network") return true;
+  return (
+    answer.error === "backend_timeout" || answer.error === "backend_unreachable"
+  );
+}
+
 const SUCCESS_FLAG = {
   approve: "approved",
   reject: "rejected",
@@ -326,7 +336,10 @@ export function useDraftActions(
         if (used) return Promise.resolve();
         used = true;
         return track(async () => {
-          const inUse: Draft[] = [];
+          // The drafts Undo is offered for again: a revert the core
+          // couldn't finish, or one the page can't tell reached the core.
+          // A second revert of a draft already back answers not_decided.
+          const retryable: Draft[] = [];
           const { done, failed, statuses } = await decideAll(
             revertible,
             (d) => ({ action: "revert", proposal_id: d.proposal_id }),
@@ -343,9 +356,10 @@ export function useDraftActions(
                 return `${d.skill_name} is already back in Pending.`;
               }
               if (code === "revert_failed") {
-                inUse.push(d);
+                retryable.push(d);
                 return `${d.skill_name} couldn't be moved back to Pending: a file is in use. Try Undo again in a moment.`;
               }
+              if (mayNotHaveArrived(answer)) retryable.push(d);
               return decisionError(answer, d, labels);
             }
           );
@@ -371,10 +385,10 @@ export function useDraftActions(
           }
           toastErrors(
             failed,
-            inUse.length > 0
+            retryable.length > 0
               ? {
                   duration: UNDO_MS,
-                  action: { label: "Undo", onClick: undoer(inUse, labels) },
+                  action: { label: "Undo", onClick: undoer(retryable, labels) },
                 }
               : undefined
           );

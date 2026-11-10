@@ -1103,6 +1103,129 @@ describe("Undo after revert_failed", () => {
   });
 });
 
+// A revert the page can't tell reached the core (the fetch to the WebUI
+// server rejected, or the relay could not reach or wait for the backend)
+// must not spend the Undo: nothing else in the page moves a decided draft
+// back.
+describe("Undo after a failure that may not have reached the core", () => {
+  /** a and b approved; the Undo of that toast. */
+  async function approved() {
+    stubFetch([
+      [200, okApprove],
+      [200, okApprove],
+    ]);
+    const { result } = setup();
+    await act(async () => {
+      await result.current.approve([
+        draft({ proposal_id: "a" }),
+        draft({ proposal_id: "b" }),
+      ]);
+    });
+    return toast.success.mock.calls[0][1].action.onClick as () => Promise<void>;
+  }
+  /** The reverts answer in turn: `[status, body]`, or "network" for a
+   *  fetch that rejects. */
+  function stubReverts(
+    answers: Array<[number, Record<string, unknown>] | "network">
+  ) {
+    calls = [];
+    let i = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: string, init: RequestInit) => {
+        calls.push(JSON.parse(String(init.body)));
+        const next = answers[i++];
+        return next === "network"
+          ? Promise.reject(new TypeError("Failed to fetch"))
+          : reply(next[0], next[1]);
+      })
+    );
+  }
+
+  it.each([
+    ["the fetch rejected", "network" as const],
+    [
+      "the backend did not answer in time",
+      [504, { error: "backend_timeout" }] as [number, Record<string, unknown>],
+    ],
+    [
+      "the backend could not be reached",
+      [502, { error: "backend_unreachable" }] as [
+        number,
+        Record<string, unknown>
+      ],
+    ],
+  ])("offers Undo again when %s", async (_label, failure) => {
+    const undo = await approved();
+    stubReverts([[200, okRevert], failure]);
+    await act(async () => {
+      await undo();
+    });
+    expect(toast.success).toHaveBeenLastCalledWith("Moved a back to Pending.");
+    expect(toast.error).toHaveBeenCalledTimes(1);
+    expect(toast.error.mock.calls[0][1]).toEqual({
+      duration: 10_000,
+      action: expect.objectContaining({ label: "Undo" }),
+    });
+
+    // The retry reverts only the draft that failed, once.
+    const retry = toast.error.mock.calls[0][1].action.onClick;
+    stubReverts([[200, okRevert]]);
+    await act(async () => {
+      await retry();
+    });
+    expect(calls).toEqual([{ action: "revert", proposal_id: "b" }]);
+    expect(toast.success).toHaveBeenLastCalledWith("Moved b back to Pending.");
+    stubReverts([]);
+    await act(async () => {
+      await retry();
+    });
+    expect(calls).toEqual([]);
+  });
+
+  it("a retry of a revert that did reach the core says it is already back", async () => {
+    const undo = await approved();
+    stubReverts([[200, okRevert], "network"]);
+    await act(async () => {
+      await undo();
+    });
+    stubReverts([[409, { error: "not_decided" }]]);
+    await act(async () => {
+      await toast.error.mock.calls[0][1].action.onClick();
+    });
+    expect(errorLines()).toEqual(["b is already back in Pending."]);
+    // Nothing left to retry.
+    expect(toast.error.mock.calls[1]).toHaveLength(1);
+  });
+
+  it("a second such failure offers Undo again", async () => {
+    const undo = await approved();
+    stubReverts([[200, okRevert], "network"]);
+    await act(async () => {
+      await undo();
+    });
+    stubReverts([[504, { error: "backend_timeout" }]]);
+    await act(async () => {
+      await toast.error.mock.calls[0][1].action.onClick();
+    });
+    expect(toast.error).toHaveBeenCalledTimes(2);
+    expect(toast.error.mock.calls[1][1].action.label).toBe("Undo");
+  });
+
+  it("a refusal that a retry can't change offers none", async () => {
+    const undo = await approved();
+    stubReverts([
+      [200, okRevert],
+      [403, { error: "secret_rejected" }],
+    ]);
+    await act(async () => {
+      await undo();
+    });
+    expect(toast.error).toHaveBeenCalledTimes(1);
+    expect(toast.error.mock.calls[0]).toHaveLength(1);
+  });
+});
+
 describe("decisionToast", () => {
   const w = (id: string, dir = A) =>
     draft({ proposal_id: id, workspace_dir: dir });
