@@ -30,6 +30,7 @@ import type { Lookup } from "./release";
 import {
   BACKEND_LOG,
   DEFAULT_BACKEND_PORT,
+  folderKey,
   runtimeDir,
   withReadyFolders,
   type Env,
@@ -120,8 +121,9 @@ export interface AppDeps {
 
   // Electron
   messageBox(opts: MessageBoxOptions): Promise<{ response: number }>;
-  /** A native folder dialog; null when cancelled. */
-  chooseFolder(title: string): Promise<string | null>;
+  /** A native folder dialog, opened at `defaultPath` when given; null when
+   *  cancelled. */
+  chooseFolder(title: string, defaultPath?: string): Promise<string | null>;
   openPath(path: string): void;
   showItemInFolder(path: string): void;
   copyText(text: string): void;
@@ -286,12 +288,28 @@ export interface App {
   /** The bridge's `defaultFolder` for a page from `senderOrigin`: null for
    *  another origin, or when the Documents folder cannot be resolved. */
   defaultFolderFor(senderOrigin: string | null): string | null;
+  /** The bridge's `projectFolders` for a page from `senderOrigin`, in the
+   *  core's key form: the default folder and the folder of the page shown,
+   *  each null when unknown. Null for another origin. */
+  projectFoldersFor(senderOrigin: string | null): ProjectFolders | null;
+  /** The bridge's `pickFolder()`: a folder dialog opened at `defaultPath`,
+   *  else at the default folder. Null for another origin, an argument that is
+   *  not a string, a cancel, or while another dialog from the page is open. */
+  pickFolderFor(
+    senderOrigin: string | null,
+    defaultPath: unknown
+  ): Promise<string | null>;
   /** The bridge's `restartBackend()` for a page from `senderOrigin`; another
    *  origin gets `not_allowed` and restarts nothing. */
   restartFor(senderOrigin: string | null): Promise<RestartResult>;
   /** True once the app exits: close and quit events go through. */
   readonly exiting: boolean;
   readonly quitState: QuitState;
+}
+
+export interface ProjectFolders {
+  default: string | null;
+  launch: string | null;
 }
 
 const INSTALL_WAIT_MS = 15_000;
@@ -322,6 +340,8 @@ export function createApp(deps: AppDeps): App {
    *  bring the user back to it. */
   let lastUiUrl: string | null = null;
   let lastUiWorkspace: string | null = null;
+  /** A folder dialog from the page is open. */
+  let picking = false;
   /** A launch, restart or action on the error screen is running. */
   let working = false;
   let quitState: QuitState = "none";
@@ -381,6 +401,33 @@ export function createApp(deps: AppDeps): App {
     const origin = uiOrigin();
     return origin !== null && senderOrigin === origin;
   };
+
+  /** The default folder, or null when the Documents folder cannot be
+   *  resolved. */
+  function defaultFolderOrNull(): string | null {
+    try {
+      return defaultFolder(deps);
+    } catch (e) {
+      log.warn(`no default folder for the page: ${e}`);
+      return null;
+    }
+  }
+
+  async function pickFolder(defaultPath: string | undefined) {
+    if (picking) return null;
+    picking = true;
+    try {
+      return await deps.chooseFolder(
+        "Choose a folder",
+        defaultPath || (defaultFolderOrNull() ?? undefined)
+      );
+    } catch (e) {
+      log.warn(`folder dialog: ${e}`);
+      return null;
+    } finally {
+      picking = false;
+    }
+  }
 
   // --- Screens ------------------------------------------------------------------
 
@@ -1515,14 +1562,24 @@ export function createApp(deps: AppDeps): App {
     uiOrigin,
     backendUrlFor: (senderOrigin) =>
       fromUi(senderOrigin) && ready ? ready.url : null,
-    defaultFolderFor: (senderOrigin) => {
+    defaultFolderFor: (senderOrigin) =>
+      fromUi(senderOrigin) ? defaultFolderOrNull() : null,
+    projectFoldersFor: (senderOrigin) => {
       if (!fromUi(senderOrigin)) return null;
-      try {
-        return defaultFolder(deps);
-      } catch (e) {
-        log.warn(`no default folder for the page: ${e}`);
+      const folder = defaultFolderOrNull();
+      return {
+        default: folder ? folderKey(folder) : null,
+        launch: lastUiWorkspace ? folderKey(lastUiWorkspace) : null,
+      };
+    },
+    pickFolderFor: async (senderOrigin, defaultPath) => {
+      if (!fromUi(senderOrigin)) {
+        log.warn(`folder dialog refused for the origin ${senderOrigin}`);
         return null;
       }
+      if (defaultPath !== undefined && typeof defaultPath !== "string")
+        return null;
+      return pickFolder(defaultPath);
     },
     updateChanged: (state) => {
       log.info(`app update: ${JSON.stringify(state)}`);

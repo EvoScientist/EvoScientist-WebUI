@@ -28,7 +28,7 @@ import {
 } from "electron";
 import { autoUpdater, CancellationToken } from "electron-updater";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import {
   QUIT_FOR_INSTALL,
   QUIT_FOR_INSTALL_CANCELLED,
@@ -175,9 +175,11 @@ const desktop = createApp({
 
   messageBox: (opts) =>
     win ? dialog.showMessageBox(win, opts) : dialog.showMessageBox(opts),
-  chooseFolder: async (title) => {
+  chooseFolder: async (title, defaultPath) => {
     const opts = {
       title,
+      // The page may pass a key-form path (forward slashes on Windows).
+      ...(defaultPath ? { defaultPath: resolve(defaultPath) } : {}),
       properties: ["openDirectory", "createDirectory"] as (
         | "openDirectory"
         | "createDirectory"
@@ -489,6 +491,12 @@ function registerIpc(): void {
   ipcMain.on("desktop:default-folder", (e) => {
     e.returnValue = desktop.defaultFolderFor(senderOrigin(e));
   });
+  ipcMain.on("desktop:project-folders", (e) => {
+    e.returnValue = desktop.projectFoldersFor(senderOrigin(e));
+  });
+  ipcMain.handle("desktop:pick-folder", (e, defaultPath: unknown) =>
+    desktop.pickFolderFor(senderOrigin(e), defaultPath)
+  );
   ipcMain.handle("desktop:restart-backend", (e) =>
     desktop.restartFor(senderOrigin(e))
   );

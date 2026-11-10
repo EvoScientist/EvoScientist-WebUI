@@ -1,10 +1,18 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, resolve, win32 } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   expandWorkdir,
   folderEnv,
+  folderKey,
   readStartConfig,
   resolveFolders,
   runtimeDir,
@@ -217,4 +225,72 @@ describe("runtimeDir", () => {
       "the app now installs a core that keeps its log in the server home: revisit runtimeDir's fallback"
     ).toBeLessThan(0);
   });
+});
+
+describe("folderKey", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = realpathSync.native(mkdtempSync(join(tmpdir(), "evo-key-")));
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  const posix = (p: string) => p.replaceAll("\\", "/");
+
+  it("follows a link to an existing folder", () => {
+    mkdirSync(join(dir, "real"));
+    // A junction needs no rights on Windows.
+    symlinkSync(join(dir, "real"), join(dir, "link"), "junction");
+    expect(folderKey(join(dir, "link"))).toBe(posix(join(dir, "real")));
+  });
+
+  it("resolves the existing parent of a missing folder", () => {
+    mkdirSync(join(dir, "real"));
+    symlinkSync(join(dir, "real"), join(dir, "link"), "junction");
+    expect(folderKey(join(dir, "link", "gone", "deeper"))).toBe(
+      posix(join(dir, "real", "gone", "deeper"))
+    );
+  });
+
+  it("keeps a missing folder absolute, without a trailing slash", () => {
+    expect(folderKey(join(dir, "gone") + "/")).toBe(posix(join(dir, "gone")));
+    expect(folderKey(join(dir, "gone", "..", "x"))).toBe(posix(join(dir, "x")));
+  });
+
+  const missing = () => {
+    throw new Error("ENOENT");
+  };
+
+  it("spells a Windows folder with forward slashes and keeps a root", () => {
+    expect(folderKey("C:\\Users\\u\\Docs\\", win32, missing)).toBe(
+      "C:/Users/u/Docs"
+    );
+    expect(folderKey("C:\\", win32, missing)).toBe("C:/");
+    expect(folderKey("\\\\srv\\share\\proj", win32, missing)).toBe(
+      "//srv/share/proj"
+    );
+  });
+
+  it("takes the drive's spelling for a missing Windows folder", () => {
+    const real = (p: string) => (p === "c:\\" ? "C:\\" : missing());
+    expect(folderKey("c:\\gone\\x", win32, real)).toBe("C:/gone/x");
+  });
+
+  it("takes the real path's spelling on Windows", () => {
+    const real = (p: string) =>
+      p === "c:\\users\\u\\docs" ? "C:\\Users\\u\\Docs" : missing();
+    expect(folderKey("c:\\users\\u\\docs", win32, real)).toBe(
+      "C:/Users/u/Docs"
+    );
+  });
+
+  it("keeps the root", () => {
+    expect(folderKey("/", undefined, missing)).toBe(posix(resolve("/")));
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "keeps a backslash in a POSIX folder name",
+    () => {
+      expect(folderKey("/a\\b/", undefined, missing)).toBe("/a\\b");
+    }
+  );
 });

@@ -31,6 +31,50 @@ describe("desktopBridge", () => {
       defaultFolder: "C:\\Docs\\EvoScientist",
     });
   });
+  it("offers the app's project folders, keeping only non-empty strings", () => {
+    window.evoscientistDesktop = {
+      projectFolders: { default: "C:/Docs/EvoScientist", launch: "D:/work" },
+    };
+    expect(desktopBridge()?.projectFolders).toEqual({
+      default: "C:/Docs/EvoScientist",
+      launch: "D:/work",
+    });
+    window.evoscientistDesktop = { projectFolders: { default: "", launch: 7 } };
+    expect(desktopBridge()?.projectFolders).toEqual({});
+    window.evoscientistDesktop = { projectFolders: "C:/Docs" };
+    expect(desktopBridge()?.projectFolders).toBeUndefined();
+  });
+
+  it("passes the start folder to pickFolder and returns the chosen one", async () => {
+    const pickFolder = vi.fn(async () => "D:\\work");
+    window.evoscientistDesktop = { pickFolder };
+    await expect(desktopBridge()?.pickFolder?.("D:\\old")).resolves.toBe(
+      "D:\\work"
+    );
+    expect(pickFolder).toHaveBeenCalledWith("D:\\old");
+    await desktopBridge()?.pickFolder?.();
+    expect(pickFolder).toHaveBeenLastCalledWith(undefined);
+  });
+
+  it("reads a cancel, a throw or another shape from pickFolder as null", async () => {
+    for (const pickFolder of [
+      async () => null,
+      () => {
+        throw new Error("ipc");
+      },
+      async () => {
+        throw new Error("ipc");
+      },
+      async () => "",
+      async () => ({ path: "D:\\work" }),
+    ]) {
+      window.evoscientistDesktop = { pickFolder };
+      await expect(desktopBridge()?.pickFolder?.()).resolves.toBeNull();
+    }
+    window.evoscientistDesktop = { pickFolder: "D:\\work" };
+    expect(desktopBridge()?.pickFolder).toBeUndefined();
+  });
+
   it("answers failed when the app throws or answers another shape", async () => {
     for (const restartBackend of [
       () => {

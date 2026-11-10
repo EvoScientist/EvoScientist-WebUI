@@ -2,8 +2,9 @@
 // backend answers, found the way the core finds them (EvoScientist/paths.py,
 // config/settings.py) and the way the WebUI's server does
 // (src/lib/server/paths.ts, coreConfig.ts).
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
+import * as nodePath from "node:path";
 import { join, resolve, sep } from "node:path";
 import { CORE_SCHEMA, load as loadYaml } from "js-yaml";
 
@@ -210,4 +211,36 @@ export function expandWorkdir(value: string, home = homedir()): string {
       ? home + value.slice(1)
       : value;
   return resolve(expanded);
+}
+
+/**
+ * A folder in the form the core keys projects by, as its non-strict
+ * `Path.resolve()` spells it: the real path of the nearest existing folder
+ * on the way up, with the missing rest as typed; forward slashes on Windows;
+ * no trailing slash except on a root (`C:/`, `/`).
+ */
+export function folderKey(
+  folder: string,
+  path: Pick<
+    typeof nodePath,
+    "resolve" | "dirname" | "basename" | "join" | "sep"
+  > = nodePath,
+  realpath: (p: string) => string = realpathSync.native
+): string {
+  let full = path.resolve(folder);
+  const missing: string[] = [];
+  for (let current = full; ; ) {
+    try {
+      full = path.resolve(path.join(realpath(current), ...missing));
+      break;
+    } catch {
+      const parent = path.dirname(current);
+      // Nothing on the way up resolves: the absolute path stands.
+      if (parent === current) break;
+      missing.unshift(path.basename(current));
+      current = parent;
+    }
+  }
+  // resolve() leaves no trailing separator except on a root.
+  return path.sep === "\\" ? full.replaceAll("\\", "/") : full;
 }
