@@ -168,8 +168,19 @@ export function AutoSkillsSettings({
   if (real && realKey !== snap.key) setSnap({ key: realKey, payload: real });
   const current = real ?? snap.payload;
   const saved = savedValues(current?.settings);
+  // The timezone the time is in. The core's AutoSkills schedule runs in the
+  // one in use: with the saved one hidden by an override (what it says
+  // isn't sent), the label names none.
   const tz = current?.settings?.scheduler_default_timezone;
   const timezone = typeof tz === "string" ? tz.trim() : "";
+  const timezoneHidden =
+    current !== null &&
+    shadowedSource(current, "scheduler_default_timezone") !== null;
+  const timeLabel = timezoneHidden
+    ? "At"
+    : timezone
+    ? `At (${timezone})`
+    : "At (local time)";
 
   const [edits, setEdits] = useState<Partial<Values>>({});
   const [message, setMessage] = useState<string | null>(null);
@@ -516,9 +527,7 @@ export function AutoSkillsSettings({
           </div>
 
           <div className="space-y-1">
-            <Label htmlFor="autoskills-time">
-              {timezone ? `At (${timezone})` : "At (local time)"}
-            </Label>
+            <Label htmlFor="autoskills-time">{timeLabel}</Label>
             <input
               id="autoskills-time"
               type="time"

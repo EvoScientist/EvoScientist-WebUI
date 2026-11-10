@@ -1185,6 +1185,37 @@ describe("AutoSkillsSettings with a value an override hides", () => {
     expect(screen.queryByText(NOTE)).toBeNull();
   });
 
+  // The core's AutoSkills schedule runs in the timezone in use, which an
+  // override of scheduler_default_timezone hides: the label names none.
+  it("the time label names no timezone when an override hides the saved one", () => {
+    hooks.settings = { ...SAVED, scheduler_default_timezone: "Asia/Shanghai" };
+    hooks.sources = { scheduler_default_timezone: ENV };
+    panel();
+    const field = screen.getByLabelText("At") as HTMLInputElement;
+    expect(field.id).toBe("autoskills-time");
+    expect(screen.queryByLabelText(/Asia\/Shanghai/)).toBeNull();
+    expect(screen.queryByLabelText(/local time/)).toBeNull();
+    // The time itself isn't overridden.
+    expect(field.disabled).toBe(false);
+    expect(screen.queryByText(NOTE)).toBeNull();
+  });
+
+  it('nor "local time" when none is saved and an override sets one', () => {
+    hooks.sources = { scheduler_default_timezone: ENV };
+    panel();
+    expect(screen.getByLabelText("At")).toBeTruthy();
+    expect(screen.queryByLabelText(/local time/)).toBeNull();
+  });
+
+  it("a timezone source that hides nothing keeps the saved zone in the label", () => {
+    hooks.settings = { ...SAVED, scheduler_default_timezone: "Asia/Shanghai" };
+    hooks.sources = {
+      scheduler_default_timezone: { source: "config", shadowed: false },
+    };
+    panel();
+    expect(screen.getByLabelText("At (Asia/Shanghai)")).toBeTruthy();
+  });
+
   it("with only an overridden field edited there is nothing to save", () => {
     const view = panel();
     fireEvent.click(auto());
