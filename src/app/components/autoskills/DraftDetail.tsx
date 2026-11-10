@@ -6,7 +6,6 @@ import { toast } from "sonner";
 import useSWR from "swr";
 import {
   DraftFiles,
-  DraftText,
   FileText,
   ReadError,
   Reading,
@@ -215,10 +214,32 @@ function Rationale({ text, truncated }: { text: string; truncated: boolean }) {
   );
 }
 
+// A decided draft's SKILL.md and rationale are read on demand, and read
+// again when the window is focused or their tab shows again. A read that
+// fails then leaves the text read before beside its error: the text stays
+// on screen, and the error shows only while there is no text.
+
+/** The SKILL.md of a draft whose list entry leaves it out: the draft's own
+ *  file, whole, as written. */
+function SkillFile({ draft }: { draft: Draft }) {
+  const { text, error } = useDraftFile(draft, "SKILL.md", false);
+  if (text !== null) return <FileText text={text} />;
+  if (error) return <ReadError message={error} />;
+  return <Reading />;
+}
+
 /** The rationale of a draft whose list entry leaves it out: the draft's
  *  own RATIONALE.md, whole. A draft without one answers 404. */
 function RationaleFile({ draft }: { draft: Draft }) {
   const { text, error, status } = useDraftFile(draft, "RATIONALE.md", false);
+  if (text !== null) {
+    return (
+      <Rationale
+        text={text}
+        truncated={false}
+      />
+    );
+  }
   if (status === 404) {
     return (
       <Rationale
@@ -228,13 +249,7 @@ function RationaleFile({ draft }: { draft: Draft }) {
     );
   }
   if (error) return <ReadError message={error} />;
-  if (text === null) return <Reading />;
-  return (
-    <Rationale
-      text={text}
-      truncated={false}
-    />
-  );
+  return <Reading />;
 }
 
 /** The question before an update is installed where `scope` says. The core
@@ -677,10 +692,7 @@ export function DraftDetail({
       >
         {tab === "skill" &&
           (draft.skill_md === null ? (
-            <DraftText
-              draft={draft}
-              path="SKILL.md"
-            />
+            <SkillFile draft={draft} />
           ) : (
             <>
               <FileText text={draft.skill_md} />

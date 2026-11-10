@@ -157,6 +157,8 @@ function detail(
     files?: FilesAccess;
     /** The page is checking this pane's draft's files. */
     checking?: boolean;
+    /** Hears of each read of the real reader that failed. */
+    onReadError?: () => void;
   } = {}
 ) {
   // Each mount reads with a cache of its own; a rerender keeps it.
@@ -164,7 +166,14 @@ function detail(
     <TestProjectsProvider
       value={mockProjects(readyProjects(A), { files: over.files ?? "here" })}
     >
-      <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+      <SWRConfig
+        value={{
+          provider: () => new Map(),
+          dedupingInterval: 0,
+          // (An undefined one would replace SWR's own.)
+          ...(over.onReadError ? { onError: over.onReadError } : {}),
+        }}
+      >
         <DraftDetail
           draft={d}
           projectLabel={over.projectLabel ?? "EvoSci_test"}
@@ -1327,6 +1336,103 @@ describe("DraftDetail", () => {
       answers({ "RATIONALE.md": { text: "  \n" } });
       view.rerender(detail(decided()));
       expect(panel().textContent).toBe("No rationale was written.");
+    });
+
+    // The reader reads a file again when the window is focused or its tab
+    // shows again, and keeps the last text beside the error of a read that
+    // failed: the text read stays on screen.
+    it("a re-read that fails leaves the text that was read on screen", () => {
+      const skill = "# Retrieval\n";
+      const why = "Seen **seven** times.\n";
+      const failed = "Couldn't read this file.";
+      answers({
+        "SKILL.md": { text: skill, error: failed, status: 500 },
+        "RATIONALE.md": { text: why, error: failed, status: null },
+      });
+      const view = render(detail(decided()));
+      expect(panel().querySelector("pre")?.textContent).toBe(skill);
+      expect(screen.queryByText(failed)).toBeNull();
+      fireEvent.click(tab("Why this skill"));
+      expect(within(panel()).getByText("seven").tagName).toBe("STRONG");
+      expect(screen.queryByText(failed)).toBeNull();
+
+      // Also a re-read that says the file is gone: a rationale that was
+      // read is not "No rationale was written.".
+      const gone = "This file is gone or can't be read.";
+      answers({
+        "SKILL.md": { text: skill, error: gone, status: 404 },
+        "RATIONALE.md": { text: why, error: gone, status: 404 },
+      });
+      view.rerender(detail(decided()));
+      expect(within(panel()).getByText("seven").tagName).toBe("STRONG");
+      expect(screen.queryByText("No rationale was written.")).toBeNull();
+      expect(screen.queryByText(gone)).toBeNull();
+      fireEvent.click(tab("SKILL.md"));
+      expect(panel().querySelector("pre")?.textContent).toBe(skill);
+      expect(screen.queryByText(gone)).toBeNull();
+    });
+
+    it("the real reader: texts read stay through re-reads that fail, on focus and when their tab shows again", async () => {
+      fileReads.real = true;
+      let down = false;
+      const fetchMock = vi.fn(
+        async (input: RequestInfo | URL, _init?: RequestInit) => {
+          if (down) return new Response("{}", { status: 500 });
+          return new URL(String(input)).searchParams.get("path") ===
+            "RATIONALE.md"
+            ? new Response("Seen **seven** times.\n")
+            : new Response("# as installed\n");
+        }
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const onReadError = vi.fn();
+      const failedReads = async (n: number) => {
+        await waitFor(() => expect(onReadError).toHaveBeenCalledTimes(n));
+        // The failed answer is rendered.
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+      };
+      const skillShown = () =>
+        expect(panel().querySelector("pre")?.textContent).toBe(
+          "# as installed\n"
+        );
+      const FAILED = "Couldn't read this file.";
+      render(detail(decided(), { onReadError }));
+      await waitFor(skillShown);
+      fireEvent.click(tab("Why this skill"));
+      await waitFor(() =>
+        expect(within(panel()).getByText("seven").tagName).toBe("STRONG")
+      );
+
+      // The backend goes away. SKILL.md's tab shows again: its re-read
+      // fails, and the text read before stays.
+      down = true;
+      fireEvent.click(tab("SKILL.md"));
+      await failedReads(1);
+      skillShown();
+      expect(screen.queryByText(FAILED)).toBeNull();
+
+      // The window is focused (SWR reads on focus at most every 5 s).
+      const later = Date.now() + 6_000;
+      const now = vi.spyOn(Date, "now").mockReturnValue(later);
+      try {
+        act(() => {
+          window.dispatchEvent(new Event("focus"));
+        });
+        await failedReads(2);
+      } finally {
+        now.mockRestore();
+      }
+      skillShown();
+      expect(screen.queryByText(FAILED)).toBeNull();
+
+      // The rationale's tab shows again: the same.
+      fireEvent.click(tab("Why this skill"));
+      await failedReads(3);
+      expect(within(panel()).getByText("seven").tagName).toBe("STRONG");
+      expect(screen.queryByText(FAILED)).toBeNull();
+      expect(screen.queryByText("No rationale was written.")).toBeNull();
     });
 
     it("an older core's texts in the list are shown as before, and nothing is read", () => {
