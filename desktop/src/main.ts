@@ -28,7 +28,7 @@ import {
 } from "electron";
 import { autoUpdater, CancellationToken } from "electron-updater";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import {
   QUIT_FOR_INSTALL,
   QUIT_FOR_INSTALL_CANCELLED,
@@ -178,8 +178,7 @@ const desktop = createApp({
   chooseFolder: async (title, defaultPath) => {
     const opts = {
       title,
-      // The page may pass a key-form path (forward slashes on Windows).
-      ...(defaultPath ? { defaultPath: resolve(defaultPath) } : {}),
+      ...(defaultPath ? { defaultPath } : {}),
       properties: ["openDirectory", "createDirectory"] as (
         | "openDirectory"
         | "createDirectory"

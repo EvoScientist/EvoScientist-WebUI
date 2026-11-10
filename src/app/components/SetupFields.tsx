@@ -26,6 +26,8 @@ import {
   useAvailableModels,
   type ModelRegistryEntry,
 } from "@/app/hooks/useAvailableModels";
+import { desktopBridge } from "@/lib/desktop";
+import { typedFolder } from "@/lib/projectActions";
 import type { ProviderInfo } from "@/lib/settings";
 import {
   currentProvider,
@@ -280,13 +282,46 @@ export function TextField({
   label,
   description,
   placeholder,
+  folder = false,
 }: {
   ctx: FieldContext;
   field: string;
   label?: string;
   description?: string;
   placeholder?: string;
+  /** A folder: in the desktop app, "Browse…" fills it from a folder dialog. */
+  folder?: boolean;
 }) {
+  const editable = isEditable(ctx, field);
+  const value = currentText(ctx.payload, ctx.draft.edits, field);
+  const pickFolder = folder ? desktopBridge()?.pickFolder : undefined;
+  // Read when the folder dialog answers: a save or a re-read may have made
+  // the field read-only meanwhile.
+  const ctxRef = useRef(ctx);
+  ctxRef.current = ctx;
+  const inputRef = useRef<HTMLInputElement>(null);
+  const browse = async () => {
+    if (!pickFolder) return;
+    const picked = await pickFolder(typedFolder(value) || undefined);
+    const now = ctxRef.current;
+    if (picked && isEditable(now, field)) {
+      now.draft.setField(field, picked, false);
+      inputRef.current?.focus();
+    }
+  };
+  const input = (
+    <Input
+      ref={inputRef}
+      id={`setting-${field}`}
+      autoComplete="off"
+      spellCheck={false}
+      placeholder={placeholder}
+      value={value}
+      disabled={!editable}
+      onChange={(e) => ctx.draft.setField(field, e.target.value, false)}
+      aria-invalid={ctx.draft.fieldErrors[field] ? true : undefined}
+    />
+  );
   return (
     <FieldShell
       ctx={ctx}
@@ -294,16 +329,22 @@ export function TextField({
       label={label ?? fieldLabel(field, ctx.payload.providers)}
       description={description}
     >
-      <Input
-        id={`setting-${field}`}
-        autoComplete="off"
-        spellCheck={false}
-        placeholder={placeholder}
-        value={currentText(ctx.payload, ctx.draft.edits, field)}
-        disabled={!isEditable(ctx, field)}
-        onChange={(e) => ctx.draft.setField(field, e.target.value, false)}
-        aria-invalid={ctx.draft.fieldErrors[field] ? true : undefined}
-      />
+      {pickFolder ? (
+        <div className="flex gap-2">
+          {input}
+          {editable && (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => void browse()}
+            >
+              Browse…
+            </Button>
+          )}
+        </div>
+      ) : (
+        input
+      )}
     </FieldShell>
   );
 }

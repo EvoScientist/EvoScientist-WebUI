@@ -199,6 +199,7 @@ export function SetupWizard({
             <TextField
               ctx={ctx}
               field="default_workdir"
+              folder
               description="Where EvoScientist keeps its work. Leave empty for the folder it starts in."
             />
             <MirrorField ctx={ctx} />

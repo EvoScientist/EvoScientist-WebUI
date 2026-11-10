@@ -30,6 +30,7 @@ import type { Lookup } from "./release";
 import {
   BACKEND_LOG,
   DEFAULT_BACKEND_PORT,
+  expandWorkdir,
   folderKey,
   runtimeDir,
   withReadyFolders,
@@ -121,8 +122,8 @@ export interface AppDeps {
 
   // Electron
   messageBox(opts: MessageBoxOptions): Promise<{ response: number }>;
-  /** A native folder dialog, opened at `defaultPath` when given; null when
-   *  cancelled. */
+  /** A native folder dialog, opened at `defaultPath` (absolute, native)
+   *  when given; null when cancelled. */
   chooseFolder(title: string, defaultPath?: string): Promise<string | null>;
   openPath(path: string): void;
   showItemInFolder(path: string): void;
@@ -417,9 +418,12 @@ export function createApp(deps: AppDeps): App {
     if (picking) return null;
     picking = true;
     try {
+      const start = defaultPath || defaultFolderOrNull();
+      // As default_workdir is read: a leading `~` and a relative or
+      // key-form path (forward slashes on Windows) become a native one.
       return await deps.chooseFolder(
         "Choose a folder",
-        defaultPath || (defaultFolderOrNull() ?? undefined)
+        start ? expandWorkdir(start) : undefined
       );
     } catch (e) {
       log.warn(`folder dialog: ${e}`);

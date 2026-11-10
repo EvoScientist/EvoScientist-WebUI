@@ -17,6 +17,7 @@ import {
 import type { ReactNode } from "react";
 import {
   act,
+  cleanup,
   fireEvent,
   render,
   renderHook,
@@ -1089,6 +1090,129 @@ describe("the Settings page", () => {
     expect(onSaveUrl).toHaveBeenCalledExactlyOnceWith("http://127.0.0.1:7000");
   });
 
+  describe("Browse… for the default folder", () => {
+    const folder = () =>
+      screen.getByLabelText("Default folder") as HTMLInputElement;
+    const browse = () => screen.queryByRole("button", { name: "Browse…" });
+
+    function withPicker(answer: () => Promise<string | null>) {
+      const pickFolder = vi.fn(answer);
+      window.evoscientistDesktop = { pickFolder };
+      return pickFolder;
+    }
+
+    it("fills the default folder as an unsaved change", async () => {
+      const pickFolder = withPicker(async () => "D:\\work");
+      renderSettingsPage();
+      await screen.findByLabelText("Default folder");
+      // Only the folder field gets it.
+      expect(screen.getAllByRole("button", { name: "Browse…" })).toHaveLength(
+        1
+      );
+      fireEvent.click(browse()!);
+      await waitFor(() => expect(folder().value).toBe("D:\\work"));
+      expect(document.activeElement).toBe(folder());
+      expect(pickFolder).toHaveBeenCalledWith(undefined);
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(server.patch).toHaveBeenCalledOnce());
+      expect(server.patch.mock.calls[0][0]).toEqual({
+        default_workdir: "D:\\work",
+        revision: "rev-1",
+      });
+    });
+
+    it("starts at the folder in the field, and a cancel leaves it", async () => {
+      const pickFolder = withPicker(async () => null);
+      server.settings = settings({
+        settings: { ...settings().settings, default_workdir: "/srv/work" },
+      });
+      renderSettingsPage();
+      await waitFor(() => expect(folder().value).toBe("/srv/work"));
+      fireEvent.click(browse()!);
+      await waitFor(() => expect(pickFolder).toHaveBeenCalledWith("/srv/work"));
+      await act(async () => {});
+      expect(folder().value).toBe("/srv/work");
+      expect(
+        (screen.getByRole("button", { name: "Save" }) as HTMLButtonElement)
+          .disabled
+      ).toBe(true);
+    });
+
+    it("starts at a pasted folder without its quotes", async () => {
+      const pickFolder = withPicker(async () => null);
+      renderSettingsPage();
+      await screen.findByLabelText("Default folder");
+      fireEvent.change(folder(), { target: { value: ' "C:\\work" ' } });
+      fireEvent.click(browse()!);
+      await waitFor(() => expect(pickFolder).toHaveBeenCalledWith("C:\\work"));
+    });
+
+    it("is not offered in a browser", async () => {
+      renderSettingsPage();
+      await screen.findByLabelText("Default folder");
+      expect(browse()).toBeNull();
+    });
+
+    it("is not offered for a shadowed folder or on a page that can't save", async () => {
+      withPicker(async () => "/srv/picked");
+      server.settings = settings({
+        sources: { default_workdir: { source: "env", shadowed: true } },
+      });
+      renderSettingsPage();
+      await screen.findByLabelText("Default folder");
+      await waitFor(() => expect(folder().disabled).toBe(true));
+      expect(browse()).toBeNull();
+      cleanup();
+
+      server.settings = settings();
+      server.access = { writable: false, reason: "host_not_loopback" };
+      renderSettingsPage();
+      await screen.findByText(/These settings are read-only here/);
+      expect(browse()).toBeNull();
+    });
+
+    it("drops a folder picked while a save made the field read-only", async () => {
+      let answer: (folder: string | null) => void = () => {};
+      withPicker(
+        () => new Promise<string | null>((resolve) => (answer = resolve))
+      );
+      let finishSave: () => void = () => {};
+      const slowSave = () =>
+        new Promise<Response>(
+          (resolve) =>
+            (finishSave = () =>
+              resolve(
+                json({
+                  revision: "rev-2",
+                  changed: ["model"],
+                  restart_required: false,
+                  restart_fields: [],
+                  warnings: {},
+                })
+              ))
+        );
+      // The fake server awaits what `patch` returns.
+      server.patch.mockImplementationOnce(
+        slowSave as unknown as typeof server.patch
+      );
+      renderSettingsPage();
+      const model = (await screen.findByLabelText("Model")) as HTMLInputElement;
+      fireEvent.click(browse()!);
+      fireEvent.change(model, { target: { value: "gpt-4.1" } });
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(server.patch).toHaveBeenCalledOnce());
+      expect(browse()).toBeNull();
+
+      await act(async () => answer("/srv/late"));
+      expect(folder().value).toBe("");
+      await act(async () => finishSave());
+      expect(server.patch.mock.calls[0][0]).toEqual({
+        model: "gpt-4.1",
+        revision: "rev-1",
+      });
+    });
+  });
+
   describe("section index", () => {
     const index = () =>
       within(screen.getByRole("navigation", { name: "Settings sections" }));
@@ -1587,6 +1711,25 @@ describe("the setup wizard", () => {
       (screen.getByRole("button", { name: "Next" }) as HTMLButtonElement)
         .disabled
     ).toBe(true);
+  });
+
+  it("offers Browse… on the folder step in the desktop app", async () => {
+    window.evoscientistDesktop = {
+      pickFolder: vi.fn(async () => "/srv/picked"),
+    };
+    renderView();
+    await screen.findByRole("region", { name: "Setup wizard" });
+    next();
+    next();
+    fireEvent.change(keyInput(), { target: { value: "sk-new-key-1234" } });
+    next();
+    fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+    fireEvent.click(screen.getByRole("button", { name: "Browse…" }));
+    await waitFor(() =>
+      expect(
+        (screen.getByLabelText("Default folder") as HTMLInputElement).value
+      ).toBe("/srv/picked")
+    );
   });
 
   it("offers the desktop app's folder once", async () => {

@@ -135,6 +135,17 @@ export function typedFolder(folder: string): string {
   return folder.trim().replace(/^"(.+)"$/, "$1");
 }
 
+/** The folder that holds `path`; a root keeps its separator (`/`, `C:/`). */
+export function parentFolder(path: string): string | undefined {
+  const trimmed = path.replace(/[\\/]+$/, "");
+  const cut = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
+  if (cut < 0) return undefined;
+  const parent = trimmed.slice(0, cut);
+  return parent === "" || /^[a-z]:$/i.test(parent)
+    ? trimmed.slice(0, cut + 1)
+    : parent;
+}
+
 /** Register `folder` (an absolute path; `~` is expanded by the backend). */
 export async function addProject(folder: string): Promise<AddProjectResult> {
   const { ok, status, body } = await send("POST", {

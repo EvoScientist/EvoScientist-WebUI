@@ -1,5 +1,6 @@
 import type { MessageBoxOptions } from "electron";
-import { join } from "node:path";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createApp, type AppDeps, type AppLog, type AppWindow } from "./app";
 import type { MemoryWaitResult, WorkCheck } from "./closeCheck";
@@ -908,17 +909,38 @@ describe("restart from the page (bridge)", () => {
   it("pickFolder opens the dialog at the given start folder, else at the default folder", async () => {
     const chooseFolder = vi.fn(async () => "D:\\work");
     const h = await launched({ chooseFolder });
+    const old = resolve("/srv/old");
     await expect(
-      h.app.pickFolderFor("http://127.0.0.1:4718", "D:\\old")
+      h.app.pickFolderFor("http://127.0.0.1:4718", old)
     ).resolves.toBe("D:\\work");
-    expect(chooseFolder).toHaveBeenLastCalledWith("Choose a folder", "D:\\old");
+    expect(chooseFolder).toHaveBeenLastCalledWith("Choose a folder", old);
     for (const start of [undefined, ""]) {
       await h.app.pickFolderFor("http://127.0.0.1:4718", start);
       expect(chooseFolder).toHaveBeenLastCalledWith(
         "Choose a folder",
-        join("/docs", "EvoScientist")
+        resolve("/docs", "EvoScientist")
       );
     }
+  });
+
+  it("pickFolder opens a start folder as typed in its resolved form", async () => {
+    const chooseFolder = vi.fn(async () => null);
+    const h = await launched({ chooseFolder });
+    await h.app.pickFolderFor("http://127.0.0.1:4718", "/srv/a/./b/");
+    expect(chooseFolder).toHaveBeenLastCalledWith(
+      "Choose a folder",
+      resolve("/srv/a/b")
+    );
+  });
+
+  it("pickFolder opens a start folder under ~ in the home folder", async () => {
+    const chooseFolder = vi.fn(async () => null);
+    const h = await launched({ chooseFolder });
+    await h.app.pickFolderFor("http://127.0.0.1:4718", "~/work");
+    expect(chooseFolder).toHaveBeenLastCalledWith(
+      "Choose a folder",
+      join(homedir(), "work")
+    );
   });
 
   it("pickFolder answers null on a cancel or a failed dialog", async () => {
