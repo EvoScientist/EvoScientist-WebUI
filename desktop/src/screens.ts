@@ -513,18 +513,6 @@ export function errorScreen(error: BootError, ctx: ScreenContext): ErrorScreen {
         port: DEFAULT_BACKEND_PORT,
       };
       break;
-    case "workspace_conflict": {
-      const other = str(d.run_dir) ?? str(d.workspace);
-      screen = {
-        title: "A backend for another folder is running",
-        lines: [
-          other ? `It serves ${other}.` : error.message,
-          "The app never starts a second backend. Stop the other one with EvoSci server stop in a terminal, then press Retry. Stopping it ends running work in every project that uses that backend.",
-        ],
-        actions: ["retry", "open_logs"],
-      };
-      break;
-    }
     case "sign_in_required":
       screen = {
         title: `Sign in${str(d.provider) ? ` to ${d.provider}` : ""}`,

@@ -36,14 +36,14 @@ describe("startDeploy", () => {
     const s = startDeploy("EvoSci", process.cwd(), process.env, {
       log: quiet,
       spawn: fakeDeploy(
-        'console.log(JSON.stringify({protocol:1,event:"error",code:"workspace_conflict",message:"m",detail:{workspace:"other"}})); process.exit(1)'
+        'console.log(JSON.stringify({protocol:1,event:"error",code:"folder_missing",message:"m",detail:{workspace:"other"}})); process.exit(1)'
       ),
     });
     expect(await s.outcome).toEqual({
       kind: "error",
       error: {
         event: "error",
-        code: "workspace_conflict",
+        code: "folder_missing",
         message: "m",
         detail: { workspace: "other" },
       },
