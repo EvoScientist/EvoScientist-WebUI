@@ -37,7 +37,7 @@ import {
   type StopRunsResult,
   type ProjectWork,
 } from "@/lib/projectRemoval";
-import type { Project } from "@/lib/projects";
+import { samePath, type Project } from "@/lib/projects";
 import { folderName } from "@/lib/workspaceAssistant";
 import { cn } from "@/lib/utils";
 import {
@@ -158,11 +158,6 @@ function moveCandidates(
     .sort((a, b) => Number(b.sameName) - Number(a.sameName));
 }
 
-/** Whether `path` looks like a Windows one: a drive letter or a backslash. */
-function windowsPath(path: string): boolean {
-  return /^[a-z]:/i.test(path) || path.includes("\\");
-}
-
 /** The registered project, other than `moving`, at the typed `folder`: a
  *  move there merges into it. Paths compare ignoring the kind of separator
  *  and a trailing one; Windows paths also ignore case, as the backend does
@@ -172,17 +167,11 @@ function mergeTarget(
   folder: string,
   moving: Project
 ): Project | null {
-  const path = (key: string) => key.replace(/[\\/]+/g, "/").replace(/\/$/, "");
-  const raw = typedFolder(folder);
-  const typed = path(raw);
-  if (!typed) return null;
-  const same = (key: string) =>
-    windowsPath(raw) || windowsPath(key)
-      ? path(key).toLowerCase() === typed.toLowerCase()
-      : path(key) === typed;
+  const typed = typedFolder(folder);
+  if (!typed.replace(/[\\/]+$/, "")) return null;
   return (
     projects.find(
-      (project) => project.key !== moving.key && same(project.key)
+      (project) => project.key !== moving.key && samePath(project.key, typed)
     ) ?? null
   );
 }
