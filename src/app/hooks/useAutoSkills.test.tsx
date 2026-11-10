@@ -497,6 +497,125 @@ describe("useAutoSkills", () => {
       expect(fetchMock.mock.calls.length).toBe(asked + 2);
     });
 
+    // The mark of a skipped minute is for the minute right after it. One
+    // that asked nothing for another reason left it set, so the next read in
+    // flight wasn't waited for: the timer's request replaced it, and the
+    // page showed that one's failure.
+    it.each<[string, "hidden" | "offline" | "unsupported" | "failed"]>([
+      ["the tab was hidden", "hidden"],
+      ["the browser was offline", "offline"],
+      ["the list read as unsupported", "unsupported"],
+      ["the latest read had failed", "failed"],
+    ])(
+      "waits for a read in flight again after a minute that asked nothing because %s",
+      async (_why, why) => {
+        vi.useFakeTimers();
+        const start = Date.now();
+        const until = (ms: number) => settle(start + ms - Date.now());
+        // A read answers `status` at once, unless the test holds it; while
+        // one is held, any other read fails.
+        let status = 200;
+        let holdNext = false;
+        let held: ((res: Response) => void) | null = null;
+        const fetchMock = stubFetch(() => {
+          if (holdNext) {
+            holdNext = false;
+            return new Promise<Response>((resolve) => {
+              held = resolve;
+            });
+          }
+          if (held) return json({}, 500);
+          return status === 200 ? json(list(["a"])) : json({}, status);
+        });
+        // Without SWR's retry, so a failed read stays the latest one.
+        const { result } = renderHook(() => useAutoSkills(), {
+          wrapper: ({ children }: { children: ReactNode }) => (
+            <SWRConfig
+              value={{
+                provider: () => new Map(),
+                dedupingInterval: 0,
+                shouldRetryOnError: false,
+              }}
+            >
+              {children}
+            </SWRConfig>
+          ),
+        });
+        await until(10);
+        expect(result.current.status).toBe("ready");
+        const focus = async () => {
+          holdNext = true;
+          act(() => {
+            window.dispatchEvent(new Event("focus"));
+          });
+          await settle(5);
+          expect(held).not.toBeNull();
+        };
+        const answerHeld = async (ids: string[]) => {
+          const answer = held as unknown as (res: Response) => void;
+          held = null;
+          await act(async () => {
+            answer(json(list(ids)));
+            await vi.advanceTimersByTimeAsync(10);
+          });
+        };
+        /** A read outside the timer (the page's Retry) answers `next`. */
+        const read = async (next: number) => {
+          status = next;
+          await act(async () => {
+            await result.current.refresh();
+          });
+        };
+        const shown = () =>
+          result.current.status === "ready" &&
+          result.current.list.drafts.map((d) => d.proposal_id);
+        const hidden = vi.spyOn(document, "visibilityState", "get");
+        const offline = vi.spyOn(navigator, "onLine", "get");
+        try {
+          // The first minute is skipped for a focus read in flight.
+          await until(AUTOSKILLS_REFRESH_MS - 10);
+          await focus();
+          await until(AUTOSKILLS_REFRESH_MS + 1_000);
+          expect(fetchMock).toHaveBeenCalledTimes(2);
+          await answerHeld(["a", "b"]);
+          expect(shown()).toEqual(["a", "b"]);
+
+          // The second asks nothing, for another reason.
+          if (why === "hidden") hidden.mockReturnValue("hidden");
+          if (why === "offline") offline.mockReturnValue(false);
+          if (why === "unsupported") {
+            await read(404);
+            expect(result.current.status).toBe("unsupported");
+          }
+          if (why === "failed") {
+            await read(500);
+            expect(result.current.status).toBe("error");
+          }
+          const before = fetchMock.mock.calls.length;
+          await until(AUTOSKILLS_REFRESH_MS * 2 + 1_000);
+          expect(fetchMock.mock.calls.length).toBe(before);
+          if (why === "hidden") hidden.mockReturnValue("visible");
+          if (why === "offline") offline.mockReturnValue(true);
+          if (why === "unsupported" || why === "failed") await read(200);
+          expect(result.current.status).toBe("ready");
+
+          // The third comes round with a focus read out again: that read is
+          // waited for, and its answer is what shows.
+          await until(AUTOSKILLS_REFRESH_MS * 3 - 10);
+          await focus();
+          const asked = fetchMock.mock.calls.length;
+          await until(AUTOSKILLS_REFRESH_MS * 3 + 1_000);
+          expect(fetchMock.mock.calls.length).toBe(asked);
+          await answerHeld(["a", "c"]);
+          expect(fetchMock.mock.calls.length).toBe(asked);
+          expect(shown()).toEqual(["a", "c"]);
+        } finally {
+          hidden.mockRestore();
+          offline.mockRestore();
+        }
+      }
+    );
+
     it("a deployment switch moves the timer to the new backend's list", async () => {
       vi.useFakeTimers();
       const fetchMock = stubFetch(() => json(list()));

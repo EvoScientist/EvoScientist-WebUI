@@ -127,7 +127,9 @@ const polls = new WeakMap<Cache, Map<string, Poll>>();
  *  a `mutate(key)` made then and drops the first one's answer, so a read
  *  that would have brought the list was lost to one that failed. Never two
  *  minutes in a row, though: SWR clears the key's `isValidating` only when
- *  a read it kept ends, so a read it discarded can leave the flag true. */
+ *  a read it kept ends, so a read it discarded can leave the flag true. In
+ *  a row only: a minute skipped for any other reason starts the count over,
+ *  so the next read in flight is waited for again. */
 function joinPoll(
   cache: Cache,
   mutate: ScopedMutator,
@@ -144,6 +146,10 @@ function joinPoll(
     // Whether the last minute was skipped for a read in flight.
     let waited = false;
     const tick = () => {
+      // Cleared by every minute, whatever it does next: only the minute
+      // that waits for a read sets it, for the one right after.
+      const waitedLast = waited;
+      waited = false;
       if (
         typeof document !== "undefined" &&
         document.visibilityState === "hidden"
@@ -157,11 +163,10 @@ function joinPoll(
       if (latest?.data === "unsupported" || latest?.error !== undefined) {
         return;
       }
-      if (latest?.isValidating && !waited) {
+      if (latest?.isValidating && !waitedLast) {
         waited = true;
         return;
       }
-      waited = false;
       try {
         void Promise.resolve(mutate(key)).catch(() => {});
       } catch {
