@@ -29,7 +29,9 @@ export const READ_TIMEOUT_MS = 15_000;
 export type AutoSkillsState =
   | { status: "loading" }
   | { status: "unsupported" }
-  | { status: "error"; error: Error }
+  /** The latest read failed. `list` is the last one read before it, when
+   *  there is one: out of date, for a caller that says so. */
+  | { status: "error"; error: Error; list?: DraftList }
   | { status: "ready"; list: DraftList };
 
 type ListKey = readonly ["autoskills", string, string];
@@ -159,11 +161,15 @@ export function useAutoSkills(
     },
     [base, apiKey, mutateCache]
   );
-  // The latest read decides: a failed re-read shows the error, not the old
-  // list (SWR keeps `data` next to `error`; a later success clears the error).
+  // The latest read decides the status: a failed re-read is an error, so no
+  // reader takes old numbers for current ones. SWR keeps `data` next to
+  // `error` (a later success clears the error): the last good list goes with
+  // the error, the same object, for the drafts page to keep on screen.
   let state: AutoSkillsState;
-  if (error) state = { status: "error", error: error as Error };
-  else if (data === "unsupported") state = { status: "unsupported" };
+  if (error) {
+    state = { status: "error", error: error as Error };
+    if (data && data !== "unsupported") state.list = data;
+  } else if (data === "unsupported") state = { status: "unsupported" };
   else if (data) state = { status: "ready", list: data };
   else state = { status: "loading" };
   return {

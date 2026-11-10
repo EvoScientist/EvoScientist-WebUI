@@ -14,6 +14,7 @@ import {
 import {
   APPROVE_BUSY,
   APPROVE_CHANGED,
+  APPROVE_STALE,
   fileSection,
   filesQuestion,
   useShownQuestion,
@@ -374,7 +375,17 @@ export function DraftsPage() {
   // the versions recorded at the click, whatever is picked meanwhile.
   const [asked, setAsked] = useState<BulkDecision>(NO_DECISION);
 
-  const list = auto.status === "ready" ? auto.list : null;
+  // The drafts as last read. A re-read that fails leaves them here, the
+  // same object (`stale`): the page keeps showing them, with the open draft
+  // and any question, under a line that says so, and decides nothing until a
+  // read answers. Nothing below sees a new list meanwhile.
+  const list =
+    auto.status === "ready"
+      ? auto.list
+      : auto.status === "error"
+      ? auto.list ?? null
+      : null;
+  const stale = auto.status === "error" && list !== null;
   // Read on every render, so the page renders again when a read of the list
   // ends (the Undo holds below wait for that).
   const reading = auto.isValidating;
@@ -409,8 +420,9 @@ export function DraftsPage() {
   // render with the list ready and no read in flight: that list comes from
   // the newest read, which started after the revert, even if SWR kept the
   // cached object (equal data) and no new list comes. A newer hold of the
-  // same draft stays. While reads fail nothing changes: the next list
-  // releases every hold.
+  // same draft stays. While reads fail nothing is released (the list shown
+  // is the one from before): the read that answers does it, here or with a
+  // new list above.
   if (readUndos.length > 0 && auto.status === "ready" && !reading) {
     setReadUndos(NO_TOKENS);
     setDecided((prev) => release(prev, readUndos));
@@ -470,8 +482,9 @@ export function DraftsPage() {
   const working = busy || checking !== null;
   const canWrite = access?.writable === true;
   // A decision also waits for the projects: until they are known (read
-  // again) the selection can't be checked against them.
-  const canDecide = canWrite && registered !== null;
+  // again) the selection can't be checked against them. And for the drafts:
+  // none is decided from a list whose re-read failed.
+  const canDecide = canWrite && registered !== null && !stale;
   // Said only once known: while access is being checked every decision
   // waits, without a box that goes again a moment later.
   const readOnlyReason =
@@ -678,11 +691,13 @@ export function DraftsPage() {
   };
   /** Why an approval of `drafts`, clicked before their files were
    *  checked, can't go once they are: another decision or an Undo (clicked
-   *  on an earlier toast meanwhile) is still being saved, the projects'
-   *  gate is closed, or none of them can be decided any more. Null when it
-   *  can. */
+   *  on an earlier toast meanwhile) is still being saved, the drafts
+   *  couldn't be read again meanwhile (they may not have changed at all),
+   *  the projects' gate is closed, or none of them can be decided any more.
+   *  Null when it can. */
   const blockedAfterCheck = (drafts: readonly Draft[]): string | null => {
     if (busy) return APPROVE_BUSY;
+    if (stale) return APPROVE_STALE;
     if (!canDecide || !isReady() || sendable(drafts).length === 0) {
       return APPROVE_CHANGED;
     }
@@ -856,7 +871,7 @@ export function DraftsPage() {
           <p className="mt-6 text-sm">
             Update EvoScientist to review drafts here.
           </p>
-        ) : auto.status === "error" ? (
+        ) : auto.status === "error" && !list ? (
           <div className="mt-6 flex flex-wrap items-center gap-3">
             <p
               role="alert"
@@ -874,7 +889,7 @@ export function DraftsPage() {
               Retry
             </Button>
           </div>
-        ) : auto.status === "loading" || !list ? (
+        ) : !list ? (
           <div
             className="mt-6 flex items-center gap-2 text-sm text-muted-foreground"
             aria-live="polite"
@@ -891,6 +906,26 @@ export function DraftsPage() {
               <p className="mt-4 rounded-lg border border-border bg-muted px-3 py-2 text-sm text-muted-foreground">
                 {readOnlyReason}
               </p>
+            )}
+            {stale && (
+              <div className="mt-4 flex flex-wrap items-center gap-3">
+                <p
+                  role="alert"
+                  className="text-sm text-destructive"
+                >
+                  Couldn&apos;t read the drafts again. This list may be out of
+                  date.
+                </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void auto.refresh()}
+                  className="border-solid max-md:min-h-11"
+                >
+                  Retry
+                </Button>
+              </div>
             )}
 
             <div

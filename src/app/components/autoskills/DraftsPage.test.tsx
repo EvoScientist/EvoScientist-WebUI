@@ -1110,6 +1110,241 @@ describe("DraftsPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(hooks.refresh).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("tablist")).toBeNull();
+    // No list was read before it: nothing to keep showing.
+    expect(screen.queryByText(/This list may be out of date/)).toBeNull();
+  });
+
+  // A poll, a focus read or a busy core's timeout can fail in the middle of
+  // a review: the list read last stays, under a line that says so, and
+  // nothing is decided from it until a read answers.
+  describe("a re-read of the drafts that fails", () => {
+    const AGAIN =
+      "Couldn't read the drafts again. This list may be out of date.";
+    /** The latest read failed: the error, with the list read before it. */
+    const fail = (over: Record<string, unknown> = {}) => {
+      hooks.auto = {
+        status: "error",
+        error: new Error("500"),
+        list: hooks.auto.list,
+        ...over,
+      };
+    };
+    /** A read answered with equal drafts: SWR keeps the list's object. */
+    const recover = () => {
+      hooks.auto = { status: "ready", list: hooks.auto.list };
+    };
+    const pane = () =>
+      within(
+        screen.getByRole("heading", { level: 3, hidden: true }).parentElement!
+      );
+    const off = (button: HTMLElement) => (button as HTMLButtonElement).disabled;
+
+    it("keeps the list under a line that says so, with Retry, and decides nothing", () => {
+      const x = draft({
+        proposal_id: "x",
+        skill_name: "arxiv-paper-retrieval",
+      });
+      const z = draft({ proposal_id: "z", workspace_dir: B });
+      ready([x, z]);
+      q.values.set("draftId", "x");
+      const view = render(page());
+      pick("z");
+      expect(screen.queryByRole("alert")).toBeNull();
+
+      fail();
+      view.rerender(page());
+      expect(screen.getByRole("alert").textContent).toBe(AGAIN);
+      expect(screen.queryByText("Couldn't read the drafts.")).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      expect(hooks.refresh).toHaveBeenCalledTimes(1);
+
+      // The tabs, the rows, the selection and the open draft are all there.
+      expect(screen.getByRole("tab", { name: /^Pending 2/ })).toBeTruthy();
+      expect(selection()?.textContent).toContain("1 selected");
+      expect(
+        pane().getByRole("heading", { name: "arxiv-paper-retrieval" })
+      ).toBeTruthy();
+
+      // No decision: the bar's and the pane's are off.
+      for (const box of [within(selection()!), pane()]) {
+        for (const name of ["Approve", "Reject"]) {
+          const button = box.getByRole("button", { name });
+          expect(off(button)).toBe(true);
+          fireEvent.click(button);
+        }
+      }
+      expect(hooks.approve).not.toHaveBeenCalled();
+      expect(hooks.reject).not.toHaveBeenCalled();
+
+      // Run now decides nothing: it is left as it was.
+      const run = within(
+        screen.getByRole("group", { name: "project_B" })
+      ).getByRole("button", { name: "Run now" });
+      expect(off(run)).toBe(false);
+      fireEvent.click(run);
+      expect(hooks.run).toHaveBeenCalledWith(B);
+
+      // A read answers: the line goes and the decisions are back.
+      recover();
+      view.rerender(page());
+      expect(screen.queryByRole("alert")).toBeNull();
+      fireEvent.click(
+        within(selection()!).getByRole("button", { name: "Reject" })
+      );
+      expect(hooks.reject.mock.calls).toEqual([[[z]]]);
+      fireEvent.click(pane().getByRole("button", { name: "Approve" }));
+      expect(hooks.approve.mock.calls).toEqual([[[x], { x: "workspace" }]]);
+    });
+
+    it("the open draft keeps the place picked and its open question", () => {
+      const u = draft({
+        proposal_id: "u",
+        skill_name: "paper-review-v2",
+        operation: "update",
+        target_skill_name: "paper-review",
+        scope: "global",
+      });
+      ready([u]);
+      q.values.set("draftId", "u");
+      const view = render(page());
+      fireEvent.click(pane().getByLabelText("Install into"));
+      fireEvent.click(
+        screen.getByRole("option", {
+          name: "EvoSci_test/skills (this project)",
+        })
+      );
+      fireEvent.click(pane().getByRole("button", { name: "Approve" }));
+      const question = () =>
+        screen.getByRole("dialog", { name: "Install a project copy?" });
+      const install = () =>
+        within(question()).getByRole("button", { name: "Install" });
+      expect(off(install())).toBe(false);
+
+      // The read fails under the open question: it stays, but can't be
+      // answered yet.
+      fail();
+      view.rerender(page());
+      expect(off(install())).toBe(true);
+      fireEvent.click(install());
+      expect(hooks.approve).not.toHaveBeenCalled();
+      expect(pane().getByLabelText("Install into").textContent).toBe(
+        "EvoSci_test/skills (this project)"
+      );
+
+      // A read answers: the same question, answered with the place picked.
+      recover();
+      view.rerender(page());
+      fireEvent.click(install());
+      expect(hooks.approve.mock.calls).toEqual([[[u], { u: "workspace" }]]);
+    });
+
+    it("the bulk question stays open, to be answered once a read answers", () => {
+      const u = draft({
+        proposal_id: "u",
+        skill_name: "paper-review-v2",
+        operation: "update",
+        target_skill_name: "paper-review",
+      });
+      const c = draft({ proposal_id: "c", created_at: "2026-10-01T09:00:00Z" });
+      ready([u, c]);
+      const view = render(page());
+      pick("paper-review-v2");
+      pick("c");
+      fireEvent.click(
+        within(selection()!).getByRole("button", { name: "Approve" })
+      );
+      const question = () =>
+        screen.getByRole("dialog", { name: "Replace an installed skill?" });
+      const replace = () =>
+        within(question()).getByRole("button", { name: "Replace and install" });
+
+      fail();
+      view.rerender(page());
+      expect(off(replace())).toBe(true);
+      fireEvent.click(replace());
+      expect(hooks.approve).not.toHaveBeenCalled();
+
+      recover();
+      view.rerender(page());
+      expect(off(replace())).toBe(false);
+      fireEvent.click(replace());
+      expect(hooks.approve.mock.calls).toEqual([[[u, c]]]);
+    });
+
+    it("the list coming back as it was releases no decision's hold and unpicks nothing", async () => {
+      const x = draft({ proposal_id: "x" });
+      const y = draft({ proposal_id: "y", created_at: "2026-10-15T09:00:00Z" });
+      const z = draft({ proposal_id: "z", created_at: "2026-10-01T09:00:00Z" });
+      ready([x, y, z]);
+      hooks.approve.mockResolvedValueOnce({ done: [z], failed: [] });
+      const view = render(page());
+      const box = (name: string) =>
+        screen.getByRole("checkbox", {
+          name: `Select ${name}`,
+        }) as HTMLInputElement;
+      // z decided here: held until a list after the decision.
+      pick("z");
+      fireEvent.click(
+        within(selection()!).getByRole("button", { name: "Approve" })
+      );
+      await waitFor(() => expect(box("z").disabled).toBe(true));
+      pick("x");
+      pick("y");
+      expect(selection()?.textContent).toContain("2 selected");
+
+      // The decision's re-read fails: the list from before it stays.
+      fail();
+      view.rerender(page());
+      expect(selection()?.textContent).toContain("2 selected");
+      expect(box("z").disabled).toBe(true);
+      // Picking is no decision: it stays possible.
+      expect(box("x").disabled).toBe(false);
+
+      // The list object comes back unchanged: it is still the one from
+      // before the decision, so z stays held, and nothing is unpicked.
+      recover();
+      view.rerender(page());
+      expect(selection()?.textContent).toContain("2 selected");
+      expect(box("z").disabled).toBe(true);
+
+      // The list after the decision takes over.
+      ready([x, y, { ...z, status: "approved" }]);
+      view.rerender(page());
+      expect(selection()?.textContent).toContain("2 selected");
+      expect(screen.queryByRole("checkbox", { name: "Select z" })).toBeNull();
+    });
+
+    it("an Undo's hold waits through the failed read, and goes with the read that answers", async () => {
+      const x = draft({ proposal_id: "x", updated_at: "2026-11-06T12:00:00Z" });
+      ready([x]);
+      const view = render(page());
+      const box = () =>
+        screen.getByRole("checkbox", { name: "Select x" }) as HTMLInputElement;
+      let settle = () => {};
+      const reread = new Promise<void>((resolve) => {
+        settle = resolve;
+      });
+      act(() => hooks.onReverted?.([x], reread));
+      expect(box().disabled).toBe(true);
+
+      // The Undo's own re-read fails, and settles.
+      fail({ isValidating: false });
+      view.rerender(page());
+      await act(async () => settle());
+      expect(box().disabled).toBe(true);
+      // SWR's retry is out.
+      fail({ isValidating: true });
+      view.rerender(page());
+      expect(box().disabled).toBe(true);
+      // It answers with equal drafts: the same list, from the newest read.
+      hooks.auto = {
+        status: "ready",
+        list: hooks.auto.list,
+        isValidating: false,
+      };
+      view.rerender(page());
+      expect(box().disabled).toBe(false);
+    });
   });
 
   it("a read-only page says why and disables decisions", () => {
@@ -2866,6 +3101,55 @@ describe("DraftsPage", () => {
       expect(hooks.approve).not.toHaveBeenCalled();
       expect(screen.queryByRole("dialog")).toBeNull();
       expect(errors).not.toHaveBeenCalled();
+    });
+
+    it("an approval whose files are checked while the drafts can't be read again sends nothing, and says that", async () => {
+      const STALE =
+        "Nothing was installed: the drafts couldn't be read again. Approve again once they are.";
+      const errors = spyErrors();
+      const waiting = holdReads();
+      const c = holding({ proposal_id: "c" }, [["SKILL.md", 10]]);
+      const x = holding(
+        { proposal_id: "x", created_at: "2026-10-01T09:00:00Z" },
+        [["SKILL.md", 10]]
+      );
+      const drafts = listOf([c, x]);
+      const stale = { status: "error", error: new Error("500"), list: drafts };
+      hooks.auto = { status: "ready", list: drafts };
+      q.values.set("draftId", "x");
+      const view = render(page());
+      const pane = () =>
+        within(screen.getByRole("heading", { level: 3 }).parentElement!);
+
+      // The bar: the drafts didn't change, only their re-read failed.
+      pick("c");
+      approveSelected();
+      hooks.auto = stale;
+      view.rerender(page());
+      await act(async () => waiting.shift()!());
+      await waitFor(() => expect(errors).toHaveBeenCalledWith(STALE));
+      expect(errors).toHaveBeenCalledTimes(1);
+      expect(hooks.approve).not.toHaveBeenCalled();
+      expect(screen.queryByRole("dialog")).toBeNull();
+
+      // The pane: the same.
+      hooks.auto = { status: "ready", list: drafts };
+      view.rerender(page());
+      fireEvent.click(pane().getByRole("button", { name: "Approve" }));
+      hooks.auto = stale;
+      view.rerender(page());
+      await act(async () => waiting.shift()!());
+      await waitFor(() => expect(errors).toHaveBeenCalledTimes(2));
+      expect(errors).toHaveBeenLastCalledWith(STALE);
+      expect(hooks.approve).not.toHaveBeenCalled();
+      expect(screen.queryByRole("dialog")).toBeNull();
+
+      // Once they are read again, "Approve again" goes: c is still picked,
+      // and its file was read by the first check.
+      hooks.auto = { status: "ready", list: drafts };
+      view.rerender(page());
+      approveSelected();
+      expect(hooks.approve.mock.calls).toEqual([[[c]]]);
     });
 
     it("an approval whose drafts changed while their files were checked sends nothing, and says so", async () => {

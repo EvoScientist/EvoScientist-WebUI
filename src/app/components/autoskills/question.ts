@@ -39,6 +39,10 @@ export const APPROVE_CHANGED =
 /** The same, while another decision or an Undo is still being saved. */
 export const APPROVE_BUSY =
   "Another change is still being saved. Approve again.";
+/** The same, while the list shown is out of date: its latest read failed,
+ *  so the page can't tell whether the drafts changed. */
+export const APPROVE_STALE =
+  "Nothing was installed: the drafts couldn't be read again. Approve again once they are.";
 
 /** The words a question's dialog shows: `live` while it is open; while it
  *  fades out (200 ms, still on the page), the words it had open, whatever

@@ -290,19 +290,50 @@ describe("useAutoSkills", () => {
     expect(renders).toBe(before);
   });
 
-  it("a failed re-read shows the error, not the old list", async () => {
+  // The status follows the latest read, so no reader takes old numbers for
+  // current ones; the last good list comes with the error for a caller
+  // that keeps showing it and says so (the drafts page).
+  it("a failed re-read is an error, with the last good list beside it", async () => {
     const answers = [json(list(["a"])), json({}, 500), json(list(["b"]))];
     stubFetch(() => answers.shift()!);
     const { result } = renderHook(() => useAutoSkills(), { wrapper });
     await waitFor(() => expect(result.current.status).toBe("ready"));
+    const read = result.current.status === "ready" ? result.current.list : null;
+    expect(read?.drafts[0].proposal_id).toBe("a");
     await act(async () => {
       await result.current.refresh().catch(() => {});
     });
     await waitFor(() => expect(result.current.status).toBe("error"));
+    // The same object: nothing that compares lists sees a new one.
+    expect(result.current.status === "error" && result.current.list).toBe(read);
     await act(async () => {
       await result.current.refresh();
     });
     await waitFor(() => expect(result.current.status).toBe("ready"));
+    expect(
+      result.current.status === "ready" &&
+        result.current.list.drafts[0].proposal_id
+    ).toBe("b");
+  });
+
+  it("an error without a list read before it has none", async () => {
+    // A first read that fails.
+    stubFetch(() => json({}, 500));
+    const first = renderHook(() => useAutoSkills(), { wrapper });
+    await waitFor(() => expect(first.result.current.status).toBe("error"));
+    expect("list" in first.result.current).toBe(false);
+    first.unmount();
+
+    // An old core's answer, then a failed read: no list either.
+    const answers = [json({}, 404), json({}, 500)];
+    stubFetch(() => answers.shift() ?? json({}, 500));
+    const old = renderHook(() => useAutoSkills(), { wrapper });
+    await waitFor(() => expect(old.result.current.status).toBe("unsupported"));
+    await act(async () => {
+      await old.result.current.refresh().catch(() => {});
+    });
+    await waitFor(() => expect(old.result.current.status).toBe("error"));
+    expect("list" in old.result.current).toBe(false);
   });
 
   it("a body without proposals is an error", async () => {
