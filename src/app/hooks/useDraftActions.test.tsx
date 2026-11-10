@@ -343,12 +343,35 @@ describe("useDraftActions", () => {
     await act(async () => {
       out = await result.current.approve([d]);
     });
+    // The answer says what the draft is now: maybe this page's own
+    // decision, made before it left and came back.
     expect(out).toEqual({
       done: [],
-      failed: [{ draft: d, message: "x was already decided elsewhere." }],
+      failed: [{ draft: d, message: "x is already approved." }],
     });
     expect(toast.success).not.toHaveBeenCalled();
-    expect(errorLines()).toEqual(["x was already decided elsewhere."]);
+    expect(errorLines()).toEqual(["x is already approved."]);
+  });
+
+  it("not_pending says what the draft is", async () => {
+    stubFetch([
+      [409, { error: "not_pending", status: "rejected" }],
+      [409, { error: "not_pending", status: "approved" }],
+      [409, { error: "not_pending" }],
+      [409, { error: "not_pending", status: "archived" }],
+    ]);
+    const { result } = setup();
+    await act(async () => {
+      await result.current.reject(
+        ["a", "b", "c", "d"].map((id) => draft({ proposal_id: id }))
+      );
+    });
+    expect(errorLines()).toEqual([
+      "a is already rejected.",
+      "b is already approved.",
+      "c is no longer pending.",
+      "d is no longer pending.",
+    ]);
   });
 
   it("a draft changed since the page read it installs nothing and says so", async () => {
@@ -1571,6 +1594,23 @@ describe("decisionError", () => {
     expect(
       decisionError({ status: 502, error: "backend_unreachable" }, d, labels)
     ).toBe("The WebUI server cannot reach EvoScientist on this machine.");
+    expect(
+      decisionError(
+        { status: 409, error: "not_pending", draftStatus: "approved" },
+        d,
+        labels
+      )
+    ).toBe("n is already approved.");
+    expect(
+      decisionError(
+        { status: 409, error: "not_pending", draftStatus: "rejected" },
+        d,
+        labels
+      )
+    ).toBe("n is already rejected.");
+    expect(
+      decisionError({ status: 409, error: "not_pending" }, d, labels)
+    ).toBe("n is no longer pending.");
     expect(decisionError({ status: 409, error: "no_project" }, d, labels)).toBe(
       "n belongs to no registered project, so it wasn't changed."
     );

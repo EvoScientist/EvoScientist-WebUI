@@ -34,7 +34,12 @@ export interface DecisionResult {
   }>;
 }
 
-type Answer = { status: number; error?: string; detail?: string } | "network";
+/** An answer that wasn't a success: the HTTP status, the body's `error` and
+ *  `detail`, and the draft's own status when the body names one
+ *  (`not_pending`). "network": the fetch to the WebUI server rejected. */
+type Answer =
+  | { status: number; error?: string; detail?: string; draftStatus?: string }
+  | "network";
 
 const UNDO_MS = 10_000;
 
@@ -109,7 +114,16 @@ export function decisionError(
   const code = typeof answer.error === "string" ? answer.error : "";
   switch (code) {
     case "not_pending":
-      return `${name} was already decided elsewhere.`;
+      // What the draft is now, as the core says: the decision may be this
+      // page's own (made, then the page left and came back before the list
+      // was read again), so never "elsewhere".
+      if (answer.draftStatus === "approved") {
+        return `${name} is already approved.`;
+      }
+      if (answer.draftStatus === "rejected") {
+        return `${name} is already rejected.`;
+      }
+      return `${name} is no longer pending.`;
     case "draft_changed":
       return action === "reject"
         ? `${name} changed since the page read it, so it wasn't rejected. Read the new version, then decide.`
@@ -184,6 +198,7 @@ async function post(
       status: reply.status,
       error: typeof data.error === "string" ? data.error : undefined,
       detail: typeof data.detail === "string" ? data.detail : undefined,
+      draftStatus: typeof data.status === "string" ? data.status : undefined,
     },
   };
 }
