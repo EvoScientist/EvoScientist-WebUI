@@ -121,6 +121,10 @@ export function decisionError(
         draft.workspace_dir,
         labels
       )} isn't served by this backend right now, so ${name} wasn't changed.`;
+    case "no_project":
+      return `${name} belongs to no registered project, so it wasn't changed.`;
+    case "revert_unavailable":
+      return `${name} can't be moved back: EvoScientist can't undo this decision.`;
     case "approve_failed":
     case "reject_failed":
       if (answer.detail?.trim()) return `${name}: ${answer.detail}`;

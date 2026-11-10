@@ -447,6 +447,42 @@ describe("useDraftActions", () => {
     expect(refresh).toHaveBeenCalledTimes(1);
   });
 
+  it("a draft of no project says so, and the next draft still goes", async () => {
+    stubFetch([
+      [409, { error: "no_project" }],
+      [200, { rejected: true }],
+    ]);
+    const { result } = setup();
+    const a = draft({ proposal_id: "a", skill_name: "orphan-skill" });
+    const b = draft({ proposal_id: "b" });
+    let out: DecisionResult | undefined;
+    await act(async () => {
+      out = await result.current.reject([a, b]);
+    });
+    expect(calls).toHaveLength(2);
+    expect(out?.done).toEqual([b]);
+    expect(errorLines()).toEqual([
+      "orphan-skill belongs to no registered project, so it wasn't changed.",
+    ]);
+  });
+
+  it("an Undo the core can't do says so and offers no other", async () => {
+    stubFetch([[200, okApprove]]);
+    const { result } = setup();
+    await act(async () => {
+      await result.current.approve([draft({ proposal_id: "a" })]);
+    });
+    stubFetch([[409, { error: "revert_unavailable" }]]);
+    await act(async () => {
+      await toast.success.mock.calls[0][1].action.onClick();
+    });
+    expect(errorLines()).toEqual([
+      "a can't be moved back: EvoScientist can't undo this decision.",
+    ]);
+    expect(toast.error.mock.calls[0]).toHaveLength(1);
+    expect(toast.success).toHaveBeenCalledTimes(1);
+  });
+
   it("mixed bulk approve reports each draft", async () => {
     stubFetch([
       [200, okApprove],
@@ -1535,6 +1571,12 @@ describe("decisionError", () => {
     expect(
       decisionError({ status: 502, error: "backend_unreachable" }, d, labels)
     ).toBe("The WebUI server cannot reach EvoScientist on this machine.");
+    expect(decisionError({ status: 409, error: "no_project" }, d, labels)).toBe(
+      "n belongs to no registered project, so it wasn't changed."
+    );
+    expect(
+      decisionError({ status: 409, error: "revert_unavailable" }, d, labels)
+    ).toBe("n can't be moved back: EvoScientist can't undo this decision.");
     expect(decisionError({ status: 500 }, d, labels)).toBe(
       "n couldn't be changed (HTTP 500)."
     );
