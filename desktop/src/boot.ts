@@ -1,12 +1,12 @@
 // The launch sequence, as a state machine that tests drive without Electron:
-// find `EvoSci` and check it with `--version --json` (C08); when it is missing
-// or broken, install or repair it with the bundled install script (W03b);
-// when it is older than the app's range, offer to update it (W03c): with
-// `EvoSci update` (C11) from 0.3.7 on, else, and for a pip or conda install,
+// find `EvoSci` and check it with `--version --json`; when it is missing
+// or broken, install or repair it with the bundled install script;
+// when it is older than the app's range, offer to update it: with
+// `EvoSci update` from 0.3.7 on, else, and for a pip or conda install,
 // with the bundled script;
 // run `EvoSci setup` when this core version has not been set up, else the
 // `node` stage; resolve the workspace folder, then `EvoSci deploy --json`
-// (C13) until `ready` or an error. The window, the UI server and the screens
+// until `ready` or an error. The window, the UI server and the screens
 // live in app.ts; every dependency on the machine comes in through BootDeps.
 import { join } from "node:path";
 import type { DeploySession } from "./deploy";
@@ -36,7 +36,7 @@ import {
 } from "./versions";
 
 /** `--version --json` can be slow on a first run under Defender; a timeout is
- *  its own error with Retry, never a missing core (measurement 5 may tune it). */
+ *  its own error with Retry, never a missing core. */
 export const VERSION_TIMEOUT_MS = 60_000;
 /** The node stage takes about half a second with a usable Node on disk. */
 export const NODE_STAGE_TIMEOUT_MS = 120_000;
@@ -46,7 +46,7 @@ export const UPDATE_LOCK_POLL_MS = 3_000;
 /** The install script's last lines on the progress screen. */
 export const INSTALL_TAIL_LINES = 12;
 
-/** The first core release with `EvoSci update` (C11 merged after 0.3.6);
+/** The first core release with `EvoSci update` (added after 0.3.6);
  *  an older core is updated with the bundled install script. */
 export const FIRST_UPDATABLE = "0.3.7";
 
@@ -142,7 +142,7 @@ export interface BootDeps {
   ensureDir(path: string): void;
   startDeploy(evosci: string, workspace: string): DeploySession;
 
-  // Install, repair and setup (W03b)
+  // Install, repair and setup
   /** The first-launch answer about mainland China mirrors, kept in userData. */
   keptMirror(): boolean | null;
   keepMirror(cn: boolean): void;
@@ -167,7 +167,7 @@ export interface BootDeps {
   /** Records a setup that exited 0; null forgets the record. */
   recordSetup(coreVersion: string | null): void;
 
-  // Core updates (W03c)
+  // Core updates
   /** Shows the update offer; resolves when the user chooses Update (Quit
    *  quits the app). */
   askUpdate(from: string): Promise<void>;
@@ -206,7 +206,7 @@ export interface BootOptions {
 }
 
 /**
- * Whether to use mainland China mirrors (How > Mirrors): `mirror` from
+ * Whether to use mainland China mirrors: `mirror` from
  * config.yaml first, which `EvoSci setup --cn` and the settings page write,
  * the first-launch answer only while the file has none; null when neither.
  */
@@ -580,7 +580,7 @@ type Updated =
   | { kind: "script"; notice?: string };
 
 /**
- * A core older than the range (W03c): the offer, the busy check and stop of
+ * A core older than the range: the offer, the busy check and stop of
  * the app's own backend, then `EvoSci update` to the newest release in the
  * range (from 0.3.7 on) with a new version check, or, for 0.3.6 and for a
  * pip or conda install (`manual_update` without a uv tool install), the
@@ -655,7 +655,7 @@ async function updateCore(
     onState({ phase: "updating", view })
   );
   const { outcome, view } = await run.done;
-  // Closing waits for the update (D21); after it nothing new starts.
+  // Closing waits for the update; after it nothing new starts.
   if (deps.stopping()) {
     if (
       outcome.kind === "done" &&
@@ -787,7 +787,7 @@ export async function boot(
     `core ${info.version}, protocol ${info.protocol}, webui_compat ${info.webuiCompat}`
   );
   let incompatible = checkCore(info, deps.manifest, deps.platform);
-  // Older than the range: the update offer (W03c). A version that is not a
+  // Older than the range: the update offer. A version that is not a
   // release cannot be placed, and updating `0.4.0a1` would be a downgrade.
   if (
     incompatible?.code === "core_too_old" &&

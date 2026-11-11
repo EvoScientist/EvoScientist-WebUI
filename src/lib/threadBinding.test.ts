@@ -104,6 +104,18 @@ describe("threadBinding", () => {
     expect(binding.kind === "readOnly" && binding.folder).toBeFalsy();
   });
 
+  it("names a missing project by the name the page shows", () => {
+    const binding = threadBinding(
+      readyProjects(A, { key: B, name: "Default workspace", missing: true }),
+      folders({ workspaceDir: B }),
+      CHAT_GRAPHS,
+      A
+    );
+    expect(binding.kind === "readOnly" && binding.reason).toBe(
+      `This conversation's project folder, Default workspace (${B}), is missing.`
+    );
+  });
+
   it("makes a thread that works in a run folder read-only", () => {
     expect(
       threadBinding(

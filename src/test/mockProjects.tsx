@@ -37,6 +37,7 @@ export function mockProjects(
     current?: string | null;
     files?: FilesAccess;
     canMove?: boolean;
+    launchKey?: string | null;
   } = {}
 ): ProjectsContextValue {
   const current =
@@ -45,6 +46,7 @@ export function mockProjects(
       : pickProject(projects, [options.current ?? null]);
   return {
     projects,
+    launchKey: options.launchKey ?? null,
     canMove: options.canMove ?? false,
     refreshing: false,
     error: null,

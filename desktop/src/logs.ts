@@ -1,7 +1,7 @@
 // The app's own logs: `desktop.log` (the main process, and the stderr of every
 // child) and `desktop-ui.log` (the UI server's output), next to the backend's
 // `langgraph_dev.log`. Each line is written synchronously, so the line written
-// in `session-end` reaches the file before Windows ends the process (D5), and
+// in `session-end` reaches the file before Windows ends the process, and
 // a crash report reads every line written so far.
 import {
   closeSync,

@@ -12,6 +12,7 @@ import {
   type ReactNode,
 } from "react";
 
+import { desktopBridge, type DesktopBridge } from "@/lib/desktop";
 import { readMoveSupport } from "@/lib/projectActions";
 import { retryWithBackoff } from "@/lib/retry";
 import {
@@ -19,6 +20,7 @@ import {
   findProject,
   pickProject,
   readLastUsedProject,
+  withAppFolders,
   writeLastUsedProject,
   type Project,
   type ProjectsState,
@@ -30,8 +32,12 @@ import {
 export type FilesAccess = "pending" | "here" | "elsewhere";
 
 export interface ProjectsContextValue {
-  /** The last project list the backend gave. */
+  /** The last project list the backend gave; in the desktop app the
+   *  default folder's project is named "Default workspace". */
   projects: ProjectsState;
+  /** In the desktop app, the key of the project the app registered at launch:
+   *  the next launch registers it again, so it isn't offered for removal. */
+  launchKey: string | null;
   /** Whether this machine's backend can move a project (whether this page
    *  may is the settings access's to say): asked with each read of the list,
    *  apart from it. */
@@ -157,6 +163,7 @@ async function readProjects(
 interface ProviderState {
   backend: string;
   projects: ProjectsState;
+  launchKey: string | null;
   canMove: boolean;
   files: FilesAccess;
   refreshing: boolean;
@@ -175,6 +182,7 @@ function initialState(backend: string, deploymentUrl: string): ProviderState {
   return {
     backend,
     projects: { status: "pending" },
+    launchKey: null,
     canMove: false,
     pendingMoves: NO_MOVES,
     arrivedMoves: NO_MOVES,
@@ -211,6 +219,10 @@ export function ProjectsProvider({
   // Read by a read that ends after the render it started in.
   const stateRef = useRef(state);
   stateRef.current = state;
+
+  // The desktop app's folders, read once: they hold for the page's life,
+  // except that a move of the launch project takes its launch folder along.
+  const appFoldersRef = useRef<DesktopBridge["projectFolders"] | null>(null);
 
   const gateRef = useRef(false);
   // One read at a time; a request during it reads once more afterwards, so
@@ -291,7 +303,14 @@ export function ProjectsProvider({
       if (!answer || controller.signal.aborted) {
         return { status: "pending" } as ProjectsState;
       }
-      const published = answer;
+      appFoldersRef.current ??= desktopBridge()?.projectFolders ?? {};
+      const app =
+        answer.status === "ready"
+          ? withAppFolders(answer.projects, appFoldersRef.current)
+          : null;
+      const published: ProjectsState = app
+        ? { status: "ready", projects: app.projects }
+        : answer;
       // A project no longer on the list is forgotten: added again, it is a
       // new project, current only when picked. The stored one only when it
       // is this page's: another tab may have just picked one this list
@@ -311,6 +330,7 @@ export function ProjectsProvider({
         return {
           ...prev,
           projects: published,
+          launchKey: app?.launchKey ?? null,
           refreshing: false,
           error: null,
           selected: forget(prev.selected) ? null : prev.selected,
@@ -393,6 +413,12 @@ export function ProjectsProvider({
       if (readLastUsedProject(deploymentUrl) === from) {
         writeLastUsedProject(deploymentUrl, to);
       }
+      // A moved launch project is the launch folder from here on: the core
+      // rewrote `default_workdir`, which the desktop app launches in.
+      const app = appFoldersRef.current;
+      if (app && stateRef.current.launchKey === from) {
+        appFoldersRef.current = { ...app, launch: to };
+      }
       setState((prev) => ({
         ...prev,
         selected: prev.selected === from ? to : prev.selected,
@@ -411,6 +437,7 @@ export function ProjectsProvider({
   const value = useMemo(
     () => ({
       projects: state.projects,
+      launchKey: state.launchKey,
       canMove: state.canMove,
       refreshing: state.refreshing,
       error: state.error,

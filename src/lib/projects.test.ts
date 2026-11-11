@@ -5,6 +5,8 @@ import {
   pickProject,
   readLastUsedProject,
   registeredTasks,
+  samePath,
+  withAppFolders,
   writeLastUsedProject,
 } from "./projects";
 import { readyProjects } from "@/test/mockProjects";
@@ -99,5 +101,96 @@ describe("registeredTasks", () => {
         projects
       ).map((t) => t.id)
     ).toEqual(["1", "2"]);
+  });
+});
+
+describe("samePath", () => {
+  it("ignores case on Windows keys, the drive letter included", () => {
+    expect(samePath("C:/Users/u/Proj", "c:/users/U/proj")).toBe(true);
+    expect(samePath("C:/Users/u/Proj", "C:\\Users\\u\\Proj\\")).toBe(true);
+    expect(samePath("C:/Users/u/Proj", "D:/Users/u/Proj")).toBe(false);
+  });
+
+  it("compares POSIX paths exactly", () => {
+    expect(samePath("/home/u/Proj", "/home/u/proj")).toBe(false);
+    expect(samePath("/home/u/proj", "/home/u/proj")).toBe(true);
+  });
+
+  it("tolerates a trailing slash", () => {
+    expect(samePath("/home/u/proj", "/home/u/proj/")).toBe(true);
+    expect(samePath("C:/", "C:")).toBe(true);
+  });
+});
+
+describe("withAppFolders", () => {
+  const projects = readyProjects(
+    "/home/u/Documents/EvoScientist",
+    "/home/u/alpha",
+    "/srv/zeta"
+  ).projects;
+
+  it("names the default folder's project and sorts by that name", () => {
+    const out = withAppFolders(projects, {
+      default: "/home/u/Documents/EvoScientist",
+    });
+    expect(out.projects.map((p) => p.name)).toEqual([
+      "alpha",
+      "Default workspace",
+      "zeta",
+    ]);
+    expect(out.projects[1].key).toBe("/home/u/Documents/EvoScientist");
+    expect(out.launchKey).toBeNull();
+  });
+
+  it("gives the launch folder's key and keeps its folder name", () => {
+    const out = withAppFolders(projects, {
+      default: "/home/u/Documents/EvoScientist",
+      launch: "/srv/zeta/",
+    });
+    expect(out.launchKey).toBe("/srv/zeta");
+    expect(out.projects.find((p) => p.key === "/srv/zeta")?.name).toBe("zeta");
+  });
+
+  it("matches a Windows key whose drive letter is cased differently", () => {
+    const out = withAppFolders(
+      readyProjects("c:/Users/u/Documents/EvoScientist").projects,
+      {
+        default: "C:/Users/u/Documents/EvoScientist",
+        launch: "C:/Users/u/Documents/EvoScientist",
+      }
+    );
+    expect(out.projects[0].name).toBe("Default workspace");
+    expect(out.launchKey).toBe("c:/Users/u/Documents/EvoScientist");
+  });
+
+  it("matches a macOS key typed in another case than the folder's", () => {
+    const out = withAppFolders(
+      readyProjects("/Users/u/documents/evoscientist").projects,
+      {
+        default: "/Users/u/Documents/EvoScientist",
+        launch: "/Users/u/Documents/EvoScientist",
+      }
+    );
+    expect(out.projects[0].name).toBe("Default workspace");
+    expect(out.launchKey).toBe("/Users/u/documents/evoscientist");
+  });
+
+  it("matches the exact folder before one that differs only in case", () => {
+    const both = readyProjects("/work/Proj", "/work/proj").projects;
+    for (const folder of ["/work/Proj", "/work/proj"]) {
+      const out = withAppFolders(both, { default: folder, launch: folder });
+      expect(out.launchKey).toBe(folder);
+      expect(out.projects.find((p) => p.key === folder)?.name).toBe(
+        "Default workspace"
+      );
+    }
+  });
+
+  it("changes nothing for folders that are unknown or not projects", () => {
+    for (const folders of [{}, { default: "/elsewhere", launch: "/gone" }]) {
+      const out = withAppFolders(projects, folders);
+      expect(out.projects).toEqual(projects);
+      expect(out.launchKey).toBeNull();
+    }
   });
 });

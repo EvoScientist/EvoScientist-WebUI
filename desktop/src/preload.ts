@@ -1,17 +1,17 @@
 // The window's preload. It runs sandboxed, so it may require only "electron"
 // and nothing local (type imports are erased). Two jobs:
-// - On the WebUI's origin (D6): before any page script runs, ask the main
+// - On the WebUI's origin: before any page script runs, ask the main
 //   process for the backend URL and merge it into the WebUI's saved config
 //   (`localStorage['evoscientist-config']`, read by `getConfig()` in
 //   src/lib/config.ts), keeping the other keys, so ConfigDialog never opens.
-//   Then expose the bridge that W01 reads in src/lib/desktop.ts
-//   (`window.evoscientistDesktop`): `restartBackend()` and `defaultFolder`
-//   (W03d), and `appUpdate` (W04). The main process answers them only for
-//   the UI's own origin.
+//   Then expose the bridge src/lib/desktop.ts reads
+//   (`window.evoscientistDesktop`): `restartBackend()`, `defaultFolder`,
+//   `appUpdate`, `projectFolders` and `pickFolder()`. The main process
+//   answers them only for the UI's own origin.
 // - On the status page (file:): expose what it needs to show the current
 //   screen, run its actions and offer the app update.
 import { contextBridge, ipcRenderer } from "electron";
-import type { RestartResult } from "./app";
+import type { ProjectFolders, RestartResult } from "./app";
 import type { UpdateState } from "./appUpdate";
 import type { ActionId, Screen, UpdateOffer } from "./screens";
 
@@ -66,14 +66,20 @@ if (location.protocol === "file:") {
 }
 
 /** Exposes `window.evoscientistDesktop`; `defaultFolder` only when the main
- *  process has one (the Documents folder resolved). */
+ *  process has one (the Documents folder resolved), and in `projectFolders`
+ *  only the folders it knows. */
 function exposeBridge(): void {
   const folder = ipcRenderer.sendSync("desktop:default-folder") as
     | string
     | null;
+  const keys = ipcRenderer.sendSync(
+    "desktop:project-folders"
+  ) as ProjectFolders | null;
   contextBridge.exposeInMainWorld("evoscientistDesktop", {
     restartBackend: (): Promise<RestartResult> =>
       ipcRenderer.invoke("desktop:restart-backend"),
+    pickFolder: (defaultPath?: string): Promise<string | null> =>
+      ipcRenderer.invoke("desktop:pick-folder", defaultPath),
     appUpdate: {
       state: (): Promise<UpdateState> =>
         ipcRenderer.invoke("desktop:update-state"),
@@ -91,5 +97,9 @@ function exposeBridge(): void {
         ipcRenderer.invoke("desktop:update-restart"),
     },
     ...(folder ? { defaultFolder: folder } : {}),
+    projectFolders: {
+      ...(keys?.default ? { default: keys.default } : {}),
+      ...(keys?.launch ? { launch: keys.launch } : {}),
+    },
   });
 }

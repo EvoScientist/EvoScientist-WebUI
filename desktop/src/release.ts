@@ -1,4 +1,4 @@
-// The newest core release inside the app's range (W03c, How > Core update):
+// The newest core release inside the app's range:
 // the version the app passes to `EvoSci update --version`. It reads the
 // package index's JSON simple API, on the index `EvoSci update` itself uses:
 // the Tsinghua mirror with `mirror: cn` in config.yaml, else PyPI (the update

@@ -27,6 +27,7 @@ import {
   addProject,
   moveProject,
   movedText,
+  parentFolder,
   projectsReadOnlyReason,
   typedFolder,
 } from "@/lib/projectActions";
@@ -37,7 +38,8 @@ import {
   type StopRunsResult,
   type ProjectWork,
 } from "@/lib/projectRemoval";
-import type { Project } from "@/lib/projects";
+import { desktopBridge } from "@/lib/desktop";
+import { samePath, type Project } from "@/lib/projects";
 import { folderName } from "@/lib/workspaceAssistant";
 import { cn } from "@/lib/utils";
 import {
@@ -158,31 +160,18 @@ function moveCandidates(
     .sort((a, b) => Number(b.sameName) - Number(a.sameName));
 }
 
-/** Whether `path` looks like a Windows one: a drive letter or a backslash. */
-function windowsPath(path: string): boolean {
-  return /^[a-z]:/i.test(path) || path.includes("\\");
-}
-
-/** The registered project, other than `moving`, at the typed `folder`: a
- *  move there merges into it. Paths compare ignoring the kind of separator
- *  and a trailing one; Windows paths also ignore case, as the backend does
- *  there. */
+/** The registered project, other than `moving`, at the typed `folder`
+ *  (compared with `samePath`): a move there merges into it. */
 function mergeTarget(
   projects: readonly Project[],
   folder: string,
   moving: Project
 ): Project | null {
-  const path = (key: string) => key.replace(/[\\/]+/g, "/").replace(/\/$/, "");
-  const raw = typedFolder(folder);
-  const typed = path(raw);
-  if (!typed) return null;
-  const same = (key: string) =>
-    windowsPath(raw) || windowsPath(key)
-      ? path(key).toLowerCase() === typed.toLowerCase()
-      : path(key) === typed;
+  const typed = typedFolder(folder);
+  if (!typed.replace(/[\\/]+$/, "")) return null;
   return (
     projects.find(
-      (project) => project.key !== moving.key && same(project.key)
+      (project) => project.key !== moving.key && samePath(project.key, typed)
     ) ?? null
   );
 }
@@ -219,6 +208,24 @@ function ProjectFolderDialog({
   const [choice, setChoice] = useState<Project | null>(null);
   const [busy, setBusy] = useState<"add" | "move" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const pickFolder = useMemo(() => desktopBridge()?.pickFolder, []);
+  // Read when the folder dialog answers: a busy dialog ignores it.
+  const busyRef = useRef(busy);
+  busyRef.current = busy;
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const browse = async () => {
+    if (!pickFolder) return;
+    // A moved folder often sits next to the old one.
+    const start =
+      typedFolder(folder) || (moving ? parentFolder(moving.key) : undefined);
+    const picked = await pickFolder(start || undefined);
+    if (picked && busyRef.current === null) {
+      setFolder(picked);
+      // Enter then submits rather than opening the dialog again.
+      inputRef.current?.focus();
+    }
+  };
 
   const candidates =
     !moving && canMove && projects.status === "ready"
@@ -357,29 +364,45 @@ function ProjectFolderDialog({
             >
               Folder
             </label>
-            <Input
-              id="add-project-folder"
-              autoFocus
-              value={folder}
-              onChange={(e) => setFolder(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.nativeEvent.isComposing || e.keyCode === 229) return;
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  void submit();
+            <div className="flex gap-2">
+              <Input
+                ref={inputRef}
+                id="add-project-folder"
+                autoFocus
+                value={folder}
+                onChange={(e) => setFolder(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    void submit();
+                  }
+                }}
+                placeholder="/home/you/my-project"
+                spellCheck={false}
+                autoComplete="off"
+                disabled={busy !== null}
+                aria-invalid={error !== null}
+                aria-describedby={
+                  [
+                    error && "add-project-error",
+                    mergeInto && "add-project-merge",
+                  ]
+                    .filter(Boolean)
+                    .join(" ") || undefined
                 }
-              }}
-              placeholder="/home/you/my-project"
-              spellCheck={false}
-              autoComplete="off"
-              disabled={busy !== null}
-              aria-invalid={error !== null}
-              aria-describedby={
-                [error && "add-project-error", mergeInto && "add-project-merge"]
-                  .filter(Boolean)
-                  .join(" ") || undefined
-              }
-            />
+              />
+              {pickFolder && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => void browse()}
+                  disabled={busy !== null}
+                >
+                  Browse…
+                </Button>
+              )}
+            </div>
             {candidates.length > 0 && (
               <fieldset
                 className="space-y-1 pt-1"

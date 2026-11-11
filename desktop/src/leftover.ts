@@ -1,8 +1,7 @@
 // A UI server this app left behind. On Windows the main process's job object
-// ends the UI server with the app (measurement 3), so this matters for macOS
-// and Linux (W06). The app records the UI server's PID and start time in
-// `userData`; at launch it stops that process only when both still match, so
-// a reused PID is never ended.
+// ends the UI server with the app, so this matters for macOS and Linux. The app
+// records the UI server's PID and start time in `userData`; at launch it stops
+// that process only when both still match, so a reused PID is never ended.
 import { execFile } from "node:child_process";
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";

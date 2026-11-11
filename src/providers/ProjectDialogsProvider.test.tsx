@@ -591,6 +591,95 @@ describe("Move project", () => {
     });
   });
 
+  describe("Browse… in the desktop app", () => {
+    afterEach(() => {
+      delete window.evoscientistDesktop;
+    });
+
+    function withPicker(answer: () => Promise<string | null>) {
+      const pickFolder = vi.fn(answer);
+      window.evoscientistDesktop = { pickFolder };
+      return pickFolder;
+    }
+
+    const folderField = () =>
+      screen.getByLabelText("Folder") as HTMLInputElement;
+
+    it("fills the folder from the folder dialog without adding", async () => {
+      const fetchMock = stubRelay(200, {});
+      const pickFolder = withPicker(async () => "/srv/picked");
+      renderWithMissing();
+      act(() => dialogs!.openAddProject());
+      fireEvent.click(screen.getByRole("button", { name: "Browse…" }));
+
+      await waitFor(() => expect(folderField().value).toBe("/srv/picked"));
+      // Enter now submits.
+      expect(document.activeElement).toBe(folderField());
+      // Nothing typed: the app opens it at its default folder.
+      expect(pickFolder).toHaveBeenCalledWith(undefined);
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(screen.getByRole("radio", { name: "a new project" })).toBeTruthy();
+    });
+
+    it("starts at the typed folder, and a cancel leaves it", async () => {
+      const pickFolder = withPicker(async () => null);
+      renderWithMissing();
+      act(() => dialogs!.openAddProject());
+      typeFolder(' "/srv/typed" ');
+      fireEvent.click(screen.getByRole("button", { name: "Browse…" }));
+
+      await waitFor(() =>
+        expect(pickFolder).toHaveBeenCalledWith("/srv/typed")
+      );
+      await act(async () => {});
+      expect(folderField().value).toBe(' "/srv/typed" ');
+    });
+
+    it("starts a move at the missing folder's parent", async () => {
+      const pickFolder = withPicker(async () => "/srv/projB");
+      renderWithMissing();
+      act(() => dialogs!.openMoveProject!(GONE));
+      fireEvent.click(screen.getByRole("button", { name: "Browse…" }));
+
+      await waitFor(() => expect(folderField().value).toBe("/srv/projB"));
+      expect(pickFolder).toHaveBeenCalledWith("/old/data");
+    });
+
+    it("is disabled while adding, and an answer that comes then is dropped", async () => {
+      let answer: (folder: string | null) => void = () => {};
+      withPicker(
+        () => new Promise<string | null>((resolve) => (answer = resolve))
+      );
+      stubSlowRelay();
+      renderWithMissing();
+      act(() => dialogs!.openAddProject());
+      fireEvent.click(screen.getByRole("button", { name: "Browse…" }));
+      typeFolder("/srv/new");
+      fireEvent.click(screen.getByRole("button", { name: "Add" }));
+      await screen.findByText(/Adding the project/);
+
+      expect(
+        screen.getByRole("button", { name: "Browse…" }).hasAttribute("disabled")
+      ).toBe(true);
+      await act(async () => answer("/srv/late"));
+      expect(folderField().value).toBe("/srv/new");
+    });
+
+    it("is not offered in a browser", () => {
+      renderWithMissing();
+      act(() => dialogs!.openAddProject());
+      expect(screen.queryByRole("button", { name: "Browse…" })).toBeNull();
+    });
+
+    it("is not offered on a page that can't change projects", () => {
+      withPicker(async () => "/srv/picked");
+      access.value = { writable: false, reason: "other_backend" };
+      renderWithMissing();
+      act(() => dialogs!.openAddProject());
+      expect(screen.queryByRole("button", { name: "Browse…" })).toBeNull();
+    });
+  });
+
   it("can't be closed while a project is being added", async () => {
     stubSlowRelay();
     renderWithMissing();

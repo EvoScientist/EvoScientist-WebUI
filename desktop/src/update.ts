@@ -1,4 +1,4 @@
-// `EvoSci update --version <v> --skip webui --json` (C11, How > Core update):
+// `EvoSci update --version <v> --skip webui --json`:
 // its own progress, the setup stages of the new version that it forwards in
 // the same stream, the processes it waits for, and its outcome. The outcome
 // is the `update` stage's terminal line, the last line it writes: on Windows

@@ -1,11 +1,21 @@
 import type { MessageBoxOptions } from "electron";
-import { join } from "node:path";
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+} from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createApp, type AppDeps, type AppLog, type AppWindow } from "./app";
 import type { MemoryWaitResult, WorkCheck } from "./closeCheck";
 import type { CrashInfo } from "./crash";
 import type { DeployOutcome, DeploySession } from "./deploy";
 import type { DeployError, DeployReady } from "./lines";
+import { folderKey } from "./paths";
 import type { Collected, ExitInfo } from "./proc";
 import type { InstallRun } from "./install";
 import { SessionEnd } from "./sessionEnd";
@@ -194,6 +204,7 @@ function harness(over: Partial<AppDeps> = {}) {
     documentsDir: () => "/docs",
     exit,
     fileExists: () => true,
+    isFolder: () => true,
     ensureDir: () => {},
     recordEvoSci: () => {},
     readUiRecord: () => null,
@@ -841,6 +852,209 @@ describe("restart from the page (bridge)", () => {
     documents = false;
     expect(h.app.defaultFolderFor("http://127.0.0.1:4718")).toBeNull();
     expect(h.log.lines.at(-1)).toMatch(/^WARN no default folder/);
+  });
+
+  it("projectFolders names the default and the page's folder in key form, for the UI's origin only", async () => {
+    const h = await launched();
+    expect(h.app.projectFoldersFor("http://127.0.0.1:4718")).toEqual({
+      default: folderKey(join("/docs", "EvoScientist")),
+      launch: folderKey(READY.workspace),
+    });
+    expect(h.app.projectFoldersFor("http://127.0.0.1:9999")).toBeNull();
+    expect(h.app.projectFoldersFor(null)).toBeNull();
+  });
+
+  it("projectFolders has no default folder when Documents cannot be resolved", async () => {
+    let documents = true;
+    const h = await launched({
+      documentsDir: () => {
+        if (documents) return "/docs";
+        throw new Error("Failed to get 'documents' path");
+      },
+    });
+    documents = false;
+    expect(h.app.projectFoldersFor("http://127.0.0.1:4718")).toEqual({
+      default: null,
+      launch: folderKey(READY.workspace),
+    });
+  });
+
+  it("projectFolders keeps the page's folder while a restart keeps the page", async () => {
+    const gate = deferred<void>();
+    const h = await launched();
+    h.sessions[0].stopped.gate = gate.promise;
+    const restart = h.app.restartFromPage();
+    await vi.waitFor(() => expect(h.sessions[0].stopped.count).toBe(1));
+    // The backend is gone meanwhile; a reload of the page still gets it.
+    expect(h.app.backendUrlFor("http://127.0.0.1:4718")).toBeNull();
+    expect(h.app.projectFoldersFor("http://127.0.0.1:4718")?.launch).toBe(
+      folderKey(READY.workspace)
+    );
+    gate.resolve();
+    await expect(restart).resolves.toEqual({ ok: true });
+    expect(h.app.projectFoldersFor("http://127.0.0.1:4718")?.launch).toBe(
+      folderKey(READY.workspace)
+    );
+  });
+
+  it("projectFolders follows a restart that lands on another folder", async () => {
+    let first = true;
+    const h = await launched({
+      startDeploy: () => {
+        const s = fakeSession(
+          first ? READY : { ...READY, workspace: "/elsewhere" }
+        );
+        first = false;
+        return s;
+      },
+    });
+    expect(h.app.projectFoldersFor("http://127.0.0.1:4718")?.launch).toBe(
+      folderKey(READY.workspace)
+    );
+    await expect(h.app.restartFromPage()).resolves.toEqual({ ok: true });
+    expect(h.app.projectFoldersFor("http://127.0.0.1:4718")?.launch).toBe(
+      folderKey("/elsewhere")
+    );
+  });
+
+  it("pickFolder opens the dialog at the given start folder, else at the default folder", async () => {
+    const chooseFolder = vi.fn(async () => "D:\\work");
+    const h = await launched({ chooseFolder });
+    const old = resolve("/srv/old");
+    await expect(
+      h.app.pickFolderFor("http://127.0.0.1:4718", old)
+    ).resolves.toBe("D:\\work");
+    expect(chooseFolder).toHaveBeenLastCalledWith("Choose a folder", old);
+    for (const start of [undefined, ""]) {
+      await h.app.pickFolderFor("http://127.0.0.1:4718", start);
+      expect(chooseFolder).toHaveBeenLastCalledWith(
+        "Choose a folder",
+        resolve("/docs", "EvoScientist")
+      );
+    }
+  });
+
+  it("pickFolder opens a start folder as typed in its resolved form", async () => {
+    const chooseFolder = vi.fn(async () => null);
+    const h = await launched({ chooseFolder });
+    await h.app.pickFolderFor("http://127.0.0.1:4718", "/srv/a/./b/");
+    expect(chooseFolder).toHaveBeenLastCalledWith(
+      "Choose a folder",
+      resolve("/srv/a/b")
+    );
+  });
+
+  it("pickFolder opens a start folder under ~ in the home folder", async () => {
+    const chooseFolder = vi.fn(async () => null);
+    const h = await launched({ chooseFolder });
+    await h.app.pickFolderFor("http://127.0.0.1:4718", "~/work");
+    expect(chooseFolder).toHaveBeenLastCalledWith(
+      "Choose a folder",
+      join(homedir(), "work")
+    );
+  });
+
+  it("pickFolder opens a relative start folder at the default folder", async () => {
+    const chooseFolder = vi.fn(async () => null);
+    const h = await launched({ chooseFolder });
+    await h.app.pickFolderFor("http://127.0.0.1:4718", "work");
+    expect(chooseFolder).toHaveBeenLastCalledWith(
+      "Choose a folder",
+      resolve("/docs", "EvoScientist")
+    );
+  });
+
+  it("pickFolder answers null on a cancel or a failed dialog", async () => {
+    const chooseFolder = vi
+      .fn<AppDeps["chooseFolder"]>()
+      .mockResolvedValueOnce(null)
+      .mockRejectedValueOnce(new Error("no window"));
+    const h = await launched({ chooseFolder });
+    await expect(
+      h.app.pickFolderFor("http://127.0.0.1:4718", undefined)
+    ).resolves.toBeNull();
+    await expect(
+      h.app.pickFolderFor("http://127.0.0.1:4718", undefined)
+    ).resolves.toBeNull();
+    expect(h.log.lines.at(-1)).toMatch(/^WARN folder dialog/);
+    chooseFolder.mockResolvedValueOnce("/after");
+    await expect(
+      h.app.pickFolderFor("http://127.0.0.1:4718", undefined)
+    ).resolves.toBe("/after");
+  });
+
+  it("projectFolders spells the page's folder as a key once, while it exists", async () => {
+    const dir = realpathSync.native(mkdtempSync(join(tmpdir(), "evo-app-")));
+    try {
+      mkdirSync(join(dir, "real", "work"), { recursive: true });
+      symlinkSync(join(dir, "real"), join(dir, "link"), "junction");
+      const h = await launched({
+        startDeploy: () =>
+          fakeSession({ ...READY, workspace: join(dir, "link", "work") }),
+      });
+      const key = join(dir, "real", "work").replaceAll("\\", "/");
+      expect(h.app.projectFoldersFor("http://127.0.0.1:4718")?.launch).toBe(
+        key
+      );
+      unlinkSync(join(dir, "link"));
+      expect(h.app.projectFoldersFor("http://127.0.0.1:4718")?.launch).toBe(
+        key
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("pickFolder opens a missing start folder at its nearest existing parent", async () => {
+    const chooseFolder = vi.fn(async () => null);
+    const existing = resolve("/srv");
+    const h = await launched({
+      chooseFolder,
+      isFolder: (p) => p === existing || p === resolve("/"),
+    });
+    await h.app.pickFolderFor(
+      "http://127.0.0.1:4718",
+      resolve("/srv/new/deeper")
+    );
+    expect(chooseFolder).toHaveBeenLastCalledWith("Choose a folder", existing);
+  });
+
+  it("pickFolder passes no start folder when nothing on the way up exists", async () => {
+    const chooseFolder = vi.fn(async () => null);
+    const h = await launched({ chooseFolder, isFolder: () => false });
+    await h.app.pickFolderFor("http://127.0.0.1:4718", resolve("/srv/new"));
+    expect(chooseFolder).toHaveBeenLastCalledWith("Choose a folder", undefined);
+  });
+
+  it("pickFolder serves only the UI's origin and a string or no argument", async () => {
+    const chooseFolder = vi.fn(async () => "/picked");
+    const h = await launched({ chooseFolder });
+    for (const origin of ["http://127.0.0.1:9999", null])
+      await expect(h.app.pickFolderFor(origin, undefined)).resolves.toBeNull();
+    for (const arg of [42, null, { path: "/x" }])
+      await expect(
+        h.app.pickFolderFor("http://127.0.0.1:4718", arg)
+      ).resolves.toBeNull();
+    expect(chooseFolder).not.toHaveBeenCalled();
+  });
+
+  it("pickFolder answers null while its dialog is open, and opens again after", async () => {
+    const answer = deferred<string | null>();
+    const chooseFolder = vi
+      .fn<AppDeps["chooseFolder"]>()
+      .mockReturnValueOnce(answer.promise)
+      .mockResolvedValue("/second");
+    const h = await launched({ chooseFolder });
+    const first = h.app.pickFolderFor("http://127.0.0.1:4718", undefined);
+    await expect(
+      h.app.pickFolderFor("http://127.0.0.1:4718", undefined)
+    ).resolves.toBeNull();
+    answer.resolve("/first");
+    await expect(first).resolves.toBe("/first");
+    await expect(
+      h.app.pickFolderFor("http://127.0.0.1:4718", undefined)
+    ).resolves.toBe("/second");
+    expect(chooseFolder).toHaveBeenCalledTimes(2);
   });
 
   it("asks again for work started during the wait, and Cancel stops nothing", async () => {

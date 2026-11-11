@@ -1,6 +1,6 @@
 "use client";
 
-// The desktop app's update offer (W04), as one notice that stays until it is
+// The desktop app's update offer, as one notice that stays until it is
 // closed: "Download" when an update is available, the progress while it
 // downloads, then "Restart to update". The app checks on its own and
 // downloads and installs only when asked; "Restart to update" asks first

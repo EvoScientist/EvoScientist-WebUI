@@ -789,3 +789,89 @@ describe("ProjectsProvider files", () => {
     });
   });
 });
+
+describe("ProjectsProvider in the desktop app", () => {
+  afterEach(() => {
+    delete window.evoscientistDesktop;
+  });
+
+  it("names the default folder's project, sorted by that name, and gives the launch folder's key", async () => {
+    window.evoscientistDesktop = {
+      projectFolders: {
+        default: "/home/you/Documents/EvoScientist",
+        launch: "/srv/zeta",
+      },
+    };
+    stubBackends({
+      [A]: {
+        projects: () =>
+          listing(
+            "/srv/zeta",
+            "/home/you/alpha",
+            "/home/you/Documents/EvoScientist"
+          ),
+      },
+    });
+    const { result } = renderProjects();
+    await waitFor(() => expect(result.current.isReady()).toBe(true));
+    expect(result.current.projects).toMatchObject({
+      status: "ready",
+      projects: [
+        { key: "/home/you/alpha", name: "alpha" },
+        { key: "/home/you/Documents/EvoScientist", name: "Default workspace" },
+        { key: "/srv/zeta", name: "zeta" },
+      ],
+    });
+    expect(result.current.launchKey).toBe("/srv/zeta");
+  });
+
+  it("takes the launch folder along when its project is moved", async () => {
+    window.evoscientistDesktop = { projectFolders: { launch: "/old/zeta" } };
+    let answer = () => listing("/old/zeta", "/home/you/alpha");
+    stubBackends({ [A]: { projects: () => answer() } });
+    const { result } = renderProjects();
+    await waitFor(() => expect(result.current.isReady()).toBe(true));
+    expect(result.current.launchKey).toBe("/old/zeta");
+
+    act(() => result.current.followMove("/old/zeta", "/srv/zeta"));
+    answer = () => listing("/srv/zeta", "/home/you/alpha");
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(result.current.launchKey).toBe("/srv/zeta");
+  });
+
+  it("keeps the launch folder when another project is moved", async () => {
+    window.evoscientistDesktop = { projectFolders: { launch: "/srv/zeta" } };
+    let answer = () => listing("/srv/zeta", "/old/alpha");
+    stubBackends({ [A]: { projects: () => answer() } });
+    const { result } = renderProjects();
+    await waitFor(() => expect(result.current.isReady()).toBe(true));
+
+    act(() => result.current.followMove("/old/alpha", "/home/you/alpha"));
+    answer = () => listing("/srv/zeta", "/home/you/alpha");
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(result.current.launchKey).toBe("/srv/zeta");
+  });
+
+  it("keeps the folder names and no launch folder in a browser", async () => {
+    stubBackends({
+      [A]: {
+        projects: () =>
+          listing("/srv/zeta", "/home/you/Documents/EvoScientist"),
+      },
+    });
+    const { result } = renderProjects();
+    await waitFor(() => expect(result.current.isReady()).toBe(true));
+    expect(result.current.projects).toMatchObject({
+      status: "ready",
+      projects: [
+        { key: "/home/you/Documents/EvoScientist", name: "EvoScientist" },
+        { key: "/srv/zeta", name: "zeta" },
+      ],
+    });
+    expect(result.current.launchKey).toBeNull();
+  });
+});

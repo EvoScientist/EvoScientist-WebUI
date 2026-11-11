@@ -4,6 +4,7 @@ import {
   exposureWarnings,
   moveProject,
   movedText,
+  parentFolder,
   projectsReadOnlyReason,
   readMoveSupport,
   removeProject,
@@ -304,5 +305,17 @@ describe("projectsReadOnlyReason", () => {
     expect(
       projectsReadOnlyReason({ writable: false, reason: "other_backend" })
     ).toMatch(/machine that runs it/);
+  });
+});
+
+describe("parentFolder", () => {
+  it("gives the folder that holds a path, keeping a root's separator", () => {
+    expect(parentFolder("/x")).toBe("/");
+    expect(parentFolder("/")).toBeUndefined();
+    expect(parentFolder("/home/u/proj/")).toBe("/home/u");
+    expect(parentFolder("C:/x")).toBe("C:/");
+    expect(parentFolder("C:/x/y")).toBe("C:/x");
+    expect(parentFolder("C:\\x\\y")).toBe("C:\\x");
+    expect(parentFolder("//srv/share/p")).toBe("//srv/share");
   });
 });

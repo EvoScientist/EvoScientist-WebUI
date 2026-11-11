@@ -2,7 +2,7 @@
 // backend"): busy threads, running background jobs and enabled scheduled
 // tasks, each probe with a short timeout. A probe that fails or times out
 // gives "unknown", which still lets the user quit. Then, after the window is
-// hidden, the wait for the memory workers (D4).
+// hidden, the wait for the memory workers.
 import { loopbackJson, type JsonResponse } from "./loopback";
 import { sleep } from "./proc";
 
@@ -225,7 +225,7 @@ export async function busyMemoryWorkers(req: Request): Promise<number | null> {
 export const MEMORY_WAIT_MS = 120_000;
 /** None busy for this long in a row counts as done: the observation linker
  *  starts only after a worker finished, from a watcher that polls every 1 s
- *  and then creates the linker's thread and run (D4). */
+ *  and then creates the linker's thread and run. */
 export const MEMORY_QUIET_MS = 3_000;
 export const MEMORY_POLL_MS = 500;
 
@@ -268,7 +268,7 @@ export async function waitForMemoryWorkers(
 }
 
 /** What the stop is for: quitting the app, or a stop after which the backend
- *  comes back ("Restart backend", a core update; W04's "Restart to update"
+ *  comes back ("Restart backend", a core update; "Restart to update"
  *  uses the same check). */
 export type StopPurpose = "quit" | "restart" | "update";
 

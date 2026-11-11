@@ -184,19 +184,6 @@ describe("errorScreen", () => {
     }
   });
 
-  it("names the other folder of a workspace conflict", () => {
-    const s = errorScreen(
-      err("workspace_conflict", { workspace: "D:\\other" }),
-      ctx
-    );
-    expect(s.lines[0]).toBe("It serves D:\\other.");
-    // The backend keeps running across sessions (core #691): name the stop
-    // command and what it ends.
-    expect(s.lines[1]).toMatch(/Stop the other one with EvoSci server stop/);
-    expect(s.lines[1]).toMatch(/ends running work in every project/);
-    expect(s.actions).toEqual(["retry", "open_logs"]);
-  });
-
   it("gives sign_in_required, start failures and the workspace their own actions", () => {
     expect(
       errorScreen(err("sign_in_required", { provider: "openai" }), ctx)

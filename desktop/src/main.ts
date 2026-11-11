@@ -27,7 +27,13 @@ import {
   type WebContents,
 } from "electron";
 import { autoUpdater, CancellationToken } from "electron-updater";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import {
   QUIT_FOR_INSTALL,
@@ -108,7 +114,7 @@ const manifest: Manifest = {
   uiVersion: bundledUiVersion(UI_SERVER_JS) ?? app.getVersion(),
 };
 
-/** The core version the bundled install script installs (D11). */
+/** The core version the bundled install script installs. */
 const INSTALL_VERSION = installVersion(manifest.coreRange);
 
 const folders = resolveFolders(process.env);
@@ -143,9 +149,8 @@ function readKeptMirror(): boolean | null {
   }
 }
 
-/** App updates from GitHub Releases (W04): only an installed Windows app
- *  updates itself; macOS packaging is W06. electron-updater's own lines go
- *  to desktop.log too. */
+/** App updates from GitHub Releases: only an installed Windows app updates
+ *  itself. electron-updater's own lines go to desktop.log too. */
 const appUpdate =
   app.isPackaged && process.platform === "win32"
     ? createAppUpdate({
@@ -175,9 +180,10 @@ const desktop = createApp({
 
   messageBox: (opts) =>
     win ? dialog.showMessageBox(win, opts) : dialog.showMessageBox(opts),
-  chooseFolder: async (title) => {
+  chooseFolder: async (title, defaultPath) => {
     const opts = {
       title,
+      ...(defaultPath ? { defaultPath } : {}),
       properties: ["openDirectory", "createDirectory"] as (
         | "openDirectory"
         | "createDirectory"
@@ -198,6 +204,13 @@ const desktop = createApp({
   },
 
   fileExists: existsSync,
+  isFolder: (p) => {
+    try {
+      return statSync(p, { throwIfNoEntry: false })?.isDirectory() === true;
+    } catch {
+      return false;
+    }
+  },
   ensureDir: (p) => void mkdirSync(p, { recursive: true }),
   recordEvoSci: (found) => {
     try {
@@ -478,21 +491,27 @@ function registerIpc(): void {
   ipcMain.handle("status:act", (e, id: ActionId, arg: unknown) =>
     fromStatusPage(e) ? desktop.act(id, arg) : undefined
   );
-  // D6: the preload asks synchronously, before any page script runs, and
+  // The preload asks synchronously, before any page script runs, and
   // merges the URL into the WebUI's saved config. Only the UI's own origin
   // gets it.
   ipcMain.on("desktop:backend-url", (e) => {
     e.returnValue = desktop.backendUrlFor(senderOrigin(e));
   });
-  // W03d: the bridge for the WebUI (`src/lib/desktop.ts`), also only for the
+  // The bridge for the WebUI (`src/lib/desktop.ts`), also only for the
   // UI's own origin.
   ipcMain.on("desktop:default-folder", (e) => {
     e.returnValue = desktop.defaultFolderFor(senderOrigin(e));
   });
+  ipcMain.on("desktop:project-folders", (e) => {
+    e.returnValue = desktop.projectFoldersFor(senderOrigin(e));
+  });
+  ipcMain.handle("desktop:pick-folder", (e, defaultPath: unknown) =>
+    desktop.pickFolderFor(senderOrigin(e), defaultPath)
+  );
   ipcMain.handle("desktop:restart-backend", (e) =>
     desktop.restartFor(senderOrigin(e))
   );
-  // W04: the app update, for the WebUI page and the status page.
+  // The app update, for the WebUI page and the status page.
   ipcMain.handle("desktop:update-state", (e) =>
     desktop.updateFor(senderOrigin(e), fromStatusPage(e))
   );

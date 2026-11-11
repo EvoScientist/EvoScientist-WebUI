@@ -4,7 +4,7 @@
 // dependencies so they can be tested without either. main.ts builds the
 // dependencies and wires Electron's events to the methods here.
 import type { MessageBoxOptions } from "electron";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, sep } from "node:path";
 import {
   boot,
   defaultFolder,
@@ -30,6 +30,8 @@ import type { Lookup } from "./release";
 import {
   BACKEND_LOG,
   DEFAULT_BACKEND_PORT,
+  expandWorkdir,
+  folderKey,
   runtimeDir,
   withReadyFolders,
   type Env,
@@ -87,7 +89,7 @@ export interface AppWindow {
   /** Hides every visible window of the app, the ones the UI opened too, and
    *  returns a function that shows them again. */
   hideAll(): () => void;
-  /** Sends the app update's state to the page shown (W04): the WebUI's
+  /** Sends the app update's state to the page shown: the WebUI's
    *  bridge reads `state`, the status page `offer`. */
   sendUpdate(state: UpdateState, offer: UpdateOffer | null): void;
 }
@@ -120,8 +122,9 @@ export interface AppDeps {
 
   // Electron
   messageBox(opts: MessageBoxOptions): Promise<{ response: number }>;
-  /** A native folder dialog; null when cancelled. */
-  chooseFolder(title: string): Promise<string | null>;
+  /** A native folder dialog, opened at `defaultPath` (absolute, native)
+   *  when given; null when cancelled. */
+  chooseFolder(title: string, defaultPath?: string): Promise<string | null>;
   openPath(path: string): void;
   showItemInFolder(path: string): void;
   copyText(text: string): void;
@@ -131,6 +134,8 @@ export interface AppDeps {
 
   // Files
   fileExists(path: string): boolean;
+  /** `path` is an existing folder. */
+  isFolder(path: string): boolean;
   ensureDir(path: string): void;
   recordEvoSci(found: Located): void;
   readUiRecord(): UiRecord | null;
@@ -173,7 +178,7 @@ export interface AppDeps {
     cancelled: () => boolean
   ): Promise<MemoryWaitResult>;
 
-  // Install, repair and setup (W03b)
+  // Install, repair and setup
   keptMirror(): boolean | null;
   keepMirror(cn: boolean): void;
   windowsArm64(): Promise<boolean>;
@@ -190,7 +195,7 @@ export interface AppDeps {
   writeSetupRecord(coreVersion: string | null): void;
   pause?(ms: number): Promise<void>;
 
-  // Core updates (W03c)
+  // Core updates
   /** The newest core release inside the range (Electron's `net.fetch`). */
   lookupRelease(cn: boolean): Promise<Lookup>;
   runUpdate(
@@ -205,12 +210,12 @@ export interface AppDeps {
 
   sessionEnd?: SessionEnd;
 
-  // App updates (W04): null where the app does not update itself (not
+  // App updates: null where the app does not update itself (not
   // packaged, or not on Windows).
   appUpdate?: AppUpdate | null;
   /** Resolves when the installer had its time to end the app; default 15 s. */
   installWait?(): Promise<void>;
-  /** The user cancelled a quit the installer asked for (D12): leaves the
+  /** The user cancelled a quit the installer asked for: leaves the
    *  marker the installer waits for (installer/check-app-running.nsh). */
   installQuitCancelled?(): void;
 }
@@ -223,8 +228,8 @@ export const QUIT_FOR_INSTALL_CANCELLED = "quit-for-install-cancelled";
 
 export type QuitState = "none" | "checking" | "waiting" | "stopping";
 
-/** What the bridge's `restartBackend()` answers the page (W01's
- *  `src/lib/desktop.ts`): `not_owned` for a reused backend, `cancelled` when
+/** What the bridge's `restartBackend()` answers the page
+ *  (`src/lib/desktop.ts`): `not_owned` for a reused backend, `cancelled` when
  *  the user cancelled a busy check, `busy` while a launch, a restart from the
  *  menu, a screen action or a quit runs or when a quit or the end of the
  *  session starts during the restart, else the code of the error screen the
@@ -246,9 +251,9 @@ export interface App {
   start(): void;
   launch(): Promise<void>;
   restartBackend(): Promise<void>;
-  /** The bridge's restart (W03d), for the WebUI's settings page. */
+  /** The bridge's restart, for the WebUI's settings page. */
   restartFromPage(): Promise<RestartResult>;
-  /** "Restart to update" (W04): busy checks and stops as at quit, then the
+  /** "Restart to update": busy checks and stops as at quit, then the
    *  installer of the downloaded update. `not_ready` without one (or when
    *  its file cannot be opened), `busy` while a launch, restart, install,
    *  setup, core update or quit runs or when the session ends meanwhile,
@@ -281,17 +286,33 @@ export interface App {
   readonly screen: Screen;
   /** The UI's origin while a UI server runs. */
   uiOrigin(): string | null;
-  /** The backend URL for the preload of a page from `senderOrigin` (D6). */
+  /** The backend URL for the preload of a page from `senderOrigin`. */
   backendUrlFor(senderOrigin: string | null): string | null;
   /** The bridge's `defaultFolder` for a page from `senderOrigin`: null for
    *  another origin, or when the Documents folder cannot be resolved. */
   defaultFolderFor(senderOrigin: string | null): string | null;
+  /** The bridge's `projectFolders` for a page from `senderOrigin`, in the
+   *  core's key form: the default folder and the folder of the page shown,
+   *  each null when unknown. Null for another origin. */
+  projectFoldersFor(senderOrigin: string | null): ProjectFolders | null;
+  /** The bridge's `pickFolder()`: a folder dialog opened at `defaultPath`,
+   *  else at the default folder. Null for another origin, an argument that is
+   *  not a string, a cancel, or while another dialog from the page is open. */
+  pickFolderFor(
+    senderOrigin: string | null,
+    defaultPath: unknown
+  ): Promise<string | null>;
   /** The bridge's `restartBackend()` for a page from `senderOrigin`; another
    *  origin gets `not_allowed` and restarts nothing. */
   restartFor(senderOrigin: string | null): Promise<RestartResult>;
   /** True once the app exits: close and quit events go through. */
   readonly exiting: boolean;
   readonly quitState: QuitState;
+}
+
+export interface ProjectFolders {
+  default: string | null;
+  launch: string | null;
 }
 
 const INSTALL_WAIT_MS = 15_000;
@@ -322,6 +343,10 @@ export function createApp(deps: AppDeps): App {
    *  bring the user back to it. */
   let lastUiUrl: string | null = null;
   let lastUiWorkspace: string | null = null;
+  /** `lastUiWorkspace` in the core's key form, spelled while it exists. */
+  let lastUiKey: string | null = null;
+  /** A folder dialog from the page is open. */
+  let picking = false;
   /** A launch, restart or action on the error screen is running. */
   let working = false;
   let quitState: QuitState = "none";
@@ -333,12 +358,12 @@ export function createApp(deps: AppDeps): App {
    *  quit waits for it. */
   let stoppingDeploy: Promise<"stopped" | "killed"> | null = null;
   let relaunchAfterExit = false;
-  /** The running quit was asked for by the installer (D12). */
+  /** The running quit was asked for by the installer. */
   let quitForInstall = false;
   let exiting = false;
   /** The install script, setup or `EvoSci update` while it runs: closing
-   *  asks, then stops the script or setup (D14) or waits for the update,
-   *  which is never killed (D21). */
+   *  asks, then stops the script or setup or waits for the update,
+   *  which is never killed. */
   let step: {
     kind: "install" | "setup" | "update";
     cancel(): Promise<void>;
@@ -381,6 +406,57 @@ export function createApp(deps: AppDeps): App {
     const origin = uiOrigin();
     return origin !== null && senderOrigin === origin;
   };
+
+  /** The default folder, or null when the Documents folder cannot be
+   *  resolved. */
+  function defaultFolderOrNull(): string | null {
+    try {
+      return defaultFolder(deps);
+    } catch (e) {
+      log.warn(`no default folder for the page: ${e}`);
+      return null;
+    }
+  }
+
+  /** The nearest existing folder at or above `path`: a dialog given a
+   *  missing one would offer its last part as the name to create. */
+  function existingFolder(path: string): string | undefined {
+    for (let current = path; ; current = dirname(current)) {
+      if (deps.isFolder(current)) return current;
+      if (dirname(current) === current) return undefined;
+    }
+  }
+
+  async function pickFolder(defaultPath: string | undefined) {
+    // The dialog is modal to the window, so a second request hardly ever
+    // comes; answering it as a cancel is enough.
+    if (picking) return null;
+    picking = true;
+    try {
+      // A relative path would be resolved against the app's own working
+      // folder, which the user never chose.
+      const typed =
+        defaultPath &&
+        (isAbsolute(defaultPath) ||
+          defaultPath === "~" ||
+          defaultPath.startsWith("~/") ||
+          defaultPath.startsWith(`~${sep}`))
+          ? defaultPath
+          : null;
+      const start = typed || defaultFolderOrNull();
+      // As default_workdir is read: a leading `~` and a key-form path
+      // (forward slashes on Windows) become a native one.
+      return await deps.chooseFolder(
+        "Choose a folder",
+        start ? existingFolder(expandWorkdir(start)) : undefined
+      );
+    } catch (e) {
+      log.warn(`folder dialog: ${e}`);
+      return null;
+    } finally {
+      picking = false;
+    }
+  }
 
   // --- Screens ------------------------------------------------------------------
 
@@ -461,7 +537,7 @@ export function createApp(deps: AppDeps): App {
   }
 
   /** Keeps `EvoSci update` while it runs: closing waits for its terminal
-   *  line, after cancelling it if it waits for processes (D21). */
+   *  line, after cancelling it if it waits for processes. */
   function trackUpdate(r: UpdateRun): UpdateRun {
     const current = {
       kind: "update" as const,
@@ -490,14 +566,14 @@ export function createApp(deps: AppDeps): App {
     });
   }
 
-  /** Before a core update (W03c): the busy check with its own wording, then
+  /** Before a core update: the busy check with its own wording, then
    *  a stop of the backend the app started, as Restart backend does. A
    *  backend the app reused is left alone; the update then ends with
    *  `server_running`. Callers hold `working`.
    *  Not reached today: `launchLocked` stops `deploy` before every boot, so
    *  the version check never runs with the app's own backend up. It is here
    *  for the issue's order of steps and for a later caller that updates
-   *  with the backend running (W04's "Restart to update"). */
+   *  with the backend running ("Restart to update"). */
   async function stopOwnBackend(): Promise<boolean> {
     if (!ready || !session || !ready.owned) return true;
     if (!(await confirmStop("update"))) return false;
@@ -824,6 +900,7 @@ export function createApp(deps: AppDeps): App {
       showingUi = true;
       lastUiUrl = page.href;
       lastUiWorkspace = r.workspace;
+      lastUiKey = folderKey(r.workspace);
       try {
         await win.loadUrl(page.href);
       } catch (e) {
@@ -913,7 +990,7 @@ export function createApp(deps: AppDeps): App {
     return r.response === 0;
   }
 
-  /** The question before closing while `EvoSci update` runs (D21): it is
+  /** The question before closing while `EvoSci update` runs: it is
    *  never killed, so the app quits after its terminal line; while it waits
    *  for processes, closing cancels it. True to quit. */
   async function confirmStopUpdate(
@@ -975,7 +1052,7 @@ export function createApp(deps: AppDeps): App {
 
   let pageRun: Promise<RestartResult> | null = null;
 
-  /** The bridge's restart (W03d): the menu's steps, while the page stays
+  /** The bridge's restart: the menu's steps, while the page stays
    *  shown when it still fits (`showUiLocked`); resolves once the new backend
    *  is ready, or with the reason it did not restart. A call while one runs
    *  waits for that one. */
@@ -1089,7 +1166,7 @@ export function createApp(deps: AppDeps): App {
     }
   }
 
-  /** "Restart to update" (D5): the quit's busy check, then the status page's
+  /** "Restart to update": the quit's busy check, then the status page's
    *  "Getting ready to update..." during the memory wait, a second check for
    *  work that started meanwhile (a scheduled task; Cancel brings the app
    *  back with its backend), the stops, and only then the installer, which
@@ -1248,7 +1325,7 @@ export function createApp(deps: AppDeps): App {
     );
   }
 
-  /** The end of the system session (D5): no confirmation, no memory wait. On
+  /** The end of the system session: no confirmation, no memory wait. On
    *  Windows the process ends right after `session-end` returns, so this only
    *  writes one log line (synchronously) and closes both stdin pipes; the
    *  backend's job object does the rest if `deploy` dies first. At a real
@@ -1270,9 +1347,9 @@ export function createApp(deps: AppDeps): App {
     quitState = "checking";
     heldError = null;
     try {
-      // The install script or setup runs (D14): ask, then stop its tree. The
+      // The install script or setup runs: ask, then stop its tree. The
       // next launch runs that step again. An update is asked about on its
-      // own and waited for (D21).
+      // own and waited for.
       if (
         step &&
         !sessionEnd.ending &&
@@ -1287,7 +1364,7 @@ export function createApp(deps: AppDeps): App {
         resumeAfterCancelledQuit();
         return;
       }
-      // The window stays on the update's rows until it ends (D21).
+      // The window stays on the update's rows until it ends.
       const waitForUpdate = step?.kind === "update" && !sessionEnd.ending;
       if (waitForUpdate) {
         quitAfterUpdate = true;
@@ -1300,7 +1377,7 @@ export function createApp(deps: AppDeps): App {
         resumeAfterCancelledQuit();
         return;
       }
-      // Hidden, never destroyed: a destroyed window gets no `session-end` (D5).
+      // Hidden, never destroyed: a destroyed window gets no `session-end`.
       // Windows opened from the UI hide too.
       const showAgain = win && !waitForUpdate ? win.hideAll() : () => {};
       if (owned && ready && !sessionEnd.ending) {
@@ -1515,14 +1592,24 @@ export function createApp(deps: AppDeps): App {
     uiOrigin,
     backendUrlFor: (senderOrigin) =>
       fromUi(senderOrigin) && ready ? ready.url : null,
-    defaultFolderFor: (senderOrigin) => {
+    defaultFolderFor: (senderOrigin) =>
+      fromUi(senderOrigin) ? defaultFolderOrNull() : null,
+    projectFoldersFor: (senderOrigin) => {
       if (!fromUi(senderOrigin)) return null;
-      try {
-        return defaultFolder(deps);
-      } catch (e) {
-        log.warn(`no default folder for the page: ${e}`);
+      const folder = defaultFolderOrNull();
+      return {
+        default: folder ? folderKey(folder) : null,
+        launch: lastUiKey,
+      };
+    },
+    pickFolderFor: async (senderOrigin, defaultPath) => {
+      if (!fromUi(senderOrigin)) {
+        log.warn(`folder dialog refused for the origin ${senderOrigin}`);
         return null;
       }
+      if (defaultPath !== undefined && typeof defaultPath !== "string")
+        return null;
+      return pickFolder(defaultPath);
     },
     updateChanged: (state) => {
       log.info(`app update: ${JSON.stringify(state)}`);

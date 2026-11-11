@@ -1,4 +1,4 @@
-// One `EvoSci deploy --json` process (C13): started without `--workdir` in the
+// One `EvoSci deploy --json` process: started without `--workdir` in the
 // workspace folder, read until it prints `ready` or `error`, watched for
 // `backend_exited` or its own exit afterwards, and stopped the documented way:
 // close its stdin, wait for it to exit (its `stopped` line is only logged when
@@ -7,7 +7,7 @@ import { parseDeployEvent, type DeployError, type DeployReady } from "./lines";
 import { killTree, run, withTimeout, type Logger, type Running } from "./proc";
 
 /** How long `deploy` gets after its stdin closes before its tree is ended.
- *  Its own stop takes up to about 14.5 s (D7, accepted on the issue). */
+ *  Its own stop takes up to about 14.5 s. */
 export const DEPLOY_STOP_MS = 20_000;
 
 export type DeployOutcome =
@@ -21,7 +21,7 @@ export interface DeploySession {
   onLost(cb: (error: DeployError) => void): void;
   /** Close stdin, wait up to DEPLOY_STOP_MS for the exit, then end the tree. */
   stop(): Promise<"stopped" | "killed">;
-  /** The end of the session, synchronous: close stdin and return (D5). */
+  /** The end of the session, synchronous: close stdin and return. */
   closeStdinNow(): void;
   pid: number | undefined;
 }

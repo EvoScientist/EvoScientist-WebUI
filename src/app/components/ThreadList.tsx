@@ -179,7 +179,7 @@ export function ThreadList({
     () => new Set()
   );
 
-  const { projects, current, arrivedMoves } = useProjects();
+  const { projects, current, arrivedMoves, launchKey } = useProjects();
   const { openAddProject, openRemoveProject, openMoveProject, moving } =
     useProjectDialogs();
   const projectList = useMemo(
@@ -1041,7 +1041,11 @@ export function ThreadList({
                     }
                   : undefined
               }
-              onRemove={() => openRemoveProject(project)}
+              onRemove={
+                project.key === launchKey
+                  ? undefined
+                  : () => openRemoveProject(project)
+              }
               onMove={
                 openMoveProject && project.missing && !moving?.has(project.key)
                   ? () => openMoveProject(project)
@@ -1315,7 +1319,7 @@ function ProjectSection({
             />
           </button>
         )}
-        {onRemove && (
+        {(onRemove || onMove) && (
           <DropdownMenu modal={false}>
             <DropdownMenuTrigger asChild>
               <button
@@ -1339,13 +1343,15 @@ function ProjectSection({
                   Moved? Choose its new folder…
                 </DropdownMenuItem>
               )}
-              <DropdownMenuItem
-                className="min-h-11 md:min-h-0"
-                onSelect={onRemove}
-              >
-                <FolderMinus aria-hidden="true" />
-                Remove project
-              </DropdownMenuItem>
+              {onRemove && (
+                <DropdownMenuItem
+                  className="min-h-11 md:min-h-0"
+                  onSelect={onRemove}
+                >
+                  <FolderMinus aria-hidden="true" />
+                  Remove project
+                </DropdownMenuItem>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
         )}

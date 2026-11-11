@@ -626,6 +626,74 @@ describe("ThreadList by project", () => {
     );
   });
 
+  describe("the app's launch folder", () => {
+    const dialogs = () => ({
+      openAddProject: vi.fn(),
+      openRemoveProject: vi.fn(),
+      openMoveProject: vi.fn(),
+    });
+    const renderWith = (
+      value: ProjectsContextValue,
+      d: ReturnType<typeof dialogs>
+    ) =>
+      render(
+        <TestProjectsProvider value={value}>
+          <ProjectDialogsContext.Provider value={d}>
+            <ThreadList onThreadSelect={vi.fn()} />
+          </ProjectDialogsContext.Provider>
+        </TestProjectsProvider>
+      );
+
+    it("offers no removal of the launch folder, and keeps it for the others", async () => {
+      renderWith(
+        mockProjects(readyProjects(TEST_PROJECT, OTHER), {
+          current: TEST_PROJECT,
+          launchKey: TEST_PROJECT,
+        }),
+        dialogs()
+      );
+      // In place and not removable: no actions at all.
+      expect(
+        screen.queryByRole("button", { name: "Actions for project projA" })
+      ).toBeNull();
+      fireEvent.keyDown(
+        screen.getByRole("button", { name: "Actions for project projB" }),
+        { key: "Enter" }
+      );
+      expect(
+        await screen.findByRole("menuitem", { name: "Remove project" })
+      ).toBeTruthy();
+    });
+
+    it("still offers to choose its new folder when it is missing", async () => {
+      const d = dialogs();
+      renderWith(
+        mockProjects(
+          readyProjects(TEST_PROJECT, {
+            key: OTHER,
+            name: "projB",
+            missing: true,
+          }),
+          { current: TEST_PROJECT, launchKey: OTHER }
+        ),
+        d
+      );
+      fireEvent.keyDown(
+        screen.getByRole("button", { name: "Actions for project projB" }),
+        { key: "Enter" }
+      );
+      fireEvent.click(
+        await screen.findByRole("menuitem", { name: /new folder/ })
+      );
+      expect(d.openMoveProject).toHaveBeenCalledWith(
+        expect.objectContaining({ key: OTHER })
+      );
+      expect(
+        screen.queryByRole("menuitem", { name: "Remove project" })
+      ).toBeNull();
+    });
+  });
+
   describe("a project whose folder is missing", () => {
     const withMissing = () =>
       mockProjects(

@@ -90,7 +90,7 @@ export type Screen =
 const MIRROR_RETRY_LINE =
   "Retry with mainland China mirrors keeps using them while the app runs, and setup saves them for later launches; the settings page can change it.";
 
-/** The first-launch question, before the install script runs (D15). */
+/** The first-launch question, before the install script runs. */
 export function mirrorQuestion(): QuestionScreen {
   return {
     kind: "question",
@@ -125,7 +125,7 @@ export function installScreen(state: {
   };
 }
 
-/** The offer for a core older than the app's range (W03c). */
+/** The offer for a core older than the app's range. */
 export function updateQuestion(from: string, range: string): QuestionScreen {
   return {
     kind: "question",
@@ -156,7 +156,7 @@ export function separateInstallQuestion(
 
 /** `EvoSci update` runs: its own row above the new version's setup stages;
  *  while it waits, the processes it waits for and Cancel. While the app
- *  waits for it to quit, it says so (D21). */
+ *  waits for it to quit, it says so. */
 export function updateScreen(view: UpdateView, quitting = false): SetupScreen {
   const row: Stage = {
     id: "update",
@@ -513,18 +513,6 @@ export function errorScreen(error: BootError, ctx: ScreenContext): ErrorScreen {
         port: DEFAULT_BACKEND_PORT,
       };
       break;
-    case "workspace_conflict": {
-      const other = str(d.run_dir) ?? str(d.workspace);
-      screen = {
-        title: "A backend for another folder is running",
-        lines: [
-          other ? `It serves ${other}.` : error.message,
-          "The app never starts a second backend. Stop the other one with EvoSci server stop in a terminal, then press Retry. Stopping it ends running work in every project that uses that backend.",
-        ],
-        actions: ["retry", "open_logs"],
-      };
-      break;
-    }
     case "sign_in_required":
       screen = {
         title: `Sign in${str(d.provider) ? ` to ${d.provider}` : ""}`,
@@ -583,7 +571,7 @@ export function errorScreen(error: BootError, ctx: ScreenContext): ErrorScreen {
   };
 }
 
-/** The status page's line for an app update (W04), with its button. The
+/** The status page's line for an app update, with its button. The
  *  WebUI page shows the same texts (src/app/components/DesktopUpdateNotice.tsx). */
 export interface UpdateOffer {
   text: string;

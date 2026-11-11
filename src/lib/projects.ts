@@ -24,6 +24,58 @@ export function compareProjects(a: Project, b: Project): number {
   return a.name.localeCompare(b.name) || a.key.localeCompare(b.key);
 }
 
+/** Whether `path` looks like a Windows one: a drive letter or a backslash. */
+function windowsPath(path: string): boolean {
+  return /^[a-z]:/i.test(path) || path.includes("\\");
+}
+
+/** Whether two folder paths name the same folder: ignoring the kind of
+ *  separator and a trailing one, and on Windows paths also case (the drive
+ *  letter included). Neither is resolved. */
+export function samePath(a: string, b: string): boolean {
+  const path = (p: string) => p.replace(/[\\/]+/g, "/").replace(/\/$/, "");
+  return windowsPath(a) || windowsPath(b)
+    ? path(a).toLowerCase() === path(b).toLowerCase()
+    : path(a) === path(b);
+}
+
+/** The name the default folder's project shows. */
+const DEFAULT_PROJECT_NAME = "Default workspace";
+
+/**
+ * The app's folders among `projects` (both in the core's key form): the
+ * project at `folders.default` shows as "Default workspace", re-sorted by
+ * that name; `launchKey` is the key of the project at `folders.launch`.
+ * A folder matches its project exactly, else ignoring case: on macOS the app
+ * spells a folder as it is on disk, while the core keeps the case it was
+ * given; on Linux `Proj` and `proj` can be two projects.
+ */
+export function withAppFolders(
+  projects: readonly Project[],
+  folders: { default?: string; launch?: string }
+): { projects: Project[]; launchKey: string | null } {
+  const at = (folder: string | undefined) =>
+    folder
+      ? projects.find((project) => samePath(project.key, folder)) ??
+        projects.find((project) =>
+          samePath(project.key.toLowerCase(), folder.toLowerCase())
+        )
+      : null;
+  const byDefault = at(folders.default);
+  return {
+    projects: byDefault
+      ? projects
+          .map((project) =>
+            project === byDefault
+              ? { ...project, name: DEFAULT_PROJECT_NAME }
+              : project
+          )
+          .sort(compareProjects)
+      : [...projects],
+    launchKey: at(folders.launch)?.key ?? null,
+  };
+}
+
 /** The projects in a `GET /api/workspaces` body, sorted; entries without a
  *  folder are dropped. */
 export function parseProjects(body: unknown): Project[] {
