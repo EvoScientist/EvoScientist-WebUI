@@ -1,5 +1,5 @@
-// The JSON lines of `EvoSci --version --json` (C08), `deploy --json` (C13),
-// `setup --json` (C04) and `update --json` (C11). Each command prints one
+// The JSON lines of `EvoSci --version --json`, `deploy --json`,
+// `setup --json` and `update --json`. Each command prints one
 // JSON object per line on stdout; later core versions may add fields and
 // events, never rename or remove them, so unknown fields are kept and unknown
 // events are passed through rather than refused.

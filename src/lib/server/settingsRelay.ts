@@ -20,7 +20,7 @@ import type { RelayRefusal } from "@/lib/settings";
 import { globalDataDir } from "@/lib/server/paths";
 import { hostHeaderName, isCrossOrigin } from "@/lib/server/workspace";
 
-/** The header the backend reads the local secret from (C12). */
+/** The header the backend reads the local secret from. */
 export const LOCAL_SECRET_HEADER = "X-EvoScientist-Local-Secret";
 
 /** How long a forwarded request may take. A save checks every changed API key
@@ -101,7 +101,7 @@ export interface LocalBackend {
   port: number;
   /** Its base URL, on loopback. */
   url: string;
-  /** The local secret file (C12): this server's own,
+  /** The local secret file: this server's own,
    *  `globalDataDir()/server/local-secret`. */
   secretPath: string;
 }

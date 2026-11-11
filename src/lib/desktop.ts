@@ -12,7 +12,7 @@ export type RestartResult =
    *  is a failure. */
   | { ok: false; code: string };
 
-/** The app update the desktop app offers (W04). `failed`: the last download
+/** The app update the desktop app offers. `failed`: the last download
  *  did not finish. */
 export type AppUpdateState =
   | { kind: "none" }
@@ -59,7 +59,7 @@ export interface DesktopBridge {
    *  while another dialog is open, or when the app fails or answers another
    *  shape. */
   pickFolder?: (defaultPath?: string) => Promise<string | null>;
-  /** App updates (W04); missing in an app that does not update itself. */
+  /** App updates; missing in an app that does not update itself. */
   appUpdate?: DesktopAppUpdate;
 }
 

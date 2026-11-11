@@ -120,7 +120,7 @@ export function withTimeout<T>(
  * started with `windowsHide`. Elsewhere the process gets SIGTERM, then SIGKILL
  * after a grace period; with `group` (a child started with `group: true`) the
  * signals go to its whole process group, else only to the process (the
- * backend's tree comes with macOS and Linux packaging in W06).
+ * backend's tree is not covered on macOS and Linux yet).
  */
 export async function killTree(
   pid: number,

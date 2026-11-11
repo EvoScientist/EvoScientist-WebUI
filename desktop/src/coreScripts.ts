@@ -1,4 +1,4 @@
-// The core's install scripts that the app bundles (C10): `install.ps1` and
+// The core's install scripts that the app bundles: `install.ps1` and
 // `install.sh` from the core's tag `v<installVersion(coreRange)>`, the tag
 // whose constraints.txt the script installs. The desktop build downloads them
 // (scripts/fetch-core-scripts.mjs) and fails if either is missing; the

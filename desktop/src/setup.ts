@@ -1,4 +1,4 @@
-// `EvoSci setup --json --skip webui` (C04, How > Setup): the stage list from
+// `EvoSci setup --json --skip webui`: the stage list from
 // `--manifest`, each stage's progress and result from its JSON lines, and the
 // record of the core version that was last set up. The app bundles its own
 // UI, so the `webui` stage is skipped. A failed stage does not stop the later
@@ -85,7 +85,7 @@ export const failedStages = (stages: Stage[]) =>
 export interface SetupRun {
   /** Ends with the exit and both output streams closed. */
   done: Promise<{ exit: ExitInfo; stages: Stage[] }>;
-  /** Stops setup and what it started (closing the app, D14). */
+  /** Stops setup and what it started (closing the app). */
   cancel(): Promise<void>;
 }
 

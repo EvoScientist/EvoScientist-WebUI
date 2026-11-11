@@ -103,7 +103,7 @@ export interface UiServer {
   whenAnswering(timeoutMs: number): Promise<void>;
   /** Closes stdin, then ends the tree after 5 s. */
   stop(): Promise<void>;
-  /** The end of the session, synchronous: close stdin and return (D5). */
+  /** The end of the session, synchronous: close stdin and return. */
   closeStdinNow(): void;
   pid: number | undefined;
 }

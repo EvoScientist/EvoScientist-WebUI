@@ -27,7 +27,7 @@ async function fetchSettings([, base, apiKey]: SettingsKey): Promise<
     headers,
     cache: "no-store",
   });
-  // Deployments without the route (EvoScientist before C14).
+  // Deployments without the route (an older EvoScientist).
   if (res.status === 404 || res.status === 405) return "unsupported";
   if (!res.ok) throw new Error(`GET /api/settings answered ${res.status}`);
   const body: unknown = await res.json();

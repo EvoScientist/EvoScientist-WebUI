@@ -1,9 +1,9 @@
-// Installing or repairing the core with the install script the app bundles
-// (C10, How > Install script): the command per platform, the checks that come
-// before it (Windows on arm64, an update that is still finishing), the copy of
-// `config.yaml` before a repair, and the run itself, whose output has no event
-// protocol: its lines are shown and logged as they come, and a failure shows
-// the output from the last `Error:` line on.
+// Installing or repairing the core with the install script the app bundles: the
+// command per platform, the checks that come before it (Windows on arm64, an
+// update that is still finishing), the copy of `config.yaml` before a repair,
+// and the run itself, whose output has no event protocol: its lines are shown
+// and logged as they come, and a failure shows the output from the last
+// `Error:` line on.
 import {
   constants,
   copyFileSync,
@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { killTree, run, type ExitInfo, type Logger } from "./proc";
 import type { Collected } from "./proc";
 
-/** The error codes of this step (How > Deploy errors, [b]). */
+/** The error codes of this step. */
 export type InstallErrorCode =
   | "install_failed"
   | "unsupported_platform"
@@ -32,13 +32,13 @@ export const powershellPath = (env: NodeJS.ProcessEnv) =>
   );
 
 /**
- * The script-block form (D10, measured before W03b): a script block is not
- * refused by the `Restricted` or `AllSigned` execution policy, as a `-File`
- * would be. The console PowerShell gets under `windowsHide` runs at code page
- * 437 even where the OEM code page is another, so its own lines (the `Error:`
- * line with a path in it) would lose every non-ASCII letter: the output
- * encoding is UTF-8 first. In this form the script reports a failure only
- * through `$LASTEXITCODE`, set to 1 first for failures before its own `try`.
+ * The script-block form: a script block is not refused by the `Restricted` or
+ * `AllSigned` execution policy, as a `-File` would be. The console PowerShell
+ * gets under `windowsHide` runs at code page 437 even where the OEM code page
+ * is another, so its own lines (the `Error:` line with a path in it) would lose
+ * every non-ASCII letter: the output encoding is UTF-8 first. In this form the
+ * script reports a failure only through `$LASTEXITCODE`, set to 1 first for
+ * failures before its own `try`.
  */
 export const POWERSHELL_COMMAND =
   "try { [Console]::OutputEncoding = New-Object Text.UTF8Encoding $false } catch { }; " +
@@ -138,7 +138,7 @@ export const updateLockPath = (dataDir: string) =>
  * Whether an update still holds its lock. On Windows the update helper keeps
  * the file open without sharing, so opening it fails with EBUSY (a sharing
  * violation) while it runs; the file stays after the update, so only that
- * state counts. macOS and Linux use `flock`, which Node cannot test (W06).
+ * state counts. macOS and Linux use `flock`, which Node cannot test.
  */
 export function updateLockHeld(
   dataDir: string,
@@ -205,7 +205,7 @@ export const refusedAsRunning = (output: string[]) =>
 export interface InstallRun {
   /** Ends with the exit and both output streams closed. */
   done: Promise<{ exit: ExitInfo; lines: string[] }>;
-  /** Stops the script and what it started (closing the app, D14). */
+  /** Stops the script and what it started (closing the app). */
   cancel(): Promise<void>;
 }
 
