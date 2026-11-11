@@ -38,6 +38,11 @@ vi.mock("@/app/hooks/useMemoryActivity", () => ({
   useMemoryActivity: () => ({ unseenCount: 0, markSeen: vi.fn() }),
 }));
 
+// The rail's drafts count (ThreadListNav.test.tsx covers it).
+vi.mock("@/app/hooks/useAutoSkills", () => ({
+  useAutoSkills: () => ({ status: "loading", refresh: vi.fn() }),
+}));
+
 const threadFixtures: ThreadItem[] = [
   {
     id: "t-1",

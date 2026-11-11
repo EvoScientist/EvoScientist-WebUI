@@ -17,6 +17,7 @@ import { ClientProvider, useDeployment } from "@/providers/ClientProvider";
 import { ProjectsProvider, useProjects } from "@/providers/ProjectsProvider";
 import { findProject } from "@/lib/projects";
 import { ProjectDialogsProvider } from "@/providers/ProjectDialogsProvider";
+import { RunNowProvider } from "@/providers/RunNowProvider";
 import { SetupNotice } from "@/app/components/SetupNotice";
 import { SetupView } from "@/app/components/SetupView";
 import { useSetupGate } from "@/app/hooks/useSetupGate";
@@ -720,10 +721,14 @@ function HomePageContent() {
         deploymentUrl={config.deploymentUrl}
         apiKey={langsmithApiKey}
       >
-        <HomePageInner
-          config={config}
-          handleSaveConfig={handleSaveConfig}
-        />
+        {/* Above the views: AutoSkills' Run now goes on, and is reported,
+            after the drafts page is left. */}
+        <RunNowProvider>
+          <HomePageInner
+            config={config}
+            handleSaveConfig={handleSaveConfig}
+          />
+        </RunNowProvider>
       </ProjectsProvider>
     </ClientProvider>
   );

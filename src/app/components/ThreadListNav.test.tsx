@@ -5,7 +5,7 @@
 // active one goes back to the conversation.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 
 const nav = vi.hoisted(() => ({
   view: null as string | null,
@@ -13,6 +13,13 @@ const nav = vi.hoisted(() => ({
   // What useSettings() reports: undefined before an answer and against an
   // EvoScientist without /api/settings.
   settings: undefined as object | undefined,
+  // The drafts the deployment answered (useAutoSkills).
+  auto: { status: "loading" } as Record<string, unknown>,
+  memoryUnseen: 0,
+}));
+
+vi.mock("@/app/hooks/useAutoSkills", () => ({
+  useAutoSkills: () => ({ ...nav.auto, refresh: vi.fn() }),
 }));
 
 vi.mock("@/app/hooks/useSettings", () => ({
@@ -34,7 +41,10 @@ vi.mock("sonner", () => ({
 }));
 
 vi.mock("@/app/hooks/useMemoryActivity", () => ({
-  useMemoryActivity: () => ({ unseenCount: 0, markSeen: vi.fn() }),
+  useMemoryActivity: () => ({
+    unseenCount: nav.memoryUnseen,
+    markSeen: vi.fn(),
+  }),
 }));
 
 vi.mock("@/app/hooks/useThreads", () => ({
@@ -53,11 +63,18 @@ vi.mock("@/app/hooks/useThreads", () => ({
 }));
 
 import { ThreadList } from "./ThreadList";
-import { TestProjectsProvider } from "@/test/mockProjects";
+import {
+  TEST_PROJECT,
+  TestProjectsProvider,
+  mockProjects,
+  readyProjects,
+} from "@/test/mockProjects";
 
 beforeEach(() => {
   nav.view = null;
   nav.settings = undefined;
+  nav.auto = { status: "loading" };
+  nav.memoryUnseen = 0;
   nav.setView.mockClear();
 });
 
@@ -102,5 +119,107 @@ describe("left rail without Setup", () => {
     );
     expect(screen.getByRole("button", { name: /^experts$/i })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /^setup$/i })).toBeNull();
+  });
+});
+
+// Drafts wait in every registered project; the rail counts all of them.
+describe("left rail Research Skills count", () => {
+  const B = "/work/EvoSci_test";
+  const C = "/work/project_B";
+  // The current project is TEST_PROJECT, which has no drafts waiting.
+  const rail = () => (
+    <TestProjectsProvider
+      value={mockProjects(readyProjects(TEST_PROJECT, B, C), {
+        current: TEST_PROJECT,
+      })}
+    >
+      <ThreadList
+        onThreadSelect={vi.fn()}
+        onMutateReady={vi.fn()}
+        onInterruptCountChange={vi.fn()}
+      />
+    </TestProjectsProvider>
+  );
+  const renderRail = () => render(rail());
+  const skillsEntry = () =>
+    screen.getByRole("button", { name: /^research skills/i });
+  const counts = (pending: number) => ({ pending, approved: 0, rejected: 0 });
+  const ready = (pending: number, byProject: Record<string, number> = {}) => {
+    nav.auto = {
+      status: "ready",
+      list: {
+        drafts: [],
+        counts: { pending, approved: 4, rejected: 1 },
+        byProject: Object.fromEntries(
+          Object.entries(byProject).map(([key, n]) => [key, counts(n)])
+        ),
+      },
+    };
+  };
+
+  it("the Research Skills entry counts pending drafts across projects", () => {
+    ready(9, { [TEST_PROJECT]: 0, [B]: 7, [C]: 2 });
+    nav.memoryUnseen = 3;
+    renderRail();
+
+    const badge = within(skillsEntry()).getByText("9");
+    expect(badge.getAttribute("title")).toBe(
+      "9 drafted skills wait for review"
+    );
+    expect(badge.getAttribute("aria-label")).toBe("9 drafted skills to review");
+    // The EvoMemory entry's badge, drawn the same way.
+    const memoryBadge = screen.getByLabelText("3 memory updates");
+    expect(badge.className).toBe(memoryBadge.className);
+  });
+
+  it("keeps the count on every view, the skills view too", () => {
+    ready(1);
+    nav.view = "skills";
+    renderRail();
+
+    const badge = within(skillsEntry()).getByText("1");
+    expect(badge.getAttribute("title")).toBe(
+      "1 drafted skill waits for review"
+    );
+    expect(badge.getAttribute("aria-label")).toBe("1 drafted skill to review");
+    // The entry still goes back to the conversation from its own view.
+    fireEvent.click(skillsEntry());
+    expect(nav.setView).toHaveBeenCalledWith(null);
+  });
+
+  it("no count on an old core", () => {
+    nav.auto = { status: "unsupported" };
+    const view = renderRail();
+    expect(skillsEntry().textContent).toBe("Research Skills");
+
+    // Nor while the drafts load, after a failed read, or with none waiting.
+    for (const auto of [
+      { status: "loading" },
+      { status: "error", error: new Error("HTTP 500") },
+    ]) {
+      nav.auto = auto;
+      view.rerender(rail());
+      expect(skillsEntry().textContent).toBe("Research Skills");
+    }
+    ready(0);
+    view.rerender(rail());
+    expect(skillsEntry().textContent).toBe("Research Skills");
+    expect(screen.queryByLabelText(/drafted skills? to review/)).toBeNull();
+  });
+
+  // A failed re-read comes with the last list read before it, for the
+  // drafts page to keep on screen. A count is a claim about now: the rail
+  // shows none from that list, as after a failed read without one.
+  it("no count from the list a failed re-read left behind", () => {
+    ready(9, { [TEST_PROJECT]: 0, [B]: 7, [C]: 2 });
+    const before = nav.auto.list;
+    const view = renderRail();
+    expect(within(skillsEntry()).getByText("9")).toBeTruthy();
+
+    nav.auto = { status: "error", error: new Error("HTTP 500"), list: before };
+    view.rerender(rail());
+    expect(skillsEntry().textContent).toBe("Research Skills");
+    expect(screen.queryByLabelText(/drafted skills? to review/)).toBeNull();
+    expect(screen.queryByTitle(/drafted skills? waits? for review/)).toBeNull();
   });
 });

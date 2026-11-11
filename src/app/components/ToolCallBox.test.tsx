@@ -529,3 +529,31 @@ describe("ToolCallBox file edits", () => {
     expect(screen.queryByRole("list", { name: "Changes" })).toBeNull();
   });
 });
+
+describe("ToolCallBox opened diff rows", () => {
+  it("keeps an opened fold across collapse and re-expand", () => {
+    const content = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`).join(
+      "\n"
+    );
+    render(
+      <ToolCallBox
+        toolCall={{
+          id: "tc-keep",
+          name: "write_file",
+          args: { file_path: "/ws/notes.md", content },
+          status: "completed",
+          result: "Updated file /ws/notes.md",
+        }}
+      />
+    );
+    const toggle = () => screen.getAllByRole("button")[0];
+    fireEvent.click(toggle());
+    fireEvent.click(screen.getByRole("button", { name: "Show 9 more lines" }));
+    expect(screen.getByText("line 7")).toBeTruthy();
+
+    fireEvent.click(toggle());
+    expect(screen.queryByText("line 7")).toBeNull();
+    fireEvent.click(toggle());
+    expect(screen.getByText("line 7")).toBeTruthy();
+  });
+});

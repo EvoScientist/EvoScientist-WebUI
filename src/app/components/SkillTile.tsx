@@ -27,6 +27,7 @@ export function SkillTile({
   onUpdate,
   onUninstall,
   actions,
+  tag,
   icon: Icon = Puzzle,
 }: {
   title: string;
@@ -44,6 +45,8 @@ export function SkillTile({
   /** Rendered next to the install controls — e.g. the "Expert" marker, or
    *  the Active state in the Experts view. */
   actions?: ReactNode;
+  /** A short label after the title, e.g. "from memory". */
+  tag?: string;
   /** Leading glyph. Defaults to the skill icon; the Experts view passes its
    *  own so the two galleries read apart at a glance. */
   icon?: LucideIcon;
@@ -51,39 +54,55 @@ export function SkillTile({
   const versionLabel = installed
     ? installedVersion && `v${installedVersion}`
     : latestVersion && `v${latestVersion}`;
+  const heading = (
+    <>
+      <Icon
+        className="mt-0.5 size-5 shrink-0 text-[var(--brand)]"
+        aria-hidden="true"
+      />
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+          <h3 className="break-words text-lg font-medium leading-tight">
+            {title}
+          </h3>
+          {tag && (
+            <span className="shrink-0 rounded-full border border-solid border-[var(--brand)] bg-[var(--brand-soft)] px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-[var(--brand)]">
+              {tag}
+            </span>
+          )}
+          {versionLabel && (
+            <span className="shrink-0 font-mono text-xs text-muted-foreground">
+              {versionLabel}
+            </span>
+          )}
+          {meta && (
+            <span className="shrink-0 text-xs text-muted-foreground">
+              · {meta}
+            </span>
+          )}
+        </div>
+        <p className="mt-1 line-clamp-2 text-sm leading-6 text-muted-foreground">
+          {description || "No description."}
+        </p>
+      </div>
+    </>
+  );
   return (
     <div className="flex flex-col rounded-lg border border-border bg-card p-3">
-      <button
-        type="button"
-        onClick={onOpen}
-        className="-m-1 flex items-start gap-2.5 rounded-md p-1 text-left transition-colors hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring"
-        title="View details"
-      >
-        <Icon
-          className="mt-0.5 size-5 shrink-0 text-[var(--brand)]"
-          aria-hidden="true"
-        />
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-            <h3 className="break-words text-lg font-medium leading-tight">
-              {title}
-            </h3>
-            {versionLabel && (
-              <span className="shrink-0 font-mono text-xs text-muted-foreground">
-                {versionLabel}
-              </span>
-            )}
-            {meta && (
-              <span className="shrink-0 text-xs text-muted-foreground">
-                · {meta}
-              </span>
-            )}
-          </div>
-          <p className="mt-1 line-clamp-2 text-sm leading-6 text-muted-foreground">
-            {description || "No description."}
-          </p>
-        </div>
-      </button>
+      {/* Without details to open (a project's own skill) the heading isn't
+          a control: a "View details" that does nothing would mislead. */}
+      {onOpen ? (
+        <button
+          type="button"
+          onClick={onOpen}
+          className="-m-1 flex items-start gap-2.5 rounded-md p-1 text-left transition-colors hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring"
+          title="View details"
+        >
+          {heading}
+        </button>
+      ) : (
+        <div className="-m-1 flex items-start gap-2.5 p-1">{heading}</div>
+      )}
       <div className="mt-2.5 flex flex-wrap items-center justify-end gap-2">
         {actions}
         {installed && updateAvailable && (

@@ -1,0 +1,806 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  AUTOSKILLS_FIELDS,
+  autoSkillsReadOnlyReason,
+  bannerSummary,
+  fromMemorySkills,
+  groupDrafts,
+  installedLabel,
+  isProjectCopy,
+  isRevertible,
+  labelFor,
+  MAX_SHOWN_BYTES,
+  parseDraftList,
+  projectLabels,
+  secondOf,
+  statusLine,
+  unshowableFiles,
+  updatesOwnCopy,
+  type Draft,
+  type DraftFile,
+  type DraftList,
+  type FileReadOutcome,
+} from "./autoskills";
+import type { Project } from "./projects";
+import type { SettingsWriteAccess } from "./settings";
+
+function project(key: string, name?: string): Project {
+  return {
+    key,
+    name: name ?? key.split("/").pop() ?? key,
+    missing: false,
+  };
+}
+
+function draft(over: Partial<Draft> = {}): Draft {
+  return {
+    proposal_id: "p1",
+    skill_name: "alpha",
+    description: "",
+    operation: "create",
+    target_skill_name: null,
+    scope: "workspace",
+    submitted_scope: null,
+    status: "pending",
+    workspace_dir: "/work/A",
+    created_at: "2026-11-01T10:00:00Z",
+    updated_at: "2026-11-01T10:00:00Z",
+    approved_at: null,
+    approved_by: null,
+    rejected_at: null,
+    approved_skill_path: null,
+    approved_skill_present: null,
+    source_observation_ids: [],
+    skill_md: "",
+    skill_md_truncated: false,
+    rationale_md: "",
+    rationale_md_truncated: false,
+    files: [],
+    install_target: null,
+    install_base: null,
+    install_error: null,
+    ...over,
+  };
+}
+
+function list(drafts: Draft[], byProject: DraftList["byProject"] = {}) {
+  const counts = { pending: 0, approved: 0, rejected: 0 };
+  for (const d of drafts) counts[d.status] += 1;
+  return { drafts, counts, byProject } satisfies DraftList;
+}
+
+describe("parseDraftList", () => {
+  it("keeps well-formed drafts and drops the rest", () => {
+    const parsed = parseDraftList({
+      proposals: [
+        {
+          proposal_id: "a",
+          skill_name: "s",
+          workspace_dir: "/w",
+          status: "approved",
+          operation: "create",
+          scope: "workspace",
+          files: [{ path: "SKILL.md", size: 3, installed: true }, { size: 1 }],
+        },
+        {
+          proposal_id: "bad-op",
+          skill_name: "s",
+          workspace_dir: "/w",
+          status: "pending",
+          operation: "delete",
+          scope: "workspace",
+        },
+        {
+          proposal_id: "bad-scope",
+          skill_name: "s",
+          workspace_dir: "/w",
+          status: "pending",
+          operation: "create",
+          scope: "wrong",
+        },
+        {
+          proposal_id: "no-op",
+          skill_name: "s",
+          workspace_dir: "/w",
+          status: "pending",
+          scope: "workspace",
+        },
+        {
+          proposal_id: "no-scope",
+          skill_name: "s",
+          workspace_dir: "/w",
+          status: "pending",
+          operation: "update",
+        },
+        { proposal_id: "b", skill_name: "s", workspace_dir: "/w" },
+        { proposal_id: "c", skill_name: "s", workspace_dir: "/w", status: "x" },
+        { skill_name: "s", workspace_dir: "/w", status: "pending" },
+        { proposal_id: "d", workspace_dir: "/w", status: "pending" },
+        { proposal_id: "e", skill_name: "s", status: "pending" },
+        null,
+      ],
+      counts: { pending: 0, approved: 1, rejected: 0 },
+      by_project: { "/w": { pending: 0, approved: 1, rejected: 0 } },
+    });
+    expect(parsed?.drafts).toHaveLength(1);
+    const d = parsed!.drafts[0];
+    expect(d).toMatchObject({
+      proposal_id: "a",
+      description: "",
+      operation: "create",
+      target_skill_name: null,
+      scope: "workspace",
+      approved_by: null,
+      approved_skill_present: null,
+      source_observation_ids: [],
+      skill_md: "",
+      skill_md_truncated: false,
+      install_error: null,
+    });
+    expect(d.files).toEqual([{ path: "SKILL.md", size: 3, installed: true }]);
+    expect(parsed?.counts).toEqual({ pending: 0, approved: 1, rejected: 0 });
+    expect(parsed?.byProject["/w"]).toEqual({
+      pending: 0,
+      approved: 1,
+      rejected: 0,
+    });
+  });
+
+  // The list carries the texts of pending drafts only: a decided draft's
+  // are null, and the page reads them through the file route. An older core
+  // still sends them.
+  it("keeps a null SKILL.md and rationale as null, and a text as the text", () => {
+    const row = (over: Record<string, unknown>) => ({
+      skill_name: "s",
+      workspace_dir: "/w",
+      status: "approved",
+      operation: "create",
+      scope: "workspace",
+      ...over,
+    });
+    const parsed = parseDraftList({
+      proposals: [
+        row({
+          proposal_id: "read-on-demand",
+          skill_md: null,
+          skill_md_truncated: null,
+          rationale_md: null,
+          rationale_md_truncated: null,
+        }),
+        row({
+          proposal_id: "older-core",
+          skill_md: "# s\n",
+          skill_md_truncated: true,
+          rationale_md: "Because.\n",
+          rationale_md_truncated: false,
+        }),
+        row({ proposal_id: "empty", skill_md: "", rationale_md: "" }),
+        // Neither null nor a text: read as before, an empty text.
+        row({ proposal_id: "missing" }),
+        row({ proposal_id: "odd", skill_md: 7, rationale_md: ["x"] }),
+      ],
+      counts: { pending: 0, approved: 5, rejected: 0 },
+    });
+    const texts = Object.fromEntries(
+      parsed!.drafts.map((d) => [
+        d.proposal_id,
+        [
+          d.skill_md,
+          d.skill_md_truncated,
+          d.rationale_md,
+          d.rationale_md_truncated,
+        ],
+      ])
+    );
+    expect(texts).toEqual({
+      "read-on-demand": [null, false, null, false],
+      "older-core": ["# s\n", true, "Because.\n", false],
+      empty: ["", false, "", false],
+      missing: ["", false, "", false],
+      odd: ["", false, "", false],
+    });
+  });
+
+  it("returns null without a proposals array", () => {
+    expect(parseDraftList(null)).toBeNull();
+    expect(parseDraftList({ counts: {} })).toBeNull();
+    expect(parseDraftList({ proposals: {}, counts: {} })).toBeNull();
+    expect(parseDraftList({ proposals: [] })).toBeNull();
+  });
+});
+
+describe("parseDraftList counts", () => {
+  const ok = { pending: 1, approved: 0, rejected: 0 };
+
+  it("refuses counts that aren't a plain object of numbers", () => {
+    expect(parseDraftList({ proposals: [], counts: [] })).toBeNull();
+    expect(
+      parseDraftList({ proposals: [], counts: { pending: 1 } })
+    ).toBeNull();
+    expect(
+      parseDraftList({
+        proposals: [],
+        counts: { pending: -1, approved: 0, rejected: 0 },
+      })
+    ).toBeNull();
+    expect(
+      parseDraftList({
+        proposals: [],
+        counts: { pending: "1", approved: 0, rejected: 0 },
+      })
+    ).toBeNull();
+    expect(parseDraftList({ proposals: [], counts: ok })).not.toBeNull();
+  });
+
+  it("refuses a by_project that isn't a plain object and skips bad entries", () => {
+    expect(
+      parseDraftList({ proposals: [], counts: ok, by_project: [] })
+    ).toBeNull();
+    expect(
+      parseDraftList({ proposals: [], counts: ok, by_project: "x" })
+    ).toBeNull();
+    const parsed = parseDraftList({
+      proposals: [],
+      counts: ok,
+      by_project: { "/a": ok, "/b": { pending: "x" }, "/c": [] },
+    });
+    expect(parsed?.byProject).toEqual({ "/a": ok });
+  });
+});
+
+describe("projectLabels", () => {
+  it("disambiguates folders that share a name", () => {
+    const labels = projectLabels([
+      project("/work/EvoSci_test"),
+      project("/home/EvoSci_test"),
+      project("/work/other"),
+    ]);
+    expect(labels.get("/work/EvoSci_test")).toBe("EvoSci_test (work)");
+    expect(labels.get("/home/EvoSci_test")).toBe("EvoSci_test (home)");
+    expect(labels.get("/work/other")).toBe("other");
+  });
+
+  it("uses the full key when the parents match too", () => {
+    const labels = projectLabels([
+      project("/a/work/x", "x"),
+      project("/b/work/x", "x"),
+    ]);
+    expect(labels.get("/a/work/x")).toBe("/a/work/x");
+    expect(labels.get("/b/work/x")).toBe("/b/work/x");
+  });
+
+  it("falls back to the key when a disambiguated label is still shared", () => {
+    const labels = projectLabels([
+      project("/work/A", "A"),
+      project("/home/A", "A"),
+      project("/x/y", "A (work)"),
+    ]);
+    expect(labels.get("/work/A")).toBe("/work/A");
+    expect(labels.get("/x/y")).toBe("/x/y");
+    expect(labels.get("/home/A")).toBe("A (home)");
+  });
+
+  it("labelFor falls back to the last path segment", () => {
+    const labels = projectLabels([project("/w/A")]);
+    expect(labelFor("/w/A", labels)).toBe("A");
+    expect(labelFor("/w/unknown", labels)).toBe("unknown");
+    expect(labelFor("C:\\w\\win", labels)).toBe("win");
+  });
+});
+
+describe("groupDrafts", () => {
+  const projects = [project("/work/B"), project("/work/A")];
+
+  it("lists every project on Pending, newest first", () => {
+    const groups = groupDrafts(
+      list([
+        draft({
+          proposal_id: "1",
+          skill_name: "old",
+          created_at: "2026-11-01",
+        }),
+        draft({
+          proposal_id: "2",
+          skill_name: "new",
+          created_at: "2026-11-03",
+        }),
+        draft({ proposal_id: "3", skill_name: "b", created_at: "2026-11-03" }),
+      ]),
+      projects,
+      "pending"
+    );
+    expect(groups.map((g) => g.project.key)).toEqual(["/work/A", "/work/B"]);
+    expect(groups[0].label).toBe("A");
+    expect(groups[0].drafts.map((d) => d.skill_name)).toEqual([
+      "b",
+      "new",
+      "old",
+    ]);
+    expect(groups[1].drafts).toEqual([]);
+  });
+
+  it("gives a draft of a project the list doesn't know yet its own group", () => {
+    const groups = groupDrafts(
+      list([draft({ workspace_dir: "/elsewhere/Z" })]),
+      projects,
+      "pending"
+    );
+    expect(groups.map((g) => g.label)).toEqual(["A", "B", "Z"]);
+    expect(groups[2].project.key).toBe("/elsewhere/Z");
+    expect(groups[2].drafts).toHaveLength(1);
+  });
+
+  it("orders drafts by the time they name, not the text", () => {
+    const groups = groupDrafts(
+      list([
+        draft({
+          proposal_id: "1",
+          skill_name: "plus2",
+          created_at: "2026-11-01T10:00:00+02:00",
+        }),
+        draft({
+          proposal_id: "2",
+          skill_name: "utc",
+          created_at: "2026-11-01T09:00:00Z",
+        }),
+        draft({ proposal_id: "3", skill_name: "junk", created_at: "" }),
+        draft({ proposal_id: "4", skill_name: "also", created_at: "nope" }),
+      ]),
+      projects,
+      "pending"
+    );
+    expect(groups[0].drafts.map((d) => d.skill_name)).toEqual([
+      "utc",
+      "plus2",
+      "also",
+      "junk",
+    ]);
+  });
+
+  it("gives an unknown project a Pending group only for a pending draft", () => {
+    const groups = groupDrafts(
+      list([
+        draft({
+          proposal_id: "1",
+          status: "approved",
+          workspace_dir: "/elsewhere/Z",
+        }),
+      ]),
+      projects,
+      "pending"
+    );
+    expect(groups.map((g) => g.label)).toEqual(["A", "B"]);
+  });
+
+  it("lists only projects with drafts on Approved and Rejected", () => {
+    const l = list([
+      draft({ proposal_id: "1", status: "approved", workspace_dir: "/work/B" }),
+      draft({ proposal_id: "2", status: "pending", workspace_dir: "/work/A" }),
+    ]);
+    expect(
+      groupDrafts(l, projects, "approved").map((g) => g.project.key)
+    ).toEqual(["/work/B"]);
+    expect(groupDrafts(l, projects, "rejected")).toEqual([]);
+  });
+});
+
+describe("bannerSummary", () => {
+  it("splits pending by project and finds the latest", () => {
+    const projects = [project("/work/B"), project("/work/A")];
+    const l = list(
+      [
+        draft({ proposal_id: "1", created_at: "2026-11-01T00:00:00Z" }),
+        draft({ proposal_id: "2", created_at: "2026-11-03T00:00:00Z" }),
+        draft({
+          proposal_id: "3",
+          status: "approved",
+          created_at: "2026-11-09T00:00:00Z",
+        }),
+      ],
+      {
+        "/work/A": { pending: 2, approved: 0, rejected: 0 },
+        "/work/B": { pending: 0, approved: 1, rejected: 0 },
+      }
+    );
+    expect(bannerSummary(l, projects)).toEqual({
+      pending: 2,
+      split: [{ label: "A", count: 2 }],
+      latest: "2026-11-03T00:00:00Z",
+    });
+    expect(bannerSummary(list([]), projects).latest).toBeNull();
+  });
+
+  it("compares times, not text, and names a project only byProject knows", () => {
+    const l = list(
+      [
+        draft({ proposal_id: "1", created_at: "2026-11-01T10:00:00+02:00" }),
+        draft({ proposal_id: "2", created_at: "2026-11-01T09:00:00Z" }),
+        draft({ proposal_id: "3", created_at: "garbage" }),
+      ],
+      { "/other/Q": { pending: 3, approved: 0, rejected: 0 } }
+    );
+    expect(bannerSummary(l, [project("/work/A")])).toEqual({
+      pending: 3,
+      split: [{ label: "Q", count: 3 }],
+      latest: "2026-11-01T09:00:00Z",
+    });
+    expect(
+      bannerSummary(list([draft({ created_at: "garbage" })]), []).latest
+    ).toBeNull();
+  });
+});
+
+describe("installedLabel", () => {
+  const labels = projectLabels([project("/work/A")]);
+
+  it("names the project tier, the global tier and an uninstalled skill", () => {
+    expect(installedLabel(draft({ status: "approved" }), labels)).toBe(
+      "Installed into A/skills"
+    );
+    expect(
+      installedLabel(draft({ status: "approved", scope: "global" }), labels)
+    ).toBe("Installed into all projects (global)");
+    expect(
+      installedLabel(
+        draft({ status: "approved", approved_skill_present: false }),
+        labels
+      )
+    ).toBe("No longer installed");
+    expect(installedLabel(draft({ status: "rejected" }), labels)).toBe(
+      "Rejected. EvoMemory won't suggest it again unless the observations behind it change."
+    );
+    expect(installedLabel(draft(), labels)).toBe("");
+  });
+});
+
+describe("statusLine", () => {
+  it("reads each cadence and mode, and off", () => {
+    expect(AUTOSKILLS_FIELDS).toEqual([
+      "memory_skill_synthesis_enabled",
+      "memory_skill_synthesis_mode",
+      "memory_skill_synthesis_cadence",
+      "memory_skill_synthesis_time",
+    ]);
+    expect(statusLine(undefined)).toBeNull();
+    expect(
+      statusLine({
+        memory_skill_synthesis_enabled: true,
+        memory_skill_synthesis_mode: "review",
+        memory_skill_synthesis_cadence: "weekly",
+        memory_skill_synthesis_time: "03:00",
+      })
+    ).toBe("Every project · runs weekly at 03:00 · you review each draft");
+    expect(
+      statusLine({
+        memory_skill_synthesis_enabled: true,
+        memory_skill_synthesis_mode: "auto",
+        memory_skill_synthesis_cadence: "nightly",
+        memory_skill_synthesis_time: "02:30",
+      })
+    ).toBe(
+      "Every project · runs every night at 02:30 · drafts install automatically"
+    );
+    expect(
+      statusLine({
+        memory_skill_synthesis_enabled: true,
+        memory_skill_synthesis_mode: "review",
+        memory_skill_synthesis_cadence: "monthly",
+        memory_skill_synthesis_time: "04:00",
+      })
+    ).toBe("Every project · runs monthly at 04:00 · you review each draft");
+    expect(statusLine({ memory_skill_synthesis_enabled: true })).toBe(
+      "Every project · runs weekly at 03:00 · you review each draft"
+    );
+    expect(statusLine({ memory_skill_synthesis_enabled: false })).toBe(
+      "AutoSkills is off in every project"
+    );
+  });
+
+  it("never states a value an override hides", () => {
+    const ENABLED = "memory_skill_synthesis_enabled";
+    const MODE = "memory_skill_synthesis_mode";
+    const CADENCE = "memory_skill_synthesis_cadence";
+    const TIME = "memory_skill_synthesis_time";
+    const saved = {
+      [ENABLED]: true,
+      [MODE]: "auto",
+      [CADENCE]: "nightly",
+      [TIME]: "02:30",
+    };
+    const line = (...fields: string[]) => statusLine(saved, new Set(fields));
+    const BY_ENV =
+      "AutoSkills is set by an environment variable on the machine that runs EvoScientist.";
+
+    // Whether it is on at all isn't known, whatever is saved.
+    expect(line(ENABLED)).toBe(BY_ENV);
+    expect(line(ENABLED, MODE, CADENCE, TIME)).toBe(BY_ENV);
+    expect(statusLine({ ...saved, [ENABLED]: false }, new Set([ENABLED]))).toBe(
+      BY_ENV
+    );
+
+    // Only the part that is hidden goes.
+    expect(line(MODE)).toBe("Every project · runs every night at 02:30");
+    expect(line(CADENCE)).toBe(
+      "Every project · runs at 02:30 · drafts install automatically"
+    );
+    expect(line(TIME)).toBe(
+      "Every project · runs every night · drafts install automatically"
+    );
+    expect(line(CADENCE, TIME)).toBe(
+      "Every project · drafts install automatically"
+    );
+
+    // With all three hidden nothing is left to say but that: the line never
+    // reads only "Every project".
+    expect(line(MODE, CADENCE, TIME)).toBe(BY_ENV);
+
+    // A saved off that nothing hides is still off.
+    expect(
+      statusLine({ ...saved, [ENABLED]: false }, new Set([MODE, TIME]))
+    ).toBe("AutoSkills is off in every project");
+    expect(
+      statusLine({ ...saved, [ENABLED]: false }, new Set([MODE, CADENCE, TIME]))
+    ).toBe("AutoSkills is off in every project");
+    // No override: the whole line, as without the argument.
+    expect(line()).toBe(
+      "Every project · runs every night at 02:30 · drafts install automatically"
+    );
+    expect(statusLine(undefined, new Set([ENABLED]))).toBeNull();
+  });
+});
+
+describe("secondOf", () => {
+  const NINE = Date.UTC(2026, 10, 10, 9, 0, 0);
+
+  it("reads the core's stamps and LangGraph's as the same instant", () => {
+    // The core: seconds, Z.
+    expect(secondOf("2026-11-10T09:00:00Z")).toBe(NINE);
+    // LangGraph: microseconds, +00:00.
+    expect(secondOf("2026-11-10T09:00:00.654321+00:00")).toBe(NINE);
+    expect(secondOf("2026-11-10T09:00:00+00:00")).toBe(NINE);
+    // Other offsets name the same instant.
+    expect(secondOf("2026-11-10T10:00:00+01:00")).toBe(NINE);
+    expect(secondOf("2026-11-10T04:00:00.123-05:00")).toBe(NINE);
+  });
+
+  it("cuts the fraction: down to the second, never up", () => {
+    expect(secondOf("2026-11-10T09:00:00.999999+00:00")).toBe(NINE);
+    expect(secondOf("2026-11-10T09:00:00.5Z")).toBe(NINE);
+    expect(secondOf("2026-11-10T09:00:01.000001+00:00")).toBe(NINE + 1000);
+  });
+
+  it("is null for anything that isn't such a stamp", () => {
+    for (const value of [
+      "",
+      "soon",
+      "2026-11-10",
+      // No zone: not an instant.
+      "2026-11-10T09:00:00",
+      "2026-11-10T09:00:00.654321",
+      "2026-11-10 09:00:00Z",
+      "2026-11-10T09:00:00Z trailing",
+      // Shaped like one, but no such date.
+      "2026-13-40T09:00:00Z",
+      5,
+      null,
+      undefined,
+      {},
+    ]) {
+      expect(secondOf(value), String(value)).toBeNull();
+    }
+  });
+});
+
+describe("fromMemorySkills", () => {
+  it("maps installed approvals by tier and ignores other projects", () => {
+    const l = list([
+      draft({
+        proposal_id: "1",
+        status: "approved",
+        scope: "global",
+        approved_skill_path: "/home/u/.evoscientist/skills/g-skill",
+        operation: "update",
+      }),
+      draft({
+        proposal_id: "2",
+        status: "approved",
+        approved_skill_path: "C:\\w\\A\\skills\\p-skill",
+      }),
+      draft({
+        proposal_id: "3",
+        status: "approved",
+        workspace_dir: "/work/B",
+        approved_skill_path: "/work/B/skills/other",
+      }),
+      draft({
+        proposal_id: "4",
+        status: "approved",
+        approved_skill_path: "/work/A/skills/gone",
+        approved_skill_present: false,
+      }),
+      draft({ proposal_id: "5", approved_skill_path: "/work/A/skills/pend" }),
+    ]);
+    const out = fromMemorySkills(l, "/work/A");
+    expect([...out.global]).toEqual([["g-skill", "update"]]);
+    expect([...out.project]).toEqual([["p-skill", "create"]]);
+    expect(fromMemorySkills(l, null).project.size).toBe(0);
+  });
+});
+
+describe("isProjectCopy", () => {
+  const global = "/home/u/.evoscientist/skills/data-cleaning";
+  const project = "/work/A/skills/data-cleaning";
+  const update = (over: Partial<Draft>) =>
+    draft({ operation: "update", target_skill_name: "data-cleaning", ...over });
+
+  it("is an update written to another folder than the one it starts from", () => {
+    // A project's own copy of a global skill: the global one stays.
+    expect(
+      isProjectCopy(update({ install_target: project, install_base: global }))
+    ).toBe(true);
+    // In place.
+    expect(
+      isProjectCopy(update({ install_target: global, install_base: global }))
+    ).toBe(false);
+    expect(
+      isProjectCopy(update({ install_target: project, install_base: project }))
+    ).toBe(false);
+  });
+
+  it("counts an update the core can't place as a replace, and a new skill as neither", () => {
+    // Decided, or the approval would fail: both null.
+    expect(isProjectCopy(update({}))).toBe(false);
+    expect(
+      isProjectCopy(update({ install_target: project, install_base: null }))
+    ).toBe(false);
+    expect(
+      isProjectCopy(update({ install_target: null, install_base: global }))
+    ).toBe(false);
+    expect(
+      isProjectCopy(
+        draft({
+          operation: "create",
+          install_target: project,
+          install_base: global,
+        })
+      )
+    ).toBe(false);
+  });
+});
+
+describe("updatesOwnCopy", () => {
+  const global = "/home/u/.evoscientist/skills/data-cleaning";
+  const project = "/work/A/skills/data-cleaning";
+  const update = (over: Partial<Draft>) =>
+    draft({ operation: "update", target_skill_name: "data-cleaning", ...over });
+
+  it("is an update recorded for the project that the core writes over the project's copy", () => {
+    expect(
+      updatesOwnCopy(update({ install_target: project, install_base: project }))
+    ).toBe(true);
+  });
+
+  it("is no other draft", () => {
+    // A project copy of a global skill: the project has none of its own yet.
+    expect(
+      updatesOwnCopy(update({ install_target: project, install_base: global }))
+    ).toBe(false);
+    // An update of the global skill, in place.
+    expect(
+      updatesOwnCopy(
+        update({
+          scope: "global",
+          install_target: global,
+          install_base: global,
+        })
+      )
+    ).toBe(false);
+    // The core can't place it (the copy is gone), or it is decided: nothing
+    // says the project has its own.
+    expect(updatesOwnCopy(update({}))).toBe(false);
+    expect(
+      updatesOwnCopy(update({ install_target: project, install_base: null }))
+    ).toBe(false);
+    // A new skill.
+    expect(
+      updatesOwnCopy(draft({ install_target: project, install_base: project }))
+    ).toBe(false);
+  });
+});
+
+describe("isRevertible", () => {
+  it("allows rejects and new skills, not updates", () => {
+    expect(isRevertible(draft({ operation: "update" }), "reject")).toBe(true);
+    expect(isRevertible(draft({ operation: "create" }), "approve")).toBe(true);
+    expect(isRevertible(draft({ operation: "update" }), "approve")).toBe(false);
+  });
+});
+
+describe("autoSkillsReadOnlyReason", () => {
+  it("names the reason", () => {
+    expect(autoSkillsReadOnlyReason(undefined)).toBe(
+      "Checking whether this page can review drafts…"
+    );
+    expect(autoSkillsReadOnlyReason({ writable: true })).toBeNull();
+    expect(
+      autoSkillsReadOnlyReason({ writable: false, reason: "not_loopback" })
+    ).toBe(
+      "This WebUI server listens on the network, not on this machine only, so it doesn't approve or reject drafts. Start it with EvoSci --ui webui, or with npm run dev:local."
+    );
+    expect(
+      autoSkillsReadOnlyReason({ writable: false, reason: "host_not_loopback" })
+    ).toBe(
+      "This page is open by a network address. Drafts are reviewed from a page open at 127.0.0.1 or localhost on the machine that runs EvoScientist."
+    );
+    expect(
+      autoSkillsReadOnlyReason({ writable: false, reason: "other_backend" })
+    ).toBe(
+      "The deployment URL is not the EvoScientist that runs next to this WebUI server, so drafts are reviewed on the machine that runs it."
+    );
+    expect(
+      autoSkillsReadOnlyReason({ writable: false, reason: "unsupported" })
+    ).toBe("This EvoScientist version cannot review drafts from the WebUI.");
+    for (const reason of ["constructor", "toString", "made_up"]) {
+      expect(
+        autoSkillsReadOnlyReason({
+          writable: false,
+          reason,
+        } as unknown as SettingsWriteAccess)
+      ).toBe("This page can't review drafts right now.");
+    }
+    expect(
+      autoSkillsReadOnlyReason({ writable: false, reason: "backend_timeout" })
+    ).toBe("EvoScientist did not answer in time.");
+  });
+});
+
+describe("unshowableFiles", () => {
+  const file = (path: string, size: number): DraftFile => ({
+    path,
+    size,
+    installed: false,
+  });
+
+  it("lists what the page can't show: by size, a 413, a 415 and a read that failed", () => {
+    const files = [
+      file("SKILL.md", 120),
+      file("data/big.csv", MAX_SHOWN_BYTES + 1),
+      file("at-the-limit.txt", MAX_SHOWN_BYTES),
+      file("grew.txt", 10),
+      file("logo.png", 2048),
+      file("notes.md", 30),
+      file("never-answered.md", 5),
+    ];
+    const reads = new Map<string, FileReadOutcome>([
+      ["SKILL.md", "shown"],
+      ["at-the-limit.txt", "shown"],
+      // Listed small, but the core says too large (it grew since).
+      ["grew.txt", "too_large"],
+      ["logo.png", "not_text"],
+      ["notes.md", "unchecked"],
+    ]);
+    // The size alone decides a file over the limit; one with no answer
+    // couldn't be checked. In the files' order.
+    expect(unshowableFiles(files, reads)).toEqual([
+      { path: "data/big.csv", size: MAX_SHOWN_BYTES + 1, reason: "too_large" },
+      { path: "grew.txt", size: 10, reason: "too_large" },
+      { path: "logo.png", size: 2048, reason: "not_text" },
+      { path: "notes.md", size: 30, reason: "unchecked" },
+      { path: "never-answered.md", size: 5, reason: "unchecked" },
+    ]);
+  });
+
+  it("is empty when every file was shown", () => {
+    expect(
+      unshowableFiles(
+        [file("SKILL.md", 1), file("run.py", MAX_SHOWN_BYTES)],
+        new Map([
+          ["SKILL.md", "shown"],
+          ["run.py", "shown"],
+        ])
+      )
+    ).toEqual([]);
+    expect(unshowableFiles([], new Map())).toEqual([]);
+  });
+});

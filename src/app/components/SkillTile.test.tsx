@@ -122,3 +122,70 @@ describe("SkillTile icon", () => {
     expect(document.querySelector("svg.lucide-users")).toBeTruthy();
   });
 });
+
+describe("SkillTile tag", () => {
+  it("draws the tag as a pill after the title", () => {
+    render(
+      <SkillTile
+        {...base}
+        installed
+        tag="from memory"
+      />
+    );
+    const tag = screen.getByText("from memory");
+    expect(
+      screen.getByRole("heading", { name: "Paper Review" }).nextElementSibling
+    ).toBe(tag);
+    expect(tag.className.split(/\s+/)).toEqual(
+      expect.arrayContaining([
+        "rounded-full",
+        "border",
+        "border-solid",
+        "border-[var(--brand)]",
+        "bg-[var(--brand-soft)]",
+        "text-[var(--brand)]",
+      ])
+    );
+    // Lowercase as written ("from memory"), unlike the EXPERT marker.
+    expect(tag.className.split(/\s+/)).not.toContain("uppercase");
+  });
+
+  it("has no tag unless given one", () => {
+    render(<SkillTile {...base} />);
+    expect(
+      screen.getByRole("heading", { name: "Paper Review" }).nextElementSibling
+    ).toBeNull();
+  });
+});
+
+describe("SkillTile without details", () => {
+  // A skill whose details the page can't show (a project's own skill): no
+  // "View details" control that does nothing.
+  it("shows its title and text without a details button", () => {
+    render(
+      <SkillTile
+        {...base}
+        installed
+        onUninstall={() => {}}
+      />
+    );
+    expect(screen.getByRole("heading", { name: "Paper Review" })).toBeTruthy();
+    expect(screen.getByText("Adversarial self-review.")).toBeTruthy();
+    expect(screen.queryByTitle("View details")).toBeNull();
+    expect(screen.getAllByRole("button").map((b) => b.textContent)).toEqual([
+      "Uninstall",
+    ]);
+  });
+
+  it("keeps the details button when it can open them", () => {
+    const onOpen = vi.fn();
+    render(
+      <SkillTile
+        {...base}
+        onOpen={onOpen}
+      />
+    );
+    fireEvent.click(screen.getByTitle("View details"));
+    expect(onOpen).toHaveBeenCalledOnce();
+  });
+});

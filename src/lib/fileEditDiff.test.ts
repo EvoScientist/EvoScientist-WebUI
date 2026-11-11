@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { clipLine, fileEditDiff, foldRows, type DiffRow } from "./fileEditDiff";
+import {
+  clipLine,
+  fileEditDiff,
+  foldRows,
+  textFileDiff,
+  type DiffRow,
+} from "./fileEditDiff";
 import { TRUNCATION_SUFFIX } from "./subAgentStepsStore";
 
 // deepagents' tools: edit_file(file_path, old_string, new_string,
@@ -474,5 +480,71 @@ describe("clipLine", () => {
       head: "x".repeat(999),
       more: 11,
     });
+  });
+});
+
+describe("textFileDiff", () => {
+  it("textFileDiff shows a changed line with its context", () => {
+    expect(textFileDiff("a\nb\nc\n", "a\nB\nc\n")).toEqual({
+      rows: [
+        { kind: "context", text: "a" },
+        { kind: "removed", text: "b" },
+        { kind: "added", text: "B" },
+        { kind: "context", text: "c" },
+      ],
+      added: 1,
+      removed: 1,
+      replaces: [],
+    });
+  });
+
+  it("textFileDiff is null for identical texts", () => {
+    expect(textFileDiff("same\n", "same\n")).toBeNull();
+  });
+
+  it("textFileDiff notes a final line break added", () => {
+    const diff = textFileDiff("a\nb", "a\nb\n");
+    expect(diff).not.toBeNull();
+    expect(diff!.rows.some((r) => r.kind === "note")).toBe(true);
+    expect(diff!.added).toBe(0);
+    expect(diff!.removed).toBe(0);
+  });
+
+  it("textFileDiff diffs texts that end with the truncation suffix", () => {
+    const diff = textFileDiff(
+      "old line" + TRUNCATION_SUFFIX,
+      "new line" + TRUNCATION_SUFFIX
+    );
+    expect(diff).not.toBeNull();
+    expect(diff!.removed).toBe(1);
+    expect(diff!.added).toBe(1);
+  });
+
+  it("textFileDiff shows an empty old text as all added, and the reverse", () => {
+    expect(textFileDiff("", "a\nb\n")).toMatchObject({
+      added: 2,
+      removed: 0,
+      replaces: [],
+    });
+    expect(textFileDiff("a\nb\n", "")).toMatchObject({
+      added: 0,
+      removed: 2,
+      replaces: [],
+    });
+  });
+
+  it("textFileDiff drops the carriage returns of CRLF texts", () => {
+    const diff = textFileDiff("a\r\nb\r\n", "a\r\nB\r\n");
+    expect(diff!.rows).toEqual([
+      { kind: "context", text: "a" },
+      { kind: "removed", text: "b" },
+      { kind: "added", text: "B" },
+    ]);
+  });
+
+  it("textFileDiff is null past the size limits", () => {
+    const lines = (prefix: string) =>
+      Array.from({ length: 3000 }, (_, i) => `${prefix}${i}`).join("\n");
+    expect(textFileDiff(lines("a"), lines("b"))).toBeNull();
   });
 });

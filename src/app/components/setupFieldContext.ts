@@ -5,7 +5,11 @@
 import type { ModelRegistryEntry } from "@/app/hooks/useAvailableModels";
 import type { SettingsDraft } from "@/app/hooks/useSettingsDraft";
 import type { SettingsPayload } from "@/lib/settings";
-import { currentText, isMaskedSecret } from "@/lib/settingsForm";
+import {
+  currentText,
+  isMaskedSecret,
+  shadowedSource,
+} from "@/lib/settingsForm";
 
 export interface FieldContext {
   payload: SettingsPayload;
@@ -15,8 +19,7 @@ export interface FieldContext {
 }
 
 export function shadowOf(ctx: FieldContext, field: string) {
-  const source = ctx.payload.sources[field];
-  return source?.shadowed ? source : null;
+  return shadowedSource(ctx.payload, field);
 }
 
 /** For a base URL whose key is saved and also set elsewhere (the

@@ -9,6 +9,7 @@ import type {
   SettingsPayload,
   SettingsWriteAccess,
 } from "@/lib/settings";
+import { AUTOSKILLS_FIELDS } from "@/lib/autoskills";
 
 /** Unsaved changes, by field: a string is the new value, `null` removes the
  *  field (a secret, or a value going back to its default). A field that is
@@ -239,6 +240,11 @@ const FIELD_LABELS: Record<string, string> = {
   version: "EvoScientist version",
 };
 
+/** `restart_fields` without the AutoSkills settings, which apply at once. */
+export function restartFieldsShown(fields: readonly string[]): string[] {
+  return fields.filter((f) => !AUTOSKILLS_FIELDS.includes(f));
+}
+
 /** A readable name for a field, or for an entry of `restart_fields`. */
 export function fieldLabel(
   field: string,
@@ -251,6 +257,18 @@ export function fieldLabel(
   }
   const words = field.replace(/_/g, " ");
   return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+/** The override (environment, CLI, `.env`) that hides a field's saved
+ *  value in the running backend, or null when the saved value is the one in
+ *  use. The payload carries the saved value only: what the override says is
+ *  not sent. */
+export function shadowedSource(
+  payload: Pick<SettingsPayload, "sources">,
+  field: string
+): SettingSource | null {
+  const source = payload.sources[field];
+  return source?.shadowed ? source : null;
 }
 
 /** Where an override of a shadowed field comes from. */
