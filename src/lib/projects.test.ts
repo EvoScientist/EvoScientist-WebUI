@@ -175,6 +175,17 @@ describe("withAppFolders", () => {
     expect(out.launchKey).toBe("/Users/u/documents/evoscientist");
   });
 
+  it("matches the exact folder before one that differs only in case", () => {
+    const both = readyProjects("/work/Proj", "/work/proj").projects;
+    for (const folder of ["/work/Proj", "/work/proj"]) {
+      const out = withAppFolders(both, { default: folder, launch: folder });
+      expect(out.launchKey).toBe(folder);
+      expect(out.projects.find((p) => p.key === folder)?.name).toBe(
+        "Default workspace"
+      );
+    }
+  });
+
   it("changes nothing for folders that are unknown or not projects", () => {
     for (const folders of [{}, { default: "/elsewhere", launch: "/gone" }]) {
       const out = withAppFolders(projects, folders);

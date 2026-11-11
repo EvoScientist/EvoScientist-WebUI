@@ -46,8 +46,9 @@ const DEFAULT_PROJECT_NAME = "Default workspace";
  * The app's folders among `projects` (both in the core's key form): the
  * project at `folders.default` shows as "Default workspace", re-sorted by
  * that name; `launchKey` is the key of the project at `folders.launch`.
- * Case is ignored: on macOS the app spells a folder as it is on disk, while
- * the core keeps the case it was given.
+ * A folder matches its project exactly, else ignoring case: on macOS the app
+ * spells a folder as it is on disk, while the core keeps the case it was
+ * given; on Linux `Proj` and `proj` can be two projects.
  */
 export function withAppFolders(
   projects: readonly Project[],
@@ -55,7 +56,8 @@ export function withAppFolders(
 ): { projects: Project[]; launchKey: string | null } {
   const at = (folder: string | undefined) =>
     folder
-      ? projects.find((project) =>
+      ? projects.find((project) => samePath(project.key, folder)) ??
+        projects.find((project) =>
           samePath(project.key.toLowerCase(), folder.toLowerCase())
         )
       : null;
