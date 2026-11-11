@@ -156,12 +156,16 @@ export function treeOf(rows: PsRow[], root: number): PsRow[] {
   return tree;
 }
 
+/** `ps`. On macOS by its full path: the app replaces its PATH with the login
+ *  shell's, where another `ps` may come first. */
+export const PS = process.platform === "darwin" ? "/bin/ps" : "ps";
+
 /** Every process of the system (macOS and Linux), or null when `ps` fails
  *  or takes longer than 5 s. */
 export function listProcesses(): Promise<PsRow[] | null> {
   return new Promise((resolve) => {
     execFile(
-      "ps",
+      PS,
       ["-axo", "pid=,ppid=,lstart="],
       { timeout: 5_000, maxBuffer: 16 * 1024 * 1024, encoding: "utf8" },
       (error, stdout) => resolve(error ? null : parsePs(stdout))
@@ -180,10 +184,12 @@ export const TREE_GRACE_MS = 5_000;
  * runs after the grace period gets SIGKILL. The backend's server is a child
  * of `EvoSci deploy` in a session of its own, so a signal to deploy's
  * process group alone would leave it running. A recorded pid is sent SIGKILL
- * only while `ps` still shows it with the same start time, so a pid the
- * system reused meanwhile is left alone. With `group` (a child started with
- * `group: true`) the first signals also go to its whole process group.
- * Without a process list only the process (or its group) is signalled.
+ * only while `ps` still shows it with the same start time, the process
+ * itself included, so a pid the system reused meanwhile is left alone. With
+ * `group` (a child started with `group: true`) the signals for the process
+ * go to its whole process group. Without a process list, or for a process
+ * the list does not show, only the process (or its group) is signalled, as
+ * before the tree was read.
  */
 export async function killTree(
   pid: number,
@@ -208,7 +214,7 @@ export async function killTree(
     return;
   }
   const rows = await list();
-  if (!rows) log.warn(`no process list: ending only pid ${pid}`);
+  const self = rows?.find((r) => r.pid === pid) ?? null;
   const below = treeOf(rows ?? [], pid).filter((r) => r.pid !== pid);
   // A negative pid signals the process group whose leader is `pid`.
   const target = group ? -pid : pid;
@@ -221,6 +227,9 @@ export async function killTree(
       return false;
     }
   };
+  if (!rows) log.warn(`no process list: ending only pid ${pid}`);
+  else if (!self && signal(target, 0))
+    log.warn(`pid ${pid} is not in the process list: ending only it`);
   const running = () =>
     signal(target, 0) || below.some((r) => signal(r.pid, 0));
   const reached = signal(target, "SIGTERM");
@@ -228,24 +237,35 @@ export async function killTree(
   if (!reached && below.length === 0) return;
   for (let i = 0; i < TREE_GRACE_MS / 100 && running(); i++) await sleep(100);
   if (!running()) return;
+  // SIGKILL only for what is still the process that was recorded: listed
+  // under the same pid with the same start time. A recorded pid that is not
+  // listed any more has ended.
+  const now = self || below.length ? await list() : null;
+  const same = (r: PsRow) =>
+    now?.some((n) => n.pid === r.pid && n.started === r.started) === true;
+  const listed = (r: PsRow) => now?.some((n) => n.pid === r.pid) === true;
   if (signal(target, 0)) {
-    log.warn(`${what} did not end on SIGTERM; sending SIGKILL`);
-    signal(target, "SIGKILL");
+    // Not recorded, or no second list: as before the tree was read.
+    if (!self || !now || same(self)) {
+      log.warn(`${what} did not end on SIGTERM; sending SIGKILL`);
+      signal(target, "SIGKILL");
+    } else if (listed(self)) {
+      log.warn(`pid ${pid} is not the same process any more; left alone`);
+    }
   }
-  const left = below.filter((r) => signal(r.pid, 0));
-  if (left.length === 0) return;
-  const now = await list();
-  for (const r of left) {
-    if (now?.some((n) => n.pid === r.pid && n.started === r.started)) {
+  for (const r of below) {
+    if (!signal(r.pid, 0)) continue;
+    if (!now)
+      log.warn(
+        `no process list: pid ${r.pid} (started by ${pid}) is left running`
+      );
+    else if (same(r)) {
       log.warn(`pid ${r.pid} (started by ${pid}) did not end; sending SIGKILL`);
       signal(r.pid, "SIGKILL");
-    } else {
+    } else if (listed(r))
       log.warn(
-        now
-          ? `pid ${r.pid} is not the process recorded under ${pid} any more; left alone`
-          : `no process list: pid ${r.pid} (started by ${pid}) is left running`
+        `pid ${r.pid} is not the process recorded under ${pid} any more; left alone`
       );
-    }
   }
 }
 

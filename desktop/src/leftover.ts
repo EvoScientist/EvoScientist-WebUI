@@ -5,7 +5,7 @@
 import { execFile } from "node:child_process";
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Logger } from "./proc";
+import { PS, type Logger } from "./proc";
 
 export interface UiRecord {
   pid: number;
@@ -65,7 +65,7 @@ export function processStartTime(
             `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().ToString('o')`,
           ],
         ]
-      : ["ps", ["-o", "lstart=", "-p", String(pid)]];
+      : [PS, ["-o", "lstart=", "-p", String(pid)]];
   return new Promise((resolve) => {
     execFile(
       file,
