@@ -15,20 +15,23 @@ function appList(timeoutMs) {
   }
 }
 
-/** Whether `list` has `pid` as a foreground application: those have a Dock
- *  icon. One entry per application: `<n>) "<name>" ASN:...`, then indented
- *  lines, one of them `pid = <pid> ... type="Foreground"`. */
-function foreground(list, pid) {
-  const entry = list
+/** The entry of `pid` in `list`, or undefined. One entry per application:
+ *  `<n>) "<name>" ASN:...`, then indented lines, one of them
+ *  `pid = <pid> ... type="Foreground"` (or "UIElement", "BackgroundOnly"). */
+function entryOf(list, pid) {
+  return list
     .split(/\n(?=\s*\d+\) ")/)
     .find((e) => new RegExp(`^\\s*pid = ${pid}\\b`, "m").test(e));
-  return entry ? /\btype="Foreground"/.test(entry) : false;
 }
+
+/** Whether an entry is a foreground application: those have a Dock icon. */
+const isForeground = (entry) => /\btype="Foreground"/.test(entry);
 
 /**
  * Whether `pid` has a Dock icon: `{ shown }`, read from a list that is known
- * to show Dock icons, or `{ unseen: <why> }` when no such list was read
- * within `timeoutMs`.
+ * to show Dock icons and that has `pid` in it, or `{ unseen: <why> }` when no
+ * such list was read within `timeoutMs`. A process that is in no list (it
+ * has ended, or never registered with macOS) is unseen, not "without icon".
  *
  * The control: a process of `controlExe` (an app's own executable) in Node
  * mode that sets its process title gets a Dock icon, so the list must have
@@ -63,9 +66,12 @@ export async function dockIconOf(pid, controlExe, timeoutMs = 15_000) {
         Math.max(1000, Math.min(10_000, until - Date.now()))
       );
       if (list === null) why = "the application list could not be read";
-      else if (foreground(list, control.pid))
-        return { shown: foreground(list, pid) };
-      else
+      else if (isForeground(entryOf(list, control.pid) ?? "")) {
+        const entry = entryOf(list, pid);
+        return entry === undefined
+          ? { unseen: "the process is not in the application list" }
+          : { shown: isForeground(entry) };
+      } else
         why = "the control process was not listed as a foreground application";
       await new Promise((r) => setTimeout(r, 250));
     }

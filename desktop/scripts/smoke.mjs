@@ -211,16 +211,20 @@ async function main() {
     log.info(`GET / 200, GET ${asset} 200`);
     if (process.platform === "darwin") {
       // The server has set its process title by now (Next does before it
-      // listens), which is what registers it with macOS. It is looked up in
-      // a list that shows a control process with a Dock icon: where that is
+      // listens), which is what registers it with macOS, so it is in the
+      // application list. It is looked up in a list that shows a control
+      // process with a Dock icon: where the control or the server itself is
       // not listed, the check would see nothing and must not pass.
       const dock = await dockIconOf(ui.pid, exe);
+      // A server that ended meanwhile is in no list: say that, where known.
+      // One turn of the event loop first: the check's last read blocks, so
+      // an exit during it has not been reported yet.
+      await new Promise((r) => setImmediate(r));
+      if (uiEnded) fail("the UI server ended during the checks");
       if ("unseen" in dock) fail(`the Dock check sees nothing: ${dock.unseen}`);
       if (dock.shown) fail("the UI server has a Dock icon of its own");
       log.info("Dock: no icon for the UI server (a control process has one)");
     }
-    // A server that ended meanwhile is in no application list, which the
-    // Dock check reads as "no icon".
     if (uiEnded) fail("the UI server ended during the checks");
   }
   return version;
