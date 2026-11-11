@@ -175,13 +175,15 @@ export function listProcesses(): Promise<PsRow[] | null> {
 }
 
 /** `listProcesses` without waiting, for a caller that must finish in one
- *  step (a process that is about to exit). Null when `ps` fails. */
+ *  step (a process that is about to exit). It blocks the caller, so `ps`
+ *  gets 1 s (it takes some tens of milliseconds). Null when `ps` fails or
+ *  takes longer. */
 export function listProcessesNow(): PsRow[] | null {
   try {
     return parsePs(
       execFileSync(PS, ["-axo", "pid=,ppid=,lstart="], {
         encoding: "utf8",
-        timeout: 5_000,
+        timeout: 1_000,
         maxBuffer: 16 * 1024 * 1024,
       })
     );

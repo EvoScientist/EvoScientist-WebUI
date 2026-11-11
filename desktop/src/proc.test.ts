@@ -556,13 +556,17 @@ describe.skipIf(process.platform === "win32")("killTree with a tree", () => {
     });
     const pid = r.child.pid!;
     const { warned, log } = recording();
-    await killTree(pid, log, process.platform, true, async () =>
-      ((await listProcesses()) ?? []).filter((x) => x.pid !== pid)
-    );
-    expect(await withTimeout(r.closed, 5000)).not.toBe("timeout");
-    expect(warned).toEqual([
-      `pid ${pid} is not in the process list: ending only its process group`,
-    ]);
+    try {
+      await killTree(pid, log, process.platform, true, async () =>
+        ((await listProcesses()) ?? []).filter((x) => x.pid !== pid)
+      );
+      expect(await withTimeout(r.closed, 5000)).not.toBe("timeout");
+      expect(warned).toEqual([
+        `pid ${pid} is not in the process list: ending only its process group`,
+      ]);
+    } finally {
+      end(pid);
+    }
   });
 
   it("with a process group, leaves the group alone once the leader's pid is another process", async () => {
@@ -595,11 +599,15 @@ describe.skipIf(process.platform === "win32")("killTree with a tree", () => {
     });
     const pid = r.child.pid!;
     const { warned, log } = recording();
-    await killTree(pid, log, process.platform, true, async () => null);
-    expect(await withTimeout(r.closed, 5000)).not.toBe("timeout");
-    expect(warned).toEqual([
-      `no process list: ending only process group ${pid}`,
-    ]);
+    try {
+      await killTree(pid, log, process.platform, true, async () => null);
+      expect(await withTimeout(r.closed, 5000)).not.toBe("timeout");
+      expect(warned).toEqual([
+        `no process list: ending only process group ${pid}`,
+      ]);
+    } finally {
+      end(pid);
+    }
   });
 });
 

@@ -110,6 +110,13 @@ export function endProbes(): void {
  * All in one step, so nothing is left for a later turn that may not come
  * (the app quits), and the shell is never only stopped. The processes are
  * listed first: once the shell is gone, what it started hangs under pid 1.
+ * Without a list (`ps` failed) only the group is ended.
+ *
+ * The list and the signals are not one moment for the shell: a profile that
+ * is still starting commands (the time limit, the output limit or a quit
+ * came while it ran) can start one after the list, and with job control
+ * (bash) that command has a group of its own and runs on. At the end marker
+ * the shell waits in its last command and starts nothing.
  */
 function endShell(pid: number): void {
   const below = treeOf(listProcessesNow() ?? [], pid)

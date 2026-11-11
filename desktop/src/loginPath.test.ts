@@ -383,6 +383,51 @@ describe.skipIf(process.platform === "win32")("probeShell", () => {
     }
   });
 
+  it("sends no signal for a shell that a signal has ended", async () => {
+    // Ended by a signal, a shell has no exit code; it has ended all the same.
+    const shellFile = join(home, "signalled-shell");
+    const kill = vi.spyOn(process, "kill");
+    try {
+      expect(
+        await probeShell(
+          "/bin/sh",
+          `echo $$ > '${shellFile}'; kill -KILL $$`,
+          5_000,
+          END,
+          env
+        )
+      ).toBeNull();
+      const shell = await pidIn(shellFile);
+      const toIt = kill.mock.calls.filter(
+        ([target]) => Math.abs(Number(target)) === shell
+      );
+      expect(toIt).toEqual([]);
+    } finally {
+      kill.mockRestore();
+    }
+  });
+
+  // With job control every job has a process group of its own, which the
+  // signal to the shell's group does not reach: bash on macOS has it on for
+  // an interactive shell even without a terminal, `set -m` turns it on
+  // everywhere.
+  it.skipIf(!existsSync("/bin/bash"))(
+    "ends a background job that has a process group of its own",
+    async () => {
+      const jobFile = join(home, "own-group-job");
+      const script = `set -m; ${nap(
+        34
+      )} & echo $! > '${jobFile}'; printf '%s' '${END}'; sleep 20`;
+      const out = await probeShell("/bin/bash", script, 10_000, END, env);
+      expect(out).toMatch(/__E__$/);
+      const job = await pidIn(jobFile);
+      await vi.waitFor(() => expect(alive(job)).toBe(false), {
+        timeout: 5000,
+      });
+    },
+    20_000
+  );
+
   it("has ended the shell when it answers, and never stops one", async () => {
     // No step is left for later: the app may quit right after the answer,
     // and a shell that was only stopped (SIGSTOP) would stay for ever.
@@ -417,7 +462,7 @@ describe.skipIf(process.platform === "win32")("probeShell", () => {
     )}'; sleep 0.4; printf '%s' '${END.slice(3)}'; sleep 20`;
     const out = await probeShell("/bin/sh", script, 5_000, END, env);
     expect(out).toMatch(/__E__$/);
-  });
+  }, 20_000);
 
   // zsh without a terminal keeps what it starts in its own process group;
   // a job whose parent has gone is then reached only through that group.
@@ -434,7 +479,8 @@ describe.skipIf(process.platform === "win32")("probeShell", () => {
       await vi.waitFor(() => expect(alive(job)).toBe(false), {
         timeout: 5000,
       });
-    }
+    },
+    20_000
   );
 
   it("runs the shell with stdin closed and the two variables that keep it from waiting", async () => {
