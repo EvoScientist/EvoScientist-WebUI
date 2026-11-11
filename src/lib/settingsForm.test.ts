@@ -9,8 +9,10 @@ import {
   modelForProvider,
   patchBody,
   readOnlyReason,
+  restartFieldsShown,
   saveErrorText,
   sendableEdits,
+  shadowedSource,
   sourceNote,
   stepOfField,
   testKeyErrorText,
@@ -306,6 +308,25 @@ describe("labels", () => {
     ).toBe("the .env file at /w/.env");
     expect(sourceNote({ source: "cli", shadowed: true })).toMatch(/flag/);
   });
+
+  it("finds the override that hides a field's saved value", () => {
+    const env = { source: "env", shadowed: true };
+    const overridden: SettingsPayload = {
+      ...payload,
+      sources: {
+        memory_skill_synthesis_enabled: env,
+        // Where the value comes from, with nothing hidden.
+        provider: { source: "config", shadowed: false },
+      },
+    };
+    expect(
+      shadowedSource(overridden, "memory_skill_synthesis_enabled")
+    ).toEqual(env);
+    expect(shadowedSource(overridden, "provider")).toBeNull();
+    // No source recorded for the field.
+    expect(shadowedSource(overridden, "model")).toBeNull();
+    expect(shadowedSource(payload, "provider")).toBeNull();
+  });
 });
 
 describe("saveErrorText", () => {
@@ -365,5 +386,21 @@ describe("testKeyErrorText", () => {
     expect(testKeyErrorText({ base_url: "must be an http or https URL" })).toBe(
       "Address: must be an http or https URL"
     );
+  });
+});
+
+describe("restartFieldsShown", () => {
+  it("restartFieldsShown drops the AutoSkills fields", () => {
+    expect(
+      restartFieldsShown([
+        "model",
+        "memory_skill_synthesis_enabled",
+        "memory_skill_synthesis_mode",
+        "tavily_api_key",
+        "memory_skill_synthesis_cadence",
+        "memory_skill_synthesis_time",
+        "scheduler_default_timezone",
+      ])
+    ).toEqual(["model", "tavily_api_key", "scheduler_default_timezone"]);
   });
 });

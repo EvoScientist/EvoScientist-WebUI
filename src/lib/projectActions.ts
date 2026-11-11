@@ -28,11 +28,8 @@ export function exposureWarnings(host: unknown, tunnel: unknown): string[] {
   return warnings;
 }
 
-const REFUSAL_TEXT: Record<RelayRefusal | "other_backend", string> = {
-  not_loopback:
-    "This WebUI server listens on the network, not on this machine only, so it doesn't change projects. Start it with EvoSci --ui webui, or with npm run dev:local.",
-  host_not_loopback:
-    "This page is open by a network address. Projects are added and removed from a page open at 127.0.0.1 or localhost on the machine that runs EvoScientist.",
+/** The relay refusals that read the same whatever the page was changing. */
+export const RELAY_REFUSAL_TEXT = {
   cross_origin: "This page is not on the WebUI's own address.",
   json_required: "The WebUI sent a request the backend does not take.",
   secret_missing:
@@ -42,6 +39,14 @@ const REFUSAL_TEXT: Record<RelayRefusal | "other_backend", string> = {
   backend_unreachable:
     "The WebUI server cannot reach EvoScientist on this machine.",
   backend_timeout: "EvoScientist did not answer in time.",
+} as const satisfies Partial<Record<RelayRefusal, string>>;
+
+const REFUSAL_TEXT: Record<RelayRefusal | "other_backend", string> = {
+  ...RELAY_REFUSAL_TEXT,
+  not_loopback:
+    "This WebUI server listens on the network, not on this machine only, so it doesn't change projects. Start it with EvoSci --ui webui, or with npm run dev:local.",
+  host_not_loopback:
+    "This page is open by a network address. Projects are added and removed from a page open at 127.0.0.1 or localhost on the machine that runs EvoScientist.",
   unsupported:
     "This EvoScientist version cannot change projects from the WebUI.",
   other_backend:

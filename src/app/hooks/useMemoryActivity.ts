@@ -5,6 +5,11 @@ import { getMemorySeenAt, setMemorySeenAt } from "@/lib/memoryActivity";
 
 const DEFAULT_INTERVAL_MS = 15_000;
 
+// AutoSkills keeps its drafts and processed marks in the memory folder, and
+// every decision or run rewrites some of them. The drafts are announced on
+// Research Skills, so these files are not memory activity.
+const AUTOSKILLS_PREFIX = "autoskills/";
+
 interface UseMemoryActivityResult {
   /** Files newer than the seen-baseline (i.e. updates since the user last looked). */
   unseenCount: number;
@@ -23,7 +28,7 @@ interface UseMemoryActivityResult {
  *
  * On first ever load (no stored baseline) it adopts the current newest mtime as
  * the baseline, so pre-existing memory doesn't show a badge — only changes from
- * here on do.
+ * here on do. Files under autoskills/ count for neither.
  */
 export function useMemoryActivity(opts?: {
   enabled?: boolean;
@@ -40,10 +45,16 @@ export function useMemoryActivity(opts?: {
       const res = await fetch("/api/memory", { cache: "no-store" });
       if (!res.ok) return;
       const data = (await res.json()) as {
-        entries?: { mtime?: number }[];
+        entries?: { path?: unknown; mtime?: number }[];
       };
       if (!mountedRef.current) return;
       const mtimes = (data.entries ?? [])
+        .filter(
+          (e) =>
+            !(
+              typeof e.path === "string" && e.path.startsWith(AUTOSKILLS_PREFIX)
+            )
+        )
         .map((e) => (typeof e.mtime === "number" ? e.mtime : 0))
         .filter((m) => m > 0);
       const latest = mtimes.length ? Math.max(...mtimes) : 0;

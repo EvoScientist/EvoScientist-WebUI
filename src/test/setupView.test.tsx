@@ -581,6 +581,53 @@ describe("the Setup form", () => {
     expect(screen.queryByText(/New chats/)).toBeNull();
   });
 
+  it("the restart notice stays hidden when only AutoSkills fields changed", async () => {
+    server.settings = settings({
+      restart_required: true,
+      restart_fields: [
+        "memory_skill_synthesis_enabled",
+        "memory_skill_synthesis_time",
+      ],
+    });
+    renderView();
+    await screen.findByLabelText("Provider");
+    expect(screen.queryByText(/after EvoScientist restarts/)).toBeNull();
+    expect(screen.queryByText(/quit EvoSci/)).toBeNull();
+  });
+
+  it("the restart notice appears once the page has loaded with a model change", async () => {
+    server.settings = settings({
+      restart_required: true,
+      restart_fields: ["model"],
+    });
+    renderView();
+    await screen.findByLabelText("Provider");
+    expect(screen.queryByText(/New chats in the WebUI/)).not.toBeNull();
+  });
+
+  it("the restart notice still names a model change next to an AutoSkills change", async () => {
+    server.settings = settings({
+      restart_required: true,
+      restart_fields: ["memory_skill_synthesis_mode", "model"],
+    });
+    renderView();
+    await screen.findByText(
+      /^New chats in the WebUI use the saved model already\. Scheduled tasks and Agents panel follow-ups switch to it after EvoScientist restarts\./
+    );
+    expect(screen.queryByText(/memory_skill_synthesis/)).toBeNull();
+  });
+
+  it("the restart notice still shows for the scheduler timezone alone", async () => {
+    server.settings = settings({
+      restart_required: true,
+      restart_fields: ["scheduler_default_timezone"],
+    });
+    renderView();
+    await screen.findByText(
+      /These changes take effect after EvoScientist restarts:/
+    );
+  });
+
   it("restarts through the desktop bridge when there is one", async () => {
     const restartBackend = vi.fn(async () => ({ ok: true as const }));
     window.evoscientistDesktop = { restartBackend };

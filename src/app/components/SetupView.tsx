@@ -44,7 +44,11 @@ import { SetupWizard } from "@/app/components/SetupWizard";
 import { desktopBridge } from "@/lib/desktop";
 import { toast } from "sonner";
 import { isSetupDeferred } from "@/lib/setupDeferral";
-import { fieldLabel, readOnlyReason } from "@/lib/settingsForm";
+import {
+  fieldLabel,
+  readOnlyReason,
+  restartFieldsShown,
+} from "@/lib/settingsForm";
 import type { SettingsPayload } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { useDeployment } from "@/providers/ClientProvider";
@@ -192,7 +196,7 @@ export function SetupView({
           <RestartNotice
             // A new set of waiting fields starts the notice afresh, so an
             // earlier answer that hid Restart now does not keep hiding it.
-            key={payload.restart_fields.join(",")}
+            key={restartFieldsShown(payload.restart_fields).join(",")}
             payload={payload}
             onRestarted={refresh}
           />
@@ -286,7 +290,7 @@ export function SetupView({
         <RestartNotice
           // A new set of waiting fields starts the notice afresh, so an
           // earlier answer that hid Restart now does not keep hiding it.
-          key={payload.restart_fields.join(",")}
+          key={restartFieldsShown(payload.restart_fields).join(",")}
           payload={payload}
           onRestarted={refresh}
         />
@@ -583,7 +587,8 @@ export function RestartNotice({
     | { kind: "done"; text: string }
   >({ kind: "idle" });
   const { access } = useSettingsAccess();
-  if (!payload.restart_required || payload.restart_fields.length === 0) {
+  const restartFields = restartFieldsShown(payload.restart_fields);
+  if (!payload.restart_required || restartFields.length === 0) {
     return null;
   }
   // Restart now restarts the app's own backend, so it is offered only when
@@ -598,12 +603,12 @@ export function RestartNotice({
   const info =
     typeof provider === "string" ? payload.providers[provider] : undefined;
   const newChatsAtOnce =
-    payload.restart_fields.some((f) => f === "model" || f === "provider") &&
+    restartFields.some((f) => f === "model" || f === "provider") &&
     ![info?.key_field, info?.base_url_field].some(
-      (f) => !!f && payload.restart_fields.includes(f)
+      (f) => !!f && restartFields.includes(f)
     );
   // The model and provider are then said apart from the other fields.
-  const names = payload.restart_fields
+  const names = restartFields
     .filter((f) => !newChatsAtOnce || (f !== "model" && f !== "provider"))
     .map((field) => fieldLabel(field, payload.providers))
     .join(", ");

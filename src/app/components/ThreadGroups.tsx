@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, type ReactNode } from "react";
 import type { Thread } from "@langchain/langgraph-sdk";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -99,9 +99,16 @@ export function ThreadGroups({
     shown.length === 0 &&
     !fill &&
     !isLoadingMore;
+  // Report only when `empty` changes: the parent passes a new callback on
+  // every render, and reporting again on each one fed a first-load render
+  // loop (React #185).
+  const onEmptyChangeRef = useRef(onEmptyChange);
   useEffect(() => {
-    onEmptyChange?.(empty);
-  }, [empty, onEmptyChange]);
+    onEmptyChangeRef.current = onEmptyChange;
+  }, [onEmptyChange]);
+  useEffect(() => {
+    onEmptyChangeRef.current?.(empty);
+  }, [empty]);
 
   if (threads.error) {
     return (
