@@ -197,6 +197,8 @@ async function main() {
       log,
     });
     cleanups.unshift(() => ui.stop());
+    let uiEnded = false;
+    void ui.exited.then(() => (uiEnded = true));
     await ui.whenAnswering(60_000);
     const page = await fetch(ui.url);
     const html = await page.text();
@@ -217,6 +219,9 @@ async function main() {
       if (dock.shown) fail("the UI server has a Dock icon of its own");
       log.info("Dock: no icon for the UI server (a control process has one)");
     }
+    // A server that ended meanwhile is in no application list, which the
+    // Dock check reads as "no icon".
+    if (uiEnded) fail("the UI server ended during the checks");
   }
   return version;
 }

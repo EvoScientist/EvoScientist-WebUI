@@ -21,7 +21,7 @@ function appList(timeoutMs) {
 function foreground(list, pid) {
   const entry = list
     .split(/\n(?=\s*\d+\) ")/)
-    .find((e) => new RegExp(`\\bpid = ${pid}\\b`).test(e));
+    .find((e) => new RegExp(`^\\s*pid = ${pid}\\b`, "m").test(e));
   return entry ? /\btype="Foreground"/.test(entry) : false;
 }
 
@@ -38,6 +38,8 @@ function foreground(list, pid) {
  * pass without having seen anything.
  */
 export async function dockIconOf(pid, controlExe, timeoutMs = 15_000) {
+  // Nothing to look up: it would read as "no icon".
+  if (!Number.isInteger(pid)) return { unseen: "there is no process id" };
   // Left alone (this script was ended), the control ends by itself.
   const holdMs = timeoutMs + 15_000;
   const control = spawn(
