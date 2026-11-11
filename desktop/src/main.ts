@@ -180,8 +180,12 @@ const desktop = createApp({
   log,
   uiLog,
 
+  // On the window as a sheet, unless the window is hidden (closed on macOS):
+  // a sheet on a hidden window would not be seen.
   messageBox: (opts) =>
-    win ? dialog.showMessageBox(win, opts) : dialog.showMessageBox(opts),
+    win?.isVisible()
+      ? dialog.showMessageBox(win, opts)
+      : dialog.showMessageBox(opts),
   chooseFolder: async (title, defaultPath) => {
     const opts = {
       title,
@@ -364,6 +368,13 @@ function appWindow(w: BrowserWindow): AppWindow {
       w.focus();
     },
     focus: () => w.focus(),
+    hide: () => {
+      // A window hidden in full screen leaves its empty space behind.
+      if (w.isFullScreen()) {
+        w.once("leave-full-screen", () => w.hide());
+        w.setFullScreen(false);
+      } else w.hide();
+    },
     hideAll: () => {
       const shown = BrowserWindow.getAllWindows().filter((x) => x.isVisible());
       for (const x of shown) x.hide();
@@ -403,7 +414,8 @@ function guard(contents: WebContents): void {
   });
 }
 
-/** The one app window, hidden instead of closed until the app exits. */
+/** The one app window, hidden instead of closed until the app exits. On
+ *  macOS closing it only hides it; elsewhere closing it quits the app. */
 function createWindow(): BrowserWindow {
   const w = new BrowserWindow({
     width: 1280,
@@ -415,11 +427,14 @@ function createWindow(): BrowserWindow {
     backgroundColor: nativeTheme.shouldUseDarkColors ? "#24221e" : "#faf9f4",
     webPreferences: WEB_PREFERENCES,
   });
-  w.once("ready-to-show", () => w.show());
+  w.once("ready-to-show", () => {
+    w.show();
+    desktop.windowShown();
+  });
   w.on("close", (e) => {
     if (desktop.exiting) return;
     e.preventDefault();
-    void desktop.requestQuit();
+    desktop.closeWindow();
   });
   w.on("query-session-end", (e) => desktop.querySessionEnd(e.reasons));
   w.on("session-end", (e) =>
@@ -590,6 +605,8 @@ function start(): void {
   app.on("second-instance", (_e, argv) =>
     desktop.secondInstance(argv.includes(QUIT_FOR_INSTALL))
   );
+  // macOS: a click on the Dock icon, or the app opened again from Finder.
+  app.on("activate", () => desktop.activate());
   app.on("before-quit", (e) => {
     if (desktop.exiting) return;
     e.preventDefault();

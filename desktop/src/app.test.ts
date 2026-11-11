@@ -151,6 +151,7 @@ function fakeWindow() {
     navigate: (u: string) => void (page = u),
     bringToFront: () => void calls.push("front"),
     focus: () => void calls.push("focus"),
+    hide: () => void calls.push("hide window"),
     hideAll: () => {
       calls.push("hide");
       return shownAgain;
@@ -1364,6 +1365,99 @@ describe("second launch", () => {
     const h = await launched();
     h.app.secondInstance();
     expect(h.win.calls.at(-1)).toBe("front");
+  });
+});
+
+// A Mac app stays in the Dock when its window is closed; the window comes
+// back with its page as it was.
+describe("the window on macOS", () => {
+  const mac = { platform: "darwin" as const };
+
+  it("closing the window hides it and stops nothing", async () => {
+    const h = await launched({ ...mac, checkWork: async () => BUSY });
+    h.app.closeWindow();
+    await settle();
+    expect(h.win.calls.at(-1)).toBe("hide window");
+    expect(h.app.quitState).toBe("none");
+    expect(h.messageBox).not.toHaveBeenCalled();
+    expect(h.uis[0].ui.stops).toBe(0);
+    expect(h.sessions[0].stopped.count).toBe(0);
+    expect(h.exit).not.toHaveBeenCalled();
+  });
+
+  it.each(["win32", "linux"] as const)(
+    "on %s closing the window quits, as before",
+    async (platform) => {
+      const h = await launched({ platform });
+      h.app.closeWindow();
+      await vi.waitFor(() => expect(h.exit).toHaveBeenCalledWith(false));
+      expect(h.win.calls).not.toContain("hide window");
+      expect(h.sessions[0].stopped.count).toBe(1);
+    }
+  );
+
+  it("a click on the Dock icon brings the hidden window back", async () => {
+    const h = await launched(mac);
+    h.app.windowShown();
+    h.app.closeWindow();
+    h.app.activate();
+    expect(h.win.calls.slice(-2)).toEqual(["hide window", "front"]);
+  });
+
+  it("an activation before the window was first shown does nothing", async () => {
+    const h = await launched(mac);
+    const before = h.win.calls.length;
+    h.app.activate();
+    expect(h.win.calls).toHaveLength(before);
+    h.app.windowShown();
+    h.app.activate();
+    expect(h.win.calls.at(-1)).toBe("front");
+  });
+
+  it("a click on the Dock icon during the memory wait cancels the quit and shows the window, also one closed before", async () => {
+    let cancelledFn: () => boolean = () => false;
+    const waiting = deferred<void>();
+    const h = await launched({
+      ...mac,
+      waitForMemoryWorkers: async (_url, cancelled) => {
+        cancelledFn = cancelled;
+        waiting.resolve();
+        while (!cancelledFn()) await settle();
+        return "cancelled" as MemoryWaitResult;
+      },
+    });
+    h.app.windowShown();
+    h.app.closeWindow();
+    const quit = h.app.requestQuit();
+    await waiting.promise;
+    h.app.activate();
+    await quit;
+    expect(h.win.shownAgain).toHaveBeenCalledTimes(1);
+    expect(h.win.calls.at(-1)).toBe("front");
+    expect(h.exit).not.toHaveBeenCalled();
+    expect(h.app.quitState).toBe("none");
+  });
+
+  it("a click on the Dock icon while stopping relaunches after the exit", async () => {
+    const gate = deferred<void>();
+    const h = await launched(mac);
+    h.app.windowShown();
+    h.sessions[0].stopped.gate = gate.promise;
+    const quit = h.app.requestQuit();
+    await vi.waitFor(() => expect(h.sessions[0].stopped.count).toBe(1));
+    h.app.activate();
+    gate.resolve();
+    await quit;
+    expect(h.exit).toHaveBeenCalledWith(true);
+  });
+
+  it("quitting with the window closed still asks about running work", async () => {
+    const h = await launched({ ...mac, checkWork: async () => BUSY });
+    h.app.closeWindow();
+    h.messageBox.mockResolvedValueOnce({ response: 1 });
+    await h.app.requestQuit();
+    expect(h.messageBox).toHaveBeenCalledTimes(1);
+    expect(h.exit).not.toHaveBeenCalled();
   });
 });
 

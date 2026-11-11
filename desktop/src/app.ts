@@ -86,6 +86,9 @@ export interface AppWindow {
   /** Restores, shows and focuses the window (a second launch). */
   bringToFront(): void;
   focus(): void;
+  /** Hides the app's own window, with its page left as it is (closing the
+   *  window on macOS). */
+  hide(): void;
   /** Hides every visible window of the app, the ones the UI opened too, and
    *  returns a function that shows them again. */
   hideAll(): () => void;
@@ -282,6 +285,17 @@ export interface App {
   /** A second launch; `forInstall` when the installer asks the app to quit
    *  (`--quit-for-install`). */
   secondInstance(forInstall?: boolean): void;
+  /** The user closes the app's window. On macOS the window only hides: the
+   *  app stays in the Dock with its backend and its page, as Mac apps do.
+   *  Elsewhere closing the window quits the app (`requestQuit`). */
+  closeWindow(): void;
+  /** The app's window was shown for the first time. */
+  windowShown(): void;
+  /** macOS: a click on the Dock icon, or the app opened again. Handled as a
+   *  second launch, so it shows the same window and cancels a quit that
+   *  waits for the memory workers. Ignored until the window was first
+   *  shown: macOS can send it while the app starts. */
+  activate(): void;
   querySessionEnd(reasons: string[]): void;
   endOfSession(why: string): void;
   /** The current screen, for `status:get`. */
@@ -327,6 +341,7 @@ export function createApp(deps: AppDeps): App {
   const sessionEnd = deps.sessionEnd ?? new SessionEnd();
 
   let win: AppWindow | null = null;
+  let windowWasShown = false;
   let screen: Screen = progressScreen({ phase: "checking_core" });
   let onStatusPage = false;
   let evosci: string | null = null;
@@ -1397,7 +1412,10 @@ export function createApp(deps: AppDeps): App {
           quitState = "none";
           log.info("second launch during the wait: quit cancelled");
           showAgain();
-          win?.focus();
+          // On macOS the user may have closed the window before quitting;
+          // the click on the Dock icon that cancelled the quit asks for it.
+          if (deps.platform === "darwin") win?.bringToFront();
+          else win?.focus();
           resumeAfterCancelledQuit();
           return;
         }
@@ -1585,6 +1603,15 @@ export function createApp(deps: AppDeps): App {
     nativeError,
     crashReport,
     secondInstance,
+    closeWindow: () => {
+      if (deps.platform !== "darwin") return void requestQuit();
+      log.info("window closed: hidden, the app keeps running");
+      win?.hide();
+    },
+    windowShown: () => void (windowWasShown = true),
+    activate: () => {
+      if (windowWasShown) secondInstance();
+    },
     querySessionEnd: (reasons) => {
       sessionEnd.queried();
       log.info(`query-session-end (${reasons.join(",")})`);
