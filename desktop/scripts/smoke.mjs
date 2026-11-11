@@ -40,7 +40,7 @@ import proc from "../dist/proc.js";
 import release from "../dist/release.js";
 import uiServer from "../dist/uiServer.js";
 import versions from "../dist/versions.js";
-import { dockIsObservable, hasDockIcon } from "./dock.mjs";
+import { dockIconOf } from "./dock.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
@@ -209,21 +209,13 @@ async function main() {
     log.info(`GET / 200, GET ${asset} 200`);
     if (process.platform === "darwin") {
       // The server has set its process title by now (Next does before it
-      // listens), which is what registers it with macOS. A control first:
-      // where a process that has a Dock icon is not listed as one, the check
-      // would see nothing and must not pass.
-      if (!(await dockIsObservable(exe)))
-        fail(
-          "the Dock check sees nothing: a control process with a Dock icon was not listed"
-        );
-      const shown = hasDockIcon(ui.pid);
-      if (shown !== false)
-        fail(
-          shown
-            ? "the UI server has a Dock icon of its own"
-            : "the application list could not be read"
-        );
-      log.info("Dock: no icon for the UI server (a control process had one)");
+      // listens), which is what registers it with macOS. It is looked up in
+      // a list that shows a control process with a Dock icon: where that is
+      // not listed, the check would see nothing and must not pass.
+      const dock = await dockIconOf(ui.pid, exe);
+      if ("unseen" in dock) fail(`the Dock check sees nothing: ${dock.unseen}`);
+      if (dock.shown) fail("the UI server has a Dock icon of its own");
+      log.info("Dock: no icon for the UI server (a control process has one)");
     }
   }
   return version;
