@@ -291,12 +291,14 @@ describe.skipIf(process.platform === "win32")("killTree with a tree", () => {
    *  would end it. */
   const DEAF =
     "process.on('SIGTERM', () => {}); console.log('ready'); setInterval(() => {}, 1000)";
-  /** Starts DEAF as the root and waits until it is ready. */
-  async function deafRoot() {
+  /** Starts DEAF as the root (`group`: leading a process group of its own)
+   *  and waits until it is ready. */
+  async function deafRoot(group = false) {
     let ready = false;
     const r = run(node, ["-e", DEAF], {
       cwd: process.cwd(),
       env: process.env,
+      group,
       onStdoutLine: (l) => (ready ||= l === "ready"),
     });
     await vi.waitFor(() => expect(ready).toBe(true), { timeout: 10_000 });
@@ -523,20 +525,27 @@ describe.skipIf(process.platform === "win32")("killTree with a tree", () => {
     ]);
   });
 
-  it("warns when the process is missing from the list, and still ends it", async () => {
+  it("leaves a process alone that the first list does not show", async () => {
+    // ps lists every process: a pid that runs but is not in the list was
+    // given to another process after the one the app started had ended.
     const r = run(node, ["-e", "setInterval(() => {}, 1000)"], {
       cwd: process.cwd(),
       env: process.env,
     });
     const pid = r.child.pid!;
     const { warned, log } = recording();
-    await killTree(pid, log, process.platform, false, async () =>
-      ((await listProcesses()) ?? []).filter((x) => x.pid !== pid)
-    );
-    expect(await withTimeout(r.closed, 5000)).not.toBe("timeout");
-    expect(warned).toEqual([
-      `pid ${pid} is not in the process list: ending only it`,
-    ]);
+    try {
+      await killTree(pid, log, process.platform, false, async () =>
+        ((await listProcesses()) ?? []).filter((x) => x.pid !== pid)
+      );
+      expect(warned).toEqual([
+        `pid ${pid} is not in the process list; left alone`,
+      ]);
+      await later(300);
+      expect(alive(pid)).toBe(true);
+    } finally {
+      end(pid);
+    }
   });
 
   it("names the group in that warning when it ends a process group", async () => {
@@ -553,6 +562,43 @@ describe.skipIf(process.platform === "win32")("killTree with a tree", () => {
     expect(await withTimeout(r.closed, 5000)).not.toBe("timeout");
     expect(warned).toEqual([
       `pid ${pid} is not in the process list: ending only its process group`,
+    ]);
+  });
+
+  it("with a process group, leaves the group alone once the leader's pid is another process", async () => {
+    // The group that was started has gone, and its leader's pid is listed
+    // with another start time: a process that started later.
+    const r = await deafRoot(true);
+    const pid = r.child.pid!;
+    const { list } = listsThen((rows) =>
+      rows.map((x) => (x.pid === pid ? { ...x, started: "another start" } : x))
+    );
+    const { warned, log } = recording();
+    try {
+      await killTree(pid, log, process.platform, true, list);
+      expect(warned).toContain(
+        `pid ${pid} is not the same process any more; left alone`
+      );
+      expect(warned.join("\n")).not.toContain("sending SIGKILL");
+      await later(300);
+      expect(alive(pid)).toBe(true);
+    } finally {
+      end(pid);
+    }
+  }, 20_000);
+
+  it("says which group it ends without a process list", async () => {
+    const r = run(node, ["-e", "setInterval(() => {}, 1000)"], {
+      cwd: process.cwd(),
+      env: process.env,
+      group: true,
+    });
+    const pid = r.child.pid!;
+    const { warned, log } = recording();
+    await killTree(pid, log, process.platform, true, async () => null);
+    expect(await withTimeout(r.closed, 5000)).not.toBe("timeout");
+    expect(warned).toEqual([
+      `no process list: ending only process group ${pid}`,
     ]);
   });
 });

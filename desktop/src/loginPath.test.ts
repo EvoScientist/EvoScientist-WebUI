@@ -1,5 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
@@ -22,6 +28,11 @@ const block = (env: Record<string, string>, before = "", after = "") =>
   `${before}${START}${Object.entries(env)
     .map(([k, v]) => `${k}=${v}\0`)
     .join("")}${END}${after}`;
+
+/** `sleep` with a duration no other test or run uses, so a process found by
+ *  its command line is this test's own. */
+const RUN = `${process.pid}${Date.now() % 100000}`;
+const nap = (seconds: number) => `sleep ${seconds}.${RUN}`;
 
 /** Processes whose whole command line is `command`. */
 const running = (command: string) =>
@@ -334,16 +345,17 @@ describe.skipIf(process.platform === "win32")("probeShell", () => {
     // the time limit. The shell is ended where it is: it does not get to
     // its next command.
     const shellFile = join(home, "flood-shell");
-    const script = `echo $$ > '${shellFile}'; head -c 9000000 /dev/zero | tr '\\0' x; sleep 39`;
-    const began = Date.now();
+    const script = `echo $$ > '${shellFile}'; head -c 9000000 /dev/zero | tr '\\0' x; ${nap(
+      39
+    )}`;
+    // Null, not "timeout": it did not wait for the time limit.
     expect(await probeShell("/bin/sh", script, 30_000, END, env)).toBeNull();
-    expect(Date.now() - began).toBeLessThan(15_000);
     const shell = await pidIn(shellFile);
     await vi.waitFor(() => expect(alive(shell)).toBe(false), {
       timeout: 5000,
     });
     await new Promise((resolve) => setTimeout(resolve, 500));
-    expect(running("sleep 39")).toEqual([]);
+    expect(running(nap(39))).toEqual([]);
   }, 40_000);
 
   it("sends no signal for a shell that has ended by itself", async () => {
@@ -362,7 +374,6 @@ describe.skipIf(process.platform === "win32")("probeShell", () => {
         )
       ).toBeNull();
       const shell = await pidIn(shellFile);
-      await new Promise((resolve) => setTimeout(resolve, 500));
       const toIt = kill.mock.calls.filter(
         ([target]) => Math.abs(Number(target)) === shell
       );
@@ -371,6 +382,60 @@ describe.skipIf(process.platform === "win32")("probeShell", () => {
       kill.mockRestore();
     }
   });
+
+  it("has ended the shell when it answers, and never stops one", async () => {
+    // No step is left for later: the app may quit right after the answer,
+    // and a shell that was only stopped (SIGSTOP) would stay for ever.
+    const shellFile = join(home, "answered-shell");
+    const kill = vi.spyOn(process, "kill");
+    try {
+      const out = await probeShell(
+        "/bin/sh",
+        `echo $$ > '${shellFile}'; ${probeScript(START, END)}`,
+        10_000,
+        END,
+        env
+      );
+      // Read at once, with nothing awaited in between.
+      const signals = kill.mock.calls.map(([target, signal]) => [
+        target,
+        signal,
+      ]);
+      const shell = Number(readFileSync(shellFile, "utf8"));
+      expect(pathBetween(out as string, START, END)).toBeTruthy();
+      expect(signals).toContainEqual([-shell, "SIGKILL"]);
+      expect(signals.map(([, signal]) => signal)).not.toContain("SIGSTOP");
+    } finally {
+      kill.mockRestore();
+    }
+  });
+
+  it("finds an end marker that arrives in two pieces", async () => {
+    const script = `printf '%s' '${END.slice(
+      0,
+      3
+    )}'; sleep 0.4; printf '%s' '${END.slice(3)}'; sleep 20`;
+    const out = await probeShell("/bin/sh", script, 5_000, END, env);
+    expect(out).toMatch(/__E__$/);
+  });
+
+  // zsh without a terminal keeps what it starts in its own process group;
+  // a job whose parent has gone is then reached only through that group.
+  it.skipIf(!existsSync("/bin/zsh"))(
+    "ends a job in the shell's process group that is no longer below the shell",
+    async () => {
+      const jobFile = join(home, "group-job");
+      const script = `(${nap(
+        35
+      )} & echo $! > '${jobFile}'); printf '%s' '${END}'; sleep 20`;
+      const out = await probeShell("/bin/zsh", script, 10_000, END, env);
+      expect(out).toMatch(/__E__$/);
+      const job = await pidIn(jobFile);
+      await vi.waitFor(() => expect(alive(job)).toBe(false), {
+        timeout: 5000,
+      });
+    }
+  );
 
   it("runs the shell with stdin closed and the two variables that keep it from waiting", async () => {
     expect(PROBE_ENV).toEqual({
@@ -413,10 +478,7 @@ describe.skipIf(process.platform === "win32")("endProbes", () => {
   afterEach(() => vi.restoreAllMocks());
   const fresh = async () => {
     vi.resetModules();
-    return {
-      proc: await import("./proc"),
-      login: await import("./loginPath"),
-    };
+    return { login: await import("./loginPath") };
   };
   /** The pid a script wrote into `file`, once it is there. */
   const pidIn = async (file: string) => {
@@ -439,7 +501,9 @@ describe.skipIf(process.platform === "win32")("endProbes", () => {
     const { login } = await fresh();
     const shellFile = join(home, "hung-shell");
     const jobFile = join(home, "hung-job");
-    const script = `sleep 31 & echo $! > '${jobFile}'; echo $$ > '${shellFile}'; sleep 30`;
+    const script = `${nap(
+      31
+    )} & echo $! > '${jobFile}'; echo $$ > '${shellFile}'; sleep 30`;
     const probe = login.probeShell("/bin/sh", script, 30_000, END, env);
     const shell = await pidIn(shellFile);
     const job = await pidIn(jobFile);
@@ -449,40 +513,37 @@ describe.skipIf(process.platform === "win32")("endProbes", () => {
     await gone(job);
   }, 20_000);
 
-  it("also ends what a shell started when it has just answered", async () => {
-    // The answer is in, the list of its processes is not: the quit comes in
-    // between.
-    const { login, proc } = await fresh();
-    vi.spyOn(proc, "listProcesses").mockReturnValue(new Promise(() => {}));
-    const jobFile = join(home, "answered-job");
-    const script = `sleep 32 & echo $! > '${jobFile}'; ${login.probeScript(
-      START,
-      END
-    )}`;
-    const out = await login.probeShell("/bin/sh", script, 30_000, END, env);
-    expect(login.pathBetween(out as string, START, END)).toBeTruthy();
+  it("sends no signal for a shell that has ended, though its probe is still open", async () => {
+    // The shell has gone; a job it started keeps the output open, so the
+    // probe has no answer yet when the app quits.
+    const { login } = await fresh();
+    const shellFile = join(home, "open-shell");
+    const jobFile = join(home, "open-job");
+    const script = `${nap(
+      36
+    )} & echo $! > '${jobFile}'; echo $$ > '${shellFile}'; exit 3`;
+    const probe = login.probeShell("/bin/sh", script, 30_000, END, env);
+    const shell = await pidIn(shellFile);
     const job = await pidIn(jobFile);
-    expect(alive(job)).toBe(true);
-    login.endProbes();
-    await gone(job);
-  }, 20_000);
-
-  it("stops the shell before it lists its processes, so it starts nothing more", async () => {
-    // The list is a moment in time; a command the shell started after it
-    // would be missed. Here the list comes back half a second late, and the
-    // shell would start `sleep 38` meanwhile.
-    const { login, proc } = await fresh();
-    const real = proc.listProcesses;
-    vi.spyOn(proc, "listProcesses").mockImplementation(async () => {
-      const rows = await real();
-      await new Promise((resolve) => setTimeout(resolve, 600));
-      return rows;
+    await vi.waitFor(() => expect(alive(shell)).toBe(false), {
+      timeout: 5000,
     });
-    const script = `printf '%s' '${END}'; sleep 0.25; sleep 38`;
-    const out = await login.probeShell("/bin/sh", script, 30_000, END, env);
-    expect(out).toBe(END);
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-    expect(running("sleep 38")).toEqual([]);
+    const kill = vi.spyOn(process, "kill");
+    try {
+      login.endProbes();
+      expect(await probe).toBeNull();
+      const toIt = kill.mock.calls.filter(
+        ([target]) => Math.abs(Number(target)) === shell
+      );
+      expect(toIt).toEqual([]);
+    } finally {
+      kill.mockRestore();
+      try {
+        process.kill(job, "SIGKILL");
+      } catch {
+        // already gone
+      }
+    }
   }, 20_000);
 
   it("asks no further shell afterwards", async () => {

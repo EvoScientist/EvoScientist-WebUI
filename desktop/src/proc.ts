@@ -8,6 +8,7 @@
 // blocks its writer after about 128 KiB (measured on windows-latest).
 import {
   execFile,
+  execFileSync,
   spawn,
   type ChildProcess,
   type SpawnOptions,
@@ -173,6 +174,22 @@ export function listProcesses(): Promise<PsRow[] | null> {
   });
 }
 
+/** `listProcesses` without waiting, for a caller that must finish in one
+ *  step (a process that is about to exit). Null when `ps` fails. */
+export function listProcessesNow(): PsRow[] | null {
+  try {
+    return parsePs(
+      execFileSync(PS, ["-axo", "pid=,ppid=,lstart="], {
+        encoding: "utf8",
+        timeout: 5_000,
+        maxBuffer: 16 * 1024 * 1024,
+      })
+    );
+  } catch {
+    return null;
+  }
+}
+
 /** How long a tree gets between SIGTERM and SIGKILL. */
 export const TREE_GRACE_MS = 5_000;
 
@@ -187,9 +204,9 @@ export const TREE_GRACE_MS = 5_000;
  * only while `ps` still shows it with the same start time, the process
  * itself included, so a pid the system reused meanwhile is left alone. With
  * `group` (a child started with `group: true`) the signals for the process
- * go to its whole process group. Without a process list, or for a process
- * the list does not show, only the process (or its group) is signalled, as
- * before the tree was read.
+ * go to its whole process group. Without a process list only the process
+ * (or its group) is signalled, as before the tree was read. A process the
+ * list does not show is left alone; a group is still ended.
  */
 export async function killTree(
   pid: number,
@@ -227,13 +244,18 @@ export async function killTree(
       return false;
     }
   };
-  if (!rows) log.warn(`no process list: ending only pid ${pid}`);
-  else if (!self && signal(target, 0))
+  if (!rows) log.warn(`no process list: ending only ${what}`);
+  else if (!self && signal(target, 0)) {
+    // ps lists every process, so a pid that runs but is not listed was
+    // given to another process after the one that was started had ended.
+    if (!group) {
+      log.warn(`pid ${pid} is not in the process list; left alone`);
+      return;
+    }
     log.warn(
-      `pid ${pid} is not in the process list: ending only ${
-        group ? "its process group" : "it"
-      }`
+      `pid ${pid} is not in the process list: ending only its process group`
     );
+  }
   const running = () =>
     signal(target, 0) || below.some((r) => signal(r.pid, 0));
   const reached = signal(target, "SIGTERM");
@@ -250,9 +272,9 @@ export async function killTree(
   const listed = (r: PsRow) => now?.some((n) => n.pid === r.pid) === true;
   if (signal(target, 0)) {
     // Not recorded, or no second list: as before the tree was read. A group
-    // whose leader has ended is still the group that was started: its number
-    // stays taken while it has members, and a process that got the leader's
-    // pid meanwhile would be listed.
+    // whose leader has ended is ended too, also as before: a group keeps its
+    // number while it has members. Left alone is the one case the list can
+    // show: the leader's pid belongs to a process that started later.
     if (!self || !now || same(self) || (group && !listed(self))) {
       log.warn(`${what} did not end on SIGTERM; sending SIGKILL`);
       signal(target, "SIGKILL");
