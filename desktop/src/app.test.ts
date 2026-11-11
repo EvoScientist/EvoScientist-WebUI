@@ -379,6 +379,39 @@ describe("launch", () => {
   });
 });
 
+// On macOS the login shell's PATH is read while the first screen is up; the
+// launch, which finds and runs EvoSci, waits for it.
+describe("start", () => {
+  const located = { path: "/bin/EvoSci", via: "uv-tool-bin" as const };
+
+  it("shows the first screen at once and launches after what it is given", async () => {
+    const locateEvoSci = vi.fn(async () => located);
+    const h = harness({ locateEvoSci });
+    const before = deferred<void>();
+    h.app.start(before.promise);
+    await settle();
+    expect(h.win.calls).toContain("status page");
+    expect(locateEvoSci).not.toHaveBeenCalled();
+    before.resolve();
+    await vi.waitFor(() => expect(locateEvoSci).toHaveBeenCalled());
+  });
+
+  it("launches also when what it waits for fails", async () => {
+    const locateEvoSci = vi.fn(async () => located);
+    const h = harness({ locateEvoSci });
+    h.app.start(Promise.reject(new Error("no shell")));
+    await vi.waitFor(() => expect(locateEvoSci).toHaveBeenCalled());
+    expect(h.log.lines.join("\n")).toContain("no shell");
+  });
+
+  it("launches at once without one", async () => {
+    const locateEvoSci = vi.fn(async () => located);
+    const h = harness({ locateEvoSci });
+    h.app.start();
+    await vi.waitFor(() => expect(locateEvoSci).toHaveBeenCalled());
+  });
+});
+
 describe("crash report", () => {
   /** The backend log the only crash report written attaches. */
   const backendLog = (h: ReturnType<typeof harness>) => {

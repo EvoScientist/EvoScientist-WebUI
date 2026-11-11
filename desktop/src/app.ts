@@ -247,8 +247,10 @@ const QUIET_PHASES: ReadonlySet<BootState["phase"]> = new Set([
 
 export interface App {
   attachWindow(w: AppWindow): void;
-  /** Shows the first screen and starts the launch. */
-  start(): void;
+  /** Shows the first screen and starts the launch, after `before` when
+   *  given (the login shell's PATH on macOS, which the launch needs to find
+   *  and run EvoSci); a failure of `before` is only logged. */
+  start(before?: Promise<unknown>): void;
   launch(): Promise<void>;
   restartBackend(): Promise<void>;
   /** The bridge's restart, for the WebUI's settings page. */
@@ -1565,12 +1567,14 @@ export function createApp(deps: AppDeps): App {
 
   return {
     attachWindow: (w) => void (win = w),
-    start: () => {
+    start: (before) => {
       showScreen(screen);
       // Also when the launch stops on the status page: `core_too_new` tells
       // the user to update the app.
       deps.appUpdate?.start();
-      void launch();
+      void Promise.resolve(before)
+        .catch((e) => log.warn(`before the launch: ${e}`))
+        .then(() => launch());
     },
     launch,
     restartBackend,
