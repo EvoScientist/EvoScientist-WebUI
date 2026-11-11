@@ -8,7 +8,8 @@
 // 4. `EvoSci deploy --json` until `ready`;
 // 5. the bundled UI server under the packaged executable (on macOS the app's
 //    helper) with ELECTRON_RUN_AS_NODE=1: `/` and one static asset answer
-//    200, and on macOS it has no Dock icon of its own.
+//    200, and on macOS it has no Dock icon of its own (after a control
+//    process showed that a Dock icon would be seen).
 // Usage: node scripts/smoke.mjs --core pinned|newest|<version> [--app <dir>]
 //                                [--use-my-folders]
 //        (<dir>: the unpacked app's folder; on macOS the .app bundle)
@@ -39,7 +40,7 @@ import proc from "../dist/proc.js";
 import release from "../dist/release.js";
 import uiServer from "../dist/uiServer.js";
 import versions from "../dist/versions.js";
-import { hasDockIcon } from "./dock.mjs";
+import { dockIsObservable, hasDockIcon } from "./dock.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
@@ -207,15 +208,22 @@ async function main() {
     if (a.status !== 200) fail(`GET ${asset} answered ${a.status}`);
     log.info(`GET / 200, GET ${asset} 200`);
     if (process.platform === "darwin") {
-      // The server has set its process title by now, which is what
-      // registers it with macOS.
+      // The server has set its process title by now (Next does before it
+      // listens), which is what registers it with macOS. A control first:
+      // where a process that has a Dock icon is not listed as one, the check
+      // would see nothing and must not pass.
+      if (!(await dockIsObservable(exe)))
+        fail(
+          "the Dock check sees nothing: a control process with a Dock icon was not listed"
+        );
       const shown = hasDockIcon(ui.pid);
-      if (shown) fail("the UI server has a Dock icon of its own");
-      log.info(
-        shown === null
-          ? "Dock: the application list could not be read"
-          : "Dock: no icon for the UI server"
-      );
+      if (shown !== false)
+        fail(
+          shown
+            ? "the UI server has a Dock icon of its own"
+            : "the application list could not be read"
+        );
+      log.info("Dock: no icon for the UI server (a control process had one)");
     }
   }
   return version;

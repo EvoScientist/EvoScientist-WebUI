@@ -56,7 +56,7 @@ import {
   type ErrorScreen,
   type Screen,
 } from "./screens";
-import type { UiServer } from "./uiServer";
+import { uiServerExec, type UiServer } from "./uiServer";
 import type { AppUpdate, UpdateState } from "./appUpdate";
 import type { UpdateRun, UpdateView } from "./update";
 
@@ -114,8 +114,8 @@ export interface AppDeps {
   /** The bundled WebUI's `server.js` and the entry script that runs it. */
   uiServerJs: string;
   uiEntry: string;
-  /** The executable that runs the UI server as Node: Electron's binary, on
-   *  macOS the app's helper (`uiServerExec`). */
+  /** Electron's binary. It runs the UI server as Node, on macOS through the
+   *  app's helper (`uiServerExec`). */
   execPath: string;
   /** The bundled WebUI's version, read again for each crash report: when the
    *  bundle cannot be read (a missing server.js), the manifest's uiVersion has
@@ -823,7 +823,7 @@ export function createApp(deps: AppDeps): App {
     if (!deps.fileExists(deps.uiServerJs))
       throw new Error(`the bundled WebUI is missing: ${deps.uiServerJs}`);
     const started = deps.startUiServer({
-      execPath: deps.execPath,
+      execPath: uiServerExec(deps.execPath, deps.platform, deps.fileExists),
       entryScript: deps.uiEntry,
       cwd: folders.dataDir,
       env: deps.uiServerEnv({

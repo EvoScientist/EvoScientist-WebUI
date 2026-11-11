@@ -84,12 +84,7 @@ import { killTree, runCollect } from "./proc";
 import type { ActionId } from "./screens";
 import { readSetupRecord, runSetup, writeSetupRecord } from "./setup";
 import { lookupNewest } from "./release";
-import {
-  pickUiPort,
-  startUiServer,
-  uiServerEnv,
-  uiServerExec,
-} from "./uiServer";
+import { pickUiPort, startUiServer, uiServerEnv } from "./uiServer";
 import { runUpdate } from "./update";
 import { bundledUiVersion, installVersion } from "./versions";
 
@@ -182,7 +177,7 @@ const desktop = createApp({
   runtimeDirs: backendLogDirs,
   uiServerJs: UI_SERVER_JS,
   uiEntry: UI_ENTRY,
-  execPath: uiServerExec(process.execPath, process.platform, existsSync),
+  execPath: process.execPath,
   bundledUiVersion: () => bundledUiVersion(UI_SERVER_JS),
   log,
   uiLog,

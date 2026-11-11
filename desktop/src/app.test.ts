@@ -167,6 +167,8 @@ function harness(over: Partial<AppDeps> = {}) {
   const uiLog = fakeLog("desktop-ui.log");
   const sessions: ReturnType<typeof fakeSession>[] = [];
   const uis: ReturnType<typeof fakeUi>[] = [];
+  /** The executable each UI server was started with. */
+  const uiExecs: string[] = [];
   const win = fakeWindow();
   const exit = vi.fn();
   const messageBox = vi.fn(async (_opts: MessageBoxOptions) => ({
@@ -235,6 +237,7 @@ function harness(over: Partial<AppDeps> = {}) {
     startUiServer: (opts) => {
       const u = fakeUi(opts.port);
       uis.push(u);
+      uiExecs.push(opts.execPath);
       return u.ui;
     },
     uiServerEnv: () => ({}),
@@ -278,6 +281,7 @@ function harness(over: Partial<AppDeps> = {}) {
     messageBox,
     sessions,
     uis,
+    uiExecs,
     later,
     setNow: (t: number) => void (now = t),
   };
@@ -1395,6 +1399,36 @@ describe("second launch", () => {
     h.app.secondInstance();
     expect(h.win.calls.at(-1)).toBe("front");
   });
+});
+
+// The UI server sets a process title, for which Node registers it with macOS:
+// as the app's own executable it got a second, blank Dock icon.
+describe("the executable that runs the UI server", () => {
+  const contents = "/Applications/EvoScientist.app/Contents";
+  const execPath = `${contents}/MacOS/EvoScientist`;
+  const helper = `${contents}/Frameworks/EvoScientist Helper.app/Contents/MacOS/EvoScientist Helper`;
+
+  it("is the app's helper on macOS", async () => {
+    const h = await launched({ platform: "darwin", execPath });
+    expect(h.uiExecs).toEqual([helper]);
+  });
+
+  it("is the app's own executable on macOS when the helper is not there", async () => {
+    const h = await launched({
+      platform: "darwin",
+      execPath,
+      fileExists: (p) => p !== helper,
+    });
+    expect(h.uiExecs).toEqual([execPath]);
+  });
+
+  it.each(["win32", "linux"] as const)(
+    "is the app's own executable on %s",
+    async (platform) => {
+      const h = await launched({ platform, execPath });
+      expect(h.uiExecs).toEqual([execPath]);
+    }
+  );
 });
 
 // A Mac app stays in the Dock when its window is closed; the window comes
