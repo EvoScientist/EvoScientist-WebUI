@@ -1,6 +1,6 @@
 # EvoScientist desktop
 
-An Electron app that runs the installed EvoScientist core (`EvoSci deploy --json`) and the bundled WebUI in one window. This folder has the app itself, its unit tests, an unpacked build for manual checks and the Windows installer (NSIS, per user).
+An Electron app that runs the installed EvoScientist core (`EvoSci deploy --json`) and the bundled WebUI in one window. This folder has the app itself, its unit tests, an unpacked build for manual checks, the Windows installer (NSIS, per user) and the macOS dmg and zip (Apple Silicon; not signed yet).
 
 ## Layout
 
@@ -13,6 +13,7 @@ An Electron app that runs the installed EvoScientist core (`EvoSci deploy --json
 - `resources/ui-entry.mjs`: starts the bundled WebUI server (`dist/server.js` from the root build) with Electron's own Node.
 - `src/packaging.ts` + `scripts/builder.mjs`: run electron-builder with the app's version taken from the root `package.json` (the WebUI version it bundles; `desktop/package.json`'s own version is never used), and refuse `evoscientist.release` while the core range installs a core before 0.4.1 (the first with the Windows clean stop, EvoScientist#716).
 - `installer/check-app-running.nsh`: before the installer or the uninstaller replaces files, it asks a running app to quit through its own quit (`EvoScientist.exe --quit-for-install`, busy question included) and stops when the user cancels; once the app is gone it ends a UI server left running on its own. electron-builder's own check would end the app's backend and its running work at once.
+- `assets/mac/`: the macOS app icon (`EvoScientist.icns`), the picture it is drawn from (`robot.png`) and `make-icon.sh`, which rebuilds it on a Mac. The icon is named in `build.mac.icon` and kept out of electron-builder's default icon locations (`build/`, `icon.*`, `icons/`), where it would also become the Windows installer's icon.
 - `scripts/fetch-core-scripts.mjs`: downloads the core's `install.ps1` and `install.sh` from the tag of the version the app installs (the lower bound of `evoscientist.coreRange`) into `core-scripts/`; `scripts/before-pack.cjs` refuses to package without them.
 
 ## Develop
@@ -36,9 +37,12 @@ npm run build
 npm ci
 npm run pack   # unpacked
 npm run dist   # Windows: release/EvoScientist-Setup.exe, its blockmap and latest.yml
+               # macOS: release/EvoScientist-arm64.dmg, EvoScientist-arm64-mac.zip, its blockmap and latest-mac.yml
 ```
 
-`npm run pack` downloads the core's install scripts first (`npm run fetch-core-scripts`, which `npm start` needs too before it can install or repair the core); it needs Node 24.5 or newer (`node --use-env-proxy`); behind a proxy, set `HTTPS_PROXY`. The app is in `release/win-unpacked/EvoScientist.exe` (`linux-unpacked`, `mac` on other platforms). The bundled WebUI is in `resources/ui/`. `npm run dist` builds the installer with publishing off; it needs Windows (on Linux electron-builder needs Wine). The installer installs per user into `%LOCALAPPDATA%\Programs\EvoScientist` without an administrator prompt. Never change `build.appId` or `build.extraMetadata.name` after the first release: upgrades, uninstall and the install folder depend on them.
+`npm run pack` downloads the core's install scripts first (`npm run fetch-core-scripts`, which `npm start` needs too before it can install or repair the core); it needs Node 24.5 or newer (`node --use-env-proxy`); behind a proxy, set `HTTPS_PROXY`. The app is in `release/win-unpacked/EvoScientist.exe` (`release/mac-arm64/EvoScientist.app` on macOS, `linux-unpacked` on Linux). The bundled WebUI is in `resources/ui/` (`Contents/Resources/ui/` in the macOS app). `npm run dist` builds the installer with publishing off; the Windows installer needs Windows (on Linux electron-builder needs Wine). The installer installs per user into `%LOCALAPPDATA%\Programs\EvoScientist` without an administrator prompt. Never change `build.appId` or `build.extraMetadata.name` after the first release: upgrades, uninstall and the install folder depend on them.
+
+On a Mac, `npm run dist` builds the dmg to install from and the zip that updates will use, for Apple Silicon only, with fixed file names. Without a Developer ID certificate in the keychain the app is not signed: it opens on the Mac that built it, and macOS refuses a copy downloaded in a browser. Signing, notarization and releases of the macOS files come with the second part of #60.
 
 Logs: `desktop.log` and `desktop-ui.log` next to the backend's `langgraph_dev.log` once `ready` names it (the server home in the data folder, `~/.evoscientist/server` by default; `~/.config/evoscientist` with older cores); before that, in the server home when it holds a backend log, else in `~/.config/evoscientist`. Crash reports `desktop-crash-*.txt` go beside them.
 
