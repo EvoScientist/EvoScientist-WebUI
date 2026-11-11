@@ -34,6 +34,15 @@ const block = (env: Record<string, string>, before = "", after = "") =>
 const RUN = `${process.pid}${Date.now() % 100000}`;
 const nap = (seconds: number) => `sleep ${seconds}.${RUN}`;
 
+/** Ends a process a test started, when the test failed to see it end. */
+const endNow = (pid: number) => {
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch {
+    // already gone
+  }
+};
+
 /** Processes whose whole command line is `command`. */
 const running = (command: string) =>
   execFileSync("ps", ["-axo", "command="], { encoding: "utf8" })
@@ -421,9 +430,13 @@ describe.skipIf(process.platform === "win32")("probeShell", () => {
       const out = await probeShell("/bin/bash", script, 10_000, END, env);
       expect(out).toMatch(/__E__$/);
       const job = await pidIn(jobFile);
-      await vi.waitFor(() => expect(alive(job)).toBe(false), {
-        timeout: 5000,
-      });
+      try {
+        await vi.waitFor(() => expect(alive(job)).toBe(false), {
+          timeout: 5000,
+        });
+      } finally {
+        endNow(job);
+      }
     },
     20_000
   );
@@ -476,9 +489,13 @@ describe.skipIf(process.platform === "win32")("probeShell", () => {
       const out = await probeShell("/bin/zsh", script, 10_000, END, env);
       expect(out).toMatch(/__E__$/);
       const job = await pidIn(jobFile);
-      await vi.waitFor(() => expect(alive(job)).toBe(false), {
-        timeout: 5000,
-      });
+      try {
+        await vi.waitFor(() => expect(alive(job)).toBe(false), {
+          timeout: 5000,
+        });
+      } finally {
+        endNow(job);
+      }
     },
     20_000
   );

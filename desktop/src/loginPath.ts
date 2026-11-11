@@ -112,11 +112,13 @@ export function endProbes(): void {
  * listed first: once the shell is gone, what it started hangs under pid 1.
  * Without a list (`ps` failed) only the group is ended.
  *
- * The list and the signals are not one moment for the shell: a profile that
- * is still starting commands (the time limit, the output limit or a quit
- * came while it ran) can start one after the list, and with job control
- * (bash) that command has a group of its own and runs on. At the end marker
- * the shell waits in its last command and starts nothing.
+ * The list and the signals are not one moment. A profile that is still
+ * starting commands (the time limit, the output limit or a quit came while
+ * it ran) can start one after the list; so can a background job the profile
+ * left, also after the end marker; and with job control (bash) such a
+ * command has a process group of its own and runs on. The shell itself has
+ * only its last command left after the end marker, the wait, which ends by
+ * itself if it is missed.
  */
 function endShell(pid: number): void {
   const below = treeOf(listProcessesNow() ?? [], pid)
