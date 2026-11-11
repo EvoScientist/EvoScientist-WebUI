@@ -37,10 +37,17 @@ export function shellsToTry(accountShell: string | null): string[] {
   return shells;
 }
 
+/** How long the shell waits after the end marker, to be ended by the app. */
+const HOLD_SECONDS = 20;
+
 /** The command the shell runs: its environment, NUL-separated, between the
- *  markers. The markers are letters, digits and underscores only. */
+ *  markers, which are letters, digits and underscores only. Then it waits
+ *  instead of ending: a shell that ended by itself would leave what its
+ *  profile started in the background under pid 1, where the app could not
+ *  find it any more. The app ends the shell at the end marker; left alone
+ *  (the app died) it ends after the wait. */
 export function probeScript(start: string, end: string): string {
-  return `printf '%s' '${start}'; /usr/bin/env -0; printf '%s' '${end}'`;
+  return `printf '%s' '${start}'; /usr/bin/env -0; printf '%s' '${end}'; /bin/sleep ${HOLD_SECONDS}`;
 }
 
 /** PATH from the block between the markers; null when a marker or PATH is

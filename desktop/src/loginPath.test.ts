@@ -67,6 +67,11 @@ describe("probeScript", () => {
     expect(before).toContain(START);
     expect(after).toContain(END);
   });
+
+  it("keeps the shell running after the end marker, for the app to end it", () => {
+    const afterEnd = probeScript(START, END).split(END)[1];
+    expect(afterEnd).toMatch(/\/bin\/sleep \d+/);
+  });
 });
 
 describe("pathBetween", () => {
@@ -254,6 +259,22 @@ describe.skipIf(process.platform === "win32")("probeShell", () => {
     const pid = Number(/pid=(\d+)/.exec(out)?.[1]);
     expect(pid).toBeGreaterThan(0);
     await vi.waitFor(() => expect(alive(pid)).toBe(false));
+  });
+
+  it("ends a background process a profile started, also when nothing else keeps the shell running", async () => {
+    // As a profile's `some-agent &` followed by the probe's own command: the
+    // shell would end right after the end marker, and a process it started
+    // would then hang under pid 1, out of reach.
+    const pidFile = join(home, "background-pid");
+    const script = `sleep 321 & echo $! > '${pidFile}'; ${probeScript(
+      START,
+      END
+    )}`;
+    const out = await probeShell("/bin/sh", script, 10_000, END, env);
+    expect(pathBetween(out as string, START, END)).toBeTruthy();
+    const pid = Number(readFileSync(pidFile, "utf8"));
+    expect(pid).toBeGreaterThan(0);
+    await vi.waitFor(() => expect(alive(pid)).toBe(false), { timeout: 3000 });
   });
 
   it("gives up on a shell that never prints the end marker", async () => {
