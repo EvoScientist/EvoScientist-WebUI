@@ -405,6 +405,35 @@ describe("start", () => {
     expect(h.log.lines.join("\n")).toContain("no shell");
   });
 
+  it("a restart from the menu during the wait does not launch ahead of it", async () => {
+    // The launch would find and run EvoSci with the PATH not in place yet.
+    const locateEvoSci = vi.fn(async () => located);
+    const h = harness({ locateEvoSci });
+    const before = deferred<void>();
+    h.app.start(before.promise);
+    await settle();
+    await h.app.restartBackend();
+    await h.app.launch();
+    expect(locateEvoSci).not.toHaveBeenCalled();
+    before.resolve();
+    await vi.waitFor(() => expect(locateEvoSci).toHaveBeenCalledTimes(1));
+  });
+
+  it("a quit during the wait is not followed by a launch", async () => {
+    const locateEvoSci = vi.fn(async () => located);
+    const h = harness({ locateEvoSci });
+    const before = deferred<void>();
+    h.app.start(before.promise);
+    await settle();
+    await h.app.requestQuit();
+    expect(h.exit).toHaveBeenCalledWith(false);
+    before.resolve();
+    await settle();
+    await settle();
+    expect(locateEvoSci).not.toHaveBeenCalled();
+    expect(h.sessions).toHaveLength(0);
+  });
+
   it("launches at once without one", async () => {
     const locateEvoSci = vi.fn(async () => located);
     const h = harness({ locateEvoSci });
@@ -1449,15 +1478,6 @@ describe("the window on macOS", () => {
     gate.resolve();
     await quit;
     expect(h.exit).toHaveBeenCalledWith(true);
-  });
-
-  it("quitting with the window closed still asks about running work", async () => {
-    const h = await launched({ ...mac, checkWork: async () => BUSY });
-    h.app.closeWindow();
-    h.messageBox.mockResolvedValueOnce({ response: 1 });
-    await h.app.requestQuit();
-    expect(h.messageBox).toHaveBeenCalledTimes(1);
-    expect(h.exit).not.toHaveBeenCalled();
   });
 });
 

@@ -8,9 +8,10 @@ name: Desktop
 #   smoke test.
 # - Weekly: the same, so a new core release inside the app's range is tested
 #   without waiting for a WebUI change.
-# - Tags v*: the same, then (once `evoscientist.release` is on, or always in
-#   a fork) the installer: built with publishing off, then uploaded with
-#   `gh release upload` - installer and blockmap first, latest.yml last - to
+# - Tags v*: the same on Windows only, then (once `evoscientist.release` is
+#   on, or always in a fork) the installer: built with publishing off, then
+#   uploaded with `gh release upload` - installer and blockmap first,
+#   latest.yml last - to
 #   the tag's draft release (one published by hand gets the files and a
 #   warning), by a job of its own that holds the write token and runs no
 #   npm code. The last job publishes it after every

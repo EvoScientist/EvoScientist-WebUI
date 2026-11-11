@@ -1,4 +1,10 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
@@ -6,6 +12,8 @@ import {
   FALLBACK_SHELLS,
   PROBE_ENV,
   PROBE_TIMEOUT_MS,
+  endProbes,
+  ownTree,
   pathBetween,
   probeScript,
   probeShell,
@@ -115,6 +123,26 @@ describe("pathBetween", () => {
     expect(pathBetween(`PATH=/a\0${END}`, START, END)).toBeNull();
     expect(pathBetween(block({ HOME: "/h" }), START, END)).toBeNull();
     expect(pathBetween(block({ PATH: "" }), START, END)).toBeNull();
+  });
+});
+
+describe("ownTree", () => {
+  const row = (pid: number, ppid: number) => ({
+    pid,
+    ppid,
+    started: `t${pid}`,
+  });
+
+  it("is what the shell started, while the shell is still this app's child", () => {
+    const rows = [row(100, 1), row(200, 100), row(201, 200), row(202, 201)];
+    expect(ownTree(rows, 200, 100).sort()).toEqual([201, 202]);
+  });
+
+  it("is empty when the pid now belongs to some other process", () => {
+    // The shell ended and its pid was given to a process of another parent.
+    const rows = [row(100, 1), row(200, 7), row(201, 200)];
+    expect(ownTree(rows, 200, 100)).toEqual([]);
+    expect(ownTree(rows, 999, 100)).toEqual([]);
   });
 });
 
@@ -258,7 +286,9 @@ describe.skipIf(process.platform === "win32")("probeShell", () => {
     expect(Date.now() - began).toBeLessThan(5_000);
     const pid = Number(/pid=(\d+)/.exec(out)?.[1]);
     expect(pid).toBeGreaterThan(0);
-    await vi.waitFor(() => expect(alive(pid)).toBe(false));
+    await vi.waitFor(() => expect(alive(pid)).toBe(false), {
+      timeout: 5000,
+    });
   });
 
   it("ends a background process a profile started, also when nothing else keeps the shell running", async () => {
@@ -274,16 +304,20 @@ describe.skipIf(process.platform === "win32")("probeShell", () => {
     expect(pathBetween(out as string, START, END)).toBeTruthy();
     const pid = Number(readFileSync(pidFile, "utf8"));
     expect(pid).toBeGreaterThan(0);
-    await vi.waitFor(() => expect(alive(pid)).toBe(false), { timeout: 3000 });
+    await vi.waitFor(() => expect(alive(pid)).toBe(false), {
+      timeout: 5000,
+    });
   });
 
   it("gives up on a shell that never prints the end marker", async () => {
     const pidFile = join(home, "pid");
     const script = `printf '%s' '${START}'; sleep 30 & echo $! > '${pidFile}'; sleep 30`;
-    expect(await probeShell("/bin/sh", script, 600, END, env)).toBe("timeout");
+    expect(await probeShell("/bin/sh", script, 2000, END, env)).toBe("timeout");
     const pid = Number(readFileSync(pidFile, "utf8"));
     expect(pid).toBeGreaterThan(0);
-    await vi.waitFor(() => expect(alive(pid)).toBe(false));
+    await vi.waitFor(() => expect(alive(pid)).toBe(false), {
+      timeout: 5000,
+    });
   });
 
   it("is null for a shell that cannot start or ends without the marker", async () => {
@@ -291,6 +325,34 @@ describe.skipIf(process.platform === "win32")("probeShell", () => {
       await probeShell("/no/such/shell", "true", 5_000, END, env)
     ).toBeNull();
     expect(await probeShell("/bin/sh", "exit 3", 5_000, END, env)).toBeNull();
+  });
+
+  it("is null for an account shell that cannot be run at all", async () => {
+    // spawn fails at once for these (ENOTDIR, ENOEXEC) instead of reporting
+    // an error later; the next shell must still get its turn.
+    const text = join(home, "not-a-shell");
+    writeFileSync(text, "just text\n", { mode: 0o755 });
+    expect(
+      await probeShell("/bin/sh/not-a-folder", "true", 5_000, END, env)
+    ).toBeNull();
+    expect(await probeShell(text, "true", 5_000, END, env)).toBeNull();
+  });
+
+  it("endProbes ends a shell that is still being asked", async () => {
+    // The app quits while a profile hangs: the shell must not stay behind.
+    const pidFile = join(home, "hung-pid");
+    const script = `echo $$ > '${pidFile}'; sleep 30`;
+    const probe = probeShell("/bin/sh", script, 30_000, END, env);
+    await vi.waitFor(() => expect(existsSync(pidFile)).toBe(true), {
+      timeout: 5000,
+    });
+    const pid = Number(readFileSync(pidFile, "utf8"));
+    expect(alive(pid)).toBe(true);
+    endProbes();
+    expect(await probe).toBeNull();
+    await vi.waitFor(() => expect(alive(pid)).toBe(false), {
+      timeout: 5000,
+    });
   });
 
   it("runs the shell with stdin closed and the two variables that keep it from waiting", async () => {

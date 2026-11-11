@@ -1592,9 +1592,16 @@ export function createApp(deps: AppDeps): App {
       // Also when the launch stops on the status page: `core_too_new` tells
       // the user to update the app.
       deps.appUpdate?.start();
-      void Promise.resolve(before)
-        .catch((e) => log.warn(`before the launch: ${e}`))
-        .then(() => launch());
+      // The wait counts as part of the launch, so a restart from the menu
+      // meanwhile does not launch ahead of it.
+      void exclusive(async () => {
+        try {
+          await before;
+        } catch (e) {
+          log.warn(`before the launch: ${e}`);
+        }
+        if (quitState === "none") await launchLocked();
+      });
     },
     launch,
     restartBackend,
@@ -1612,7 +1619,9 @@ export function createApp(deps: AppDeps): App {
     },
     windowShown: () => void (windowWasShown = true),
     activate: () => {
-      if (windowWasShown) secondInstance();
+      if (!windowWasShown) return;
+      log.info("activated (the Dock icon, or the app opened again)");
+      secondInstance();
     },
     querySessionEnd: (reasons) => {
       sessionEnd.queried();

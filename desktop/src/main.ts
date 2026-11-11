@@ -2,9 +2,11 @@
 // It runs the launch sequence (boot.ts) on the installed core, serves the
 // bundled WebUI with Electron's own Node (uiServer.ts) and shows it in a
 // sandboxed window. While the UI is not up, the window shows a static status
-// page (resources/status.html) that never calls the backend. Closing checks
+// page (resources/status.html) that never calls the backend. Quitting checks
 // for work on a backend the app started, hides the window, waits for the
-// memory workers, then stops the UI server and that backend.
+// memory workers, then stops the UI server and that backend. Closing the
+// window does the same on Windows and Linux; on macOS it only hides the
+// window, and a click on the Dock icon brings it back.
 //
 // The flows and their state live in app.ts; this file builds their
 // dependencies from Electron and the process helpers, and wires Electron's
@@ -69,7 +71,7 @@ import {
   updateLockHeld,
 } from "./install";
 import { DESKTOP_LOG, DESKTOP_UI_LOG, FileLog } from "./logs";
-import { readLoginPath } from "./loginPath";
+import { endProbes, readLoginPath } from "./loginPath";
 import { answers } from "./loopback";
 import {
   folderEnv,
@@ -180,10 +182,10 @@ const desktop = createApp({
   log,
   uiLog,
 
-  // On the window as a sheet, unless the window is hidden (closed on macOS):
-  // a sheet on a hidden window would not be seen.
+  // On the window. On macOS only while it is visible: the user may have
+  // closed (hidden) it, and a sheet on a hidden window would not be seen.
   messageBox: (opts) =>
-    win?.isVisible()
+    win && (process.platform !== "darwin" || win.isVisible())
       ? dialog.showMessageBox(win, opts)
       : dialog.showMessageBox(opts),
   chooseFolder: async (title, defaultPath) => {
@@ -205,6 +207,9 @@ const desktop = createApp({
   copyText: (t) => clipboard.writeText(t),
   documentsDir: () => app.getPath("documents"),
   exit: (relaunch) => {
+    // A login shell that is still being asked for its PATH (a profile that
+    // hangs) would stay behind.
+    endProbes();
     if (relaunch) app.relaunch();
     app.exit(0);
   },
@@ -355,6 +360,28 @@ const desktop = createApp({
     waitForMemoryWorkers(backendRequest(url), { cancelled }),
 });
 
+/** Windows that hide once they have left full screen. */
+const hidingAfterFullScreen = new WeakSet<BrowserWindow>();
+
+/**
+ * Hides a window. On macOS a window in full screen leaves full screen first:
+ * hidden where it is, it leaves its empty space behind. `stayShown` drops a
+ * hide that still waits for that, when the window is asked for meanwhile.
+ */
+function hideWindow(w: BrowserWindow): void {
+  if (process.platform !== "darwin" || !w.isFullScreen()) return w.hide();
+  if (hidingAfterFullScreen.has(w)) return;
+  hidingAfterFullScreen.add(w);
+  w.once("leave-full-screen", () => {
+    if (hidingAfterFullScreen.delete(w) && !w.isDestroyed()) w.hide();
+  });
+  w.setFullScreen(false);
+}
+
+function stayShown(w: BrowserWindow): void {
+  hidingAfterFullScreen.delete(w);
+}
+
 /** The window as the controller drives it. */
 function appWindow(w: BrowserWindow): AppWindow {
   return {
@@ -363,23 +390,22 @@ function appWindow(w: BrowserWindow): AppWindow {
     loadUrl: (url) => w.loadURL(url),
     currentUrl: () => w.webContents.getURL(),
     bringToFront: () => {
+      stayShown(w);
       if (w.isMinimized()) w.restore();
       w.show();
       w.focus();
     },
     focus: () => w.focus(),
-    hide: () => {
-      // A window hidden in full screen leaves its empty space behind.
-      if (w.isFullScreen()) {
-        w.once("leave-full-screen", () => w.hide());
-        w.setFullScreen(false);
-      } else w.hide();
-    },
+    hide: () => hideWindow(w),
     hideAll: () => {
       const shown = BrowserWindow.getAllWindows().filter((x) => x.isVisible());
-      for (const x of shown) x.hide();
+      for (const x of shown) hideWindow(x);
       return () => {
-        for (const x of shown) if (!x.isDestroyed()) x.show();
+        for (const x of shown)
+          if (!x.isDestroyed()) {
+            stayShown(x);
+            x.show();
+          }
       };
     },
     // Each page's preload listens on its own channel.

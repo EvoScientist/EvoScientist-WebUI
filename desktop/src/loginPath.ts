@@ -8,10 +8,21 @@
 // A profile can print anything and can leave processes that keep the output
 // open, so the environment is printed between two markers that are new for
 // each run, reading stops at the end marker, and the shell is ended
-// afterwards with everything it started.
-import { spawn } from "node:child_process";
+// afterwards with the processes below it (one that detached itself from the
+// shell on purpose, like an ssh-agent, stays).
+//
+// A shell that does not take `-ilc` (csh, tcsh) gives no PATH, and the next
+// shell is asked.
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { listProcesses, treeOf, type Logger } from "./proc";
+import {
+  PS,
+  listProcesses,
+  parsePs,
+  treeOf,
+  type Logger,
+  type PsRow,
+} from "./proc";
 
 /** How long one shell gets. */
 export const PROBE_TIMEOUT_MS = 10_000;
@@ -75,6 +86,59 @@ export type Probe = (
   end: string
 ) => Promise<string | "timeout" | null>;
 
+/** The probe shells that have not been ended yet, each with the call that
+ *  settles its probe. */
+const asked = new Map<number, () => void>();
+
+/**
+ * Ends every shell that is still being asked, at once and with what it
+ * started: the app quits, and its timers and callbacks will not run any
+ * more. A profile that hangs would otherwise stay behind.
+ */
+export function endProbes(): void {
+  if (asked.size === 0) return;
+  let rows: PsRow[] = [];
+  try {
+    rows = parsePs(
+      execFileSync(PS, ["-axo", "pid=,ppid=,lstart="], {
+        encoding: "utf8",
+        timeout: 5_000,
+        maxBuffer: 16 * 1024 * 1024,
+      })
+    );
+  } catch {
+    // Without a list only the shells' process groups are ended.
+  }
+  for (const [pid, settle] of [...asked]) {
+    asked.delete(pid);
+    endTree(rows, pid);
+    settle();
+  }
+}
+
+/** SIGKILL to the process group the shell leads (it is `detached`) and to
+ *  every process below it: an interactive shell gives each job a process
+ *  group of its own, so the group signal alone misses them. */
+function endTree(rows: PsRow[], pid: number): void {
+  for (const target of [-pid, ...ownTree(rows, pid, process.pid)]) {
+    try {
+      process.kill(target, "SIGKILL");
+    } catch {
+      // already gone
+    }
+  }
+}
+
+/** The pids below the shell `pid`, but only while `pid` is still the child
+ *  of `parent` (this app): once the shell has ended, its pid may belong to
+ *  another process, whose children are not the app's to end. */
+export function ownTree(rows: PsRow[], pid: number, parent: number): number[] {
+  if (rows.find((r) => r.pid === pid)?.ppid !== parent) return [];
+  return treeOf(rows, pid)
+    .map((r) => r.pid)
+    .filter((p) => p !== pid);
+}
+
 /**
  * The real probe: `<shell> -ilc <script>` (login and interactive, so both
  * kinds of profile are read) with stdin closed, in a process group of its
@@ -91,11 +155,19 @@ export function probeShell(
   env: NodeJS.ProcessEnv = process.env
 ): Promise<string | "timeout" | null> {
   return new Promise((resolve) => {
-    const child = spawn(shell, ["-ilc", script], {
-      env: { ...env, ...PROBE_ENV },
-      stdio: ["ignore", "pipe", "ignore"],
-      detached: true,
-    });
+    let child: ChildProcess;
+    try {
+      child = spawn(shell, ["-ilc", script], {
+        env: { ...env, ...PROBE_ENV },
+        stdio: ["ignore", "pipe", "ignore"],
+        detached: true,
+      });
+    } catch {
+      // Not something that can be run (ENOTDIR, ENOEXEC): spawn throws
+      // instead of reporting an error later.
+      return resolve(null);
+    }
+    const pid = child.pid;
     let output = "";
     let settled = false;
     const finish = (result: string | "timeout" | null) => {
@@ -104,9 +176,10 @@ export function probeShell(
       clearTimeout(timer);
       child.stdout?.destroy();
       resolve(result);
-      if (child.pid) void endShell(child.pid);
+      if (pid && asked.delete(pid)) void endShell(pid);
     };
     const timer = setTimeout(() => finish("timeout"), timeoutMs);
+    if (pid) asked.set(pid, () => finish(null));
     child.stdout?.setEncoding("utf8");
     child.stdout?.on("data", (chunk: string) => {
       output += chunk;
@@ -118,18 +191,10 @@ export function probeShell(
   });
 }
 
-/** Ends the shell's process group (it leads one, being `detached`) and every
- *  process below it. The processes are listed first: once the shell is gone,
- *  what it started hangs under pid 1. */
+/** Ends the shell with what it started. The processes are listed first:
+ *  once the shell is gone, what it started hangs under pid 1. */
 async function endShell(pid: number): Promise<void> {
-  const below = treeOf((await listProcesses()) ?? [], pid);
-  for (const target of [-pid, ...below.map((r) => r.pid)]) {
-    try {
-      process.kill(target, "SIGKILL");
-    } catch {
-      // already gone
-    }
-  }
+  endTree((await listProcesses()) ?? [], pid);
 }
 
 /**
