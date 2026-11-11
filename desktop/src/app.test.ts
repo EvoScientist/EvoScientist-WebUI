@@ -1408,9 +1408,13 @@ describe("the executable that runs the UI server", () => {
   const execPath = `${contents}/MacOS/EvoScientist`;
   const helper = `${contents}/Frameworks/EvoScientist Helper.app/Contents/MacOS/EvoScientist Helper`;
 
+  const NO_HELPER =
+    "WARN the app's helper executable was not found: the UI server runs as the app's own executable and gets a Dock icon of its own";
+
   it("is the app's helper on macOS", async () => {
     const h = await launched({ platform: "darwin", execPath });
     expect(h.uiExecs).toEqual([helper]);
+    expect(h.log.lines).not.toContain(NO_HELPER);
   });
 
   it("is the app's own executable on macOS when the helper is not there", async () => {
@@ -1420,6 +1424,7 @@ describe("the executable that runs the UI server", () => {
       fileExists: (p) => p !== helper,
     });
     expect(h.uiExecs).toEqual([execPath]);
+    expect(h.log.lines).toContain(NO_HELPER);
   });
 
   it.each(["win32", "linux"] as const)(
@@ -1427,6 +1432,7 @@ describe("the executable that runs the UI server", () => {
     async (platform) => {
       const h = await launched({ platform, execPath });
       expect(h.uiExecs).toEqual([execPath]);
+      expect(h.log.lines).not.toContain(NO_HELPER);
     }
   );
 });

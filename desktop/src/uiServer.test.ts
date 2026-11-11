@@ -197,6 +197,9 @@ describe("uiServerExec", () => {
     expect(uiServerExec("/opt/MacOS/EvoScientist", "darwin", never)).toBe(
       "/opt/MacOS/EvoScientist"
     );
+    expect(uiServerExec("/x/Contents/bin/electron", "darwin", never)).toBe(
+      "/x/Contents/bin/electron"
+    );
   });
 
   it("is the app's own executable off macOS", () => {
@@ -206,5 +209,8 @@ describe("uiServerExec", () => {
     expect(uiServerExec("/opt/EvoScientist/evoscientist", "linux", never)).toBe(
       "/opt/EvoScientist/evoscientist"
     );
+    // A path shaped like a Mac app's makes no difference off macOS.
+    expect(uiServerExec(exe, "win32", never)).toBe(exe);
+    expect(uiServerExec(exe, "linux", never)).toBe(exe);
   });
 });

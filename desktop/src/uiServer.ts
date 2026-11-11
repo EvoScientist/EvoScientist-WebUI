@@ -101,9 +101,10 @@ export async function pickUiPort(
  * itself a process title, and for that Node registers the process with
  * macOS. A process of the app's own executable is registered as an
  * application of its own and gets a second icon in the Dock, a blank one
- * under the app's name; the helper is registered as a background part of the
- * app. Elsewhere, and when there is no helper (the executable is not in an
- * app bundle), it is `execPath` itself.
+ * under the app's name; the helper is registered too, but as one without a
+ * Dock icon (`LSUIElement` in its Info.plist). Elsewhere, and when there is
+ * no helper (the executable is not in an app bundle), it is `execPath`
+ * itself.
  */
 export function uiServerExec(
   execPath: string,

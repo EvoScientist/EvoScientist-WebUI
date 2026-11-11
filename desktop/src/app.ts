@@ -822,8 +822,17 @@ export function createApp(deps: AppDeps): App {
       );
     if (!deps.fileExists(deps.uiServerJs))
       throw new Error(`the bundled WebUI is missing: ${deps.uiServerJs}`);
+    const execPath = uiServerExec(
+      deps.execPath,
+      deps.platform,
+      deps.fileExists
+    );
+    if (deps.platform === "darwin" && execPath === deps.execPath)
+      log.warn(
+        "the app's helper executable was not found: the UI server runs as the app's own executable and gets a Dock icon of its own"
+      );
     const started = deps.startUiServer({
-      execPath: uiServerExec(deps.execPath, deps.platform, deps.fileExists),
+      execPath,
       entryScript: deps.uiEntry,
       cwd: folders.dataDir,
       env: deps.uiServerEnv({
