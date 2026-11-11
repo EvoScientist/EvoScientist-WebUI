@@ -7,9 +7,13 @@ import {
   folderEnv,
   readStartConfig,
   resolveFolders,
+  runtimeDir,
+  runtimeDirs,
   sharedDirFromEnv,
   withReadyFolders,
 } from "./paths";
+import { evoscientist } from "../package.json";
+import { compareReleases, installVersion, parseRelease } from "./versions";
 
 const HOME = resolve("/home/u");
 
@@ -147,7 +151,7 @@ describe("withReadyFolders", () => {
       configDir: "/c",
       logFile: "/l/x.log",
     };
-    expect(withReadyFolders(ready, folders, HOME)).toEqual({
+    expect(withReadyFolders(ready, folders, () => false, HOME)).toEqual({
       ready,
       missing: [],
     });
@@ -157,6 +161,7 @@ describe("withReadyFolders", () => {
     const r = withReadyFolders(
       { url: "u", dataDir: "", configDir: "", logFile: "" },
       folders,
+      () => false,
       HOME
     );
     expect(r.ready).toEqual({
@@ -166,5 +171,50 @@ describe("withReadyFolders", () => {
       logFile: join(HOME, ".config", "evoscientist", "langgraph_dev.log"),
     });
     expect(r.missing).toEqual(["data_dir", "config_dir", "log_file"]);
+  });
+
+  it("fills in the log of the data folder ready names", () => {
+    const r = withReadyFolders(
+      { url: "u", dataDir: "/d", configDir: "/c", logFile: "" },
+      folders,
+      (p) => p === join("/d", "server", "langgraph_dev.log"),
+      HOME
+    );
+    expect(r.ready.logFile).toBe(join("/d", "server", "langgraph_dev.log"));
+  });
+});
+
+describe("runtimeDir", () => {
+  const dirs = runtimeDirs(join(HOME, ".evoscientist"), HOME);
+  const serverHome = join(HOME, ".evoscientist", "server");
+  const older = join(HOME, ".config", "evoscientist");
+
+  it("lists the server home before the older cores' folder", () => {
+    expect(dirs).toEqual([serverHome, older]);
+  });
+
+  it("takes the server home when it holds the backend's log", () => {
+    const has = (p: string) =>
+      p === join(serverHome, "langgraph_dev.log") ||
+      p === join(older, "langgraph_dev.log");
+    expect(runtimeDir(dirs, has)).toBe(serverHome);
+  });
+
+  it("takes the older cores' folder when only it holds the backend's log", () => {
+    const has = (p: string) => p === join(older, "langgraph_dev.log");
+    expect(runtimeDir(dirs, has)).toBe(older);
+  });
+
+  it("takes the older cores' folder when neither holds the backend's log", () => {
+    expect(runtimeDir(dirs, () => false)).toBe(older);
+  });
+
+  it("falls back to the older cores' folder only while the app installs a core that keeps its log there", () => {
+    const installs = parseRelease(installVersion(evoscientist.coreRange) ?? "");
+    expect(installs).not.toBeNull();
+    expect(
+      compareReleases(installs as number[], [0, 4, 2]),
+      "the app now installs a core that keeps its log in the server home: revisit runtimeDir's fallback"
+    ).toBeLessThan(0);
   });
 });

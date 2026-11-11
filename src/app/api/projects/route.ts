@@ -7,6 +7,7 @@ import {
   refusal,
   relayGate,
 } from "@/lib/server/settingsRelay";
+import { requestFolder } from "@/lib/server/projects";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,22 +17,12 @@ export const dynamic = "force-dynamic";
  *  to 120 s for that, so this waits longer. */
 const REGISTER_TIMEOUT_MS = 150_000;
 
-/** The longest folder path taken. */
-const MAX_PATH = 4096;
-
 /** The `{workspace_dir}` of a JSON body, or null for a body without one. */
 async function folderOf(request: NextRequest): Promise<string | null> {
   const body = (await request.json().catch(() => null)) as {
     workspace_dir?: unknown;
   } | null;
-  const folder = body?.workspace_dir;
-  if (typeof folder !== "string") return null;
-  // eslint-disable-next-line no-control-regex
-  const control = /[\u0000-\u001f]/.test(folder);
-  if (!folder.trim() || folder.length > MAX_PATH || control) return null;
-  // As named: the backend reads the path (a project's key is its exact
-  // folder, spaces and all).
-  return folder;
+  return requestFolder(body?.workspace_dir);
 }
 
 const invalidPath = () =>

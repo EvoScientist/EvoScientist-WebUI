@@ -1,4 +1,4 @@
-// Adding and removing projects, through the WebUI's /api/projects relay
+// Adding, removing and moving projects, through the WebUI's /api/projects relay
 // (which adds the local secret): the requests and the words for their
 // answers.
 
@@ -86,6 +86,10 @@ function errorText(body: ErrorBody, status: number): string {
       return "The project has scheduled tasks that are on. Pause them first.";
     case "unregister_failed":
       return "Removing the project failed. Try again.";
+    case "move_pending":
+      return typeof body.detail === "string" && body.detail
+        ? body.detail
+        : "A move of this folder isn't finished yet. Finish it first.";
     case "local_secret_required":
       return REFUSAL_TEXT.secret_rejected;
     default:
@@ -98,14 +102,15 @@ function errorText(body: ErrorBody, status: number): string {
 
 async function send(
   method: "POST" | "DELETE",
-  folder: string
+  request: Record<string, string>,
+  path = "/api/projects"
 ): Promise<{ ok: boolean; status: number; body: Record<string, unknown> }> {
   let res: Response;
   try {
-    res = await fetch("/api/projects", {
+    res = await fetch(path, {
       method,
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ workspace_dir: folder }),
+      body: JSON.stringify(request),
       cache: "no-store",
     });
   } catch {
@@ -129,11 +134,17 @@ export type AddProjectResult =
     }
   | { ok: false; message: string };
 
+/** A typed folder as the backend takes it. */
+export function typedFolder(folder: string): string {
+  // Explorer's "Copy as path" puts the path in quotes.
+  return folder.trim().replace(/^"(.+)"$/, "$1");
+}
+
 /** Register `folder` (an absolute path; `~` is expanded by the backend). */
 export async function addProject(folder: string): Promise<AddProjectResult> {
-  // Explorer's "Copy as path" puts the path in quotes.
-  const path = folder.trim().replace(/^"(.+)"$/, "$1");
-  const { ok, status, body } = await send("POST", path);
+  const { ok, status, body } = await send("POST", {
+    workspace_dir: typedFolder(folder),
+  });
   if (!ok || typeof body.workspace_dir !== "string") {
     return { ok: false, message: errorText(body, status) };
   }
@@ -158,7 +169,7 @@ export type RemoveProjectResult =
 /** Remove the project at `key` from the backend. Its folder, files and
  *  conversations stay. */
 export async function removeProject(key: string): Promise<RemoveProjectResult> {
-  const { ok, status, body } = await send("DELETE", key);
+  const { ok, status, body } = await send("DELETE", { workspace_dir: key });
   if (ok) return { ok: true };
   return {
     ok: false,
@@ -168,4 +179,112 @@ export async function removeProject(key: string): Promise<RemoveProjectResult> {
       ? body.cron_ids.filter((id): id is string => typeof id === "string")
       : [],
   };
+}
+
+/** Whether this machine's backend can move a project, as the WebUI's server
+ *  finds it. Throws when that can't be read. */
+export async function readMoveSupport(signal?: AbortSignal): Promise<boolean> {
+  const res = await fetch("/api/projects/move", {
+    cache: "no-store",
+    signal,
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const body = (await res.json()) as { supported?: unknown } | null;
+  return body?.supported === true;
+}
+
+/** What the backend reports moving. */
+export interface MoveReport {
+  /** The project's key in its new folder. */
+  key: string;
+  threads: number;
+  tasks: number;
+  memory: boolean;
+  proposals: number;
+  warnings: string[];
+  /** It finished, or repeated, a move asked before. */
+  resumed: boolean;
+  /** False: it moved nothing, as the old folder is a project again (a
+   *  warning says why). */
+  moved: boolean;
+}
+
+export type MoveProjectResult =
+  | ({ ok: true } & MoveReport)
+  | { ok: false; message: string };
+
+function moveErrorText(
+  body: ErrorBody & { pending?: unknown },
+  status: number
+) {
+  const detail =
+    typeof body.detail === "string" && body.detail ? body.detail : null;
+  // A backend without the move: its catch-all answers with no `error`.
+  if (status === 404 && body.error === undefined) {
+    return "This EvoScientist version can't move projects. Update EvoScientist to move one.";
+  }
+  if (status === 409 && detail) return detail;
+  switch (body.error) {
+    case "move_failed":
+      // No `pending`: the backend couldn't tell, so the move may be waiting.
+      return body.pending !== false
+        ? `Moving the project failed${
+            detail ? ` (${detail})` : ""
+          }. Fix the cause and try again to finish it.`
+        : `Moving the project failed${detail ? `: ${detail}` : "."}`;
+    // Unanswered, or cut off: the backend may go on, and a repeat finishes
+    // it.
+    case "backend_timeout":
+    case "backend_unreachable":
+      return "The move got no answer from EvoScientist. It may still be running: try again to see it finish.";
+    default:
+      return errorText(body, status);
+  }
+}
+
+const count = (value: unknown) =>
+  typeof value === "number" && Number.isFinite(value) ? value : 0;
+
+/** Move the registered project at `old` to `folder` (an absolute path),
+ *  which it registers: its conversations, scheduled tasks and memory follow
+ *  it. Moves no files. */
+export async function moveProject(
+  old: string,
+  folder: string
+): Promise<MoveProjectResult> {
+  const { ok, status, body } = await send(
+    "POST",
+    { old, new: typedFolder(folder) },
+    "/api/projects/move"
+  );
+  if (!ok || typeof body.workspace_dir !== "string") {
+    return { ok: false, message: moveErrorText(body, status) };
+  }
+  return {
+    ok: true,
+    key: body.workspace_dir,
+    threads: count(body.threads),
+    tasks: count(body.tasks),
+    memory: Array.isArray(body.memory) && body.memory.length > 0,
+    proposals: count(body.proposals),
+    warnings: Array.isArray(body.warnings)
+      ? body.warnings.filter((w): w is string => typeof w === "string")
+      : [],
+    resumed: body.resumed === true,
+    moved: body.moved !== false,
+  };
+}
+
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+/** What a move that moved something says, for the project `name`. */
+export function movedText(name: string, report: MoveReport): string {
+  if (report.resumed) return `Finished moving ${name}.`;
+  const parts = [
+    plural(report.threads, "conversation"),
+    plural(report.tasks, "scheduled task"),
+    report.memory && "its memory",
+    report.proposals > 0 && plural(report.proposals, "AutoSkills proposal"),
+  ].filter(Boolean);
+  return `Moved ${name}: ${parts.join(", ")}.`;
 }

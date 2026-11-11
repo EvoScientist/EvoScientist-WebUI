@@ -12,6 +12,7 @@ import {
   type ReactNode,
 } from "react";
 
+import { readMoveSupport } from "@/lib/projectActions";
 import { retryWithBackoff } from "@/lib/retry";
 import {
   fetchProjects,
@@ -31,6 +32,10 @@ export type FilesAccess = "pending" | "here" | "elsewhere";
 export interface ProjectsContextValue {
   /** The last project list the backend gave. */
   projects: ProjectsState;
+  /** Whether this machine's backend can move a project (whether this page
+   *  may is the settings access's to say): asked with each read of the list,
+   *  apart from it. */
+  canMove: boolean;
   /** True while the list is being read again; nothing runs meanwhile. */
   refreshing: boolean;
   /** The last failure while reading the list, while it is retried. */
@@ -52,7 +57,22 @@ export interface ProjectsContextValue {
   /** Make `key` the current project; `remember` also makes it the last used
    *  (a pick, or a message sent in it). */
   selectProject: (key: string, options?: { remember?: boolean }) => void;
+  /** The project at `from` now is at `to`: the selection and the last used
+   *  one (here and in storage) follow it when they named it; nothing else
+   *  changes. Called before the list that has `to` is read. */
+  followMove: (from: string, to: string) => void;
+  /** The moves followed that the last published list brought in (it has
+   *  their new folders), a new array each time: what holds an old key (the
+   *  open thread's metadata) reads it again. */
+  arrivedMoves: readonly ProjectMove[];
   files: FilesAccess;
+}
+
+const NO_MOVES: readonly ProjectMove[] = [];
+
+export interface ProjectMove {
+  from: string;
+  to: string;
 }
 
 export const ProjectsContext = createContext<ProjectsContextValue | null>(null);
@@ -137,6 +157,7 @@ async function readProjects(
 interface ProviderState {
   backend: string;
   projects: ProjectsState;
+  canMove: boolean;
   files: FilesAccess;
   refreshing: boolean;
   error: string | null;
@@ -144,12 +165,19 @@ interface ProviderState {
   selected: string | null;
   /** The project last used on this backend, from this browser's storage. */
   lastUsed: string | null;
+  /** The moves followed, until a list that has their new folder is
+   *  published. */
+  pendingMoves: readonly ProjectMove[];
+  arrivedMoves: readonly ProjectMove[];
 }
 
 function initialState(backend: string, deploymentUrl: string): ProviderState {
   return {
     backend,
     projects: { status: "pending" },
+    canMove: false,
+    pendingMoves: NO_MOVES,
+    arrivedMoves: NO_MOVES,
     files: "pending",
     refreshing: true,
     error: null,
@@ -189,12 +217,38 @@ export function ProjectsProvider({
   // the published answer is never older than the latest request.
   const runningRef = useRef<{ promise: Promise<ProjectsState> } | null>(null);
   const againRef = useRef(false);
+  // The move check running, if any: a read meanwhile doesn't start another.
+  const moveCheckRef = useRef<Promise<void> | null>(null);
   // Made per mount and per backend: the last one's read is aborted, as is
   // the first mount's under React's development double mount.
   const controllerRef = useRef<{
     backend: string;
     controller: AbortController;
   } | null>(null);
+
+  // Whether this machine's backend can move a project, asked with each read
+  // of the list but apart from it: a backend slow to answer never holds the
+  // list up. A failed read is asked again, with backoff.
+  const checkMove = useCallback(
+    (signal: AbortSignal) => {
+      if (moveCheckRef.current) return;
+      const check = retryWithBackoff(
+        () => readMoveSupport(signal),
+        signal,
+        MAX_RETRY_MS
+      ).then((canMove) => {
+        if (moveCheckRef.current === check) moveCheckRef.current = null;
+        if (canMove === null || signal.aborted) return;
+        setState((prev) =>
+          prev.backend !== backend || prev.canMove === canMove
+            ? prev
+            : { ...prev, canMove }
+        );
+      });
+      moveCheckRef.current = check;
+    },
+    [backend]
+  );
 
   const refresh = useCallback((): Promise<ProjectsState> => {
     // A `refresh` kept from before a switch to another backend (a request
@@ -204,6 +258,7 @@ export function ProjectsProvider({
       return Promise.resolve({ status: "pending" });
     }
     const { controller } = current;
+    checkMove(controller.signal);
     gateRef.current = false;
     setState((prev) =>
       prev.refreshing ? prev : { ...prev, refreshing: true }
@@ -249,25 +304,37 @@ export function ProjectsProvider({
       if (forget(lastUsed) && readLastUsedProject(deploymentUrl) === lastUsed) {
         writeLastUsedProject(deploymentUrl, null);
       }
-      setState((prev) => ({
-        ...prev,
-        projects: published,
-        refreshing: false,
-        error: null,
-        selected: forget(prev.selected) ? null : prev.selected,
-        lastUsed: forget(prev.lastUsed) ? null : prev.lastUsed,
-      }));
+      setState((prev) => {
+        const arrived = prev.pendingMoves.filter((move) =>
+          findProject(published, move.to)
+        );
+        return {
+          ...prev,
+          projects: published,
+          refreshing: false,
+          error: null,
+          selected: forget(prev.selected) ? null : prev.selected,
+          lastUsed: forget(prev.lastUsed) ? null : prev.lastUsed,
+          ...(arrived.length > 0 && {
+            pendingMoves: prev.pendingMoves.filter(
+              (move) => !arrived.includes(move)
+            ),
+            arrivedMoves: arrived,
+          }),
+        };
+      });
       return published;
     })();
     runningRef.current = run;
     return run.promise;
-  }, [deploymentUrl, apiKey, backend]);
+  }, [deploymentUrl, apiKey, backend, checkMove]);
 
   useEffect(() => {
     const controller = new AbortController();
     controllerRef.current = { backend, controller };
     runningRef.current = null;
     againRef.current = false;
+    moveCheckRef.current = null;
     void refresh();
     return () => {
       controller.abort();
@@ -321,6 +388,21 @@ export function ProjectsProvider({
     [deploymentUrl]
   );
 
+  const followMove = useCallback(
+    (from: string, to: string) => {
+      if (readLastUsedProject(deploymentUrl) === from) {
+        writeLastUsedProject(deploymentUrl, to);
+      }
+      setState((prev) => ({
+        ...prev,
+        selected: prev.selected === from ? to : prev.selected,
+        lastUsed: prev.lastUsed === from ? to : prev.lastUsed,
+        pendingMoves: [...prev.pendingMoves, { from, to }],
+      }));
+    },
+    [deploymentUrl]
+  );
+
   const current = useMemo(
     () => pickProject(state.projects, [state.selected, state.lastUsed]),
     [state.projects, state.selected, state.lastUsed]
@@ -329,15 +411,18 @@ export function ProjectsProvider({
   const value = useMemo(
     () => ({
       projects: state.projects,
+      canMove: state.canMove,
       refreshing: state.refreshing,
       error: state.error,
       isReady,
       refresh,
       current,
       selectProject,
+      followMove,
+      arrivedMoves: state.arrivedMoves,
       files: state.files,
     }),
-    [state, isReady, refresh, current, selectProject]
+    [state, isReady, refresh, current, selectProject, followMove]
   );
   return (
     <ProjectsContext.Provider value={value}>

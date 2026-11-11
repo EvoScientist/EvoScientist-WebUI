@@ -141,6 +141,11 @@ export function parseDeployEvent(line: string): DeployEvent | null {
   }
 }
 
+/** The backend's log an error's detail names (`log_file`), when it names one. */
+export function detailLogFile(detail: unknown): string | undefined {
+  return str(obj(detail).log_file) || undefined;
+}
+
 // --- EvoSci setup --json / update --json ---------------------------------------
 
 export type StageStatus = "running" | "done" | "skipped" | "error";

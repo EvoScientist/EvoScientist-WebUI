@@ -538,6 +538,36 @@ describe("ThreadList by project", () => {
     }
   });
 
+  it("reads the lists again when a moved project's new folder is listed", async () => {
+    vi.useFakeTimers();
+    try {
+      const before = two();
+      const { rerender } = renderList(
+        <ThreadList onThreadSelect={vi.fn()} />,
+        before
+      );
+      mutate.mockClear();
+
+      rerender(
+        <TestProjectsProvider
+          value={{
+            ...before,
+            arrivedMoves: [{ from: "/gone/projC", to: TEST_PROJECT }],
+          }}
+        >
+          <ThreadList onThreadSelect={vi.fn()} />
+        </TestProjectsProvider>
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400);
+      });
+
+      expect(mutate).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("starts a new chat in a project from its section", () => {
     const onNewChat = vi.fn();
     const onClose = vi.fn();
@@ -594,5 +624,104 @@ describe("ThreadList by project", () => {
     expect(dialogs.openRemoveProject).toHaveBeenCalledWith(
       expect.objectContaining({ key: OTHER })
     );
+  });
+
+  describe("a project whose folder is missing", () => {
+    const withMissing = () =>
+      mockProjects(
+        readyProjects(TEST_PROJECT, {
+          key: OTHER,
+          name: "projB",
+          missing: true,
+        }),
+        { current: TEST_PROJECT }
+      );
+
+    async function openMenu(name: string) {
+      fireEvent.keyDown(
+        screen.getByRole("button", { name: `Actions for project ${name}` }),
+        { key: "Enter" }
+      );
+      await screen.findByRole("menuitem", { name: "Remove project" });
+    }
+
+    it("offers to choose its new folder", async () => {
+      const dialogs = {
+        openAddProject: vi.fn(),
+        openRemoveProject: vi.fn(),
+        openMoveProject: vi.fn(),
+      };
+      render(
+        <TestProjectsProvider value={withMissing()}>
+          <ProjectDialogsContext.Provider value={dialogs}>
+            <ThreadList onThreadSelect={vi.fn()} />
+          </ProjectDialogsContext.Provider>
+        </TestProjectsProvider>
+      );
+
+      await openMenu("projB");
+      fireEvent.click(screen.getByRole("menuitem", { name: /new folder/ }));
+
+      expect(dialogs.openMoveProject).toHaveBeenCalledWith(
+        expect.objectContaining({ key: OTHER })
+      );
+    });
+
+    it("offers no move for a project whose folder is in place", async () => {
+      const dialogs = {
+        openAddProject: vi.fn(),
+        openRemoveProject: vi.fn(),
+        openMoveProject: vi.fn(),
+      };
+      render(
+        <TestProjectsProvider value={withMissing()}>
+          <ProjectDialogsContext.Provider value={dialogs}>
+            <ThreadList onThreadSelect={vi.fn()} />
+          </ProjectDialogsContext.Provider>
+        </TestProjectsProvider>
+      );
+
+      await openMenu("projA");
+
+      expect(screen.queryByRole("menuitem", { name: /new folder/ })).toBeNull();
+    });
+
+    it("offers no move when the page can't move projects", async () => {
+      const dialogs = {
+        openAddProject: vi.fn(),
+        openRemoveProject: vi.fn(),
+      };
+      render(
+        <TestProjectsProvider value={withMissing()}>
+          <ProjectDialogsContext.Provider value={dialogs}>
+            <ThreadList onThreadSelect={vi.fn()} />
+          </ProjectDialogsContext.Provider>
+        </TestProjectsProvider>
+      );
+
+      await openMenu("projB");
+
+      expect(screen.queryByRole("menuitem", { name: /new folder/ })).toBeNull();
+    });
+
+    it("offers no other move while the project is being moved", async () => {
+      const dialogs = {
+        openAddProject: vi.fn(),
+        openRemoveProject: vi.fn(),
+        openMoveProject: vi.fn(),
+        moving: new Set([OTHER]),
+      };
+      render(
+        <TestProjectsProvider value={withMissing()}>
+          <ProjectDialogsContext.Provider value={dialogs}>
+            <ThreadList onThreadSelect={vi.fn()} />
+          </ProjectDialogsContext.Provider>
+        </TestProjectsProvider>
+      );
+
+      await openMenu("projB");
+
+      expect(screen.queryByRole("menuitem", { name: /new folder/ })).toBeNull();
+    });
   });
 });

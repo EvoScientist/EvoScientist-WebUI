@@ -1136,7 +1136,17 @@ export function ScheduledTasksPanel({
   const editIdRef = useRef(0);
 
   // Each task's project is the one whose assistant it runs on.
-  const { projects } = useProjects();
+  const { projects, arrivedMoves } = useProjects();
+  // A move changed the assistants its tasks run on: read them again. Until
+  // that read reports loading, the detail pane waits (`moveRead`), or the
+  // old list, without the moved project, would empty it.
+  const seenMoves = useRef(arrivedMoves);
+  const moveRead = seenMoves.current !== arrivedMoves;
+  useEffect(() => {
+    if (seenMoves.current === arrivedMoves) return;
+    seenMoves.current = arrivedMoves;
+    refresh();
+  }, [arrivedMoves, refresh]);
   const projectList = useMemo(
     () => (projects.status === "ready" ? projects.projects : []),
     [projects]
@@ -1192,10 +1202,10 @@ export function ScheduledTasksPanel({
   useEffect(() => {
     if (!selectedTaskId) return;
     // The list holds only tasks of known projects: wait for them too.
-    if (loading || error || projectsPending) return;
+    if (loading || error || projectsPending || moveRead) return;
     const updated = tasks.find((task) => task.cron_id === selectedTaskId);
     setRight(updated ? { kind: "detail", task: updated } : { kind: "empty" });
-  }, [error, loading, projectsPending, selectedTaskId, tasks]);
+  }, [error, loading, projectsPending, moveRead, selectedTaskId, tasks]);
 
   const openCreate = useCallback((template?: Template) => {
     createIdRef.current += 1;

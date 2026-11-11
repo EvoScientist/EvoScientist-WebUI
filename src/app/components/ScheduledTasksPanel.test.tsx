@@ -512,6 +512,28 @@ describe("ScheduledTasksPanel time zones", () => {
     expect(screen.getByRole("heading", { name: "Alpha" })).toBeTruthy();
   });
 
+  it("reads the tasks again when a moved project's new folder is listed", () => {
+    const C = "/gone/projC";
+    hook.tasks = [task({ name: "Moved one", assistantId: schedulerOf(C) })];
+    projectsHolder.value = mockProjects(
+      readyProjects(A, B, { key: C, name: "projC", missing: true }),
+      { current: A }
+    );
+    const { rerender } = render(<ScheduledTasksPanel />);
+    fireEvent.click(screen.getByRole("button", { name: /^Moved one/ }));
+
+    hook.tasks = [task({ name: "Moved one", assistantId: schedulerOf(B) })];
+    projectsHolder.value = {
+      ...mockProjects(readyProjects(A, B), { current: A }),
+      arrivedMoves: [{ from: C, to: B }],
+    };
+    rerender(<ScheduledTasksPanel />);
+
+    expect(hook.refresh).toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: /^Moved one/ })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Moved one" })).toBeTruthy();
+  });
+
   it("creates nothing while the projects are read again", () => {
     projectsHolder.value = {
       ...mockProjects(readyProjects(A, B), { current: A }),
