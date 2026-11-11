@@ -113,7 +113,7 @@ describe("the installer's identity", () => {
   });
 });
 
-// W06: a dmg to install from and a zip for updates, Apple Silicon only. The
+// A dmg to install from and a zip for updates, Apple Silicon only. The
 // names are fixed, like the Windows installer's, so a download link never
 // changes with the version; they keep "arm64" because electron-updater picks
 // a Mac's update file by that word.
@@ -135,7 +135,7 @@ describe("the macOS build", () => {
   });
 
   // Updates use the zip; a blockmap written for the dmg would be wrong once
-  // the dmg is stapled (W06, the signing PR).
+  // the dmg is stapled.
   it("writes no blockmap for the dmg", () => {
     expect(dmg.writeUpdateInfo).toBe(false);
   });
