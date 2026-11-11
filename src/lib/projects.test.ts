@@ -163,6 +163,18 @@ describe("withAppFolders", () => {
     expect(out.launchKey).toBe("c:/Users/u/Documents/EvoScientist");
   });
 
+  it("matches a macOS key typed in another case than the folder's", () => {
+    const out = withAppFolders(
+      readyProjects("/Users/u/documents/evoscientist").projects,
+      {
+        default: "/Users/u/Documents/EvoScientist",
+        launch: "/Users/u/Documents/EvoScientist",
+      }
+    );
+    expect(out.projects[0].name).toBe("Default workspace");
+    expect(out.launchKey).toBe("/Users/u/documents/evoscientist");
+  });
+
   it("changes nothing for folders that are unknown or not projects", () => {
     for (const folders of [{}, { default: "/elsewhere", launch: "/gone" }]) {
       const out = withAppFolders(projects, folders);

@@ -4,7 +4,7 @@
 // dependencies so they can be tested without either. main.ts builds the
 // dependencies and wires Electron's events to the methods here.
 import type { MessageBoxOptions } from "electron";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, sep } from "node:path";
 import {
   boot,
   defaultFolder,
@@ -428,12 +428,24 @@ export function createApp(deps: AppDeps): App {
   }
 
   async function pickFolder(defaultPath: string | undefined) {
+    // The dialog is modal to the window, so a second request hardly ever
+    // comes; answering it as a cancel is enough.
     if (picking) return null;
     picking = true;
     try {
-      const start = defaultPath || defaultFolderOrNull();
-      // As default_workdir is read: a leading `~` and a relative or
-      // key-form path (forward slashes on Windows) become a native one.
+      // A relative path would be resolved against the app's own working
+      // folder, which the user never chose.
+      const typed =
+        defaultPath &&
+        (isAbsolute(defaultPath) ||
+          defaultPath === "~" ||
+          defaultPath.startsWith("~/") ||
+          defaultPath.startsWith(`~${sep}`))
+          ? defaultPath
+          : null;
+      const start = typed || defaultFolderOrNull();
+      // As default_workdir is read: a leading `~` and a key-form path
+      // (forward slashes on Windows) become a native one.
       return await deps.chooseFolder(
         "Choose a folder",
         start ? existingFolder(expandWorkdir(start)) : undefined

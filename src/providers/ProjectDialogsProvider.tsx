@@ -208,7 +208,7 @@ function ProjectFolderDialog({
   const [choice, setChoice] = useState<Project | null>(null);
   const [busy, setBusy] = useState<"add" | "move" | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const pickFolder = desktopBridge()?.pickFolder;
+  const pickFolder = useMemo(() => desktopBridge()?.pickFolder, []);
   // Read when the folder dialog answers: a busy dialog ignores it.
   const busyRef = useRef(busy);
   busyRef.current = busy;

@@ -954,6 +954,16 @@ describe("restart from the page (bridge)", () => {
     );
   });
 
+  it("pickFolder opens a relative start folder at the default folder", async () => {
+    const chooseFolder = vi.fn(async () => null);
+    const h = await launched({ chooseFolder });
+    await h.app.pickFolderFor("http://127.0.0.1:4718", "work");
+    expect(chooseFolder).toHaveBeenLastCalledWith(
+      "Choose a folder",
+      resolve("/docs", "EvoScientist")
+    );
+  });
+
   it("pickFolder answers null on a cancel or a failed dialog", async () => {
     const chooseFolder = vi
       .fn<AppDeps["chooseFolder"]>()

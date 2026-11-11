@@ -825,6 +825,37 @@ describe("ProjectsProvider in the desktop app", () => {
     expect(result.current.launchKey).toBe("/srv/zeta");
   });
 
+  it("takes the launch folder along when its project is moved", async () => {
+    window.evoscientistDesktop = { projectFolders: { launch: "/old/zeta" } };
+    let answer = () => listing("/old/zeta", "/home/you/alpha");
+    stubBackends({ [A]: { projects: () => answer() } });
+    const { result } = renderProjects();
+    await waitFor(() => expect(result.current.isReady()).toBe(true));
+    expect(result.current.launchKey).toBe("/old/zeta");
+
+    act(() => result.current.followMove("/old/zeta", "/srv/zeta"));
+    answer = () => listing("/srv/zeta", "/home/you/alpha");
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(result.current.launchKey).toBe("/srv/zeta");
+  });
+
+  it("keeps the launch folder when another project is moved", async () => {
+    window.evoscientistDesktop = { projectFolders: { launch: "/srv/zeta" } };
+    let answer = () => listing("/srv/zeta", "/old/alpha");
+    stubBackends({ [A]: { projects: () => answer() } });
+    const { result } = renderProjects();
+    await waitFor(() => expect(result.current.isReady()).toBe(true));
+
+    act(() => result.current.followMove("/old/alpha", "/home/you/alpha"));
+    answer = () => listing("/srv/zeta", "/home/you/alpha");
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(result.current.launchKey).toBe("/srv/zeta");
+  });
+
   it("keeps the folder names and no launch folder in a browser", async () => {
     stubBackends({
       [A]: {

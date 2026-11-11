@@ -29,9 +29,9 @@ function windowsPath(path: string): boolean {
   return /^[a-z]:/i.test(path) || path.includes("\\");
 }
 
-/** Whether two folder paths name the same folder, as the backend compares
- *  them: ignoring the kind of separator and a trailing one, and on Windows
- *  paths also case (the drive letter included). Neither is resolved. */
+/** Whether two folder paths name the same folder: ignoring the kind of
+ *  separator and a trailing one, and on Windows paths also case (the drive
+ *  letter included). Neither is resolved. */
 export function samePath(a: string, b: string): boolean {
   const path = (p: string) => p.replace(/[\\/]+/g, "/").replace(/\/$/, "");
   return windowsPath(a) || windowsPath(b)
@@ -46,13 +46,19 @@ const DEFAULT_PROJECT_NAME = "Default workspace";
  * The app's folders among `projects` (both in the core's key form): the
  * project at `folders.default` shows as "Default workspace", re-sorted by
  * that name; `launchKey` is the key of the project at `folders.launch`.
+ * Case is ignored: on macOS the app spells a folder as it is on disk, while
+ * the core keeps the case it was given.
  */
 export function withAppFolders(
   projects: readonly Project[],
   folders: { default?: string; launch?: string }
 ): { projects: Project[]; launchKey: string | null } {
   const at = (folder: string | undefined) =>
-    folder ? projects.find((project) => samePath(project.key, folder)) : null;
+    folder
+      ? projects.find((project) =>
+          samePath(project.key.toLowerCase(), folder.toLowerCase())
+        )
+      : null;
   const byDefault = at(folders.default);
   return {
     projects: byDefault

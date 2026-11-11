@@ -4,7 +4,7 @@
 // reads the saved value from GET /api/settings, shows the unsaved change
 // from the draft, and explains why it cannot be edited when it cannot.
 
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -294,7 +294,8 @@ export function TextField({
 }) {
   const editable = isEditable(ctx, field);
   const value = currentText(ctx.payload, ctx.draft.edits, field);
-  const pickFolder = folder ? desktopBridge()?.pickFolder : undefined;
+  const bridgePick = useMemo(() => desktopBridge()?.pickFolder, []);
+  const pickFolder = folder ? bridgePick : undefined;
   // Read when the folder dialog answers: a save or a re-read may have made
   // the field read-only meanwhile.
   const ctxRef = useRef(ctx);

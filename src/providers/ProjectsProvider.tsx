@@ -220,7 +220,8 @@ export function ProjectsProvider({
   const stateRef = useRef(state);
   stateRef.current = state;
 
-  // The desktop app's folders, read once: they hold for the page's life.
+  // The desktop app's folders, read once: they hold for the page's life,
+  // except that a move of the launch project takes its launch folder along.
   const appFoldersRef = useRef<DesktopBridge["projectFolders"] | null>(null);
 
   const gateRef = useRef(false);
@@ -411,6 +412,12 @@ export function ProjectsProvider({
     (from: string, to: string) => {
       if (readLastUsedProject(deploymentUrl) === from) {
         writeLastUsedProject(deploymentUrl, to);
+      }
+      // A moved launch project is the launch folder from here on: the core
+      // rewrote `default_workdir`, which the desktop app launches in.
+      const app = appFoldersRef.current;
+      if (app && stateRef.current.launchKey === from) {
+        appFoldersRef.current = { ...app, launch: to };
       }
       setState((prev) => ({
         ...prev,
