@@ -1,19 +1,12 @@
-import {
-  existsSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
   FALLBACK_SHELLS,
   PROBE_ENV,
   PROBE_TIMEOUT_MS,
-  endProbes,
-  ownTree,
   pathBetween,
   probeScript,
   probeShell,
@@ -29,6 +22,12 @@ const block = (env: Record<string, string>, before = "", after = "") =>
   `${before}${START}${Object.entries(env)
     .map(([k, v]) => `${k}=${v}\0`)
     .join("")}${END}${after}`;
+
+/** Processes whose whole command line is `command`. */
+const running = (command: string) =>
+  execFileSync("ps", ["-axo", "command="], { encoding: "utf8" })
+    .split("\n")
+    .filter((l) => l.trim() === command);
 
 function logs() {
   const lines: string[] = [];
@@ -123,26 +122,6 @@ describe("pathBetween", () => {
     expect(pathBetween(`PATH=/a\0${END}`, START, END)).toBeNull();
     expect(pathBetween(block({ HOME: "/h" }), START, END)).toBeNull();
     expect(pathBetween(block({ PATH: "" }), START, END)).toBeNull();
-  });
-});
-
-describe("ownTree", () => {
-  const row = (pid: number, ppid: number) => ({
-    pid,
-    ppid,
-    started: `t${pid}`,
-  });
-
-  it("is what the shell started, while the shell is still this app's child", () => {
-    const rows = [row(100, 1), row(200, 100), row(201, 200), row(202, 201)];
-    expect(ownTree(rows, 200, 100).sort()).toEqual([201, 202]);
-  });
-
-  it("is empty when the pid now belongs to some other process", () => {
-    // The shell ended and its pid was given to a process of another parent.
-    const rows = [row(100, 1), row(200, 7), row(201, 200)];
-    expect(ownTree(rows, 200, 100)).toEqual([]);
-    expect(ownTree(rows, 999, 100)).toEqual([]);
   });
 });
 
@@ -338,21 +317,59 @@ describe.skipIf(process.platform === "win32")("probeShell", () => {
     expect(await probeShell(text, "true", 5_000, END, env)).toBeNull();
   });
 
-  it("endProbes ends a shell that is still being asked", async () => {
-    // The app quits while a profile hangs: the shell must not stay behind.
-    const pidFile = join(home, "hung-pid");
-    const script = `echo $$ > '${pidFile}'; sleep 30`;
-    const probe = probeShell("/bin/sh", script, 30_000, END, env);
-    await vi.waitFor(() => expect(existsSync(pidFile)).toBe(true), {
+  /** The pid a script wrote into `file`, once it is there. */
+  const pidIn = async (file: string) => {
+    let pid = 0;
+    await vi.waitFor(
+      () => {
+        pid = Number(readFileSync(file, "utf8"));
+        expect(pid).toBeGreaterThan(0);
+      },
+      { timeout: 10_000 }
+    );
+    return pid;
+  };
+  it("gives up on a shell that floods its output without the end marker", async () => {
+    // Far more than any environment, and no marker: not kept in memory until
+    // the time limit. The shell is ended where it is: it does not get to
+    // its next command.
+    const shellFile = join(home, "flood-shell");
+    const script = `echo $$ > '${shellFile}'; head -c 9000000 /dev/zero | tr '\\0' x; sleep 39`;
+    const began = Date.now();
+    expect(await probeShell("/bin/sh", script, 30_000, END, env)).toBeNull();
+    expect(Date.now() - began).toBeLessThan(15_000);
+    const shell = await pidIn(shellFile);
+    await vi.waitFor(() => expect(alive(shell)).toBe(false), {
       timeout: 5000,
     });
-    const pid = Number(readFileSync(pidFile, "utf8"));
-    expect(alive(pid)).toBe(true);
-    endProbes();
-    expect(await probe).toBeNull();
-    await vi.waitFor(() => expect(alive(pid)).toBe(false), {
-      timeout: 5000,
-    });
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(running("sleep 39")).toEqual([]);
+  }, 40_000);
+
+  it("sends no signal for a shell that has ended by itself", async () => {
+    // Its pid, and the number of its process group, may belong to another
+    // process by then.
+    const shellFile = join(home, "ended-shell");
+    const kill = vi.spyOn(process, "kill");
+    try {
+      expect(
+        await probeShell(
+          "/bin/sh",
+          `echo $$ > '${shellFile}'; exit 3`,
+          5_000,
+          END,
+          env
+        )
+      ).toBeNull();
+      const shell = await pidIn(shellFile);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      const toIt = kill.mock.calls.filter(
+        ([target]) => Math.abs(Number(target)) === shell
+      );
+      expect(toIt).toEqual([]);
+    } finally {
+      kill.mockRestore();
+    }
   });
 
   it("runs the shell with stdin closed and the two variables that keep it from waiting", async () => {
@@ -375,5 +392,127 @@ describe.skipIf(process.platform === "win32")("probeShell", () => {
     expect(await probeShell("/bin/bash", script, 10_000, END, env)).toMatch(
       /login interactive__E__$/
     );
+  });
+});
+
+// The app quits: its timers and callbacks will not run any more, so what is
+// still being asked is ended at once, and nothing new is started. Each test
+// loads the module anew: after endProbes() it asks no shell again.
+describe.skipIf(process.platform === "win32")("endProbes", () => {
+  const alive = (pid: number) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const home = mkdtempSync(join(tmpdir(), "evo-login-path-end-"));
+  const env = { ...process.env, HOME: home };
+  afterAll(() => rmSync(home, { recursive: true, force: true }));
+  afterEach(() => vi.restoreAllMocks());
+  const fresh = async () => {
+    vi.resetModules();
+    return {
+      proc: await import("./proc"),
+      login: await import("./loginPath"),
+    };
+  };
+  /** The pid a script wrote into `file`, once it is there. */
+  const pidIn = async (file: string) => {
+    let pid = 0;
+    await vi.waitFor(
+      () => {
+        pid = Number(readFileSync(file, "utf8"));
+        expect(pid).toBeGreaterThan(0);
+      },
+      { timeout: 10_000 }
+    );
+    return pid;
+  };
+  const gone = (pid: number) =>
+    vi.waitFor(() => expect(alive(pid)).toBe(false), { timeout: 5000 });
+
+  it("ends a shell that is still being asked, with what it started", async () => {
+    // A profile that hangs; the job it started runs in a process group of
+    // its own, where a signal to the shell's group does not reach it.
+    const { login } = await fresh();
+    const shellFile = join(home, "hung-shell");
+    const jobFile = join(home, "hung-job");
+    const script = `sleep 31 & echo $! > '${jobFile}'; echo $$ > '${shellFile}'; sleep 30`;
+    const probe = login.probeShell("/bin/sh", script, 30_000, END, env);
+    const shell = await pidIn(shellFile);
+    const job = await pidIn(jobFile);
+    login.endProbes();
+    expect(await probe).toBeNull();
+    await gone(shell);
+    await gone(job);
+  }, 20_000);
+
+  it("also ends what a shell started when it has just answered", async () => {
+    // The answer is in, the list of its processes is not: the quit comes in
+    // between.
+    const { login, proc } = await fresh();
+    vi.spyOn(proc, "listProcesses").mockReturnValue(new Promise(() => {}));
+    const jobFile = join(home, "answered-job");
+    const script = `sleep 32 & echo $! > '${jobFile}'; ${login.probeScript(
+      START,
+      END
+    )}`;
+    const out = await login.probeShell("/bin/sh", script, 30_000, END, env);
+    expect(login.pathBetween(out as string, START, END)).toBeTruthy();
+    const job = await pidIn(jobFile);
+    expect(alive(job)).toBe(true);
+    login.endProbes();
+    await gone(job);
+  }, 20_000);
+
+  it("stops the shell before it lists its processes, so it starts nothing more", async () => {
+    // The list is a moment in time; a command the shell started after it
+    // would be missed. Here the list comes back half a second late, and the
+    // shell would start `sleep 38` meanwhile.
+    const { login, proc } = await fresh();
+    const real = proc.listProcesses;
+    vi.spyOn(proc, "listProcesses").mockImplementation(async () => {
+      const rows = await real();
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      return rows;
+    });
+    const script = `printf '%s' '${END}'; sleep 0.25; sleep 38`;
+    const out = await login.probeShell("/bin/sh", script, 30_000, END, env);
+    expect(out).toBe(END);
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    expect(running("sleep 38")).toEqual([]);
+  }, 20_000);
+
+  it("asks no further shell afterwards", async () => {
+    const { login } = await fresh();
+    const asked: string[] = [];
+    const lines: string[] = [];
+    const found = await login.readLoginPath({
+      accountShell: "/bin/zsh",
+      log: { info: (m) => void lines.push(m), warn: (m) => void lines.push(m) },
+      // The shell being asked is ended by the quit and gives nothing.
+      probe: async (shell) => {
+        asked.push(shell);
+        login.endProbes();
+        return null;
+      },
+    });
+    expect(found).toBeNull();
+    expect(asked).toEqual(["/bin/zsh"]);
+    expect(lines.join("\n")).not.toContain("trying");
+  });
+
+  it("starts no shell afterwards", async () => {
+    const { login } = await fresh();
+    login.endProbes();
+    const marker = join(home, "started-after-the-end");
+    const script = `echo started > '${marker}'; printf '%s' '${END}'`;
+    expect(
+      await login.probeShell("/bin/sh", script, 5_000, END, env)
+    ).toBeNull();
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(() => readFileSync(marker, "utf8")).toThrow();
   });
 });

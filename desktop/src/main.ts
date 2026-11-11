@@ -182,10 +182,13 @@ const desktop = createApp({
   log,
   uiLog,
 
-  // On the window. On macOS only while it is visible: the user may have
-  // closed (hidden) it, and a sheet on a hidden window would not be seen.
+  // On the window. On macOS only while it is visible and staying: the user
+  // may have closed (hidden) it, or it is leaving full screen to be hidden,
+  // and a sheet on a hidden window would not be seen.
   messageBox: (opts) =>
-    win && (process.platform !== "darwin" || win.isVisible())
+    win &&
+    (process.platform !== "darwin" ||
+      (win.isVisible() && !hidingAfterFullScreen.has(win)))
       ? dialog.showMessageBox(win, opts)
       : dialog.showMessageBox(opts),
   chooseFolder: async (title, defaultPath) => {

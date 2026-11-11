@@ -286,23 +286,51 @@ describe.skipIf(process.platform === "win32")("killTree with a tree", () => {
     }
   });
 
-  /** A process that ignores SIGTERM and has no children of its own. */
-  const DEAF = "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)";
-  /** A parent that starts a DEAF child in a session of its own, prints that
-   *  child's pid and stays. */
-  async function parentWithDeafChild() {
+  /** A process that ignores SIGTERM and has no children of its own. It
+   *  prints "ready" once its handler is in place: a SIGTERM before that
+   *  would end it. */
+  const DEAF =
+    "process.on('SIGTERM', () => {}); console.log('ready'); setInterval(() => {}, 1000)";
+  /** Starts DEAF as the root and waits until it is ready. */
+  async function deafRoot() {
+    let ready = false;
+    const r = run(node, ["-e", DEAF], {
+      cwd: process.cwd(),
+      env: process.env,
+      onStdoutLine: (l) => (ready ||= l === "ready"),
+    });
+    await vi.waitFor(() => expect(ready).toBe(true), { timeout: 10_000 });
+    return r;
+  }
+  /** A parent that starts a DEAF child, prints that child's pid and stays.
+   *  `detached`: the child gets a session of its own; else it stays in the
+   *  parent's process group. Resolves once the child is ready. */
+  async function parentWithDeafChild(
+    opts: { detached?: boolean; group?: boolean } = {}
+  ) {
     const script = `const c = require('child_process').spawn(process.execPath, ['-e', ${JSON.stringify(
       DEAF
-    )}], { stdio: 'ignore', detached: true }); console.log(c.pid); setInterval(() => {}, 1000)`;
+    )}], { stdio: ['ignore', 'inherit', 'ignore'], detached: ${
+      opts.detached ?? true
+    } }); console.log(c.pid); setInterval(() => {}, 1000)`;
     let child = 0;
+    let ready = false;
     const r = run(node, ["-e", script], {
       cwd: process.cwd(),
       env: process.env,
-      onStdoutLine: (l) => (child = Number(l)),
+      group: opts.group,
+      onStdoutLine: (l) => {
+        if (l === "ready") ready = true;
+        else child ||= Number(l);
+      },
     });
-    await vi.waitFor(() => expect(child).toBeGreaterThan(0));
-    // The child has installed its handler once it shows up as a process.
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await vi.waitFor(
+      () => {
+        expect(child).toBeGreaterThan(0);
+        expect(ready).toBe(true);
+      },
+      { timeout: 10_000 }
+    );
     return { r, child };
   }
   /** The real list first, then `change` applied to every later one. */
@@ -379,9 +407,8 @@ describe.skipIf(process.platform === "win32")("killTree with a tree", () => {
   }, 20_000);
 
   it("never sends SIGKILL to the process itself once its start time has changed", async () => {
-    const r = run(node, ["-e", DEAF], { cwd: process.cwd(), env: process.env });
+    const r = await deafRoot();
     const pid = r.child.pid!;
-    await later(300);
     const { list } = listsThen((rows) =>
       rows.map((x) => (x.pid === pid ? { ...x, started: "another start" } : x))
     );
@@ -400,8 +427,7 @@ describe.skipIf(process.platform === "win32")("killTree with a tree", () => {
   }, 20_000);
 
   it("ends the process itself after the grace period while it is still the same", async () => {
-    const r = run(node, ["-e", DEAF], { cwd: process.cwd(), env: process.env });
-    await later(300);
+    const r = await deafRoot();
     const { warned, log } = recording();
     await killTree(r.child.pid!, log, process.platform);
     expect(warned).toContain(
@@ -430,6 +456,53 @@ describe.skipIf(process.platform === "win32")("killTree with a tree", () => {
       end(child);
     }
   });
+
+  it("with a process group, ends a member that ignores SIGTERM after the leader has ended", async () => {
+    // As a process the install script started after the first look: it is
+    // not in the recorded tree, the script itself ends on SIGTERM, and the
+    // member stays in its group.
+    const { r, child } = await parentWithDeafChild({
+      detached: false,
+      group: true,
+    });
+    let calls = 0;
+    const list = async () => {
+      const rows = await listProcesses();
+      return ++calls === 1
+        ? rows?.filter((x) => x.pid !== child) ?? null
+        : rows;
+    };
+    const { warned, log } = recording();
+    try {
+      await killTree(r.child.pid!, log, process.platform, true, list);
+      expect(await withTimeout(r.exited, 5000)).not.toBe("timeout");
+      expect(warned).toContain(
+        `process group ${r.child.pid!} did not end on SIGTERM; sending SIGKILL`
+      );
+      await vi.waitFor(() => expect(alive(child)).toBe(false), {
+        timeout: 5000,
+      });
+    } finally {
+      end(child);
+    }
+  }, 20_000);
+
+  it("says so when the process still runs but the list does not show it any more", async () => {
+    const r = await deafRoot();
+    const pid = r.child.pid!;
+    const { list } = listsThen((rows) => rows.filter((x) => x.pid !== pid));
+    const { warned, log } = recording();
+    try {
+      await killTree(pid, log, process.platform, false, list);
+      expect(warned).toEqual([
+        `pid ${pid} still runs but is not in the process list any more; left alone`,
+      ]);
+      await later(300);
+      expect(alive(pid)).toBe(true);
+    } finally {
+      end(pid);
+    }
+  }, 20_000);
 
   it("without a process list it still ends the process", async () => {
     const r = run(node, ["-e", "setInterval(() => {}, 1000)"], {
@@ -463,6 +536,23 @@ describe.skipIf(process.platform === "win32")("killTree with a tree", () => {
     expect(await withTimeout(r.closed, 5000)).not.toBe("timeout");
     expect(warned).toEqual([
       `pid ${pid} is not in the process list: ending only it`,
+    ]);
+  });
+
+  it("names the group in that warning when it ends a process group", async () => {
+    const r = run(node, ["-e", "setInterval(() => {}, 1000)"], {
+      cwd: process.cwd(),
+      env: process.env,
+      group: true,
+    });
+    const pid = r.child.pid!;
+    const { warned, log } = recording();
+    await killTree(pid, log, process.platform, true, async () =>
+      ((await listProcesses()) ?? []).filter((x) => x.pid !== pid)
+    );
+    expect(await withTimeout(r.closed, 5000)).not.toBe("timeout");
+    expect(warned).toEqual([
+      `pid ${pid} is not in the process list: ending only its process group`,
     ]);
   });
 });

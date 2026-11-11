@@ -229,7 +229,11 @@ export async function killTree(
   };
   if (!rows) log.warn(`no process list: ending only pid ${pid}`);
   else if (!self && signal(target, 0))
-    log.warn(`pid ${pid} is not in the process list: ending only it`);
+    log.warn(
+      `pid ${pid} is not in the process list: ending only ${
+        group ? "its process group" : "it"
+      }`
+    );
   const running = () =>
     signal(target, 0) || below.some((r) => signal(r.pid, 0));
   const reached = signal(target, "SIGTERM");
@@ -245,12 +249,19 @@ export async function killTree(
     now?.some((n) => n.pid === r.pid && n.started === r.started) === true;
   const listed = (r: PsRow) => now?.some((n) => n.pid === r.pid) === true;
   if (signal(target, 0)) {
-    // Not recorded, or no second list: as before the tree was read.
-    if (!self || !now || same(self)) {
+    // Not recorded, or no second list: as before the tree was read. A group
+    // whose leader has ended is still the group that was started: its number
+    // stays taken while it has members, and a process that got the leader's
+    // pid meanwhile would be listed.
+    if (!self || !now || same(self) || (group && !listed(self))) {
       log.warn(`${what} did not end on SIGTERM; sending SIGKILL`);
       signal(target, "SIGKILL");
     } else if (listed(self)) {
       log.warn(`pid ${pid} is not the same process any more; left alone`);
+    } else {
+      log.warn(
+        `pid ${pid} still runs but is not in the process list any more; left alone`
+      );
     }
   }
   for (const r of below) {
