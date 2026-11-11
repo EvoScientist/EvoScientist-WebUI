@@ -49,8 +49,18 @@ Logs: `desktop.log` and `desktop-ui.log` next to the backend's `langgraph_dev.lo
 
 Keep Electron's `RunAsNode` fuse enabled: the UI server runs as the app's own executable with `ELECTRON_RUN_AS_NODE=1`.
 
+## On macOS
+
+- Closing the window hides it: the app stays in the Dock with its backend and its page, and a click on the Dock icon (or opening the app again) brings the same window back. Quit (⌘Q) runs the checks that closing the window runs on Windows and Linux.
+- The packaged app reads the login shell's `PATH` at startup (`src/loginPath.ts`); `npm start` keeps the terminal's.
+- On its first launch the install script adds uv's tool folder to `PATH` in the shell profile unless it is there already, so `EvoSci` also works in a terminal; the install screen says so.
+- A backend or UI server that does not stop in time is ended with everything it started (`killTree` in `src/proc.ts`, on Linux too): the tree is read from `ps` first, because the backend's server runs in a session of its own.
+- Not there yet: signing and notarization, releases of the macOS files, the app's own updates, and waiting for an `EvoSci update` that is still finishing (`tools/update.lock` is checked on Windows only).
+
 ## CI and releases
 
 `.github/workflows/desktop.yml` runs on Windows for pull requests and pushes to `main` (all but docs), weekly and on tags `v*`: lint and unit tests, the build with the installer (so its NSIS script compiles), then `scripts/smoke.mjs` (outside CI only with `--use-my-folders`: it installs and sets up the core in the user's own folders) once per core version (the one the app installs and the newest release inside its range; one run while they are the same). The smoke test installs that core with the bundled install script, runs `EvoSci setup --json --skip webui`, checks `EvoSci --version --json` against the app, starts `EvoSci deploy --json` until `ready`, then the bundled UI server under the packaged `EvoScientist.exe` with `ELECTRON_RUN_AS_NODE=1`, and requests `/` and one static asset.
+
+The same build and smoke test run on macOS (`smoke-macos`, Apple Silicon, unsigned; `npm run dist` there builds the dmg and the zip) for pull requests, pushes to `main` and weekly, but not on tags: no macOS file is released yet, and the publish job does not wait for it. The unit tests also run on Linux and macOS in `.github/workflows/ci.yml`.
 
 On a tag, while `evoscientist.release` is true (on since the 0.5.1 release, whose core range starts at 0.4.1), the workflow builds the installer with publishing off and fills `release-notes.md` (before any upload, so a template error uploads nothing), in a job without a write token. A job of its own, which holds the token and runs no npm code, then uploads `EvoScientist-Setup.exe` and its blockmap, then `latest.yml`, to the tag's draft release (with a warning if the release was already published by hand) and puts the filled section in place of the notes' `<!-- desktop-release-notes -->` pair if they have one, else below them, reading the notes right before it writes them. The workflow publishes the release after every platform job succeeded, once it has notes of its own in this repository (else the draft stays and the job fails: write the notes, then re-run it), marked Latest unless the current Latest has a higher tag. While the flag is off, the release is published without desktop files. Releases start by pushing the tag, with the notes on a draft made beforehand (`gh release create <tag> --draft --notes-file ...`), or written after a publish job that stopped for them, then that job re-run; publishing is the workflow's last step. A fork's tag build gets its own identity (`W04Test`, its own install folder and userData) and publishes to the fork, for update tests.

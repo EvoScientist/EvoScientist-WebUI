@@ -8,6 +8,7 @@
 // - Desktop files go out only while `evoscientist.release` is true, and the
 //   flag may be on only while the core range installs a core with the
 //   Windows clean stop (EvoScientist#712, fixed by #716 in v0.4.1).
+import { join } from "node:path";
 import { compareReleases, installVersion, parseRelease } from "./versions";
 
 /** The first core version a desktop release may install. */
@@ -45,4 +46,31 @@ export function releaseFlagProblem(meta: {
       installs ?? "no version"
     }, before ${FIRST_RELEASE_CORE}`;
   return null;
+}
+
+/** Where an unpacked build (`npm run pack`) keeps the app: its folder, the
+ *  executable and the resources folder. On macOS the folder is the app
+ *  bundle. `appDir` names another copy of the app, as the smoke test's
+ *  `--app` does. */
+export function appLayout(
+  platform: NodeJS.Platform,
+  releaseDir: string,
+  appDir?: string
+): { appDir: string; exe: string; resources: string } {
+  if (platform === "darwin") {
+    const app = appDir ?? join(releaseDir, "mac-arm64", "EvoScientist.app");
+    return {
+      appDir: app,
+      exe: join(app, "Contents", "MacOS", "EvoScientist"),
+      resources: join(app, "Contents", "Resources"),
+    };
+  }
+  const win = platform === "win32";
+  const app =
+    appDir ?? join(releaseDir, win ? "win-unpacked" : "linux-unpacked");
+  return {
+    appDir: app,
+    exe: join(app, win ? "EvoScientist.exe" : "evoscientist"),
+    resources: join(app, "resources"),
+  };
 }

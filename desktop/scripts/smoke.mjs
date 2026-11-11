@@ -1,6 +1,7 @@
 // The desktop smoke test (.github/workflows/desktop.yml), on an unpacked
 // build (`npm run pack`), through the app's own code (dist/):
-// 1. install the core with the bundled install script (`-Version <v> -NoSetup`);
+// 1. install the core with the bundled install script (`-Version <v> -NoSetup`,
+//    `--version <v> --no-setup` on macOS and Linux);
 // 2. `EvoSci setup --json --skip webui`;
 // 3. `EvoSci --version --json`: the version asked for, inside the app's core
 //    range, and its `webui_compat` accepts the bundled WebUI;
@@ -9,10 +10,12 @@
 //    ELECTRON_RUN_AS_NODE=1: `/` and one static asset answer 200.
 // Usage: node scripts/smoke.mjs --core pinned|newest|<version> [--app <dir>]
 //                                [--use-my-folders]
+//        (<dir>: the unpacked app's folder; on macOS the .app bundle)
 //        node scripts/smoke.mjs --list   (the versions to test, as JSON: one
 //        when the newest release inside the range is the pinned one)
 // The test installs the core and runs setup in this user's own folders, as
-// the app does (and on Windows the install script adds to the user's PATH),
+// the app does (and the install script adds to the user's PATH on Windows,
+// to the shell profile on macOS and Linux),
 // so outside CI it runs only with --use-my-folders: on a CI runner, a
 // throwaway account, or with HOME / USERPROFILE / APPDATA / LOCALAPPDATA
 // pointed at a scratch folder.
@@ -29,6 +32,7 @@ import deploy from "../dist/deploy.js";
 import install from "../dist/install.js";
 import lines from "../dist/lines.js";
 import locate from "../dist/locate.js";
+import packaging from "../dist/packaging.js";
 import paths from "../dist/paths.js";
 import proc from "../dist/proc.js";
 import release from "../dist/release.js";
@@ -45,11 +49,11 @@ const { values } = parseArgs({
     "use-my-folders": { type: "boolean" },
   },
 });
-const win = process.platform === "win32";
-const appDir =
-  values.app ?? join(root, "release", win ? "win-unpacked" : "linux-unpacked");
-const exe = join(appDir, win ? "EvoScientist.exe" : "evoscientist");
-const resources = join(appDir, "resources");
+const { appDir, exe, resources } = packaging.appLayout(
+  process.platform,
+  join(root, "release"),
+  values.app
+);
 const serverJs = join(resources, "ui", "server.js");
 const range = pkg.evoscientist.coreRange;
 

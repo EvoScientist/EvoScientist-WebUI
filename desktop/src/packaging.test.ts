@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   FIRST_RELEASE_CORE,
+  appLayout,
   releaseFlagProblem,
   tagProblem,
   versionArgs,
@@ -83,6 +84,43 @@ describe("releaseFlagProblem", () => {
   // the flag off too.
   it("is on in this package.json", () => {
     expect(pkg.evoscientist.release).toBe(true);
+  });
+});
+
+// Where electron-builder puts the unpacked app, for the smoke test.
+describe("appLayout", () => {
+  it("is the unpacked folder, the executable and the resources per platform", () => {
+    expect(appLayout("win32", "C:/r")).toEqual({
+      appDir: join("C:/r", "win-unpacked"),
+      exe: join("C:/r", "win-unpacked", "EvoScientist.exe"),
+      resources: join("C:/r", "win-unpacked", "resources"),
+    });
+    expect(appLayout("linux", "/r")).toEqual({
+      appDir: join("/r", "linux-unpacked"),
+      exe: join("/r", "linux-unpacked", "evoscientist"),
+      resources: join("/r", "linux-unpacked", "resources"),
+    });
+  });
+
+  it("on macOS is the app bundle, with both inside Contents", () => {
+    const app = join("/r", "mac-arm64", "EvoScientist.app");
+    expect(appLayout("darwin", "/r")).toEqual({
+      appDir: app,
+      exe: join(app, "Contents", "MacOS", "EvoScientist"),
+      resources: join(app, "Contents", "Resources"),
+    });
+  });
+
+  it("takes another app folder, as --app gives one", () => {
+    const app = join("/Applications", "EvoScientist.app");
+    expect(appLayout("darwin", "/r", app)).toEqual({
+      appDir: app,
+      exe: join(app, "Contents", "MacOS", "EvoScientist"),
+      resources: join(app, "Contents", "Resources"),
+    });
+    expect(appLayout("linux", "/r", "/opt/app").exe).toBe(
+      join("/opt/app", "evoscientist")
+    );
   });
 });
 
