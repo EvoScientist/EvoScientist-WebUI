@@ -525,7 +525,9 @@ export function createApp(deps: AppDeps): App {
       case "asking_update":
         return;
       case "installing":
-        return showSoon(installScreen(state));
+        return showSoon(
+          installScreen({ ...state, shellProfile: deps.platform !== "win32" })
+        );
       case "updating":
         updateView = state.view;
         return showSoon(updateScreen(state.view, quitAfterUpdate));

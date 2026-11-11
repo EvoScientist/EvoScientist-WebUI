@@ -1594,6 +1594,31 @@ describe("first launch", () => {
     await launch;
   });
 
+  it.each([
+    ["darwin", true],
+    ["linux", true],
+    ["win32", false],
+  ] as const)(
+    "on %s the install screen mentions the shell profile: %s",
+    async (platform, mentioned) => {
+      const p = pendingRun({ exit: { code: 0, signal: null }, lines: [] });
+      const f = freshMachine({
+        platform,
+        keptMirror: () => false,
+        runInstall: () => p.run,
+      });
+      const launch = f.app.launch();
+      await vi.waitFor(() =>
+        expect(f.app.screen).toMatchObject({ kind: "install" })
+      );
+      const message = (f.app.screen as { message: string }).message;
+      expect(message.includes("shell profile")).toBe(mentioned);
+      f.state.installed = true;
+      p.finish();
+      await launch;
+    }
+  );
+
   it("closing during the install asks; Cancel lets it go on, Quit stops its tree and exits", async () => {
     const p = pendingRun({ exit: { code: 1, signal: null }, lines: [] });
     const f = freshMachine({
