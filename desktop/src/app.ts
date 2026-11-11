@@ -114,7 +114,8 @@ export interface AppDeps {
   /** The bundled WebUI's `server.js` and the entry script that runs it. */
   uiServerJs: string;
   uiEntry: string;
-  /** Electron's binary, which runs the UI server as Node. */
+  /** The executable that runs the UI server as Node: Electron's binary, on
+   *  macOS the app's helper (`uiServerExec`). */
   execPath: string;
   /** The bundled WebUI's version, read again for each crash report: when the
    *  bundle cannot be read (a missing server.js), the manifest's uiVersion has

@@ -145,8 +145,9 @@ jobs:
 
   # The unsigned macOS app (Apple Silicon): the dmg and the zip build, the
   # core installs, sets up and deploys, and the packaged UI server answers
-  # under the app's own executable. Nothing of it is released yet, so it does
-  # not run on tags and the publish job does not wait for it.
+  # under the app's helper executable, without a Dock icon of its own.
+  # Nothing of it is released yet, so it does not run on tags and the publish
+  # job does not wait for it.
   smoke-macos:
     name: Smoke test (macOS, core ${{ matrix.core }})
     needs: [plan]

@@ -6,8 +6,9 @@
 // 3. `EvoSci --version --json`: the version asked for, inside the app's core
 //    range, and its `webui_compat` accepts the bundled WebUI;
 // 4. `EvoSci deploy --json` until `ready`;
-// 5. the bundled UI server under the packaged executable with
-//    ELECTRON_RUN_AS_NODE=1: `/` and one static asset answer 200.
+// 5. the bundled UI server under the packaged executable (on macOS the app's
+//    helper) with ELECTRON_RUN_AS_NODE=1: `/` and one static asset answer
+//    200, and on macOS it has no Dock icon of its own.
 // Usage: node scripts/smoke.mjs --core pinned|newest|<version> [--app <dir>]
 //                                [--use-my-folders]
 //        (<dir>: the unpacked app's folder; on macOS the .app bundle)
@@ -22,7 +23,7 @@
 // `pinned` is the version the app installs, `newest` the newest release
 // inside its range (PyPI). Ends with `SMOKE OK core <version>` or
 // `SMOKE FAILED: <why>`, followed by the cleanups' lines.
-import { mkdirSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -38,6 +39,7 @@ import proc from "../dist/proc.js";
 import release from "../dist/release.js";
 import uiServer from "../dist/uiServer.js";
 import versions from "../dist/versions.js";
+import { hasDockIcon } from "./dock.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
@@ -180,7 +182,7 @@ async function main() {
   {
     const { port } = await uiServer.pickUiPort(pkg.evoscientist.uiPort);
     const ui = uiServer.startUiServer({
-      execPath: exe,
+      execPath: uiServer.uiServerExec(exe, process.platform, existsSync),
       entryScript: join(resources, "ui-entry.mjs"),
       cwd: resources,
       env: uiServer.uiServerEnv(process.env, {
@@ -204,6 +206,17 @@ async function main() {
     await a.arrayBuffer();
     if (a.status !== 200) fail(`GET ${asset} answered ${a.status}`);
     log.info(`GET / 200, GET ${asset} 200`);
+    if (process.platform === "darwin") {
+      // The server has set its process title by now, which is what
+      // registers it with macOS.
+      const shown = hasDockIcon(ui.pid);
+      if (shown) fail("the UI server has a Dock icon of its own");
+      log.info(
+        shown === null
+          ? "Dock: the application list could not be read"
+          : "Dock: no icon for the UI server"
+      );
+    }
   }
   return version;
 }

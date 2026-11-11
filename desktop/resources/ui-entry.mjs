@@ -1,4 +1,5 @@
-// The UI server's entry script. The app starts it as its own executable with
+// The UI server's entry script. The app starts it as its own executable (on
+// macOS the app's helper, which has no Dock icon) with
 // ELECTRON_RUN_AS_NODE=1 (Electron's Node, no second Node shipped), three
 // pipes and an IPC channel. It loads the bundled WebUI's `server.js` (an ES
 // module that changes into its own folder and listens on HOSTNAME:PORT), and
