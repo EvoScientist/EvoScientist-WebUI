@@ -256,7 +256,7 @@ describe.skipIf(process.platform === "win32")("probeShell", () => {
   };
   // An empty home, so the developer's own profiles are not read.
   const home = mkdtempSync(join(tmpdir(), "evo-login-path-"));
-  const env = { ...process.env, HOME: home };
+  const env = { ...process.env, HOME: home, ZDOTDIR: home };
   afterAll(() => rmSync(home, { recursive: true, force: true }));
 
   it("reads a real shell's environment", async () => {
@@ -594,7 +594,7 @@ describe.skipIf(process.platform === "win32")("endProbes", () => {
     }
   };
   const home = mkdtempSync(join(tmpdir(), "evo-login-path-end-"));
-  const env = { ...process.env, HOME: home };
+  const env = { ...process.env, HOME: home, ZDOTDIR: home };
   afterAll(() => rmSync(home, { recursive: true, force: true }));
   afterEach(() => vi.restoreAllMocks());
   const fresh = async () => {

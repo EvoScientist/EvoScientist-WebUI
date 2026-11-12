@@ -132,10 +132,12 @@ export function endProbes(): void {
  * ends, since a signal cannot tell it from any other job. A job that stays
  * keeps the shell's output, which is a closed pipe from then on: one that
  * still writes there (a `nohup` without a redirection; in a terminal
- * `nohup` would have sent that to nohup.out) ends at its next write. A job
- * that is stopped stays stopped: the hangup does not reach it before it
- * continues. Not answered (the time limit, too much output, a quit):
- * everything gets SIGKILL, a profile that hangs is not asked.
+ * `nohup` would have sent that to nohup.out) ends at its next write. A
+ * stopped job that ignores or handles the hangup stays stopped in the
+ * shell's own process group (zsh) and is continued by the system in a group
+ * of its own (bash, sh); any other stopped job ends. Not answered (the time
+ * limit, too much output, a quit): everything gets SIGKILL, a profile that
+ * hangs is not asked.
  *
  * The list and the signals are not one moment. A profile that is still
  * starting commands (the time limit, the output limit or a quit came while
