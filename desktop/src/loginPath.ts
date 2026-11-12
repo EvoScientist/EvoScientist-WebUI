@@ -8,8 +8,10 @@
 // A profile can print anything and can leave processes that keep the output
 // open, so the environment is printed between two markers that are new for
 // each run, reading stops at the end marker, and the shell is ended
-// afterwards with the processes below it (one that detached itself from the
-// shell on purpose, like an ssh-agent, stays).
+// afterwards. What it started gets a hangup then, as when a terminal window
+// closes: a job the profile started with `nohup` stays, as does a daemon
+// that left the shell (an ssh-agent); the rest ends. A shell that does not
+// answer is ended with everything below it.
 //
 // A shell that does not take `-ilc` (csh, tcsh) gives no PATH, and the next
 // shell is asked.
@@ -108,13 +110,22 @@ export function endProbes(): void {
 }
 
 /**
- * Ends a shell that still runs, with what it started: SIGKILL to the
+ * Ends a shell that still runs, with what it started: a signal to the
  * process group it leads (it is `detached`) and to every process below it,
  * since an interactive shell may give each job a process group of its own.
  * All in one step, so nothing is left for a later turn that may not come
  * (the app quits), and the shell is never only stopped. The processes are
  * listed first: once the shell is gone, what it started hangs under pid 1.
- * Without a list (`ps` failed) only the group is ended.
+ * Without a list (`ps` failed) only the group is signalled.
+ *
+ * `answered`: the shell gave its answer and waits. What it started gets
+ * SIGHUP, which is what closing a terminal window sends: a job the profile
+ * started with `nohup`, to outlive the shell, stays (a profile's
+ * `pgrep -q daemon || nohup daemon &` would otherwise be started and ended
+ * at every start of the app), and the others end. Then the shell itself
+ * gets SIGKILL. A job that stays keeps the shell's output, which is a
+ * closed pipe from then on. Not answered (the time limit, too much output,
+ * a quit): everything gets SIGKILL, a profile that hangs is not asked.
  *
  * The list and the signals are not one moment. A profile that is still
  * starting commands (the time limit, the output limit or a quit came while
@@ -124,13 +135,19 @@ export function endProbes(): void {
  * only its last command left after the end marker, the wait, which ends by
  * itself if it is missed.
  */
-function endShell(pid: number): void {
+function endShell(pid: number, answered: boolean): void {
   const below = treeOf(listProcessesNow() ?? [], pid)
     .map((r) => r.pid)
     .filter((p) => p !== pid);
-  for (const target of [-pid, ...below]) {
+  const signal = answered ? "SIGHUP" : "SIGKILL";
+  const targets: [number, NodeJS.Signals][] = [-pid, ...below].map((t) => [
+    t,
+    signal,
+  ]);
+  if (answered) targets.push([pid, "SIGKILL"]);
+  for (const [target, sent] of targets) {
     try {
-      process.kill(target, "SIGKILL");
+      process.kill(target, sent);
     } catch {
       // already gone
     }
@@ -141,10 +158,11 @@ function endShell(pid: number): void {
  * The real probe: `<shell> -ilc <script>` (login and interactive, so both
  * kinds of profile are read) with stdin closed, in a process group of its
  * own. It answers as soon as the end marker is in the output and never waits
- * for the output to close. A shell that still runs then has been ended with
- * what its profile started by the time the probe answers. A shell that has
- * ended by itself gets no signal: its pid and the number of its process
- * group may belong to another process by then.
+ * for the output to close. A shell that still runs then has been ended by
+ * the time the probe answers, and what its profile started has been sent
+ * its signal (`endShell`). A shell that has ended by itself gets no signal:
+ * its pid and the number of its process group may belong to another process
+ * by then.
  */
 export function probeShell(
   shell: string,
@@ -177,7 +195,8 @@ export function probeShell(
       if (pid) {
         asked.delete(pid);
         // Node has not seen it end: the pid and the group are still its own.
-        if (child.exitCode === null && child.signalCode === null) endShell(pid);
+        if (child.exitCode === null && child.signalCode === null)
+          endShell(pid, typeof result === "string" && result !== "timeout");
       }
       // After the shell is gone: a shell whose output is cut off goes on to
       // its next command.

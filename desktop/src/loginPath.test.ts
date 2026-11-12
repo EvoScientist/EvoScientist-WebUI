@@ -461,7 +461,10 @@ describe.skipIf(process.platform === "win32")("probeShell", () => {
       ]);
       const shell = Number(readFileSync(shellFile, "utf8"));
       expect(pathBetween(out as string, START, END)).toBeTruthy();
-      expect(signals).toContainEqual([-shell, "SIGKILL"]);
+      // The shell itself is ended for good; what it started gets a hangup.
+      expect(signals).toContainEqual([shell, "SIGKILL"]);
+      expect(signals).toContainEqual([-shell, "SIGHUP"]);
+      expect(signals).not.toContainEqual([-shell, "SIGKILL"]);
       expect(signals.map(([, signal]) => signal)).not.toContain("SIGSTOP");
     } finally {
       kill.mockRestore();
@@ -514,6 +517,50 @@ describe.skipIf(process.platform === "win32")("probeShell", () => {
     expect(out).toMatch(/true\|false\|1\|read:1__E__$/);
     expect(Date.now() - began).toBeLessThan(5_000);
   });
+
+  it("leaves a job the profile started with nohup running, as a closed terminal does, and ends the others", async () => {
+    // As `pgrep -q some-daemon || nohup some-daemon >/dev/null 2>&1 &` in a
+    // profile: the app must not end at each start what a terminal leaves.
+    const keptFile = join(home, "nohup-job");
+    const plainFile = join(home, "plain-job");
+    const script = [
+      `nohup ${nap(41)} >/dev/null 2>&1 & echo $! > '${keptFile}'`,
+      `${nap(42)} & echo $! > '${plainFile}'`,
+      probeScript(START, END),
+    ].join("\n");
+    const out = await probeShell("/bin/sh", script, 10_000, END, env);
+    expect(pathBetween(out as string, START, END)).toBeTruthy();
+    const kept = await pidIn(keptFile);
+    const plain = await pidIn(plainFile);
+    try {
+      await vi.waitFor(() => expect(alive(plain)).toBe(false), {
+        timeout: 5000,
+      });
+      // Still there once the other one has gone.
+      expect(alive(kept)).toBe(true);
+    } finally {
+      endNow(kept);
+      endNow(plain);
+    }
+  }, 20_000);
+
+  it("ends a job started with nohup too when the shell does not answer in time", async () => {
+    // A profile that hangs is ended with everything below it.
+    const jobFile = join(home, "nohup-job-of-a-hung-shell");
+    const script = [
+      `nohup ${nap(43)} >/dev/null 2>&1 & echo $! > '${jobFile}'`,
+      "sleep 30",
+    ].join("\n");
+    expect(await probeShell("/bin/sh", script, 1500, END, env)).toBe("timeout");
+    const job = await pidIn(jobFile);
+    try {
+      await vi.waitFor(() => expect(alive(job)).toBe(false), {
+        timeout: 5000,
+      });
+    } finally {
+      endNow(job);
+    }
+  }, 20_000);
 
   it("passes -ilc, so the login and interactive profiles are read", async () => {
     // bash sets `login_shell` and has `i` in $- only with those options.
@@ -575,6 +622,24 @@ describe.skipIf(process.platform === "win32")("endProbes", () => {
     expect(await probe).toBeNull();
     await gone(shell);
     await gone(job);
+  }, 20_000);
+
+  it("ends a job started with nohup too when the app quits during the wait", async () => {
+    const { login } = await fresh();
+    const jobFile = join(home, "nohup-job-at-quit");
+    const script = [
+      `nohup ${nap(44)} >/dev/null 2>&1 & echo $! > '${jobFile}'`,
+      "sleep 30",
+    ].join("\n");
+    const probe = login.probeShell("/bin/sh", script, 30_000, END, env);
+    const job = await pidIn(jobFile);
+    try {
+      login.endProbes();
+      expect(await probe).toBeNull();
+      await gone(job);
+    } finally {
+      endNow(job);
+    }
   }, 20_000);
 
   it("sends no signal for a shell that has ended, though its probe is still open", async () => {
