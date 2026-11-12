@@ -83,6 +83,25 @@ describe("installCommand", () => {
     );
   });
 
+  it("runs install.sh with the system's bash on macOS, whatever is on PATH", () => {
+    // The app's PATH is the login shell's there, where another bash (nix,
+    // Homebrew) may come first.
+    const c = installCommand({
+      platform: "darwin",
+      scriptsDir: "/app/core-scripts",
+      version: "0.4.1",
+      cn: false,
+      env: { HOME: "/Users/u", PATH: "/opt/homebrew/bin:/usr/bin:/bin" },
+    });
+    expect(c.file).toBe("/bin/bash");
+    expect(c.args).toEqual([
+      join("/app/core-scripts", "install.sh"),
+      "--version",
+      "0.4.1",
+      "--no-setup",
+    ]);
+  });
+
   it("runs install.sh with bash", () => {
     const c = installCommand({
       platform: "linux",

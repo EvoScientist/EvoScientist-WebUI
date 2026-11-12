@@ -52,7 +52,7 @@ Keep Electron's `RunAsNode` fuse enabled: the UI server runs as the app's own ex
 ## On macOS
 
 - Closing the window hides it: the app stays in the Dock with its backend and its page, and a click on the Dock icon (or opening the app again) brings the same window back. Quit (⌘Q) runs the checks that closing the window runs on Windows and Linux.
-- The packaged app reads the login shell's `PATH` at startup (`src/loginPath.ts`); `npm start` keeps the terminal's.
+- The packaged app reads the login shell's `PATH` at startup (`src/loginPath.ts`); `npm start` keeps the terminal's. The shell it asks has `EVOSCIENTIST_RESOLVING_ENVIRONMENT=1` set, so a profile can skip a slow or interactive part then; the first screen says "Reading your shell's PATH..." meanwhile. The bundled install script runs under `/bin/bash`, whatever that `PATH` has first.
 - On its first launch the install script adds uv's tool folder to `PATH` in the shell profile unless it is there already, so `EvoSci` also works in a terminal; the install screen says so.
 - A backend or UI server that does not stop in time is ended with everything it started (`killTree` in `src/proc.ts`, on Linux too): the tree is read from `ps` first, because the backend's server runs in a session of its own.
 - Not there yet: signing and notarization, releases of the macOS files, the app's own updates, and waiting for an `EvoSci update` that is still finishing (`tools/update.lock` is checked on Windows only).

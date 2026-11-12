@@ -85,7 +85,9 @@ export function installCommand(opts: {
     };
   }
   return {
-    file: "bash",
+    // macOS: the system's bash by its path. The app's PATH is the login
+    // shell's there, where another bash (nix, Homebrew) may come first.
+    file: opts.platform === "darwin" ? "/bin/bash" : "bash",
     args: [
       join(opts.scriptsDir, "install.sh"),
       "--version",

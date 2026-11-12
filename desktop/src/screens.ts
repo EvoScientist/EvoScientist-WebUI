@@ -213,10 +213,16 @@ export function setupScreen(stages: Stage[]): SetupScreen {
 
 /** The progress screen for a launch phase, the UI start or a stop. */
 export function progressScreen(
-  state: BootState | "starting_ui" | "stopping" | "preparing_update"
+  state:
+    | BootState
+    | "starting_ui"
+    | "stopping"
+    | "preparing_update"
+    | "reading_path"
 ): ProgressScreen {
   const s = typeof state === "string" ? state : state.phase;
   const text: Record<string, [string, string]> = {
+    reading_path: ["Starting EvoScientist", "Reading your shell's PATH..."],
     checking_core: [
       "Starting EvoScientist",
       "Checking the installed EvoScientist...",

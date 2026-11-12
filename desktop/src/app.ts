@@ -251,10 +251,13 @@ const QUIET_PHASES: ReadonlySet<BootState["phase"]> = new Set([
 
 export interface App {
   attachWindow(w: AppWindow): void;
-  /** Shows the first screen and starts the launch, after `before` when
-   *  given (the login shell's PATH on macOS, which the launch needs to find
-   *  and run EvoSci); a failure of `before` is only logged. */
-  start(before?: Promise<unknown>): void;
+  /** Shows the first screen and starts the launch. With `loginPath` (the
+   *  login shell's PATH, being read: the packaged macOS app) the launch
+   *  waits for it, the screen says so meanwhile, and the PATH it gives
+   *  replaces the app's own and its children's, which the launch needs to
+   *  find and run EvoSci. Null (no shell answered) keeps the PATH; a failure
+   *  is only logged. */
+  start(loginPath?: Promise<string | null>): void;
   launch(): Promise<void>;
   restartBackend(): Promise<void>;
   /** The bridge's restart, for the WebUI's settings page. */
@@ -1597,8 +1600,9 @@ export function createApp(deps: AppDeps): App {
 
   return {
     attachWindow: (w) => void (win = w),
-    start: (before) => {
-      showScreen(screen);
+    start: (loginPath) => {
+      // A shell profile can take seconds, up to the time limit of each shell.
+      showScreen(loginPath ? progressScreen("reading_path") : screen);
       // Also when the launch stops on the status page: `core_too_new` tells
       // the user to update the app.
       deps.appUpdate?.start();
@@ -1606,7 +1610,14 @@ export function createApp(deps: AppDeps): App {
       // meanwhile does not launch ahead of it.
       void exclusive(async () => {
         try {
-          await before;
+          const path = await loginPath;
+          if (path) {
+            // The UI server's environment is built from the app's own, the
+            // EvoSci children's from childEnv, which also is where EvoSci
+            // and uv are looked for.
+            deps.env.PATH = path;
+            deps.childEnv.PATH = path;
+          }
         } catch (e) {
           log.warn(`before the launch: ${e}`);
         }

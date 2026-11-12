@@ -24,10 +24,13 @@ export const PROBE_TIMEOUT_MS = 10_000;
 export const FALLBACK_SHELLS = ["/bin/zsh", "/bin/bash", "/bin/sh"];
 
 /** Keeps an oh-my-zsh update prompt and a tmux autostart from holding the
- *  shell until the time limit. */
+ *  shell until the time limit, and tells a profile that the app is the one
+ *  asking: a slow or interactive part can be skipped while
+ *  `EVOSCIENTIST_RESOLVING_ENVIRONMENT` is set. */
 export const PROBE_ENV = {
   DISABLE_AUTO_UPDATE: "true",
   ZSH_TMUX_AUTOSTART: "false",
+  EVOSCIENTIST_RESOLVING_ENVIRONMENT: "1",
 };
 
 /** The shells to ask: the account's own when it is a full path, then the
@@ -45,7 +48,8 @@ export function shellsToTry(accountShell: string | null): string[] {
 const HOLD_SECONDS = 20;
 
 /** The command the shell runs: its environment, NUL-separated, between the
- *  markers, which are letters, digits and underscores only. Then it waits
+ *  markers, which are letters, digits and underscores only (`env -0` is in
+ *  macOS 12.3 and later; the app needs macOS 13). Then it waits
  *  instead of ending: a shell that ended by itself would leave what its
  *  profile started in the background under pid 1, where the app could not
  *  find it any more. The app ends the shell at the end marker; left alone

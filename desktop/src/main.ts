@@ -584,27 +584,20 @@ function senderOrigin(e: IpcMainEvent | IpcMainInvokeEvent): string | null {
 // --- Start -------------------------------------------------------------------
 
 /**
- * The login shell's PATH for the app and its children. A Mac app opened from
- * Finder or the Dock has launchd's minimal PATH, so the packaged app asks the
- * login shell and uses its PATH however it was opened; in development the
- * terminal's PATH stays. Resolves when the PATH is in place, or was left as
- * it is because no shell answered.
+ * The login shell's PATH for the app and its children, or null when no shell
+ * answered. A Mac app opened from Finder or the Dock has launchd's minimal
+ * PATH, so the packaged app asks the login shell and uses its PATH however
+ * it was opened (`start` puts it in place); in development the terminal's
+ * PATH stays.
  */
-async function useLoginPath(): Promise<void> {
-  if (!app.isPackaged || process.platform !== "darwin") return;
+async function loginShellPath(): Promise<string | null> {
   let accountShell: string | null = null;
   try {
     accountShell = userInfo().shell;
   } catch (e) {
     log.warn(`cannot read the account's shell: ${e}`);
   }
-  const found = await readLoginPath({ accountShell, log });
-  if (!found) return;
-  // The UI server's environment is built from process.env, the EvoSci
-  // children's from childEnv, which also is where EvoSci and uv are looked
-  // for.
-  process.env.PATH = found.path;
-  childEnv.PATH = found.path;
+  return (await readLoginPath({ accountShell, log }))?.path ?? null;
 }
 
 /** Logs the start, wires the app's events and opens the window. */
@@ -618,7 +611,10 @@ function start(): void {
   );
   log.info(`data ${folders.dataDir}, config ${folders.configDir}`);
   // Runs while Electron gets ready and the first screen comes up.
-  const loginPath = useLoginPath();
+  const loginPath =
+    app.isPackaged && process.platform === "darwin"
+      ? loginShellPath()
+      : undefined;
   process.on("uncaughtException", (e) => {
     log.warn(`uncaught: ${e.stack ?? e}`);
     const report = desktop.crashReport("uncaught_exception", String(e));

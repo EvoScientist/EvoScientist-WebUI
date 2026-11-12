@@ -500,17 +500,18 @@ describe.skipIf(process.platform === "win32")("probeShell", () => {
     20_000
   );
 
-  it("runs the shell with stdin closed and the two variables that keep it from waiting", async () => {
+  it("runs the shell with stdin closed, the two variables that keep it from waiting and the one that tells a profile who asks", async () => {
     expect(PROBE_ENV).toEqual({
       DISABLE_AUTO_UPDATE: "true",
       ZSH_TMUX_AUTOSTART: "false",
+      EVOSCIENTIST_RESOLVING_ENVIRONMENT: "1",
     });
     // `read` returns at once on a closed stdin; on an open one it would wait
     // for the full time limit.
-    const script = `printf '%s|%s|' "$DISABLE_AUTO_UPDATE" "$ZSH_TMUX_AUTOSTART"; read answer; printf 'read:%s' $?; printf '%s' '${END}'`;
+    const script = `printf '%s|%s|%s|' "$DISABLE_AUTO_UPDATE" "$ZSH_TMUX_AUTOSTART" "$EVOSCIENTIST_RESOLVING_ENVIRONMENT"; read answer; printf 'read:%s' $?; printf '%s' '${END}'`;
     const began = Date.now();
     const out = await probeShell("/bin/sh", script, 10_000, END, env);
-    expect(out).toMatch(/true\|false\|read:1__E__$/);
+    expect(out).toMatch(/true\|false\|1\|read:1__E__$/);
     expect(Date.now() - began).toBeLessThan(5_000);
   });
 

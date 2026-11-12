@@ -392,13 +392,75 @@ describe("start", () => {
   it("shows the first screen at once and launches after what it is given", async () => {
     const locateEvoSci = vi.fn(async () => located);
     const h = harness({ locateEvoSci });
-    const before = deferred<void>();
+    const before = deferred<string | null>();
     h.app.start(before.promise);
     await settle();
     expect(h.win.calls).toContain("status page");
     expect(locateEvoSci).not.toHaveBeenCalled();
-    before.resolve();
+    before.resolve(null);
     await vi.waitFor(() => expect(locateEvoSci).toHaveBeenCalled());
+  });
+
+  it("says that it reads the shell's PATH while it waits for it", async () => {
+    // A profile can take seconds, up to the time limit of each shell.
+    const h = harness({ locateEvoSci: async () => located });
+    const path = deferred<string | null>();
+    h.app.start(path.promise);
+    await settle();
+    expect(h.app.screen).toEqual({
+      kind: "progress",
+      title: "Starting EvoScientist",
+      message: "Reading your shell's PATH...",
+    });
+    path.resolve(null);
+    await vi.waitFor(() =>
+      expect(h.app.screen).not.toMatchObject({
+        message: "Reading your shell's PATH...",
+      })
+    );
+  });
+
+  it("without a shell to ask, the first screen is the launch's", async () => {
+    const h = harness({ locateEvoSci: async () => located });
+    h.app.start();
+    expect(h.app.screen).toMatchObject({
+      kind: "progress",
+      message: "Checking the installed EvoScientist...",
+    });
+  });
+
+  it("gives the login shell's PATH to its own environment and to its children's, before it looks for EvoSci", async () => {
+    const env = { PATH: "/usr/bin:/bin" };
+    const childEnv = { PATH: "/usr/bin:/bin", HOME: "/Users/u" };
+    const seen: (string | undefined)[] = [];
+    const h = harness({
+      env,
+      childEnv,
+      locateEvoSci: async () => {
+        seen.push(env.PATH, childEnv.PATH);
+        return located;
+      },
+    });
+    h.app.start(Promise.resolve("/opt/homebrew/bin:/usr/bin:/bin"));
+    await vi.waitFor(() => expect(seen.length).toBe(2));
+    expect(seen).toEqual([
+      "/opt/homebrew/bin:/usr/bin:/bin",
+      "/opt/homebrew/bin:/usr/bin:/bin",
+    ]);
+    expect(h.deps.childEnv.HOME).toBe("/Users/u");
+  });
+
+  it("keeps the PATH it has when no shell answered", async () => {
+    const env = { PATH: "/usr/bin:/bin" };
+    const childEnv = { PATH: "/usr/bin:/bin" };
+    const locateEvoSci = vi.fn(async () => located);
+    const h = harness({ env, childEnv, locateEvoSci });
+    h.app.start(Promise.resolve(null));
+    await vi.waitFor(() => expect(locateEvoSci).toHaveBeenCalled());
+    expect([env.PATH, childEnv.PATH]).toEqual([
+      "/usr/bin:/bin",
+      "/usr/bin:/bin",
+    ]);
   });
 
   it("launches also when what it waits for fails", async () => {
@@ -413,25 +475,25 @@ describe("start", () => {
     // The launch would find and run EvoSci with the PATH not in place yet.
     const locateEvoSci = vi.fn(async () => located);
     const h = harness({ locateEvoSci });
-    const before = deferred<void>();
+    const before = deferred<string | null>();
     h.app.start(before.promise);
     await settle();
     await h.app.restartBackend();
     await h.app.launch();
     expect(locateEvoSci).not.toHaveBeenCalled();
-    before.resolve();
+    before.resolve(null);
     await vi.waitFor(() => expect(locateEvoSci).toHaveBeenCalledTimes(1));
   });
 
   it("a quit during the wait is not followed by a launch", async () => {
     const locateEvoSci = vi.fn(async () => located);
     const h = harness({ locateEvoSci });
-    const before = deferred<void>();
+    const before = deferred<string | null>();
     h.app.start(before.promise);
     await settle();
     await h.app.requestQuit();
     expect(h.exit).toHaveBeenCalledWith(false);
-    before.resolve();
+    before.resolve(null);
     await settle();
     await settle();
     expect(locateEvoSci).not.toHaveBeenCalled();
