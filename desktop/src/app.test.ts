@@ -423,6 +423,8 @@ describe("start", () => {
   it("without a shell to ask, the first screen is the launch's", async () => {
     const h = harness({ locateEvoSci: async () => located });
     h.app.start();
+    // The screen is shown, not only held: the page it is on has been loaded.
+    expect(h.win.calls).toContain("status page");
     expect(h.app.screen).toMatchObject({
       kind: "progress",
       message: "Checking the installed EvoScientist...",
