@@ -118,14 +118,18 @@ export function endProbes(): void {
  * listed first: once the shell is gone, what it started hangs under pid 1.
  * Without a list (`ps` failed) only the group is signalled.
  *
- * `answered`: the shell gave its answer and waits. What it started gets
- * SIGHUP, which is what closing a terminal window sends: a job the profile
- * started with `nohup`, to outlive the shell, stays (a profile's
- * `pgrep -q daemon || nohup daemon &` would otherwise be started and ended
- * at every start of the app), and the others end. Then the shell itself
- * gets SIGKILL. A job that stays keeps the shell's output, which is a
- * closed pipe from then on. Not answered (the time limit, too much output,
- * a quit): everything gets SIGKILL, a profile that hangs is not asked.
+ * `answered`: the shell gave its answer and waits. The shell itself gets
+ * SIGKILL, first, so that it cannot act on a hangup (a trap in a profile
+ * could start something). What it started then gets SIGHUP, which is what
+ * closing a terminal window sends: a job the profile started with `nohup`,
+ * to outlive the shell, stays (a profile's
+ * `pgrep -q daemon || nohup daemon >/dev/null 2>&1 &` would otherwise be
+ * started and ended at every start of the app), and the others end. A job
+ * that stays keeps the shell's output, which is a closed pipe from then on:
+ * one that still writes there (a `nohup` without a redirection; in a
+ * terminal `nohup` would have sent that to nohup.out) ends at its next
+ * write. Not answered (the time limit, too much output, a quit): everything
+ * gets SIGKILL, a profile that hangs is not asked.
  *
  * The list and the signals are not one moment. A profile that is still
  * starting commands (the time limit, the output limit or a quit came while
@@ -144,7 +148,7 @@ function endShell(pid: number, answered: boolean): void {
     t,
     signal,
   ]);
-  if (answered) targets.push([pid, "SIGKILL"]);
+  if (answered) targets.unshift([pid, "SIGKILL"]);
   for (const [target, sent] of targets) {
     try {
       process.kill(target, sent);

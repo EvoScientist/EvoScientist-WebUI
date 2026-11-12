@@ -465,6 +465,14 @@ describe.skipIf(process.platform === "win32")("probeShell", () => {
       expect(signals).toContainEqual([shell, "SIGKILL"]);
       expect(signals).toContainEqual([-shell, "SIGHUP"]);
       expect(signals).not.toContainEqual([-shell, "SIGKILL"]);
+      // The shell first: one that got the hangup first could still act on
+      // it (a trap in its profile) before it is ended.
+      const at = (target: number, signal: string) =>
+        signals.findIndex(([t, sig]) => t === target && sig === signal);
+      expect(at(shell, "SIGKILL")).toBeLessThan(at(-shell, "SIGHUP"));
+      expect(signals.findIndex(([, sig]) => sig === "SIGHUP")).toBeGreaterThan(
+        at(shell, "SIGKILL")
+      );
       expect(signals.map(([, signal]) => signal)).not.toContain("SIGSTOP");
     } finally {
       kill.mockRestore();
@@ -536,7 +544,9 @@ describe.skipIf(process.platform === "win32")("probeShell", () => {
       await vi.waitFor(() => expect(alive(plain)).toBe(false), {
         timeout: 5000,
       });
-      // Still there once the other one has gone.
+      // Still there well after the other one has gone: a job that got the
+      // same signal a moment later would be gone by now too.
+      await new Promise((r) => setTimeout(r, 700));
       expect(alive(kept)).toBe(true);
     } finally {
       endNow(kept);
