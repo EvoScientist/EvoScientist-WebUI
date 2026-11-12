@@ -8,10 +8,12 @@
 // A profile can print anything and can leave processes that keep the output
 // open, so the environment is printed between two markers that are new for
 // each run, reading stops at the end marker, and the shell is ended
-// afterwards. What it started gets a hangup then, as when a terminal window
-// closes: a job the profile started with `nohup` stays, as does a daemon
-// that left the shell (an ssh-agent); the rest ends. A shell that does not
-// answer is ended with everything below it.
+// afterwards. What it started gets a hangup then: a job that ignores it
+// (one the profile started with `nohup`) stays, as does a daemon that left
+// the shell (an ssh-agent); the rest ends, also a job that was only disowned
+// (`cmd &!`), which a closed terminal would leave. A profile can leave such
+// a job out while `EVOSCIENTIST_RESOLVING_ENVIRONMENT` is set. A shell that
+// does not answer is ended with everything below it.
 //
 // A shell that does not take `-ilc` (csh, tcsh) gives no PATH, and the next
 // shell is asked.
@@ -120,16 +122,20 @@ export function endProbes(): void {
  *
  * `answered`: the shell gave its answer and waits. The shell itself gets
  * SIGKILL, first, so that it cannot act on a hangup (a trap in a profile
- * could start something). What it started then gets SIGHUP, which is what
- * closing a terminal window sends: a job the profile started with `nohup`,
- * to outlive the shell, stays (a profile's
+ * could start something). What it started then gets SIGHUP: a job that
+ * ignores or handles it stays, so one the profile started with `nohup`, to
+ * outlive the shell, runs on (a profile's
  * `pgrep -q daemon || nohup daemon >/dev/null 2>&1 &` would otherwise be
- * started and ended at every start of the app), and the others end. A job
- * that stays keeps the shell's output, which is a closed pipe from then on:
- * one that still writes there (a `nohup` without a redirection; in a
- * terminal `nohup` would have sent that to nohup.out) ends at its next
- * write. Not answered (the time limit, too much output, a quit): everything
- * gets SIGKILL, a profile that hangs is not asked.
+ * started and ended at every start of the app), and the others end. That
+ * is less than a closed terminal leaves: a job that was only disowned
+ * (`cmd &!`, `cmd & disown`) is not hung up by its shell there, and here it
+ * ends, since a signal cannot tell it from any other job. A job that stays
+ * keeps the shell's output, which is a closed pipe from then on: one that
+ * still writes there (a `nohup` without a redirection; in a terminal
+ * `nohup` would have sent that to nohup.out) ends at its next write. A job
+ * that is stopped stays stopped: the hangup does not reach it before it
+ * continues. Not answered (the time limit, too much output, a quit):
+ * everything gets SIGKILL, a profile that hangs is not asked.
  *
  * The list and the signals are not one moment. A profile that is still
  * starting commands (the time limit, the output limit or a quit came while

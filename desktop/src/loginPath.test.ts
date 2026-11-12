@@ -526,9 +526,9 @@ describe.skipIf(process.platform === "win32")("probeShell", () => {
     expect(Date.now() - began).toBeLessThan(5_000);
   });
 
-  it("leaves a job the profile started with nohup running, as a closed terminal does, and ends the others", async () => {
+  it("leaves a job the profile started with nohup running and ends the others", async () => {
     // As `pgrep -q some-daemon || nohup some-daemon >/dev/null 2>&1 &` in a
-    // profile: the app must not end at each start what a terminal leaves.
+    // profile: the app must not end at each start what was started to stay.
     const keptFile = join(home, "nohup-job");
     const plainFile = join(home, "plain-job");
     const script = [
@@ -537,10 +537,10 @@ describe.skipIf(process.platform === "win32")("probeShell", () => {
       probeScript(START, END),
     ].join("\n");
     const out = await probeShell("/bin/sh", script, 10_000, END, env);
-    expect(pathBetween(out as string, START, END)).toBeTruthy();
     const kept = await pidIn(keptFile);
     const plain = await pidIn(plainFile);
     try {
+      expect(pathBetween(out as string, START, END)).toBeTruthy();
       await vi.waitFor(() => expect(alive(plain)).toBe(false), {
         timeout: 5000,
       });
