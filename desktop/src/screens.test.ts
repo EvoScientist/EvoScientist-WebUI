@@ -499,7 +499,7 @@ describe("the notes for a Restart to update that did not happen", () => {
     const js = readFileSync(
       join(__dirname, "..", "resources", "status.js"),
       "utf8"
-    );
+    ).replace(/\r\n/g, "\n");
     expect(notesIn(js, "UPDATE_NOTES")).toEqual(NOTES);
   });
 
@@ -515,7 +515,7 @@ describe("the notes for a Restart to update that did not happen", () => {
         "DesktopUpdateNotice.tsx"
       ),
       "utf8"
-    );
+    ).replace(/\r\n/g, "\n");
     expect(notesIn(tsx, "RESTART_NOTES")).toEqual(NOTES);
   });
 });

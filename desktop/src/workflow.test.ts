@@ -22,11 +22,12 @@ interface Job {
   steps: Step[];
 }
 
+// A Windows checkout has CRLF line ends.
 const workflow = load(
   readFileSync(
     join(__dirname, "..", "..", ".github", "workflows", "desktop.yml"),
     "utf8"
-  )
+  ).replace(/\r\n/g, "\n")
 ) as { permissions: Record<string, string>; jobs: Record<string, Job> };
 const jobs = workflow.jobs;
 const SECRETS = [

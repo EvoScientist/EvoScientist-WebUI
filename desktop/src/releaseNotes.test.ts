@@ -45,10 +45,11 @@ describe("renderNotes", () => {
   });
 
   it("fills the macOS template completely", () => {
+    // A Windows checkout has CRLF line ends.
     const template = readFileSync(
       join(__dirname, "..", templateFor("EvoScientist-arm64.dmg")),
       "utf8"
-    );
+    ).replace(/\r\n/g, "\n");
     const text = renderNotes(template, values);
     expect(text).not.toMatch(/\{\{/);
     expect(text).toMatch(/^## Desktop app for macOS\n/);
