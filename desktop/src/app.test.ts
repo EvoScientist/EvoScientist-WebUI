@@ -2527,10 +2527,11 @@ describe("restart to update (W04)", () => {
 
   // The updater's quit closes the windows first; the user's Quit closes
   // them too. From then on the app cannot come back: its window is closing,
-  // or closed. A quit that then does not end the app would leave it running
-  // without a window, so the app ends itself when the wait runs out; the
-  // system installs what it holds once the app has ended.
-  it("on macOS, once the quit has begun, the window closes and the wait ends the app instead of bringing it back", async () => {
+  // or closed. The quit gets a wait of its own, counted from its beginning;
+  // if the app still runs after it, the app ends itself, or it would run on
+  // without a window. The system installs what it holds once the app has
+  // ended.
+  it("on macOS, once the quit has begun, the window closes, and a quit that does not end the app ends with the app's own exit", async () => {
     const waits: (() => void)[] = [];
     const appUpdate = fakeAppUpdate();
     const h = await launched({
@@ -2539,8 +2540,22 @@ describe("restart to update (W04)", () => {
       platform: "darwin",
     });
     await expect(h.app.restartToUpdate()).resolves.toEqual({ ok: true });
+    expect(waits).toHaveLength(1);
     h.app.quitBegan();
     expect(h.app.closePasses()).toBe(true);
+    // The quit's own wait; a second report of the quit starts no other.
+    expect(waits).toHaveLength(2);
+    h.app.quitBegan();
+    expect(waits).toHaveLength(2);
+    // The install's wait runs out, and the system reports an error: the
+    // quit is under way, so neither brings the app back nor ends it.
+    waits[0]();
+    appUpdate.refusals[0]?.();
+    await turn();
+    expect(h.exit).not.toHaveBeenCalled();
+    expect(h.app.exiting).toBe(true);
+    expect(h.sessions).toHaveLength(1);
+    expect(appUpdate.abandonInstall).not.toHaveBeenCalled();
     // A click on the Dock icon meanwhile asks for a relaunch after the
     // exit, as during any stop. Here it must not: the app would start under
     // the install.
@@ -2549,38 +2564,28 @@ describe("restart to update (W04)", () => {
     expect(
       h.log.lines.some((l) => l.includes("second launch (quit state stopping)"))
     ).toBe(true);
-    expect(h.exit).not.toHaveBeenCalled();
-    waits[0]();
+    // The quit's wait runs out and the app is still there.
+    waits[1]();
     await turn();
     expect(h.exit).toHaveBeenCalledTimes(1);
     expect(h.exit).toHaveBeenCalledWith(false);
-    expect(h.app.exiting).toBe(true);
-    expect(h.sessions).toHaveLength(1);
-    expect(appUpdate.abandonInstall).not.toHaveBeenCalled();
     expect(h.messageBox).not.toHaveBeenCalled();
     expect(
       h.log.lines.some((l) => l.includes("the quit did not end the app"))
     ).toBe(true);
-    // Once: a refusal that comes after it finds nothing to do.
-    appUpdate.refusals[0]?.();
-    await turn();
-    expect(h.exit).toHaveBeenCalledTimes(1);
   });
 
-  it("on macOS a refusal after the quit has begun ends the app too", async () => {
-    const appUpdate = fakeAppUpdate();
+  it("on macOS a quit that began outside an update's wait starts no wait", async () => {
+    const waits: (() => void)[] = [];
     const h = await launched({
-      appUpdate,
-      installWait: never,
+      installWait: () => new Promise<void>((r) => waits.push(r)),
       platform: "darwin",
     });
-    await expect(h.app.restartToUpdate()).resolves.toEqual({ ok: true });
+    await h.app.requestQuit();
+    expect(h.exit).toHaveBeenCalledTimes(1);
     h.app.quitBegan();
-    appUpdate.refusals[0]?.();
-    await turn();
-    expect(h.exit).toHaveBeenCalledWith(false);
-    expect(h.sessions).toHaveLength(1);
-    expect(h.messageBox).not.toHaveBeenCalled();
+    expect(waits).toHaveLength(0);
+    expect(h.exit).toHaveBeenCalledTimes(1);
   });
 
   it("on Windows the window closes while the installer is awaited, as before", async () => {

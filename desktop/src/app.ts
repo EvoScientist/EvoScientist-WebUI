@@ -310,9 +310,9 @@ export interface App {
   closePasses(): boolean;
   /** macOS: a quit has begun while the app exits: the updater's (it closes
    *  the windows first, then quits) or the user's Quit. The closes that
-   *  follow are the quit's, and nothing brings the app back any more: if
-   *  the quit has not ended the app when the wait for the update runs out,
-   *  the app ends itself.
+   *  follow are the quit's, and nothing brings the app back any more. A
+   *  quit for an update that has not ended the app 15 s after it began ends
+   *  with the app's own exit.
    *  Ignored while the app runs, and on Windows: there electron-updater
    *  begins the quit right after it started the installer, on every
    *  install, and the 15 s wait is for a quit that does not end the app. */
@@ -1331,19 +1331,11 @@ export function createApp(deps: AppDeps): App {
       const giveUp = (why: string): void => {
         if (attempt !== installAttempt || !exiting || quitState !== "stopping")
           return;
-        if (!quitBegun) return void updateDidNotStart(why);
-        // macOS: the quit has closed the window, or is closing it, and has
-        // not ended the app. Without a window the app cannot come back, and
-        // left alone it would run on with a Dock icon that does nothing. It
-        // ends; the system installs what it holds once the app has ended.
-        // No relaunch, also after a click on the Dock icon: the app would
-        // start under that install.
-        installAttempt++;
-        log.warn(
-          `restart to update: the quit did not end the app (${why}); exiting`
-        );
-        relaunchAfterExit = false;
-        exitNow();
+        // macOS: once the quit has begun the window is closing or closed, so
+        // the app cannot come back. The quit has a wait of its own
+        // (`quitBegan`).
+        if (quitBegun) return;
+        void updateDidNotStart(why);
       };
       awaitingInstall = true;
       if (!update.install(() => giveUp("the system refused the update")))
@@ -1739,7 +1731,23 @@ export function createApp(deps: AppDeps): App {
       exiting &&
       (quitBegun || !(awaitingInstall && deps.platform === "darwin")),
     quitBegan: () => {
-      if (exiting && deps.platform === "darwin") quitBegun = true;
+      if (!exiting || deps.platform !== "darwin" || quitBegun) return;
+      quitBegun = true;
+      if (!awaitingInstall) return;
+      // The quit for an update ends the app within moments. If the app
+      // still runs after a wait counted from here (not from the install: the
+      // quit may begin late in that wait), the quit failed after it closed
+      // the window, and left alone the app would run on with a Dock icon
+      // that does nothing. It ends; the system installs what it holds once
+      // the app has ended. No relaunch, also after a click on the Dock
+      // icon: the app would start under that install.
+      const attempt = installAttempt;
+      void (deps.installWait ?? defaultInstallWait)().then(() => {
+        if (attempt !== installAttempt || !exiting) return;
+        log.warn("restart to update: the quit did not end the app; exiting");
+        relaunchAfterExit = false;
+        exitNow();
+      });
     },
     closeWindow: () => {
       if (deps.platform !== "darwin") return void requestQuit();
