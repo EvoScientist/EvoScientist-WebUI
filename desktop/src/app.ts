@@ -130,6 +130,8 @@ export interface AppDeps {
    *  when given; null when cancelled. */
   chooseFolder(title: string, defaultPath?: string): Promise<string | null>;
   openPath(path: string): void;
+  /** Opens a web page in the user's browser. */
+  openExternal(url: string): void;
   showItemInFolder(path: string): void;
   copyText(text: string): void;
   documentsDir(): string;
@@ -215,8 +217,11 @@ export interface AppDeps {
   sessionEnd?: SessionEnd;
 
   // App updates: null where the app does not update itself (not
-  // packaged, or not on Windows).
+  // packaged, or on Linux).
   appUpdate?: AppUpdate | null;
+  /** macOS: whether the system can put a new version in the app's place
+   *  (appUpdate.ts `canReplaceApp`). Absent elsewhere. */
+  canReplaceApp?(): boolean;
   /** Resolves when the installer had its time to end the app; default 15 s. */
   installWait?(): Promise<void>;
   /** The user cancelled a quit the installer asked for: leaves the
@@ -229,6 +234,10 @@ export interface AppDeps {
 export const QUIT_FOR_INSTALL = "--quit-for-install";
 /** The file in userData that tells the installer the quit was cancelled. */
 export const QUIT_FOR_INSTALL_CANCELLED = "quit-for-install-cancelled";
+/** Where the newest release's files are, for an app that cannot update
+ *  itself. */
+export const RELEASES_PAGE =
+  "https://github.com/EvoScientist/EvoScientist-WebUI/releases/latest";
 
 export type QuitState = "none" | "checking" | "waiting" | "stopping";
 
@@ -266,8 +275,10 @@ export interface App {
    *  installer of the downloaded update. `not_ready` without one (or when
    *  its file cannot be opened), `busy` while a launch, restart, install,
    *  setup, core update or quit runs or when the session ends meanwhile,
-   *  `cancelled` on Cancel, `update_failed` when the app started again on
-   *  the current version. On success the app ends. */
+   *  `cannot_replace` where the app cannot be replaced (macOS: nothing
+   *  stops, a box offers the download page), `cancelled` on Cancel,
+   *  `update_failed` when the app started again on the current version. On
+   *  success the app ends. */
   restartToUpdate(): Promise<RestartResult>;
   /** The app update's state changed: tells the page shown. */
   updateChanged(state: UpdateState): void;
@@ -382,6 +393,9 @@ export function createApp(deps: AppDeps): App {
   /** The running quit was asked for by the installer. */
   let quitForInstall = false;
   let exiting = false;
+  /** Counts the installs of an app update asked for and given up: what
+   *  gives one up acts only for its own. */
+  let installAttempt = 0;
   /** The install script, setup or `EvoSci update` while it runs: closing
    *  asks, then stops the script or setup or waits for the update,
    *  which is never killed. */
@@ -1206,7 +1220,10 @@ export function createApp(deps: AppDeps): App {
    *  backend the app reused keeps running. Never at the end of the session
    *  and never on an ordinary quit: nothing else calls `install()`. An
    *  installer file that cannot be opened stops it before anything stops (the
-   *  download is offered again); an error in the steps brings the app back. */
+   *  download is offered again), and so does an app that cannot be replaced
+   *  where it is; an error in the steps brings the app back. On macOS the
+   *  system checks the update while the app still runs: when it refuses it,
+   *  the app comes back at once instead of after the wait. */
   async function restartToUpdate(): Promise<RestartResult> {
     const update = deps.appUpdate;
     if (!update || update.state.kind !== "ready")
@@ -1215,6 +1232,7 @@ export function createApp(deps: AppDeps): App {
       log.info("restart to update: busy");
       return { ok: false, code: "busy" };
     }
+    if (deps.canReplaceApp?.() === false) return cannotReplace();
     if (!update.installable()) return { ok: false, code: "not_ready" };
     quitState = "checking";
     heldError = null;
@@ -1278,29 +1296,42 @@ export function createApp(deps: AppDeps): App {
       // The installer's `app.quit()` must go through the close handlers.
       exiting = true;
       update.stop();
-      if (!update.install()) return updateDidNotStart();
-      void (deps.installWait ?? defaultInstallWait)().then(() => {
-        if (exiting && quitState === "stopping") void updateDidNotStart();
-      });
+      // What gives this install up acts only for it, and only while the app
+      // still waits for it: a refusal brings the app back within seconds, so
+      // a second Restart to update can run before the first one's wait ends.
+      const attempt = ++installAttempt;
+      const giveUp = (why: string): void => {
+        if (attempt === installAttempt && exiting && quitState === "stopping")
+          void updateDidNotStart(why);
+      };
+      if (!update.install(() => giveUp("the system refused the update")))
+        return updateDidNotStart("the downloaded update could not be opened");
+      void (deps.installWait ?? defaultInstallWait)().then(() =>
+        giveUp("the app still ran 15 s after the install was asked for")
+      );
       return { ok: true };
     } catch (e) {
       log.warn(
         `restart to update failed: ${e instanceof Error ? e.message : e}`
       );
       if (!stopping) return cancel();
-      return updateDidNotStart();
+      return updateDidNotStart("a step failed");
     }
   }
 
   /** The installer file could not be opened, the steps failed after the
-   *  stops, or the app was still running 15 s after the installer was asked
-   *  for: the app starts again on the current version and says so. (A start
-   *  of the installer that fails after electron-updater has quit the app is
-   *  not seen: the next launch offers the update again.) */
-  async function updateDidNotStart(): Promise<RestartResult> {
+   *  stops, the system refused the update (macOS), or the app was still
+   *  running 15 s after the installer was asked for: the app starts again on
+   *  the current version and says so. The install is abandoned, so an answer
+   *  the system gives later does not quit the app (macOS). (A start of the
+   *  installer that fails after electron-updater has quit the app is not
+   *  seen: the next launch offers the update again.) */
+  async function updateDidNotStart(why: string): Promise<RestartResult> {
     log.warn(
-      "restart to update: no update was installed (a step failed, or the app still ran 15 s after the installer was asked for); launching again"
+      `restart to update: no update was installed (${why}); launching again`
     );
+    installAttempt++;
+    deps.appUpdate?.abandonInstall();
     exiting = false;
     quitState = "none";
     // A launch during the stops asked for a relaunch after an exit that did
@@ -1320,6 +1351,32 @@ export function createApp(deps: AppDeps): App {
       noLink: true,
     });
     return { ok: false, code: "update_failed" };
+  }
+
+  /** macOS: the system cannot put a new version in the app's place (the
+   *  app runs from a read-only volume, as the dmg is, or sits in a folder
+   *  this account cannot change). Says so and offers the page to download
+   *  from; nothing is downloaded and nothing stops. */
+  function cannotReplace(): RestartResult {
+    log.warn(
+      "app update: the app cannot be replaced where it is (a read-only volume, or a folder this account cannot change)"
+    );
+    void deps
+      .messageBox({
+        type: "info",
+        title: "EvoScientist",
+        message: "EvoScientist can't update itself here.",
+        detail:
+          "The app is on a read-only disk or in a folder your account can't change, so it can't be replaced. Move EvoScientist into the Applications folder and open it from there, or download the new version and replace the app.",
+        buttons: ["Open the download page", "OK"],
+        defaultId: 0,
+        cancelId: 1,
+        noLink: true,
+      })
+      .then((r) => {
+        if (r.response === 0) deps.openExternal(RELEASES_PAGE);
+      });
+    return { ok: false, code: "cannot_replace" };
   }
 
   /** A quit the installer asked for will not come: it stops at once. */
@@ -1685,8 +1742,16 @@ export function createApp(deps: AppDeps): App {
     updateOfferFor: (statusPage) =>
       statusPage && deps.appUpdate ? offerNow(deps.appUpdate.state) : null,
     downloadUpdateFor: (senderOrigin, statusPage) => {
-      if (statusPage || fromUi(senderOrigin)) deps.appUpdate?.download();
-      else log.warn(`update download refused for the origin ${senderOrigin}`);
+      if (!statusPage && !fromUi(senderOrigin)) {
+        log.warn(`update download refused for the origin ${senderOrigin}`);
+        return;
+      }
+      const update = deps.appUpdate;
+      if (!update) return;
+      // No download of an update the app could not install.
+      if (update.state.kind === "available" && deps.canReplaceApp?.() === false)
+        cannotReplace();
+      else update.download();
     },
     restartToUpdateFor: async (senderOrigin, statusPage) => {
       if (statusPage || fromUi(senderOrigin)) return restartToUpdate();

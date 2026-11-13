@@ -296,15 +296,18 @@ export function createAppUpdate(deps: UpdateDeps): AppUpdate {
     onFailed();
   });
 
-  function abandonInstall(): void {
-    const current = asked;
-    asked = null;
-    if (!current || !native) return;
-    for (const listener of current.added)
-      native.removeListener(
+  function removeAdded(listeners: unknown[]): void {
+    for (const listener of listeners)
+      native?.removeListener(
         "update-downloaded",
         listener as (...args: unknown[]) => void
       );
+  }
+
+  function abandonInstall(): void {
+    const current = asked;
+    asked = null;
+    if (current) removeAdded(current.added);
   }
 
   function armWatchdog(): void {
@@ -436,9 +439,12 @@ export function createAppUpdate(deps: UpdateDeps): AppUpdate {
       const current: NonNullable<typeof asked> = { onFailed, added: [] };
       asked = current;
       updater.quitAndInstall(false, true);
-      current.added = native
+      const added = native
         .listeners("update-downloaded")
         .filter((l) => !before.includes(l));
+      // Abandoned meanwhile (refused at once): they go now.
+      if (asked === current) current.added = added;
+      else removeAdded(added);
       return true;
     },
     abandonInstall,

@@ -444,6 +444,21 @@ describe("on macOS", () => {
     expect(t.quits).toEqual([2]);
   });
 
+  // The caller abandons the install from `onFailed`: when the system
+  // refuses before electron-updater's call returns, the listeners that
+  // call adds are known only after the install was abandoned.
+  it("leaves no listener when the system refuses before electron-updater returns", async () => {
+    const t = await readyOnMac();
+    t.updater.quitAndInstall.mockImplementation(() => {
+      t.native.emit("error", refused());
+      t.native.on("update-downloaded", () => t.quits.push(1));
+    });
+    const onFailed = vi.fn(() => t.u.abandonInstall());
+    expect(t.u.install(onFailed)).toBe(true);
+    expect(onFailed).toHaveBeenCalledTimes(1);
+    expect(t.native.listenerCount("update-downloaded")).toBe(0);
+  });
+
   it("without the system's updater an install is as before", async () => {
     const t = setup();
     const done = t.u.check();

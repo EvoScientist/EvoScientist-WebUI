@@ -206,6 +206,7 @@ const desktop = createApp({
     return r.canceled || !r.filePaths[0] ? null : r.filePaths[0];
   },
   openPath: (p) => void shell.openPath(p),
+  openExternal: (url) => void shell.openExternal(url),
   showItemInFolder: (p) => shell.showItemInFolder(p),
   copyText: (t) => clipboard.writeText(t),
   documentsDir: () => app.getPath("documents"),

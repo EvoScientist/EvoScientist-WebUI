@@ -10,7 +10,13 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { createApp, type AppDeps, type AppLog, type AppWindow } from "./app";
+import {
+  RELEASES_PAGE,
+  createApp,
+  type AppDeps,
+  type AppLog,
+  type AppWindow,
+} from "./app";
 import type { MemoryWaitResult, WorkCheck } from "./closeCheck";
 import type { CrashInfo } from "./crash";
 import type { DeployOutcome, DeploySession } from "./deploy";
@@ -202,6 +208,7 @@ function harness(over: Partial<AppDeps> = {}) {
     messageBox,
     chooseFolder: async () => null,
     openPath: vi.fn(),
+    openExternal: vi.fn(),
     showItemInFolder: vi.fn(),
     copyText: vi.fn(),
     documentsDir: () => "/docs",
@@ -2215,8 +2222,11 @@ describe("restart to update (W04)", () => {
       check: vi.fn(async () => {}),
       download: vi.fn(),
       installable: vi.fn(() => u.state.kind === "ready"),
-      install: vi.fn(() => {
+      /** What each install was given to call when the system refuses it. */
+      refusals: [] as ((() => void) | undefined)[],
+      install: vi.fn((onFailed?: () => void) => {
         calls?.push("install");
+        u.refusals.push(onFailed);
         return u.state.kind === "ready";
       }),
       abandonInstall: vi.fn(),
@@ -2225,6 +2235,15 @@ describe("restart to update (W04)", () => {
     return u;
   }
   const never = () => new Promise<void>(() => {});
+  /** Lets what a resolved promise started run. */
+  const turn = () => new Promise<void>((r) => setTimeout(r, 0));
+  const NOT_INSTALLED = expect.objectContaining({
+    message: "The update could not be installed.",
+  });
+  const CANNOT_REPLACE = expect.objectContaining({
+    message: "EvoScientist can't update itself here.",
+    buttons: ["Open the download page", "OK"],
+  });
 
   it("starts the update checks with the app, also before the UI loads", () => {
     const appUpdate = fakeAppUpdate("none");
@@ -2401,6 +2420,144 @@ describe("restart to update (W04)", () => {
     expect(h.log.lines.some((l) => l.includes("no update was installed"))).toBe(
       true
     );
+  });
+
+  // macOS: the system checks the update while the app still runs, and says
+  // when it refuses it (a signature it does not accept).
+  it("starts again at once when the system refuses the update", async () => {
+    const appUpdate = fakeAppUpdate();
+    const h = await launched({ appUpdate, installWait: never });
+    await expect(h.app.restartToUpdate()).resolves.toEqual({ ok: true });
+    expect(h.sessions).toHaveLength(1);
+    expect(appUpdate.abandonInstall).not.toHaveBeenCalled();
+    appUpdate.refusals[0]?.();
+    await vi.waitFor(() => expect(h.sessions).toHaveLength(2));
+    expect(h.app.exiting).toBe(false);
+    expect(h.app.quitState).toBe("none");
+    expect(appUpdate.abandonInstall).toHaveBeenCalledTimes(1);
+    expect(appUpdate.start).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() =>
+      expect(h.messageBox).toHaveBeenCalledWith(NOT_INSTALLED)
+    );
+    expect(
+      h.log.lines.some((l) =>
+        l.includes("no update was installed (the system refused the update)")
+      )
+    ).toBe(true);
+    // The refusal counts once.
+    appUpdate.refusals[0]?.();
+    await turn();
+    expect(h.sessions).toHaveLength(2);
+  });
+
+  // Left alone, an answer the system gives later would quit the app again.
+  it("forgets the install when the wait runs out", async () => {
+    const appUpdate = fakeAppUpdate();
+    const h = await launched({ appUpdate, installWait: async () => {} });
+    await expect(h.app.restartToUpdate()).resolves.toEqual({ ok: true });
+    await vi.waitFor(() => expect(h.sessions).toHaveLength(2));
+    expect(appUpdate.abandonInstall).toHaveBeenCalledTimes(1);
+  });
+
+  it("an earlier attempt's wait and refusal do not end a later attempt", async () => {
+    const waits: (() => void)[] = [];
+    const appUpdate = fakeAppUpdate();
+    const h = await launched({
+      appUpdate,
+      installWait: () => new Promise<void>((r) => waits.push(r)),
+    });
+    await expect(h.app.restartToUpdate()).resolves.toEqual({ ok: true });
+    appUpdate.refusals[0]?.();
+    // The app is back once the box shows: the launch comes first.
+    await vi.waitFor(() =>
+      expect(h.messageBox).toHaveBeenCalledWith(NOT_INSTALLED)
+    );
+    await expect(h.app.restartToUpdate()).resolves.toEqual({ ok: true });
+    expect(h.app.quitState).toBe("stopping");
+    const boxes = h.messageBox.mock.calls.length;
+    const sessions = h.sessions.length;
+    waits[0](); // the first attempt's 15 s
+    appUpdate.refusals[0]?.();
+    await turn();
+    expect(h.app.exiting).toBe(true);
+    expect(h.app.quitState).toBe("stopping");
+    expect(h.sessions).toHaveLength(sessions);
+    expect(h.messageBox.mock.calls).toHaveLength(boxes);
+    expect(appUpdate.abandonInstall).toHaveBeenCalledTimes(1);
+    // The second attempt's own wait still counts.
+    waits[1]();
+    await vi.waitFor(() => expect(h.sessions).toHaveLength(sessions + 1));
+    expect(appUpdate.abandonInstall).toHaveBeenCalledTimes(2);
+  });
+
+  // macOS: on a read-only volume (run from the dmg) or in a folder the
+  // account cannot change, the system cannot put the new version in place.
+  it("answers cannot_replace before anything stops where the app can't be replaced, and offers the download page", async () => {
+    const appUpdate = fakeAppUpdate();
+    const h = await launched({ appUpdate, canReplaceApp: () => false });
+    await expect(h.app.restartToUpdate()).resolves.toEqual({
+      ok: false,
+      code: "cannot_replace",
+    });
+    expect(appUpdate.installable).not.toHaveBeenCalled();
+    expect(appUpdate.install).not.toHaveBeenCalled();
+    expect(appUpdate.stop).not.toHaveBeenCalled();
+    expect(h.sessions[0].stopped.count).toBe(0);
+    expect(h.app.quitState).toBe("none");
+    expect(h.app.exiting).toBe(false);
+    expect(h.messageBox).toHaveBeenCalledTimes(1);
+    expect(h.messageBox).toHaveBeenCalledWith(CANNOT_REPLACE);
+    // The box's first button (the harness answers 0).
+    await vi.waitFor(() =>
+      expect(h.deps.openExternal).toHaveBeenCalledWith(RELEASES_PAGE)
+    );
+    expect(RELEASES_PAGE).toBe(
+      "https://github.com/EvoScientist/EvoScientist-WebUI/releases/latest"
+    );
+  });
+
+  it("opens no page when that box is closed with OK", async () => {
+    const appUpdate = fakeAppUpdate();
+    const messageBox = vi.fn(async () => ({ response: 1 }));
+    const h = await launched({
+      appUpdate,
+      canReplaceApp: () => false,
+      messageBox,
+    });
+    await h.app.restartToUpdate();
+    expect(messageBox).toHaveBeenCalledWith(CANNOT_REPLACE);
+    await turn();
+    expect(h.deps.openExternal).not.toHaveBeenCalled();
+  });
+
+  it("starts no download where the app can't be replaced", async () => {
+    const appUpdate = {
+      ...fakeAppUpdate(),
+      state: { kind: "available", version: "0.4.3", failed: false } as const,
+    };
+    const h = await launched({ appUpdate, canReplaceApp: () => false });
+    h.app.downloadUpdateFor(null, true);
+    expect(appUpdate.download).not.toHaveBeenCalled();
+    expect(h.messageBox).toHaveBeenCalledWith(CANNOT_REPLACE);
+    // Where it can be replaced the download starts, without a box.
+    const ok = { ...appUpdate, download: vi.fn() };
+    const g = await launched({ appUpdate: ok, canReplaceApp: () => true });
+    g.app.downloadUpdateFor(null, true);
+    expect(ok.download).toHaveBeenCalledTimes(1);
+    expect(g.messageBox).not.toHaveBeenCalled();
+  });
+
+  it("asks where the app can be replaced only for an offer it would download", async () => {
+    const canReplaceApp = vi.fn(() => false);
+    const appUpdate = fakeAppUpdate("none");
+    const h = await launched({ appUpdate, canReplaceApp });
+    h.app.downloadUpdateFor(null, true);
+    expect(h.messageBox).not.toHaveBeenCalled();
+    await expect(h.app.restartToUpdate()).resolves.toEqual({
+      ok: false,
+      code: "not_ready",
+    });
+    expect(h.messageBox).not.toHaveBeenCalled();
   });
 
   it("stops nothing when the downloaded installer cannot be opened", async () => {
