@@ -46,6 +46,12 @@ const SECRETS = [
 /** One line, single spaces: conditions are folded over several. */
 const flat = (s: string | undefined) => (s ?? "").replace(/\s+/g, " ").trim();
 const runs = (job: Job) => job.steps.map((s) => s.run ?? "").join("\n");
+/** Whether an expression anywhere in `part` reads the secrets context, in
+ *  any spelling (`secrets.X`, `secrets['X']`, `toJSON(secrets)`). */
+const namesSecret = (part: unknown) =>
+  (JSON.stringify(part).match(/\$\{\{[^}]*\}\}/g) ?? []).some((e) =>
+    /\bsecrets\b/.test(e)
+  );
 
 describe("the signing secrets", () => {
   it("are read by the mac job only, through its environment", () => {
@@ -57,7 +63,7 @@ describe("the signing secrets", () => {
           expect(text, secret).toContain(`secrets.${secret}`);
       } else {
         expect(job.environment, name).toBeUndefined();
-        expect(text, name).not.toContain("secrets.");
+        expect(namesSecret(job), name).toBe(false);
       }
     }
   });
@@ -113,13 +119,12 @@ describe("the signing secrets", () => {
     // nothing else, and the step that signs. Not the job's or the
     // workflow's own environment, which every step would get.
     // (Anywhere in the step: its `env`, but also an action's `with`.)
-    expect(
-      steps
-        .filter((s) => JSON.stringify(s).includes("secrets."))
-        .map((s) => s.name)
-    ).toEqual(["Check the signing secrets", SIGN]);
+    expect(steps.filter((s) => namesSecret(s)).map((s) => s.name)).toEqual([
+      "Check the signing secrets",
+      SIGN,
+    ]);
     for (const s of steps.filter((x) => x.uses))
-      expect(JSON.stringify(s), s.uses).not.toContain("secrets.");
+      expect(namesSecret(s), s.uses).toBe(false);
     // Nowhere else in the job (its `env`, its outputs, ...) nor in the
     // workflow's own `env`.
     const rest = {
@@ -128,8 +133,8 @@ describe("the signing secrets", () => {
         (s) => s.name !== "Check the signing secrets" && s.name !== SIGN
       ),
     };
-    expect(JSON.stringify(rest)).not.toContain("secrets.");
-    expect(JSON.stringify(workflow.env ?? {})).not.toContain("secrets.");
+    expect(namesSecret(rest)).toBe(false);
+    expect(namesSecret(workflow.env ?? {})).toBe(false);
     expect(
       steps.find((s) => s.name === "Check the signing secrets")?.run
     ).not.toMatch(/\b(npm|npx|node)\b/);
