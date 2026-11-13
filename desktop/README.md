@@ -47,6 +47,8 @@ On a Mac, `npm run dist` builds the dmg to install from and the zip that install
 
 Logs: `desktop.log` and `desktop-ui.log` next to the backend's `langgraph_dev.log` once `ready` names it (the server home in the data folder, `~/.evoscientist/server` by default; `~/.config/evoscientist` with older cores); before that, in the server home when it holds a backend log, else in `~/.config/evoscientist`. Crash reports `desktop-crash-*.txt` go beside them.
 
+The UI server writes nothing into its own folder: the root `next.config.ts` keeps Next's page cache in memory (`experimental.isrFlushToDisk: false`). In the app that folder is inside the bundle, and on macOS one file added there breaks the signature's seal, so an app that was used once would be reported as modified. The smoke test fails when the UI server changed anything in the app's folder.
+
 Keep Electron's `RunAsNode` fuse enabled: the UI server runs as the app's own executable with `ELECTRON_RUN_AS_NODE=1` (on macOS as the app's helper executable, so that it gets no Dock icon of its own).
 
 ## On macOS

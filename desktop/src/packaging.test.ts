@@ -1,9 +1,19 @@
-import { existsSync, readFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   FIRST_RELEASE_CORE,
   appLayout,
+  changedSince,
   releaseFlagProblem,
   tagProblem,
   versionArgs,
@@ -157,6 +167,41 @@ describe("appLayout", () => {
       exe: join(app, "Contents", "MacOS", "W04Test"),
       resources: join(app, "Contents", "Resources"),
     });
+  });
+});
+
+// The smoke test's check that the UI server leaves the app's folder alone.
+describe("changedSince", () => {
+  it("lists what was added or changed in a folder after a moment, at any depth", () => {
+    const dir = mkdtempSync(join(tmpdir(), "evo-changed-"));
+    try {
+      mkdirSync(join(dir, "a", "b"), { recursive: true });
+      writeFileSync(join(dir, "kept.txt"), "1");
+      writeFileSync(join(dir, "a", "b", "changed.txt"), "1");
+      // Everything so far is older than the moment.
+      const before = new Date(Date.now() - 60_000);
+      for (const p of ["kept.txt", "a/b/changed.txt", "a/b", "a", "."])
+        utimesSync(join(dir, p), before, before);
+      const since = Date.now() - 30_000;
+      expect(changedSince(dir, since)).toEqual([]);
+      writeFileSync(join(dir, "a", "b", "changed.txt"), "2");
+      mkdirSync(join(dir, "a", "cache"));
+      writeFileSync(join(dir, "a", "cache", "new.bin"), "x");
+      expect(changedSince(dir, since).sort()).toEqual(
+        [
+          "a",
+          join("a", "b", "changed.txt"),
+          join("a", "cache"),
+          join("a", "cache", "new.bin"),
+        ].sort()
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("is empty for a folder that is not there", () => {
+    expect(changedSince(join(tmpdir(), "evo-no-such-folder"), 0)).toEqual([]);
   });
 });
 

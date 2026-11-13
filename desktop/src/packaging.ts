@@ -11,6 +11,7 @@
 // - The macOS files go out only while `evoscientist.releaseMac` is true as
 //   well: they need the signing secrets, and they are uploaded next to the
 //   Windows files, so that flag may be on only while `release` is.
+import { readdirSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { compareReleases, installVersion, parseRelease } from "./versions";
 
@@ -54,6 +55,26 @@ export function releaseFlagProblem(meta: {
       installs ?? "no version"
     }, before ${FIRST_RELEASE_CORE}`;
   return null;
+}
+
+/** What was added to `dir` or changed in it after `sinceMs` (files and
+ *  folders, paths relative to `dir`, at any depth). For the smoke test: the
+ *  UI server must leave the app's folder as it was. On macOS that folder is
+ *  inside the signed bundle, where one added file breaks the signature. */
+export function changedSince(dir: string, sinceMs: number): string[] {
+  let entries: string[];
+  try {
+    entries = readdirSync(dir, { recursive: true }) as string[];
+  } catch {
+    return [];
+  }
+  return entries.filter((entry) => {
+    try {
+      return statSync(join(dir, entry)).mtimeMs > sinceMs;
+    } catch {
+      return false;
+    }
+  });
 }
 
 /** Where an unpacked build (`npm run pack`) keeps the app: its folder, the

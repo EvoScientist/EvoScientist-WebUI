@@ -8,8 +8,9 @@
 // 4. `EvoSci deploy --json` until `ready`;
 // 5. the bundled UI server under the packaged executable (on macOS the app's
 //    helper) with ELECTRON_RUN_AS_NODE=1: `/` and one static asset answer
-//    200, and on macOS it has no Dock icon of its own (after a control
-//    process showed that a Dock icon would be seen).
+//    200, on macOS it has no Dock icon of its own (after a control
+//    process showed that a Dock icon would be seen), and it wrote nothing
+//    into the app's folder.
 // Usage: node scripts/smoke.mjs --core pinned|newest|<version> [--app <dir>]
 //                                [--use-my-folders]
 //        (<dir>: the unpacked app's folder; on macOS the .app bundle)
@@ -203,6 +204,7 @@ async function main() {
 async function checkUiServer({ backendUrl, dataDir, configDir }) {
   step("UI server under the packaged executable");
   {
+    const startedAt = Date.now();
     const { port } = await uiServer.pickUiPort(pkg.evoscientist.uiPort);
     const ui = uiServer.startUiServer({
       execPath: uiServer.uiServerExec(exe, process.platform, existsSync),
@@ -248,6 +250,19 @@ async function checkUiServer({ backendUrl, dataDir, configDir }) {
       log.info("Dock: no icon for the UI server (a control process has one)");
     }
     if (uiEnded) fail("the UI server ended during the checks");
+    // The server leaves the app's folder as it was. On macOS that folder is
+    // inside the signed bundle: one file added there breaks the signature,
+    // and the system reports an app that was used once as modified.
+    const written = packaging.changedSince(resources, startedAt);
+    if (written.length)
+      fail(
+        `the UI server wrote into the app's folder: ${written
+          .slice(0, 4)
+          .join(", ")}${
+          written.length > 4 ? ` and ${written.length - 4} more` : ""
+        }`
+      );
+    log.info("the UI server wrote nothing into the app's folder");
   }
 }
 
