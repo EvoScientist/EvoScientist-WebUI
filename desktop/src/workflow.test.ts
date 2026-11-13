@@ -112,11 +112,14 @@ describe("the signing secrets", () => {
     // Two steps name them: the check that they are there, which runs
     // nothing else, and the step that signs. Not the job's or the
     // workflow's own environment, which every step would get.
+    // (Anywhere in the step: its `env`, but also an action's `with`.)
     expect(
       steps
-        .filter((s) => JSON.stringify(s.env ?? {}).includes("secrets."))
+        .filter((s) => JSON.stringify(s).includes("secrets."))
         .map((s) => s.name)
     ).toEqual(["Check the signing secrets", SIGN]);
+    for (const s of steps.filter((x) => x.uses))
+      expect(JSON.stringify(s), s.uses).not.toContain("secrets.");
     expect(JSON.stringify(jobs.mac.env ?? {})).not.toContain("secrets.");
     expect(JSON.stringify(workflow.env ?? {})).not.toContain("secrets.");
     expect(
