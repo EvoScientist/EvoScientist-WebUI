@@ -2219,6 +2219,7 @@ describe("restart to update (W04)", () => {
         calls?.push("install");
         return u.state.kind === "ready";
       }),
+      abandonInstall: vi.fn(),
       stop: vi.fn(),
     };
     return u;
@@ -2561,6 +2562,7 @@ describe("app update on the pages (W04)", () => {
     download: vi.fn(),
     installable: vi.fn(() => true),
     install: vi.fn(() => true),
+    abandonInstall: vi.fn(),
     stop: vi.fn(),
   };
   const UI = "http://127.0.0.1:4718";
@@ -2721,6 +2723,7 @@ describe("the installer asks the app to quit (D12)", () => {
         download: vi.fn(),
         installable: vi.fn(() => true),
         install: vi.fn(() => true),
+        abandonInstall: vi.fn(),
         stop: vi.fn(),
       },
     });

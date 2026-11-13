@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { CancellationToken } from "electron-updater";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -5,8 +6,12 @@ import {
   CHECK_LIMIT_MS,
   FIRST_CHECK_MS,
   STALL_MS,
+  appBundle,
+  canReplaceApp,
   configureUpdater,
   createAppUpdate,
+  updatesItself,
+  type NativeUpdater,
   type Updater,
   type UpdateState,
 } from "./appUpdate";
@@ -58,7 +63,11 @@ const none: CheckResult = {
 };
 
 function setup(
-  opts: { online?: boolean; canOpen?: (p: string) => boolean } = {}
+  opts: {
+    online?: boolean;
+    canOpen?: (p: string) => boolean;
+    native?: NativeUpdater;
+  } = {}
 ) {
   const f = fakeUpdater();
   const states: UpdateState[] = [];
@@ -79,6 +88,7 @@ function setup(
     },
     onChange: (s) => states.push(s),
     canOpen: opts.canOpen ?? ((p) => p === INSTALLER),
+    native: opts.native,
   });
   return {
     ...f,
@@ -356,6 +366,157 @@ describe("install", () => {
     expect(t.updater.quitAndInstall).not.toHaveBeenCalled();
     expect(t.logs.join("\n")).toMatch(
       /update install: the downloaded installer cannot be opened \(C:.*EvoScientist-Setup\.exe\); offering the download again/
+    );
+  });
+});
+
+// On macOS electron-updater hands the downloaded zip to Electron's own
+// updater (Squirrel.Mac) when the install is asked for: it adds a listener
+// there that quits the app once the system has taken the update.
+describe("on macOS", () => {
+  /** The app with a downloaded update, and what electron-updater's
+   *  `quitAndInstall` does there. */
+  async function readyOnMac() {
+    const native = new EventEmitter();
+    const quits: number[] = [];
+    const t = setup({ native });
+    let installs = 0;
+    t.updater.quitAndInstall.mockImplementation(() => {
+      const n = ++installs;
+      native.on("update-downloaded", () => quits.push(n));
+    });
+    const done = t.u.check();
+    t.pending.check?.resolve(available("0.4.3"));
+    await done;
+    t.u.download();
+    t.pending.download?.resolve();
+    await settle();
+    return { ...t, native, quits };
+  }
+  const refused = () =>
+    new Error("Code signature at URL file:///x did not pass validation");
+
+  it("tells the caller once when the system refuses the update", async () => {
+    const t = await readyOnMac();
+    const onFailed = vi.fn();
+    expect(t.u.install(onFailed)).toBe(true);
+    expect(onFailed).not.toHaveBeenCalled();
+    t.native.emit("error", refused());
+    t.native.emit("error", refused());
+    expect(onFailed).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores an error before an install and after the install was abandoned", async () => {
+    const t = await readyOnMac();
+    const onFailed = vi.fn();
+    t.native.emit("error", refused());
+    expect(t.u.install(onFailed)).toBe(true);
+    t.u.abandonInstall();
+    t.native.emit("error", refused());
+    expect(onFailed).not.toHaveBeenCalled();
+  });
+
+  // Left there, a late answer from the system would quit an app the user
+  // works in again.
+  it("removes the quit listeners electron-updater added once the install is abandoned, and keeps the others", async () => {
+    const t = await readyOnMac();
+    const own = vi.fn();
+    t.native.on("update-downloaded", own);
+    expect(t.u.install()).toBe(true);
+    expect(t.native.listenerCount("update-downloaded")).toBe(2);
+    t.u.abandonInstall();
+    expect(t.native.listeners("update-downloaded")).toEqual([own]);
+    t.native.emit("update-downloaded");
+    expect(t.quits).toEqual([]);
+    expect(own).toHaveBeenCalledTimes(1);
+    // Nothing left to remove: a second call changes nothing.
+    t.u.abandonInstall();
+    expect(t.native.listeners("update-downloaded")).toEqual([own]);
+  });
+
+  it("a second install after an abandoned one adds one listener, not two", async () => {
+    const t = await readyOnMac();
+    expect(t.u.install()).toBe(true);
+    t.u.abandonInstall();
+    expect(t.u.install()).toBe(true);
+    expect(t.native.listenerCount("update-downloaded")).toBe(1);
+    t.native.emit("update-downloaded");
+    expect(t.quits).toEqual([2]);
+  });
+
+  it("without the system's updater an install is as before", async () => {
+    const t = setup();
+    const done = t.u.check();
+    t.pending.check?.resolve(available("0.4.3"));
+    await done;
+    t.u.download();
+    t.pending.download?.resolve();
+    await settle();
+    const onFailed = vi.fn();
+    expect(t.u.install(onFailed)).toBe(true);
+    expect(t.updater.quitAndInstall).toHaveBeenCalledWith(false, true);
+    t.u.abandonInstall();
+    expect(onFailed).not.toHaveBeenCalled();
+  });
+});
+
+describe("updatesItself", () => {
+  it("is the packaged app on Windows and on macOS", () => {
+    expect(updatesItself("win32", true)).toBe(true);
+    expect(updatesItself("darwin", true)).toBe(true);
+    expect(updatesItself("linux", true)).toBe(false);
+    expect(updatesItself("win32", false)).toBe(false);
+    expect(updatesItself("darwin", false)).toBe(false);
+  });
+});
+
+describe("where the macOS app can be replaced", () => {
+  const exe = "/Applications/EvoScientist.app/Contents/MacOS/EvoScientist";
+
+  it("finds the bundle of the executable", () => {
+    expect(appBundle(exe)).toBe("/Applications/EvoScientist.app");
+    expect(
+      appBundle(
+        "/Volumes/EvoScientist 0.5.3-arm64/EvoScientist.app/Contents/MacOS/EvoScientist"
+      )
+    ).toBe("/Volumes/EvoScientist 0.5.3-arm64/EvoScientist.app");
+    expect(appBundle("/usr/local/bin/electron")).toBeNull();
+  });
+
+  it("needs the bundle and its folder writable", () => {
+    const writable = (...paths: string[]) => {
+      const asked: string[] = [];
+      return {
+        asked,
+        canWrite: (p: string) => (asked.push(p), paths.includes(p)),
+      };
+    };
+    const both = writable("/Applications/EvoScientist.app", "/Applications");
+    expect(canReplaceApp(exe, both.canWrite)).toBe(true);
+    expect(both.asked.sort()).toEqual([
+      "/Applications",
+      "/Applications/EvoScientist.app",
+    ]);
+    // Installed by another account: the folder is writable, the bundle not.
+    expect(canReplaceApp(exe, writable("/Applications").canWrite)).toBe(false);
+    // A folder this account cannot change.
+    expect(
+      canReplaceApp(exe, writable("/Applications/EvoScientist.app").canWrite)
+    ).toBe(false);
+    // A read-only volume (the dmg, a translocated path): neither.
+    expect(canReplaceApp(exe, writable().canWrite)).toBe(false);
+  });
+
+  it("has nothing to say where there is no bundle", () => {
+    const canWrite = vi.fn(() => false);
+    expect(canReplaceApp("/usr/local/bin/electron", canWrite)).toBe(true);
+    expect(canWrite).not.toHaveBeenCalled();
+  });
+
+  it("asks the file system when no check is given", () => {
+    // The temp folder is writable; a bundle that is not there is not.
+    expect(canReplaceApp("/nonexistent-folder/X.app/Contents/MacOS/X")).toBe(
+      false
     );
   });
 });
