@@ -13,7 +13,7 @@ import { QUIT_FOR_INSTALL, QUIT_FOR_INSTALL_CANCELLED } from "./app";
 const pkg = JSON.parse(
   readFileSync(join(__dirname, "..", "package.json"), "utf8")
 ) as {
-  evoscientist: { coreRange: string; release?: unknown };
+  evoscientist: { coreRange: string; release?: unknown; releaseMac?: unknown };
   build: Record<string, unknown> & {
     nsis: Record<string, unknown>;
     publish: Record<string, unknown>;
@@ -84,6 +84,31 @@ describe("releaseFlagProblem", () => {
   // the flag off too.
   it("is on in this package.json", () => {
     expect(pkg.evoscientist.release).toBe(true);
+  });
+
+  // The release job uploads the macOS files next to the Windows ones, and
+  // the publish job publishes without desktop files while the installer is
+  // not built.
+  it("refuses the macOS switch while the release switch is off", () => {
+    const range = `>=${FIRST_RELEASE_CORE},<0.5`;
+    expect(
+      releaseFlagProblem({ coreRange: range, release: false, releaseMac: true })
+    ).toMatch(/releaseMac is on, but release is off/);
+    expect(releaseFlagProblem({ coreRange: range, releaseMac: true })).toMatch(
+      /releaseMac is on, but release is off/
+    );
+    expect(
+      releaseFlagProblem({ coreRange: range, release: true, releaseMac: true })
+    ).toBeNull();
+    expect(
+      releaseFlagProblem({ coreRange: range, release: true, releaseMac: false })
+    ).toBeNull();
+  });
+
+  // Off until a signed, notarized build has been made and updated once:
+  // a tag then builds no macOS files, as before.
+  it("keeps the macOS release off in this package.json", () => {
+    expect(pkg.evoscientist.releaseMac).toBe(false);
   });
 });
 
@@ -176,6 +201,31 @@ describe("the macOS build", () => {
   // the dmg is stapled.
   it("writes no blockmap for the dmg", () => {
     expect(dmg.writeUpdateInfo).toBe(false);
+  });
+
+  // Notarization needs the hardened runtime. electron-builder turns it on
+  // by default; the line keeps it on if that default changes.
+  it("signs with the hardened runtime", () => {
+    expect(mac.hardenedRuntime).toBe(true);
+  });
+
+  // V8 needs the JIT entitlement under the hardened runtime, in the app and
+  // in its helpers (one runs the UI server). Without files of its own
+  // electron-builder signs with its template, which also turns library
+  // validation off.
+  it("gives the app and what inherits the JIT entitlement and nothing else", () => {
+    expect(mac.entitlements).toBe("assets/mac/entitlements.mac.plist");
+    expect(mac.entitlementsInherit).toBe(
+      "assets/mac/entitlements.mac.inherit.plist"
+    );
+    for (const name of [mac.entitlements, mac.entitlementsInherit]) {
+      const plist = readFileSync(join(desktop, name as string), "utf8");
+      const keys = [...plist.matchAll(/<key>([^<]*)<\/key>/g)].map((m) => m[1]);
+      expect(keys, name as string).toEqual(["com.apple.security.cs.allow-jit"]);
+      expect(plist, name as string).toMatch(
+        /<key>com\.apple\.security\.cs\.allow-jit<\/key>\s*<true\/>/
+      );
+    }
   });
 
   it("has an icon of its own", () => {

@@ -21,7 +21,8 @@
       1
     ],
     "uiPort": 4718,
-    "release": true
+    "release": true,
+    "releaseMac": false
   },
   "dependencies": {
     "electron-updater": "^6.8.11",
@@ -108,7 +109,10 @@
         }
       ],
       "artifactName": "EvoScientist-${arch}-mac.${ext}",
-      "icon": "assets/mac/EvoScientist.icns"
+      "icon": "assets/mac/EvoScientist.icns",
+      "hardenedRuntime": true,
+      "entitlements": "assets/mac/entitlements.mac.plist",
+      "entitlementsInherit": "assets/mac/entitlements.mac.inherit.plist"
     },
     "dmg": {
       "artifactName": "EvoScientist-${arch}.${ext}",

@@ -8,6 +8,9 @@
 // - Desktop files go out only while `evoscientist.release` is true, and the
 //   flag may be on only while the core range installs a core with the
 //   Windows clean stop (EvoScientist#712, fixed by #716 in v0.4.1).
+// - The macOS files go out only while `evoscientist.releaseMac` is true as
+//   well: they need the signing secrets, and they are uploaded next to the
+//   Windows files, so that flag may be on only while `release` is.
 import { join } from "node:path";
 import { compareReleases, installVersion, parseRelease } from "./versions";
 
@@ -32,11 +35,16 @@ export function tagProblem(tag: string, version: string): string | null {
     : `the tag ${tag} does not name the version v${version} (root package.json)`;
 }
 
-/** Why the `release` flag cannot be on with this core range, or null. */
+/** Why the release flags cannot be as they are, or null: `release` with a
+ *  core range that installs a core before the first release core, or
+ *  `releaseMac` without `release`. */
 export function releaseFlagProblem(meta: {
   coreRange: string;
   release?: unknown;
+  releaseMac?: unknown;
 }): string | null {
+  if (meta.releaseMac === true && meta.release !== true)
+    return "releaseMac is on, but release is off: the macOS files go out with the Windows release";
   if (meta.release !== true) return null;
   const installs = installVersion(meta.coreRange);
   const release = installs ? parseRelease(installs) : null;
