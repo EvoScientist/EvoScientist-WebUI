@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   existsSync,
   lutimesSync,
   mkdirSync,
@@ -251,6 +252,41 @@ describe("changedSince", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  // Permissions mean nothing to root, and Windows has none of these modes.
+  const modes = process.platform !== "win32" && process.getuid?.() !== 0;
+
+  it.runIf(modes)("fails when a folder inside cannot be listed", () => {
+    const dir = mkdtempSync(join(tmpdir(), "evo-changed-"));
+    try {
+      mkdirSync(join(dir, "locked"));
+      chmodSync(join(dir, "locked"), 0o000);
+      expect(() => changedSince(dir, 0)).toThrow(/EACCES/);
+    } finally {
+      chmodSync(join(dir, "locked"), 0o755);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // A folder that can be listed but not entered: its entries are named,
+  // and none can be looked at.
+  it.runIf(modes)("counts an entry it cannot look at as changed", () => {
+    const dir = mkdtempSync(join(tmpdir(), "evo-changed-"));
+    try {
+      mkdirSync(join(dir, "shut"));
+      writeFileSync(join(dir, "shut", "f.txt"), "1");
+      const before = new Date(Date.now() - 60_000);
+      for (const p of ["shut/f.txt", "shut", "."])
+        utimesSync(join(dir, p), before, before);
+      chmodSync(join(dir, "shut"), 0o444);
+      expect(changedSince(dir, Date.now() - 30_000)).toEqual([
+        join("shut", "f.txt"),
+      ]);
+    } finally {
+      chmodSync(join(dir, "shut"), 0o755);
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 

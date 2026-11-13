@@ -46,12 +46,60 @@ const SECRETS = [
 /** One line, single spaces: conditions are folded over several. */
 const flat = (s: string | undefined) => (s ?? "").replace(/\s+/g, " ").trim();
 const runs = (job: Job) => job.steps.map((s) => s.run ?? "").join("\n");
+/** The `${{ }}` expressions in `text`, each without its string literals
+ *  ('…'), which may hold `}}` and any word. (A quote inside a string is
+ *  written '', which reads the same here as one string ending and the next
+ *  beginning.) */
+function expressions(text: string): string[] {
+  const found: string[] = [];
+  let at = text.indexOf("${{");
+  while (at !== -1) {
+    let code = "";
+    let i = at + 3;
+    for (; i < text.length; i++) {
+      if (text[i] === "'") {
+        const close = text.indexOf("'", i + 1);
+        i = close === -1 ? text.length : close;
+      } else if (text.startsWith("}}", i)) break;
+      else code += text[i];
+    }
+    found.push(code);
+    at = text.indexOf("${{", i);
+  }
+  return found;
+}
+
 /** Whether an expression anywhere in `part` reads the secrets context, in
- *  any spelling (`secrets.X`, `secrets['X']`, `toJSON(secrets)`). */
+ *  any spelling (`secrets.X`, `secrets['X']`, `toJSON(secrets)`,
+ *  `format('{0}', secrets.X)`). */
 const namesSecret = (part: unknown) =>
-  (JSON.stringify(part).match(/\$\{\{[^}]*\}\}/g) ?? []).some((e) =>
-    /\bsecrets\b/.test(e)
-  );
+  expressions(JSON.stringify(part)).some((e) => /\bsecrets\b/.test(e));
+
+// The helper itself: a test that cannot see a spelling would pass when a
+// secret leaks in it.
+describe("namesSecret", () => {
+  it("finds the secrets context in any expression, also past a } in a string", () => {
+    expect(namesSecret("${{ secrets.CSC_LINK }}")).toBe(true);
+    expect(namesSecret("${{ secrets['CSC_LINK'] }}")).toBe(true);
+    expect(namesSecret("${{ toJSON(secrets) }}")).toBe(true);
+    expect(
+      namesSecret("echo ${{ format('{0}', secrets.APPLE_API_KEY) }}")
+    ).toBe(true);
+    expect(namesSecret("${{ '}}' }} then ${{ secrets.X }}")).toBe(true);
+    expect(namesSecret({ env: { K: "${{secrets.X}}" } })).toBe(true);
+  });
+
+  it("does not count the word outside an expression or inside a string", () => {
+    expect(namesSecret("Check the signing secrets")).toBe(false);
+    expect(namesSecret("${{ format('secrets {0}', matrix.build) }}")).toBe(
+      false
+    );
+    expect(namesSecret("${{ 'it''s secrets' }}")).toBe(false);
+    expect(namesSecret("${{ matrix.build == 'release' && 'mac' }}")).toBe(
+      false
+    );
+  });
+});
 
 describe("the signing secrets", () => {
   it("are read by the mac job only, through its environment", () => {

@@ -240,9 +240,18 @@ async function checkUiServer({ backendUrl, dataDir, configDir }) {
     if (a.status !== 200) fail(`GET ${asset} answered ${a.status}`);
     log.info(`GET / 200, GET ${asset} 200`);
     // Two more kinds of request that made the server write a page to its
-    // cache: a file route and a page that is not there.
-    for (const path of ["/icon.png", "/no-such-page-for-the-smoke-test"])
-      await (await fetch(new URL(path, ui.url))).arrayBuffer();
+    // cache: a file route and a page that is not there. Each must be served
+    // as such, or the folder check below proves nothing about them.
+    for (const [path, want] of [
+      ["/icon.png", 200],
+      ["/no-such-page-for-the-smoke-test", 404],
+    ]) {
+      const r = await fetch(new URL(path, ui.url));
+      await r.arrayBuffer();
+      if (r.status !== want)
+        fail(`GET ${path} answered ${r.status}, not ${want}`);
+    }
+    log.info("GET /icon.png 200, GET of a missing page 404");
     if (process.platform === "darwin") {
       // The server has set its process title by now (Next does before it
       // listens), which is what registers it with macOS, so it is in the
@@ -265,6 +274,13 @@ async function checkUiServer({ backendUrl, dataDir, configDir }) {
     // the signature, and the system reports an app that was used once as
     // modified.
     await stopUi();
+    // A stop that timed out ends the tree and returns: the folder is looked
+    // at only once the server has really gone.
+    const gone = await Promise.race([
+      ui.exited.then(() => true),
+      new Promise((r) => setTimeout(() => r(false), 15_000)),
+    ]);
+    if (!gone) fail("the UI server still ran 15 s after it was stopped");
     const written = packaging.changedSince(appDir, startedAt);
     if (written.length)
       fail(
