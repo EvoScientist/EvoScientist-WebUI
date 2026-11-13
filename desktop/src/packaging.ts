@@ -11,7 +11,7 @@
 // - The macOS files go out only while `evoscientist.releaseMac` is true as
 //   well: they need the signing secrets, and they are uploaded next to the
 //   Windows files, so that flag may be on only while `release` is.
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { compareReleases, installVersion, parseRelease } from "./versions";
 
 /** The first core version a desktop release may install. */
@@ -58,8 +58,8 @@ export function releaseFlagProblem(meta: {
 
 /** Where an unpacked build (`npm run pack`) keeps the app: its folder, the
  *  executable and the resources folder. On macOS the folder is the app
- *  bundle. `appDir` names another copy of the app, as the smoke test's
- *  `--app` does. */
+ *  bundle, and its executable has the bundle's name. `appDir` names another
+ *  copy of the app, as the smoke test's `--app` does. */
 export function appLayout(
   platform: NodeJS.Platform,
   releaseDir: string,
@@ -69,7 +69,7 @@ export function appLayout(
     const app = appDir ?? join(releaseDir, "mac-arm64", "EvoScientist.app");
     return {
       appDir: app,
-      exe: join(app, "Contents", "MacOS", "EvoScientist"),
+      exe: join(app, "Contents", "MacOS", basename(app, ".app")),
       resources: join(app, "Contents", "Resources"),
     };
   }

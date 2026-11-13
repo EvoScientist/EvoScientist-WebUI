@@ -13,6 +13,11 @@
 // Usage: node scripts/smoke.mjs --core pinned|newest|<version> [--app <dir>]
 //                                [--use-my-folders]
 //        (<dir>: the unpacked app's folder; on macOS the .app bundle)
+//        node scripts/smoke.mjs --ui-only [--app <dir>]   (step 5 alone, with
+//        a backend address nothing listens on and scratch folders: for a
+//        build that step 1 to 4 already ran on in another form, as the signed
+//        macOS app of a release. It installs nothing, so it needs no
+//        --use-my-folders.)
 //        node scripts/smoke.mjs --list   (the versions to test, as JSON: one
 //        when the newest release inside the range is the pinned one)
 // The test installs the core and runs setup in this user's own folders, as
@@ -22,9 +27,15 @@
 // throwaway account, or with HOME / USERPROFILE / APPDATA / LOCALAPPDATA
 // pointed at a scratch folder.
 // `pinned` is the version the app installs, `newest` the newest release
-// inside its range (PyPI). Ends with `SMOKE OK core <version>` or
-// `SMOKE FAILED: <why>`, followed by the cleanups' lines.
-import { existsSync, mkdirSync, mkdtempSync, readFileSync } from "node:fs";
+// inside its range (PyPI). Ends with `SMOKE OK core <version>` (`SMOKE OK ui
+// only`) or `SMOKE FAILED: <why>`, followed by the cleanups' lines.
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -50,6 +61,7 @@ const { values } = parseArgs({
     app: { type: "string" },
     list: { type: "boolean" },
     "use-my-folders": { type: "boolean" },
+    "ui-only": { type: "boolean" },
   },
 });
 const { appDir, exe, resources } = packaging.appLayout(
@@ -179,6 +191,16 @@ async function main() {
   const ready = outcome.ready;
   log.info(`ready at ${ready.url}`);
 
+  await checkUiServer({
+    backendUrl: ready.url,
+    dataDir: ready.dataDir || folders.dataDir,
+    configDir: ready.configDir || folders.configDir,
+  });
+  return `core ${version}`;
+}
+
+/** Step 5: the bundled UI server under the packaged executable. */
+async function checkUiServer({ backendUrl, dataDir, configDir }) {
   step("UI server under the packaged executable");
   {
     const { port } = await uiServer.pickUiPort(pkg.evoscientist.uiPort);
@@ -188,9 +210,9 @@ async function main() {
       cwd: resources,
       env: uiServer.uiServerEnv(process.env, {
         uiPort: port,
-        backendUrl: ready.url,
-        dataDir: ready.dataDir || folders.dataDir,
-        configDir: ready.configDir || folders.configDir,
+        backendUrl,
+        dataDir,
+        configDir,
         serverJs,
       }),
       port,
@@ -227,12 +249,27 @@ async function main() {
     }
     if (uiEnded) fail("the UI server ended during the checks");
   }
-  return version;
+}
+
+/** `--ui-only`: the page and its assets are served without a backend. */
+async function uiOnly() {
+  if (!versions.bundledUiVersion(serverJs))
+    fail(`no bundled WebUI at ${serverJs}`);
+  console.log(`UI server only, app ${appDir}`);
+  const scratch = mkdtempSync(join(tmpdir(), "evo-smoke-ui-"));
+  cleanups.unshift(() => rmSync(scratch, { recursive: true, force: true }));
+  await checkUiServer({
+    // The discard port: nothing answers there.
+    backendUrl: "http://127.0.0.1:9",
+    dataDir: join(scratch, "data"),
+    configDir: join(scratch, "config"),
+  });
+  return "ui only";
 }
 
 let code = 0;
 try {
-  console.log(`SMOKE OK core ${await main()}`);
+  console.log(`SMOKE OK ${await (values["ui-only"] ? uiOnly() : main())}`);
 } catch (e) {
   console.error(`SMOKE FAILED: ${e instanceof Error ? e.message : e}`);
   code = 1;

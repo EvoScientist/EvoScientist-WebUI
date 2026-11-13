@@ -147,6 +147,17 @@ describe("appLayout", () => {
       join("/opt/app", "evoscientist")
     );
   });
+
+  // A fork's test build has its own product name: the bundle and the
+  // executable in it carry that name.
+  it("on macOS names the executable after the bundle", () => {
+    const app = join("/r", "mac-arm64", "W04Test.app");
+    expect(appLayout("darwin", "/r", app)).toEqual({
+      appDir: app,
+      exe: join(app, "Contents", "MacOS", "W04Test"),
+      resources: join(app, "Contents", "Resources"),
+    });
+  });
 });
 
 // Upgrades, uninstall and the update feed depend on these; none may change
