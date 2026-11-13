@@ -81,15 +81,43 @@ describe("the signing secrets", () => {
     const lines = runs(jobs.mac)
       .split("\n")
       .map((l) => l.trim());
-    const reads = new RegExp(`\\$\\{?!?(${SECRETS.join("|")}|name)\\b|\\$\\{!`);
+    const reads = new RegExp(
+      `\\$\\{?!?(APPLE_API_KEY_P8|${SECRETS.join("|")}|name)\\b|\\$\\{!`
+    );
+    const writesKey = `(umask 077 && printf '%s\\n' "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/notary-key.p8")`;
     expect(lines.filter((l) => reads.test(l))).toEqual([
       `[ -n "\${!name}" ] || missing+=("$name")`,
-      `printf '%s\\n' "$APPLE_API_KEY" > "$RUNNER_TEMP/notary-key.p8"`,
+      writesKey,
     ]);
     expect(lines.filter((l) => l.includes("notary-key.p8"))).toEqual([
-      `printf '%s\\n' "$APPLE_API_KEY" > "$RUNNER_TEMP/notary-key.p8"`,
+      writesKey,
+      `trap 'rm -f "$RUNNER_TEMP/notary-key.p8"' EXIT`,
       `export APPLE_API_KEY="$RUNNER_TEMP/notary-key.p8"`,
     ]);
+  });
+
+  // The WebUI's build and both `npm ci` run every dependency's code and
+  // need no secret.
+  it("reach the step that signs only, after the dependencies were installed", () => {
+    const steps = jobs.mac.steps;
+    const SIGN = "Build, sign and notarize the app (publishing off)";
+    expect(
+      steps
+        .filter((s) => JSON.stringify(s.env ?? {}).includes("secrets."))
+        .map((s) => s.name)
+    ).toEqual(["Check the signing secrets", SIGN]);
+    const names = steps.map((s) => s.name);
+    for (const before of [
+      "Build the WebUI",
+      "Install the desktop dependencies",
+    ])
+      expect(names.indexOf(before), before).toBeLessThan(names.indexOf(SIGN));
+    expect(names.indexOf("Build the WebUI")).toBeGreaterThan(-1);
+    const sign = steps.find((s) => s.name === SIGN);
+    expect(sign?.run).not.toMatch(/\bnpm ci\b/);
+    // The key file's permissions are set in a subshell: a umask for the
+    // whole step would reach the app's own files.
+    expect(sign?.run).not.toMatch(/^\s*umask /m);
   });
 
   // electron-builder throws when only some of the notarization variables
@@ -99,14 +127,21 @@ describe("the signing secrets", () => {
       s.name?.startsWith("Build, sign and notarize")
     );
     expect(build?.run).toContain(
-      "unset CSC_LINK CSC_KEY_PASSWORD APPLE_API_KEY_ID APPLE_API_ISSUER"
+      "unset CSC_LINK CSC_KEY_PASSWORD APPLE_API_KEY_P8 APPLE_API_KEY_ID APPLE_API_ISSUER"
     );
     expect(build?.run).toContain("export CSC_IDENTITY_AUTO_DISCOVERY=false");
     // The key's path is set for the upstream repository only.
     expect(build?.env?.APPLE_API_KEY).toBeUndefined();
-    expect(build?.run).toMatch(
-      /if \[ "\$GITHUB_REPOSITORY" = "\$UPSTREAM" \]; then\n\s*export APPLE_API_KEY=/
+    // Upstream branch: the key's path in, the key's text out. Fork branch
+    // (after `else`): neither.
+    const [upstream, fork] = (build?.run ?? "").split(/^\s*else$/m);
+    expect(upstream).toMatch(
+      /^args=\(\)\nif \[ "\$GITHUB_REPOSITORY" = "\$UPSTREAM" \]; then\n/
     );
+    expect(upstream).toMatch(
+      /export APPLE_API_KEY="\$RUNNER_TEMP\/notary-key\.p8"\n\s*unset APPLE_API_KEY_P8\n$/
+    );
+    expect(fork).not.toContain("export APPLE_API_KEY=");
   });
 });
 
@@ -124,7 +159,7 @@ describe("what a tag releases", () => {
   it("uploads only after the mac job succeeded, unless no macOS files are released", () => {
     expect(jobs.release.needs).toEqual(["plan", "installer", "mac"]);
     expect(flat(jobs.release.if)).toBe(
-      "always() && startsWith(github.ref, 'refs/tags/v') && " +
+      "!cancelled() && startsWith(github.ref, 'refs/tags/v') && " +
         "needs.installer.result == 'success' && " +
         "(needs.mac.result == 'success' || " +
         "(needs.mac.result == 'skipped' && needs.plan.outputs.mac != 'true'))"
@@ -166,6 +201,23 @@ describe("what a tag releases", () => {
 });
 
 describe("the manual rehearsal", () => {
+  // A manual run on a tag uploads and publishes that tag's release, as a
+  // push of the tag does.
+  it("fails at once on a tag, before anything is planned", () => {
+    const plan = runs(jobs.plan);
+    const refusal = plan.indexOf(
+      `if [ "$REHEARSAL" = true ] && [[ "$GITHUB_REF" == refs/tags/* ]]; then`
+    );
+    expect(refusal).toBeGreaterThan(-1);
+    expect(plan.slice(refusal, refusal + 300)).toMatch(
+      /^[^\n]*\n\s*echo "::error::[^\n]*\n\s*exit 1\n/
+    );
+    expect(refusal).toBeLessThan(plan.indexOf("GITHUB_OUTPUT"));
+    // Every job that builds or uploads waits for the plan.
+    for (const name of ["smoke", "smoke-macos", "installer", "mac", "release"])
+      expect(jobs[name].needs, name).toContain("plan");
+  });
+
   it("builds two versions in the upstream repository only, and reaches no release", () => {
     const plan = runs(jobs.plan);
     expect(plan).toContain(

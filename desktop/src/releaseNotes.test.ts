@@ -64,6 +64,16 @@ describe("renderNotes", () => {
       "https://github.com/EvoScientist/EvoScientist-WebUI/releases/latest"
     );
     expect(text).toContain("~/Library/Application Support/EvoScientist");
+    // What the app and the system's updater leave under ~/Library (seen in
+    // a scratch home after an update).
+    for (const left of [
+      "~/Library/Caches/evoscientist-updater",
+      "`Caches/com.evoscientist.desktop`",
+      "`Caches/com.evoscientist.desktop.ShipIt`",
+      "`HTTPStorages/com.evoscientist.desktop`",
+      "`Preferences/com.evoscientist.desktop.plist`",
+    ])
+      expect(text, left).toContain(left);
     expect(text).not.toMatch(/[–—]/);
   });
 });

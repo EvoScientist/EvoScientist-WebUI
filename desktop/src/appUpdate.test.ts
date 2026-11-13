@@ -490,6 +490,12 @@ describe("on macOS", () => {
     refusedLate.u.abandonInstall();
     refusedLate.native.emit("error", refused());
     expect(refusedLate.u.installPending()).toBe(false);
+
+    // The third answer the system's check can end with.
+    const nothing = await readyOnMac();
+    expect(nothing.u.install()).toBe(true);
+    nothing.native.emit("update-not-available");
+    expect(nothing.u.installPending()).toBe(false);
   });
 
   it("has nothing pending once the system already holds the update", async () => {
@@ -538,6 +544,11 @@ describe("where the macOS app can be replaced", () => {
       )
     ).toBe("/Volumes/EvoScientist 0.5.3-arm64/EvoScientist.app");
     expect(appBundle("/usr/local/bin/electron")).toBeNull();
+    // The same layout in a folder that is no bundle.
+    expect(appBundle("/opt/tool/Contents/MacOS/tool")).toBeNull();
+    expect(
+      appBundle("/Applications/EvoScientist.app/Contents/Helper")
+    ).toBeNull();
   });
 
   it("needs the bundle and its folder writable", () => {

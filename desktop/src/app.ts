@@ -301,6 +301,14 @@ export interface App {
   /** A second launch; `forInstall` when the installer asks the app to quit
    *  (`--quit-for-install`). */
   secondInstance(forInstall?: boolean): void;
+  /** Whether a window's close goes through, or is the user's and handled by
+   *  `closeWindow`. It goes through once the app exits. One exception, on
+   *  macOS: while the app waits for the system to take an update, only the
+   *  quit itself (`quitBegun`: the updater's, or the user's Quit) closes the
+   *  window. The system needs seconds for its check, and a window the user
+   *  closed meanwhile would be gone when the update is refused and the app
+   *  comes back. */
+  closePasses(quitBegun: boolean): boolean;
   /** The user closes the app's window. On macOS the window only hides: the
    *  app stays in the Dock with its backend and its page, as Mac apps do.
    *  Elsewhere closing the window quits the app (`requestQuit`). */
@@ -397,6 +405,9 @@ export function createApp(deps: AppDeps): App {
   /** Counts the installs of an app update asked for: what gives one up
    *  acts only for its own. */
   let installAttempt = 0;
+  /** The app has asked for the install of an update and waits for it to
+   *  end the app. */
+  let awaitingInstall = false;
   /** The install script, setup or `EvoSci update` while it runs: closing
    *  asks, then stops the script or setup or waits for the update,
    *  which is never killed. */
@@ -1311,6 +1322,7 @@ export function createApp(deps: AppDeps): App {
         if (attempt === installAttempt && exiting && quitState === "stopping")
           void updateDidNotStart(why);
       };
+      awaitingInstall = true;
       if (!update.install(() => giveUp("the system refused the update")))
         return updateDidNotStart("the downloaded update could not be opened");
       void (deps.installWait ?? defaultInstallWait)().then(() =>
@@ -1338,6 +1350,7 @@ export function createApp(deps: AppDeps): App {
       `restart to update: no update was installed (${why}); launching again`
     );
     deps.appUpdate?.abandonInstall();
+    awaitingInstall = false;
     exiting = false;
     quitState = "none";
     // A launch during the stops asked for a relaunch after an exit that did
@@ -1696,6 +1709,9 @@ export function createApp(deps: AppDeps): App {
     nativeError,
     crashReport,
     secondInstance,
+    closePasses: (quitBegun) =>
+      exiting &&
+      (quitBegun || !(awaitingInstall && deps.platform === "darwin")),
     closeWindow: () => {
       if (deps.platform !== "darwin") return void requestQuit();
       log.info("window closed: hidden, the app keeps running");
@@ -1754,10 +1770,15 @@ export function createApp(deps: AppDeps): App {
       }
       const update = deps.appUpdate;
       if (!update) return;
-      // No download of an update the app could not install.
-      if (update.state.kind === "available" && deps.canReplaceApp?.() === false)
+      // No download of an update the app could not install. The status page
+      // disabled its button for the click: the offer goes to it again.
+      if (
+        update.state.kind === "available" &&
+        deps.canReplaceApp?.() === false
+      ) {
         cannotReplace();
-      else update.download();
+        sendUpdateOffer();
+      } else update.download();
     },
     restartToUpdateFor: async (senderOrigin, statusPage) => {
       if (statusPage || fromUi(senderOrigin)) return restartToUpdate();

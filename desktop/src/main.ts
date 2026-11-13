@@ -159,6 +159,10 @@ function readKeptMirror(): boolean | null {
   }
 }
 
+/** A quit of the app has begun (while it exits): the windows' closes that
+ *  follow are the quit's, not the user's (`closePasses` in app.ts). */
+let quitBegun = false;
+
 /** App updates from GitHub Releases: only an installed app updates itself,
  *  on Windows and on macOS. On macOS Electron's own updater installs what
  *  electron-updater downloaded. electron-updater's own lines go to
@@ -474,7 +478,7 @@ function createWindow(): BrowserWindow {
     desktop.windowShown();
   });
   w.on("close", (e) => {
-    if (desktop.exiting) return;
+    if (desktop.closePasses(quitBegun)) return;
     e.preventDefault();
     desktop.closeWindow();
   });
@@ -646,9 +650,17 @@ function start(): void {
   // macOS: a click on the Dock icon, or the app opened again from Finder.
   app.on("activate", () => desktop.activate());
   app.on("before-quit", (e) => {
-    if (desktop.exiting) return;
+    if (desktop.exiting) {
+      quitBegun = true;
+      return;
+    }
     e.preventDefault();
     void desktop.requestQuit();
+  });
+  // The updater's quit: on macOS it closes the windows first and quits once
+  // they are closed.
+  systemUpdater.on("before-quit-for-update", () => {
+    quitBegun = true;
   });
   // The window is hidden, never closed, until the app exits.
   app.on("window-all-closed", () => {});

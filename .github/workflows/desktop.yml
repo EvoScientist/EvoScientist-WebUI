@@ -35,11 +35,12 @@ name: Desktop
 #   can be read by a workflow on any branch. Only the `mac` job names that
 #   environment. In the upstream repository it fails when a secret is
 #   missing; a fork builds unsigned.
-# - A manual run with `mac_rehearsal`: the `mac` job for this version and for
-#   the next patch version, both signed and notarized, with the update feed
-#   on 127.0.0.1. Nothing goes to a release. It is how the signing, and one
-#   update from the first build to the second, are tried before that switch
-#   goes on.
+# - A manual run on main with `mac_rehearsal`: the `mac` job for this version
+#   and for the next patch version, both signed and notarized, with the
+#   update feed on 127.0.0.1. Nothing goes to a release (on a tag, where a
+#   manual run uploads that tag's release, the run fails at once). It is how
+#   the signing, and one update from the first build to the second, are
+#   tried before that switch goes on.
 
 on:
   pull_request:
@@ -124,6 +125,12 @@ jobs:
         env:
           REHEARSAL: ${{ github.event_name == 'workflow_dispatch' && inputs.mac_rehearsal }}
         run: |
+          # A manual run on a tag builds and uploads that tag's release, as
+          # a push of the tag does: no place for test builds.
+          if [ "$REHEARSAL" = true ] && [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            echo "::error::mac_rehearsal builds test versions and releases nothing: run it on main, not on a tag."
+            exit 1
+          fi
           echo "cores=$(node scripts/smoke.mjs --list)" >> "$GITHUB_OUTPUT"
           release=$(node -p "require('./package.json').evoscientist.release === true")
           release_mac=$(node -p "require('./package.json').evoscientist.releaseMac === true")
@@ -336,9 +343,6 @@ jobs:
             echo "::error::Missing in the environment release-macos: ${missing[*]}"
             exit 1
           fi
-          # The notarization key as a file that only this user can read.
-          umask 077
-          printf '%s\n' "$APPLE_API_KEY" > "$RUNNER_TEMP/notary-key.p8"
       # The second rehearsal build is the next patch version, so the first
       # one has something to update to; both read their updates from this
       # machine, so neither ever takes one from the releases.
@@ -356,25 +360,37 @@ jobs:
             fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + '\n');
           "
           node -p "'version ' + require('./package.json').version"
+      # Neither the WebUI's build nor the installs of the dependencies get a
+      # secret: only the step that signs does.
       - name: Build the WebUI
         run: npm ci && npm run build
+      - name: Install the desktop dependencies
+        working-directory: desktop
+        run: npm ci
       - name: Build, sign and notarize the app (publishing off)
         working-directory: desktop
         env:
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         run: |
           args=()
           if [ "$GITHUB_REPOSITORY" = "$UPSTREAM" ]; then
+            # The notarization key as a file that only this user can read,
+            # for this step only. (In a subshell: the build's own files keep
+            # their usual permissions.)
+            (umask 077 && printf '%s\n' "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/notary-key.p8")
+            trap 'rm -f "$RUNNER_TEMP/notary-key.p8"' EXIT
             export APPLE_API_KEY="$RUNNER_TEMP/notary-key.p8"
+            unset APPLE_API_KEY_P8
           else
             # A fork has no certificate: an unsigned test build with its own
             # identity and update feed, like its Windows installer.
             # electron-builder refuses a notarization setup that is only
             # partly there, so none of its variables stays.
-            unset CSC_LINK CSC_KEY_PASSWORD APPLE_API_KEY_ID APPLE_API_ISSUER
+            unset CSC_LINK CSC_KEY_PASSWORD APPLE_API_KEY_P8 APPLE_API_KEY_ID APPLE_API_ISSUER
             export CSC_IDENTITY_AUTO_DISCOVERY=false
             args=(-c.appId=com.evoscientist.desktop.w04test
               -c.productName=W04Test
@@ -383,7 +399,6 @@ jobs:
               "-c.publish.owner=$GITHUB_REPOSITORY_OWNER"
               "-c.publish.repo=${GITHUB_REPOSITORY#*/}")
           fi
-          npm ci
           npm run dist -- "${args[@]}"
           ls -l release
       - name: Check the files
@@ -470,9 +485,9 @@ jobs:
     needs: [plan, installer, mac]
     # With the macOS files: only after the `mac` job succeeded. It may be
     # skipped only while a tag releases no macOS files; skipped because its
-    # smoke test failed, it stops the release.
+    # smoke test failed, it stops the release. Not in a cancelled run.
     if: >-
-      always() && startsWith(github.ref, 'refs/tags/v') &&
+      !cancelled() && startsWith(github.ref, 'refs/tags/v') &&
       needs.installer.result == 'success' &&
       (needs.mac.result == 'success' ||
       (needs.mac.result == 'skipped' && needs.plan.outputs.mac != 'true'))

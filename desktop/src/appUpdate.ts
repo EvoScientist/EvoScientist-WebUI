@@ -77,7 +77,10 @@ export interface Updater {
  *  macOS: the part the app uses. */
 export interface NativeUpdater {
   on(event: "error", listener: (e: Error) => void): unknown;
-  on(event: "update-downloaded", listener: () => void): unknown;
+  on(
+    event: "update-downloaded" | "update-not-available",
+    listener: () => void
+  ): unknown;
   listeners(event: "update-downloaded"): unknown[];
   removeListener(
     event: "update-downloaded",
@@ -300,9 +303,11 @@ export function createAppUpdate(deps: UpdateDeps): AppUpdate {
     if (percent !== state.percent) set({ ...state, percent });
   });
 
-  native?.on("update-downloaded", () => {
-    pending = false;
-  });
+  // The system's check ends with one of three answers.
+  for (const answer of ["update-downloaded", "update-not-available"] as const)
+    native?.on(answer, () => {
+      pending = false;
+    });
   native?.on("error", (e) => {
     pending = false;
     const onFailed = asked?.onFailed;
