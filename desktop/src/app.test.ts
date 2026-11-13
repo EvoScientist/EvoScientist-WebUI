@@ -2502,35 +2502,57 @@ describe("restart to update (W04)", () => {
       installWait: never,
       platform: "darwin",
     });
-    // The app runs: every close is the user's.
-    expect(h.app.closePasses(false)).toBe(false);
-    expect(h.app.closePasses(true)).toBe(false);
+    // The app runs: every close is the user's, and no quit has begun.
+    expect(h.app.closePasses()).toBe(false);
+    h.app.quitBegan();
+    expect(h.app.closePasses()).toBe(false);
     await expect(h.app.restartToUpdate()).resolves.toEqual({ ok: true });
     expect(h.app.exiting).toBe(true);
-    expect(h.app.closePasses(false)).toBe(false);
-    expect(h.app.closePasses(true)).toBe(true);
+    expect(h.app.closePasses()).toBe(false);
     h.app.closeWindow();
     expect(h.win.calls.at(-1)).toBe("hide window");
     expect(h.exit).not.toHaveBeenCalled();
     // The update is refused: the app is back, with its window.
     appUpdate.refusals[0]?.();
     await vi.waitFor(() => expect(h.sessions).toHaveLength(2));
-    expect(h.app.closePasses(true)).toBe(false);
+    expect(h.app.closePasses()).toBe(false);
     // A quit of the app that came back closes the window as any quit does.
     await vi.waitFor(() =>
       expect(h.messageBox).toHaveBeenCalledWith(NOT_INSTALLED)
     );
     await h.app.requestQuit();
     expect(h.exit).toHaveBeenCalled();
-    expect(h.app.closePasses(false)).toBe(true);
+    expect(h.app.closePasses()).toBe(true);
+  });
+
+  // The updater's quit closes the windows first; the user's Quit closes
+  // them too. From then on nothing brings the app back: its window is
+  // closing, or closed.
+  it("on macOS, once the quit has begun, the window closes and neither the wait nor a refusal brings the app back", async () => {
+    const waits: (() => void)[] = [];
+    const appUpdate = fakeAppUpdate();
+    const h = await launched({
+      appUpdate,
+      installWait: () => new Promise<void>((r) => waits.push(r)),
+      platform: "darwin",
+    });
+    await expect(h.app.restartToUpdate()).resolves.toEqual({ ok: true });
+    h.app.quitBegan();
+    expect(h.app.closePasses()).toBe(true);
+    waits[0]();
+    appUpdate.refusals[0]?.();
+    await turn();
+    expect(h.app.exiting).toBe(true);
+    expect(h.sessions).toHaveLength(1);
+    expect(appUpdate.abandonInstall).not.toHaveBeenCalled();
+    expect(h.messageBox).not.toHaveBeenCalled();
   });
 
   it("on Windows the window closes while the installer is awaited, as before", async () => {
     const appUpdate = fakeAppUpdate();
     const h = await launched({ appUpdate, installWait: never });
     await expect(h.app.restartToUpdate()).resolves.toEqual({ ok: true });
-    expect(h.app.closePasses(false)).toBe(true);
-    expect(h.app.closePasses(true)).toBe(true);
+    expect(h.app.closePasses()).toBe(true);
   });
 
   it("on macOS an exit that is no update closes the window", async () => {
@@ -2538,17 +2560,17 @@ describe("restart to update (W04)", () => {
     await h.app.requestQuit();
     expect(h.exit).toHaveBeenCalled();
     expect(h.app.exiting).toBe(true);
-    expect(h.app.closePasses(false)).toBe(true);
+    expect(h.app.closePasses()).toBe(true);
   });
 
   // macOS: the wait ran out, but the system still works on that install.
-  it("answers busy, and stops nothing, while the system still works on an install that was given up", async () => {
+  it("answers update_pending, and stops nothing, while the system still works on an install that was given up", async () => {
     const appUpdate = fakeAppUpdate();
     appUpdate.installPending.mockReturnValue(true);
     const h = await launched({ appUpdate });
     await expect(h.app.restartToUpdate()).resolves.toEqual({
       ok: false,
-      code: "busy",
+      code: "update_pending",
     });
     expect(appUpdate.install).not.toHaveBeenCalled();
     expect(appUpdate.stop).not.toHaveBeenCalled();

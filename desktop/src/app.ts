@@ -274,9 +274,9 @@ export interface App {
   /** "Restart to update": busy checks and stops as at quit, then the
    *  installer of the downloaded update. `not_ready` without one (or when
    *  its file cannot be opened), `busy` while a launch, restart, install,
-   *  setup, core update or quit runs, when the session ends meanwhile, or
-   *  while the system still works on an install that was given up (macOS),
-   *  `cannot_replace` where the app cannot be replaced (macOS: nothing
+   *  setup, core update or quit runs or when the session ends meanwhile,
+   *  `update_pending` while the system still works on an install that was
+   *  given up (macOS), `cannot_replace` where the app cannot be replaced (macOS: nothing
    *  stops, a box offers the download page), `cancelled` on Cancel,
    *  `update_failed` when the app started again on the current version. On
    *  success the app ends. */
@@ -304,11 +304,15 @@ export interface App {
   /** Whether a window's close goes through, or is the user's and handled by
    *  `closeWindow`. It goes through once the app exits. One exception, on
    *  macOS: while the app waits for the system to take an update, only the
-   *  quit itself (`quitBegun`: the updater's, or the user's Quit) closes the
-   *  window. The system needs seconds for its check, and a window the user
-   *  closed meanwhile would be gone when the update is refused and the app
-   *  comes back. */
-  closePasses(quitBegun: boolean): boolean;
+   *  quit itself (`quitBegan`) closes the window. The system needs seconds
+   *  for its check, and a window the user closed meanwhile would be gone
+   *  when the update is refused and the app comes back. */
+  closePasses(): boolean;
+  /** A quit has begun while the app exits: the updater's (on macOS it
+   *  closes the windows first, then quits) or the user's Quit. The closes
+   *  that follow are the quit's, and nothing brings the app back any more.
+   *  Ignored while the app runs. */
+  quitBegan(): void;
   /** The user closes the app's window. On macOS the window only hides: the
    *  app stays in the Dock with its backend and its page, as Mac apps do.
    *  Elsewhere closing the window quits the app (`requestQuit`). */
@@ -408,6 +412,8 @@ export function createApp(deps: AppDeps): App {
   /** The app has asked for the install of an update and waits for it to
    *  end the app. */
   let awaitingInstall = false;
+  /** A quit has begun while the app exits (`quitBegan`). */
+  let quitBegun = false;
   /** The install script, setup or `EvoSci update` while it runs: closing
    *  asks, then stops the script or setup or waits for the update,
    *  which is never killed. */
@@ -1249,7 +1255,7 @@ export function createApp(deps: AppDeps): App {
     // system. It takes no second one meanwhile.
     if (update.installPending()) {
       log.info("restart to update: the system still works on the last install");
-      return { ok: false, code: "busy" };
+      return { ok: false, code: "update_pending" };
     }
     if (!update.installable()) return { ok: false, code: "not_ready" };
     quitState = "checking";
@@ -1317,9 +1323,15 @@ export function createApp(deps: AppDeps): App {
       // What gives this install up acts only for it, and only while the app
       // still waits for it: a refusal brings the app back within seconds, so
       // a second Restart to update can run before the first one's wait ends.
+      // Not once the quit has begun: the windows are closing then.
       const attempt = ++installAttempt;
       const giveUp = (why: string): void => {
-        if (attempt === installAttempt && exiting && quitState === "stopping")
+        if (
+          attempt === installAttempt &&
+          exiting &&
+          quitState === "stopping" &&
+          !quitBegun
+        )
           void updateDidNotStart(why);
       };
       awaitingInstall = true;
@@ -1709,9 +1721,12 @@ export function createApp(deps: AppDeps): App {
     nativeError,
     crashReport,
     secondInstance,
-    closePasses: (quitBegun) =>
+    closePasses: () =>
       exiting &&
       (quitBegun || !(awaitingInstall && deps.platform === "darwin")),
+    quitBegan: () => {
+      if (exiting) quitBegun = true;
+    },
     closeWindow: () => {
       if (deps.platform !== "darwin") return void requestQuit();
       log.info("window closed: hidden, the app keeps running");

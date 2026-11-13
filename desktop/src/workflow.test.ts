@@ -89,9 +89,10 @@ describe("the signing secrets", () => {
       `[ -n "\${!name}" ] || missing+=("$name")`,
       writesKey,
     ]);
+    // The removal is set up before the file is written.
     expect(lines.filter((l) => l.includes("notary-key.p8"))).toEqual([
-      writesKey,
       `trap 'rm -f "$RUNNER_TEMP/notary-key.p8"' EXIT`,
+      writesKey,
       `export APPLE_API_KEY="$RUNNER_TEMP/notary-key.p8"`,
     ]);
   });
@@ -107,14 +108,33 @@ describe("the signing secrets", () => {
         .map((s) => s.name)
     ).toEqual(["Check the signing secrets", SIGN]);
     const names = steps.map((s) => s.name);
-    for (const before of [
+    const BEFORE = [
       "Build the WebUI",
       "Install the desktop dependencies",
-    ])
+      "Compile and fetch the core's install scripts",
+    ];
+    for (const before of BEFORE) {
+      expect(names.indexOf(before), before).toBeGreaterThan(-1);
       expect(names.indexOf(before), before).toBeLessThan(names.indexOf(SIGN));
-    expect(names.indexOf("Build the WebUI")).toBeGreaterThan(-1);
+    }
+    // The step that signs runs electron-builder and nothing of npm: what
+    // `npm run dist` does before it packages ran in the step before.
     const sign = steps.find((s) => s.name === SIGN);
-    expect(sign?.run).not.toMatch(/\bnpm ci\b/);
+    expect(sign?.run).not.toMatch(/\bnpm\b|\bnpx\b/);
+    expect(sign?.run).toContain(
+      `node scripts/builder.mjs --publish never "\${args[@]}"`
+    );
+    expect(steps.find((s) => s.name === BEFORE[2])?.run).toBe(
+      "npm run fetch-core-scripts"
+    );
+    const scripts = (
+      JSON.parse(
+        readFileSync(join(__dirname, "..", "package.json"), "utf8")
+      ) as { scripts: Record<string, string> }
+    ).scripts;
+    expect(scripts.dist).toBe(
+      "npm run fetch-core-scripts && node scripts/builder.mjs --publish never"
+    );
     // The key file's permissions are set in a subshell: a umask for the
     // whole step would reach the app's own files.
     expect(sign?.run).not.toMatch(/^\s*umask /m);
@@ -166,12 +186,12 @@ describe("what a tag releases", () => {
     );
   });
 
-  it("publishes only on a tag, after the Windows smoke test and the upload", () => {
+  it("publishes only on a tag, after the Windows smoke test and the upload, and not in a cancelled run", () => {
     expect(jobs.publish.needs).toEqual(
       expect.arrayContaining(["smoke", "installer", "release"])
     );
     expect(flat(jobs.publish.if)).toBe(
-      "always() && startsWith(github.ref, 'refs/tags/v') && " +
+      "!cancelled() && startsWith(github.ref, 'refs/tags/v') && " +
         "needs.smoke.result == 'success' && " +
         "(needs.release.result == 'success' || needs.installer.result == 'skipped')"
     );

@@ -22,6 +22,8 @@ const RESTART_NOTES: Record<string, string> = {
   not_ready: "The downloaded update could not be opened. Download it again.",
   cannot_replace:
     "EvoScientist can't update itself here. Move it into Applications, or download the new version.",
+  update_pending:
+    "macOS is still working on the update. Try again in a minute. If this stays, quit EvoScientist and open it again.",
 };
 
 interface UpdateNotice {

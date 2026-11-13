@@ -38,7 +38,8 @@ name: Desktop
 # - A manual run on main with `mac_rehearsal`: the `mac` job for this version
 #   and for the next patch version, both signed and notarized, with the
 #   update feed on 127.0.0.1. Nothing goes to a release (on a tag, where a
-#   manual run uploads that tag's release, the run fails at once). It is how
+#   manual run uploads that tag's release, the plan job fails, so no job
+#   that builds, uploads or publishes runs). It is how
 #   the signing, and one update from the first build to the second, are
 #   tried before that switch goes on.
 
@@ -360,13 +361,18 @@ jobs:
             fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + '\n');
           "
           node -p "'version ' + require('./package.json').version"
-      # Neither the WebUI's build nor the installs of the dependencies get a
-      # secret: only the step that signs does.
+      # Neither the WebUI's build nor the installs of the dependencies nor
+      # the app's own compile get a secret: only the step that signs does.
       - name: Build the WebUI
         run: npm ci && npm run build
       - name: Install the desktop dependencies
         working-directory: desktop
         run: npm ci
+      # What `npm run dist` does before it packages: done here, so that the
+      # step that signs runs electron-builder and nothing else.
+      - name: Compile and fetch the core's install scripts
+        working-directory: desktop
+        run: npm run fetch-core-scripts
       - name: Build, sign and notarize the app (publishing off)
         working-directory: desktop
         env:
@@ -381,8 +387,8 @@ jobs:
             # The notarization key as a file that only this user can read,
             # for this step only. (In a subshell: the build's own files keep
             # their usual permissions.)
-            (umask 077 && printf '%s\n' "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/notary-key.p8")
             trap 'rm -f "$RUNNER_TEMP/notary-key.p8"' EXIT
+            (umask 077 && printf '%s\n' "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/notary-key.p8")
             export APPLE_API_KEY="$RUNNER_TEMP/notary-key.p8"
             unset APPLE_API_KEY_P8
           else
@@ -399,7 +405,7 @@ jobs:
               "-c.publish.owner=$GITHUB_REPOSITORY_OWNER"
               "-c.publish.repo=${GITHUB_REPOSITORY#*/}")
           fi
-          npm run dist -- "${args[@]}"
+          node scripts/builder.mjs --publish never "${args[@]}"
           ls -l release
       - name: Check the files
         working-directory: desktop/release
@@ -567,9 +573,10 @@ jobs:
     # Also when the installer was not built (`evoscientist.release` off): the
     # release then carries no desktop files, as before the first desktop
     # release. With desktop files it waits for the upload, which runs only
-    # after every platform's job that this tag releases has succeeded.
+    # after every platform's job that this tag releases has succeeded. Not in
+    # a cancelled run.
     if: >-
-      always() && startsWith(github.ref, 'refs/tags/v') &&
+      !cancelled() && startsWith(github.ref, 'refs/tags/v') &&
       needs.smoke.result == 'success' &&
       (needs.release.result == 'success' || needs.installer.result == 'skipped')
     runs-on: ubuntu-latest
