@@ -223,17 +223,34 @@ describe("changedSince", () => {
   });
 
   // A link is looked at itself: one that points nowhere is no change, and
-  // the walk does not leave the folder through it.
+  // the walk does not go through a link to a folder (a framework's
+  // `Versions/Current`, or a folder outside the app).
   it("looks at a symbolic link, not at what it points to", () => {
     const dir = mkdtempSync(join(tmpdir(), "evo-changed-"));
+    const outside = mkdtempSync(join(tmpdir(), "evo-outside-"));
     try {
+      mkdirSync(join(dir, "Versions", "A"), { recursive: true });
+      writeFileSync(join(dir, "Versions", "A", "lib"), "1");
+      symlinkSync("A", join(dir, "Versions", "Current"));
       symlinkSync(join(dir, "nowhere"), join(dir, "dangling"));
+      symlinkSync(outside, join(dir, "out"));
       const before = new Date(Date.now() - 60_000);
-      lutimesSync(join(dir, "dangling"), before, before);
-      utimesSync(dir, before, before);
-      expect(changedSince(dir, Date.now() - 30_000)).toEqual([]);
+      for (const p of ["Versions/Current", "dangling", "out"])
+        lutimesSync(join(dir, p), before, before);
+      for (const p of ["Versions/A/lib", "Versions/A", "Versions", "."])
+        utimesSync(join(dir, p), before, before);
+      const since = Date.now() - 30_000;
+      expect(changedSince(dir, since)).toEqual([]);
+      // New files behind both links: one is in the folder (seen once, under
+      // its real path), the other is not in the folder at all.
+      writeFileSync(join(dir, "Versions", "A", "new"), "x");
+      writeFileSync(join(outside, "new"), "x");
+      expect(changedSince(dir, since).sort()).toEqual(
+        [join("Versions", "A"), join("Versions", "A", "new")].sort()
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
     }
   });
 

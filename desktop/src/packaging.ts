@@ -60,21 +60,35 @@ export function releaseFlagProblem(meta: {
 /** What was added to `dir`, changed in it or removed from it after
  *  `sinceMs`: files, links and folders at any depth, as paths relative to
  *  `dir` (`.` is the folder itself). A removal shows as its folder, whose
- *  own time changes. Links are looked at themselves, not followed. For the
+ *  own time changes. Links are looked at themselves and never followed,
+ *  so nothing outside the folder is listed and nothing twice. For the
  *  smoke test: the UI server must leave the app's folder as it was. On macOS
  *  that folder is the signed bundle, where one added file breaks the
  *  signature. Throws when the folder cannot be read: a check that could not
  *  look must not pass. */
 export function changedSince(dir: string, sinceMs: number): string[] {
-  const entries = [".", ...(readdirSync(dir, { recursive: true }) as string[])];
-  return entries.filter((entry) => {
+  const changed: string[] = [];
+  const look = (rel: string): boolean => {
     try {
-      return lstatSync(join(dir, entry)).mtimeMs > sinceMs;
+      const st = lstatSync(join(dir, rel));
+      if (st.mtimeMs > sinceMs) changed.push(rel);
+      return st.isDirectory();
     } catch {
-      // Gone, or unreadable, since the folder was listed: a change.
-      return true;
+      // Gone, or unreadable, since its folder was listed: a change.
+      changed.push(rel);
+      return false;
     }
-  });
+  };
+  // A folder that cannot be listed throws; a link to a folder is not one.
+  const walk = (rel: string): void => {
+    for (const name of readdirSync(join(dir, rel))) {
+      const child = rel === "." ? name : join(rel, name);
+      if (look(child)) walk(child);
+    }
+  };
+  if (lstatSync(dir).mtimeMs > sinceMs) changed.push(".");
+  walk(".");
+  return changed;
 }
 
 /** Where an unpacked build (`npm run pack`) keeps the app: its folder, the

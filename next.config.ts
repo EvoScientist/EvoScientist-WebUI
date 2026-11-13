@@ -13,8 +13,8 @@ const nextConfig: NextConfig = {
   // to: in the desktop app it is inside the signed app bundle, and on macOS
   // one file added there breaks the signature's seal, so the system reports
   // an app that was used once as modified. In the npm package it is the
-  // install folder. The cache is small (the page shells) and is rebuilt on
-  // the first request after a start.
+  // install folder. The cache is small (the page shells, 50 MB at most) and
+  // is filled again from the prerendered files after a start.
   experimental: { isrFlushToDisk: false },
   // `unoptimized` alone still traces sharp into the standalone output.
   // Routes that resolve dynamic paths trace the whole project root, which

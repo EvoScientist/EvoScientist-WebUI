@@ -239,6 +239,10 @@ async function checkUiServer({ backendUrl, dataDir, configDir }) {
     await a.arrayBuffer();
     if (a.status !== 200) fail(`GET ${asset} answered ${a.status}`);
     log.info(`GET / 200, GET ${asset} 200`);
+    // Two more kinds of request that made the server write a page to its
+    // cache: a file route and a page that is not there.
+    for (const path of ["/icon.png", "/no-such-page-for-the-smoke-test"])
+      await (await fetch(new URL(path, ui.url))).arrayBuffer();
     if (process.platform === "darwin") {
       // The server has set its process title by now (Next does before it
       // listens), which is what registers it with macOS, so it is in the
