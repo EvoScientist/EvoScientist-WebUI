@@ -11,7 +11,7 @@
 // - The macOS files go out only while `evoscientist.releaseMac` is true as
 //   well: they need the signing secrets, and they are uploaded next to the
 //   Windows files, so that flag may be on only while `release` is.
-import { readdirSync, statSync } from "node:fs";
+import { lstatSync, readdirSync } from "node:fs";
 import { basename, join } from "node:path";
 import { compareReleases, installVersion, parseRelease } from "./versions";
 
@@ -57,22 +57,22 @@ export function releaseFlagProblem(meta: {
   return null;
 }
 
-/** What was added to `dir` or changed in it after `sinceMs` (files and
- *  folders, paths relative to `dir`, at any depth). For the smoke test: the
- *  UI server must leave the app's folder as it was. On macOS that folder is
- *  inside the signed bundle, where one added file breaks the signature. */
+/** What was added to `dir`, changed in it or removed from it after
+ *  `sinceMs`: files, links and folders at any depth, as paths relative to
+ *  `dir` (`.` is the folder itself). A removal shows as its folder, whose
+ *  own time changes. Links are looked at themselves, not followed. For the
+ *  smoke test: the UI server must leave the app's folder as it was. On macOS
+ *  that folder is the signed bundle, where one added file breaks the
+ *  signature. Throws when the folder cannot be read: a check that could not
+ *  look must not pass. */
 export function changedSince(dir: string, sinceMs: number): string[] {
-  let entries: string[];
-  try {
-    entries = readdirSync(dir, { recursive: true }) as string[];
-  } catch {
-    return [];
-  }
+  const entries = [".", ...(readdirSync(dir, { recursive: true }) as string[])];
   return entries.filter((entry) => {
     try {
-      return statSync(join(dir, entry)).mtimeMs > sinceMs;
+      return lstatSync(join(dir, entry)).mtimeMs > sinceMs;
     } catch {
-      return false;
+      // Gone, or unreadable, since the folder was listed: a change.
+      return true;
     }
   });
 }

@@ -1,9 +1,11 @@
 import {
   existsSync,
+  lutimesSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -200,8 +202,46 @@ describe("changedSince", () => {
     }
   });
 
-  it("is empty for a folder that is not there", () => {
-    expect(changedSince(join(tmpdir(), "evo-no-such-folder"), 0)).toEqual([]);
+  it("sees a file that was removed, also one directly in the folder", () => {
+    const dir = mkdtempSync(join(tmpdir(), "evo-changed-"));
+    try {
+      mkdirSync(join(dir, "sub"));
+      writeFileSync(join(dir, "top.txt"), "1");
+      writeFileSync(join(dir, "sub", "deep.txt"), "1");
+      const before = new Date(Date.now() - 60_000);
+      for (const p of ["top.txt", "sub/deep.txt", "sub", "."])
+        utimesSync(join(dir, p), before, before);
+      const since = Date.now() - 30_000;
+      expect(changedSince(dir, since)).toEqual([]);
+      rmSync(join(dir, "sub", "deep.txt"));
+      expect(changedSince(dir, since)).toEqual(["sub"]);
+      rmSync(join(dir, "top.txt"));
+      expect(changedSince(dir, since).sort()).toEqual([".", "sub"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // A link is looked at itself: one that points nowhere is no change, and
+  // the walk does not leave the folder through it.
+  it("looks at a symbolic link, not at what it points to", () => {
+    const dir = mkdtempSync(join(tmpdir(), "evo-changed-"));
+    try {
+      symlinkSync(join(dir, "nowhere"), join(dir, "dangling"));
+      const before = new Date(Date.now() - 60_000);
+      lutimesSync(join(dir, "dangling"), before, before);
+      utimesSync(dir, before, before);
+      expect(changedSince(dir, Date.now() - 30_000)).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // A check that could not look must not pass.
+  it("fails when the folder cannot be read", () => {
+    expect(() => changedSince(join(tmpdir(), "evo-no-such-folder"), 0)).toThrow(
+      /ENOENT/
+    );
   });
 });
 

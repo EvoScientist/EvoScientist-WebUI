@@ -220,7 +220,13 @@ async function checkUiServer({ backendUrl, dataDir, configDir }) {
       port,
       log,
     });
-    cleanups.unshift(() => ui.stop());
+    let stopped = false;
+    const stopUi = async () => {
+      if (stopped) return;
+      stopped = true;
+      await ui.stop();
+    };
+    cleanups.unshift(stopUi);
     let uiEnded = false;
     void ui.exited.then(() => (uiEnded = true));
     await ui.whenAnswering(60_000);
@@ -250,10 +256,12 @@ async function checkUiServer({ backendUrl, dataDir, configDir }) {
       log.info("Dock: no icon for the UI server (a control process has one)");
     }
     if (uiEnded) fail("the UI server ended during the checks");
-    // The server leaves the app's folder as it was. On macOS that folder is
-    // inside the signed bundle: one file added there breaks the signature,
-    // and the system reports an app that was used once as modified.
-    const written = packaging.changedSince(resources, startedAt);
+    // The server leaves the app's folder as it was, also while it stops. On
+    // macOS that folder is the signed bundle: one file added there breaks
+    // the signature, and the system reports an app that was used once as
+    // modified.
+    await stopUi();
+    const written = packaging.changedSince(appDir, startedAt);
     if (written.length)
       fail(
         `the UI server wrote into the app's folder: ${written
