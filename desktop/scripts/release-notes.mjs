@@ -1,10 +1,13 @@
-// The desktop section of a release's notes (release-notes.md, filled):
-//   node scripts/release-notes.mjs section <installer>
-//     prints the filled section; runs after `npm run build` (compiled dist/);
-//   node scripts/release-notes.mjs merge <body file> <section file>
-//     prints the release body with that section in place. It runs in the job
-//     that holds the release token, which runs no npm code: it imports
-//     src/releaseNotes.ts itself (Node 24 strips the types), not dist/.
+// The desktop section of a release's notes:
+//   node scripts/release-notes.mjs section <installer or dmg>
+//     prints that platform's section, its template filled (release-notes.md
+//     for the Windows installer, release-notes-mac.md for the dmg); runs
+//     after `npm run build` (compiled dist/);
+//   node scripts/release-notes.mjs merge <body file> <section file>...
+//     prints the release body with those sections in place, in the order
+//     given. It runs in the job that holds the release token, which runs no
+//     npm code: it imports src/releaseNotes.ts itself (Node 24 strips the
+//     types), not dist/.
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -22,7 +25,7 @@ if (mode === "section" && args.length === 1) {
   );
   const range = pkg.evoscientist.coreRange;
   const section = notes.renderNotes(
-    readFileSync(join(root, "release-notes.md"), "utf8"),
+    readFileSync(join(root, notes.templateFor(args[0])), "utf8"),
     {
       version: rootPkg.version,
       sha256: createHash("sha256").update(readFileSync(args[0])).digest("hex"),
@@ -31,15 +34,19 @@ if (mode === "section" && args.length === 1) {
     }
   );
   process.stdout.write(`${section.trim()}\n`);
-} else if (mode === "merge" && args.length === 2) {
-  const { mergeNotes } = await import("../src/releaseNotes.ts");
+} else if (mode === "merge" && args.length >= 2) {
+  const { joinSections, mergeNotes } = await import("../src/releaseNotes.ts");
+  const [body, ...sections] = args;
   process.stdout.write(
-    mergeNotes(readFileSync(args[0], "utf8"), readFileSync(args[1], "utf8"))
+    mergeNotes(
+      readFileSync(body, "utf8"),
+      joinSections(sections.map((file) => readFileSync(file, "utf8")))
+    )
   );
 } else {
   console.error(
-    "usage: release-notes.mjs section <installer>\n" +
-      "       release-notes.mjs merge <body file> <section file>"
+    "usage: release-notes.mjs section <installer or dmg>\n" +
+      "       release-notes.mjs merge <body file> <section file>..."
   );
   process.exit(2);
 }
