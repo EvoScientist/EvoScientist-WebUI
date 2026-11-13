@@ -15,6 +15,7 @@ import {
   BrowserWindow,
   Menu,
   app,
+  autoUpdater as systemUpdater,
   clipboard,
   dialog,
   ipcMain,
@@ -44,7 +45,12 @@ import {
   createApp,
   type AppWindow,
 } from "./app";
-import { configureUpdater, createAppUpdate } from "./appUpdate";
+import {
+  canReplaceApp,
+  configureUpdater,
+  createAppUpdate,
+  updatesItself,
+} from "./appUpdate";
 import type { Manifest } from "./boot";
 import { backendRequest, checkWork, waitForMemoryWorkers } from "./closeCheck";
 import { writeCrashReport } from "./crash";
@@ -153,18 +159,20 @@ function readKeptMirror(): boolean | null {
   }
 }
 
-/** App updates from GitHub Releases: only an installed Windows app updates
- *  itself. electron-updater's own lines go to desktop.log too. */
-const appUpdate =
-  app.isPackaged && process.platform === "win32"
-    ? createAppUpdate({
-        updater: configureUpdater(autoUpdater, log),
-        newToken: () => new CancellationToken(),
-        online: () => net.isOnline(),
-        log,
-        onChange: (s) => desktop.updateChanged(s),
-      })
-    : null;
+/** App updates from GitHub Releases: only an installed app updates itself,
+ *  on Windows and on macOS. On macOS Electron's own updater installs what
+ *  electron-updater downloaded. electron-updater's own lines go to
+ *  desktop.log too. */
+const appUpdate = updatesItself(process.platform, app.isPackaged)
+  ? createAppUpdate({
+      updater: configureUpdater(autoUpdater, log),
+      native: process.platform === "darwin" ? systemUpdater : null,
+      newToken: () => new CancellationToken(),
+      online: () => net.isOnline(),
+      log,
+      onChange: (s) => desktop.updateChanged(s),
+    })
+  : null;
 
 const desktop = createApp({
   appVersion: app.getVersion(),
@@ -348,6 +356,10 @@ const desktop = createApp({
     }),
 
   appUpdate,
+  canReplaceApp:
+    process.platform === "darwin"
+      ? () => canReplaceApp(process.execPath)
+      : undefined,
   installQuitCancelled: () => {
     try {
       writeFileSync(

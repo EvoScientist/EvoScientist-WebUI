@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   errorScreen,
@@ -465,6 +467,54 @@ describe("core update screens (W03c)", () => {
     expect(errorScreen(err("setup_failed", { update: true }), ctx).title).toBe(
       "EvoScientist was updated, but some setup steps failed"
     );
+  });
+});
+
+// The status page (resources/status.js) and the WebUI's notice hold the
+// same notes for a "Restart to update" that did not happen.
+describe("the notes for a Restart to update that did not happen", () => {
+  const NOTES = {
+    busy: "The app is busy. Try again in a moment.",
+    not_ready: "The downloaded update could not be opened. Download it again.",
+    cannot_replace:
+      "EvoScientist can't update itself here. Move it into Applications, or download the new version.",
+  };
+  /** The entries of the object literal assigned to `name` in `source`. */
+  function notesIn(source: string, name: string): Record<string, string> {
+    const body = source.match(
+      new RegExp(`const ${name}[^=]*= \\{([\\s\\S]*?)\\n\\};`)
+    )?.[1];
+    expect(body, name).toBeTruthy();
+    return Object.fromEntries(
+      [...(body ?? "").matchAll(/(\w+):\s*"((?:[^"\\]|\\.)*)"/g)].map((m) => [
+        m[1],
+        m[2],
+      ])
+    );
+  }
+
+  it("are these on the status page", () => {
+    const js = readFileSync(
+      join(__dirname, "..", "resources", "status.js"),
+      "utf8"
+    );
+    expect(notesIn(js, "UPDATE_NOTES")).toEqual(NOTES);
+  });
+
+  it("are the same in the WebUI's notice", () => {
+    const tsx = readFileSync(
+      join(
+        __dirname,
+        "..",
+        "..",
+        "src",
+        "app",
+        "components",
+        "DesktopUpdateNotice.tsx"
+      ),
+      "utf8"
+    );
+    expect(notesIn(tsx, "RESTART_NOTES")).toEqual(NOTES);
   });
 });
 

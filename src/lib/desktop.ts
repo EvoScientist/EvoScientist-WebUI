@@ -29,9 +29,11 @@ export interface DesktopAppUpdate {
   download(): Promise<void>;
   /** "Restart to update": the app asks first while work runs, as at quit.
    *  On success the app ends; otherwise `busy`, `cancelled`, `not_ready`
-   *  (no downloaded installer, or it cannot be opened), `update_failed` (the
-   *  app started again on the current version), `not_allowed`, or `failed`
-   *  (no answer the bridge could read). */
+   *  (no downloaded update, or it cannot be opened), `cannot_replace` (macOS:
+   *  the app runs from the dmg or sits in a folder the account cannot
+   *  change; the app shows a box with the download page), `update_failed`
+   *  (the app started again on the current version), `not_allowed`, or
+   *  `failed` (no answer the bridge could read). */
   restartToUpdate(): Promise<RestartResult>;
 }
 

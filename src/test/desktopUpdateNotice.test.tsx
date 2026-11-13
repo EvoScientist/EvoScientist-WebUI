@@ -145,7 +145,7 @@ describe("DesktopUpdateNotice", () => {
     ).toBeTruthy();
     expect(
       await screen.findByText(
-        "The downloaded installer could not be opened. Download it again."
+        "The downloaded update could not be opened. Download it again."
       )
     ).toBeTruthy();
     await act(() => new Promise((r) => setTimeout(r, 50)));
@@ -153,6 +153,28 @@ describe("DesktopUpdateNotice", () => {
     expect(
       screen.queryByRole("button", { name: "Restart to update" })
     ).toBeNull();
+  });
+
+  // macOS: the app runs from the dmg or sits in a folder the account can't
+  // change. The app shows a box of its own; the offer stays, with the note.
+  it("says where the app can't update itself, and keeps the offer", async () => {
+    const app = fakeApp({ kind: "ready", version: "0.4.3" });
+    app.appUpdate.restartToUpdate.mockImplementationOnce(async () => ({
+      ok: false,
+      code: "cannot_replace",
+    }));
+    mount();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Restart to update" })
+    );
+    expect(
+      await screen.findByText(
+        "EvoScientist can't update itself here. Move it into Applications, or download the new version."
+      )
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Restart to update" })
+    ).toBeTruthy();
   });
 
   it("says when a download did not finish", async () => {
