@@ -120,7 +120,15 @@ describe("the signing secrets", () => {
     ).toEqual(["Check the signing secrets", SIGN]);
     for (const s of steps.filter((x) => x.uses))
       expect(JSON.stringify(s), s.uses).not.toContain("secrets.");
-    expect(JSON.stringify(jobs.mac.env ?? {})).not.toContain("secrets.");
+    // Nowhere else in the job (its `env`, its outputs, ...) nor in the
+    // workflow's own `env`.
+    const rest = {
+      ...jobs.mac,
+      steps: steps.filter(
+        (s) => s.name !== "Check the signing secrets" && s.name !== SIGN
+      ),
+    };
+    expect(JSON.stringify(rest)).not.toContain("secrets.");
     expect(JSON.stringify(workflow.env ?? {})).not.toContain("secrets.");
     expect(
       steps.find((s) => s.name === "Check the signing secrets")?.run
