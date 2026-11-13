@@ -151,6 +151,7 @@ function fakeWindow() {
     navigate: (u: string) => void (page = u),
     bringToFront: () => void calls.push("front"),
     focus: () => void calls.push("focus"),
+    hide: () => void calls.push("hide window"),
     hideAll: () => {
       calls.push("hide");
       return shownAgain;
@@ -166,6 +167,8 @@ function harness(over: Partial<AppDeps> = {}) {
   const uiLog = fakeLog("desktop-ui.log");
   const sessions: ReturnType<typeof fakeSession>[] = [];
   const uis: ReturnType<typeof fakeUi>[] = [];
+  /** The executable each UI server was started with. */
+  const uiExecs: string[] = [];
   const win = fakeWindow();
   const exit = vi.fn();
   const messageBox = vi.fn(async (_opts: MessageBoxOptions) => ({
@@ -234,6 +237,7 @@ function harness(over: Partial<AppDeps> = {}) {
     startUiServer: (opts) => {
       const u = fakeUi(opts.port);
       uis.push(u);
+      uiExecs.push(opts.execPath);
       return u.ui;
     },
     uiServerEnv: () => ({}),
@@ -277,6 +281,7 @@ function harness(over: Partial<AppDeps> = {}) {
     messageBox,
     sessions,
     uis,
+    uiExecs,
     later,
     setNow: (t: number) => void (now = t),
   };
@@ -376,6 +381,132 @@ describe("launch", () => {
       kind: "error",
       code: "ui_server_exited",
     });
+  });
+});
+
+// On macOS the login shell's PATH is read while the first screen is up; the
+// launch, which finds and runs EvoSci, waits for it.
+describe("start", () => {
+  const located = { path: "/bin/EvoSci", via: "uv-tool-bin" as const };
+
+  it("shows the first screen at once and launches after what it is given", async () => {
+    const locateEvoSci = vi.fn(async () => located);
+    const h = harness({ locateEvoSci });
+    const before = deferred<string | null>();
+    h.app.start(before.promise);
+    await settle();
+    expect(h.win.calls).toContain("status page");
+    expect(locateEvoSci).not.toHaveBeenCalled();
+    before.resolve(null);
+    await vi.waitFor(() => expect(locateEvoSci).toHaveBeenCalled());
+  });
+
+  it("says that it reads the shell's PATH while it waits for it", async () => {
+    // A profile can take seconds, up to the time limit of each shell.
+    const h = harness({ locateEvoSci: async () => located });
+    const path = deferred<string | null>();
+    h.app.start(path.promise);
+    await settle();
+    expect(h.app.screen).toEqual({
+      kind: "progress",
+      title: "Starting EvoScientist",
+      message: "Reading your shell's PATH...",
+    });
+    path.resolve(null);
+    await vi.waitFor(() =>
+      expect(h.app.screen).not.toMatchObject({
+        message: "Reading your shell's PATH...",
+      })
+    );
+  });
+
+  it("without a shell to ask, the first screen is the launch's", async () => {
+    const h = harness({ locateEvoSci: async () => located });
+    h.app.start();
+    // The screen is shown, not only held: the page it is on has been loaded.
+    expect(h.win.calls).toContain("status page");
+    expect(h.app.screen).toMatchObject({
+      kind: "progress",
+      message: "Checking the installed EvoScientist...",
+    });
+  });
+
+  it("gives the login shell's PATH to its own environment and to its children's, before it looks for EvoSci", async () => {
+    const env = { PATH: "/usr/bin:/bin" };
+    const childEnv = { PATH: "/usr/bin:/bin", HOME: "/Users/u" };
+    const seen: (string | undefined)[] = [];
+    const h = harness({
+      env,
+      childEnv,
+      locateEvoSci: async () => {
+        seen.push(env.PATH, childEnv.PATH);
+        return located;
+      },
+    });
+    h.app.start(Promise.resolve("/opt/homebrew/bin:/usr/bin:/bin"));
+    await vi.waitFor(() => expect(seen.length).toBe(2));
+    expect(seen).toEqual([
+      "/opt/homebrew/bin:/usr/bin:/bin",
+      "/opt/homebrew/bin:/usr/bin:/bin",
+    ]);
+    expect(h.deps.childEnv.HOME).toBe("/Users/u");
+  });
+
+  it("keeps the PATH it has when no shell answered", async () => {
+    const env = { PATH: "/usr/bin:/bin" };
+    const childEnv = { PATH: "/usr/bin:/bin" };
+    const locateEvoSci = vi.fn(async () => located);
+    const h = harness({ env, childEnv, locateEvoSci });
+    h.app.start(Promise.resolve(null));
+    await vi.waitFor(() => expect(locateEvoSci).toHaveBeenCalled());
+    expect([env.PATH, childEnv.PATH]).toEqual([
+      "/usr/bin:/bin",
+      "/usr/bin:/bin",
+    ]);
+  });
+
+  it("launches also when what it waits for fails", async () => {
+    const locateEvoSci = vi.fn(async () => located);
+    const h = harness({ locateEvoSci });
+    h.app.start(Promise.reject(new Error("no shell")));
+    await vi.waitFor(() => expect(locateEvoSci).toHaveBeenCalled());
+    expect(h.log.lines.join("\n")).toContain("no shell");
+  });
+
+  it("a restart from the menu during the wait does not launch ahead of it", async () => {
+    // The launch would find and run EvoSci with the PATH not in place yet.
+    const locateEvoSci = vi.fn(async () => located);
+    const h = harness({ locateEvoSci });
+    const before = deferred<string | null>();
+    h.app.start(before.promise);
+    await settle();
+    await h.app.restartBackend();
+    await h.app.launch();
+    expect(locateEvoSci).not.toHaveBeenCalled();
+    before.resolve(null);
+    await vi.waitFor(() => expect(locateEvoSci).toHaveBeenCalledTimes(1));
+  });
+
+  it("a quit during the wait is not followed by a launch", async () => {
+    const locateEvoSci = vi.fn(async () => located);
+    const h = harness({ locateEvoSci });
+    const before = deferred<string | null>();
+    h.app.start(before.promise);
+    await settle();
+    await h.app.requestQuit();
+    expect(h.exit).toHaveBeenCalledWith(false);
+    before.resolve(null);
+    await settle();
+    await settle();
+    expect(locateEvoSci).not.toHaveBeenCalled();
+    expect(h.sessions).toHaveLength(0);
+  });
+
+  it("launches at once without one", async () => {
+    const locateEvoSci = vi.fn(async () => located);
+    const h = harness({ locateEvoSci });
+    h.app.start();
+    await vi.waitFor(() => expect(locateEvoSci).toHaveBeenCalled());
   });
 });
 
@@ -1334,6 +1465,126 @@ describe("second launch", () => {
   });
 });
 
+// The UI server sets a process title, for which Node registers it with macOS:
+// as the app's own executable it got a second, blank Dock icon.
+describe("the executable that runs the UI server", () => {
+  const contents = "/Applications/EvoScientist.app/Contents";
+  const execPath = `${contents}/MacOS/EvoScientist`;
+  const helper = `${contents}/Frameworks/EvoScientist Helper.app/Contents/MacOS/EvoScientist Helper`;
+
+  const NO_HELPER =
+    "WARN the app's helper executable was not found: the UI server runs as the app's own executable and gets a Dock icon of its own";
+
+  it("is the app's helper on macOS", async () => {
+    const h = await launched({ platform: "darwin", execPath });
+    expect(h.uiExecs).toEqual([helper]);
+    expect(h.log.lines).not.toContain(NO_HELPER);
+  });
+
+  it("is the app's own executable on macOS when the helper is not there", async () => {
+    const h = await launched({
+      platform: "darwin",
+      execPath,
+      fileExists: (p) => p !== helper,
+    });
+    expect(h.uiExecs).toEqual([execPath]);
+    expect(h.log.lines).toContain(NO_HELPER);
+  });
+
+  it.each(["win32", "linux"] as const)(
+    "is the app's own executable on %s",
+    async (platform) => {
+      const h = await launched({ platform, execPath });
+      expect(h.uiExecs).toEqual([execPath]);
+      expect(h.log.lines).not.toContain(NO_HELPER);
+    }
+  );
+});
+
+// A Mac app stays in the Dock when its window is closed; the window comes
+// back with its page as it was.
+describe("the window on macOS", () => {
+  const mac = { platform: "darwin" as const };
+
+  it("closing the window hides it and stops nothing", async () => {
+    const h = await launched({ ...mac, checkWork: async () => BUSY });
+    h.app.closeWindow();
+    await settle();
+    expect(h.win.calls.at(-1)).toBe("hide window");
+    expect(h.app.quitState).toBe("none");
+    expect(h.messageBox).not.toHaveBeenCalled();
+    expect(h.uis[0].ui.stops).toBe(0);
+    expect(h.sessions[0].stopped.count).toBe(0);
+    expect(h.exit).not.toHaveBeenCalled();
+  });
+
+  it.each(["win32", "linux"] as const)(
+    "on %s closing the window quits, as before",
+    async (platform) => {
+      const h = await launched({ platform });
+      h.app.closeWindow();
+      await vi.waitFor(() => expect(h.exit).toHaveBeenCalledWith(false));
+      expect(h.win.calls).not.toContain("hide window");
+      expect(h.sessions[0].stopped.count).toBe(1);
+    }
+  );
+
+  it("a click on the Dock icon brings the hidden window back", async () => {
+    const h = await launched(mac);
+    h.app.windowShown();
+    h.app.closeWindow();
+    h.app.activate();
+    expect(h.win.calls.slice(-2)).toEqual(["hide window", "front"]);
+  });
+
+  it("an activation before the window was first shown does nothing", async () => {
+    const h = await launched(mac);
+    const before = h.win.calls.length;
+    h.app.activate();
+    expect(h.win.calls).toHaveLength(before);
+    h.app.windowShown();
+    h.app.activate();
+    expect(h.win.calls.at(-1)).toBe("front");
+  });
+
+  it("a click on the Dock icon during the memory wait cancels the quit and shows the window, also one closed before", async () => {
+    let cancelledFn: () => boolean = () => false;
+    const waiting = deferred<void>();
+    const h = await launched({
+      ...mac,
+      waitForMemoryWorkers: async (_url, cancelled) => {
+        cancelledFn = cancelled;
+        waiting.resolve();
+        while (!cancelledFn()) await settle();
+        return "cancelled" as MemoryWaitResult;
+      },
+    });
+    h.app.windowShown();
+    h.app.closeWindow();
+    const quit = h.app.requestQuit();
+    await waiting.promise;
+    h.app.activate();
+    await quit;
+    expect(h.win.shownAgain).toHaveBeenCalledTimes(1);
+    expect(h.win.calls.at(-1)).toBe("front");
+    expect(h.exit).not.toHaveBeenCalled();
+    expect(h.app.quitState).toBe("none");
+  });
+
+  it("a click on the Dock icon while stopping relaunches after the exit", async () => {
+    const gate = deferred<void>();
+    const h = await launched(mac);
+    h.app.windowShown();
+    h.sessions[0].stopped.gate = gate.promise;
+    const quit = h.app.requestQuit();
+    await vi.waitFor(() => expect(h.sessions[0].stopped.count).toBe(1));
+    h.app.activate();
+    gate.resolve();
+    await quit;
+    expect(h.exit).toHaveBeenCalledWith(true);
+  });
+});
+
 describe("status page actions", () => {
   /** A core older than the range: its screen has the install command. */
   async function onError(over: Partial<AppDeps> = {}) {
@@ -1466,6 +1717,31 @@ describe("first launch", () => {
     p.finish();
     await launch;
   });
+
+  it.each([
+    ["darwin", true],
+    ["linux", true],
+    ["win32", false],
+  ] as const)(
+    "on %s the install screen mentions the shell profile: %s",
+    async (platform, mentioned) => {
+      const p = pendingRun({ exit: { code: 0, signal: null }, lines: [] });
+      const f = freshMachine({
+        platform,
+        keptMirror: () => false,
+        runInstall: () => p.run,
+      });
+      const launch = f.app.launch();
+      await vi.waitFor(() =>
+        expect(f.app.screen).toMatchObject({ kind: "install" })
+      );
+      const message = (f.app.screen as { message: string }).message;
+      expect(message.includes("shell profile")).toBe(mentioned);
+      f.state.installed = true;
+      p.finish();
+      await launch;
+    }
+  );
 
   it("closing during the install asks; Cancel lets it go on, Quit stops its tree and exits", async () => {
     const p = pendingRun({ exit: { code: 1, signal: null }, lines: [] });

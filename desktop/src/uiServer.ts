@@ -1,9 +1,10 @@
 // The bundled WebUI's server, run with Electron's own Node
 // (ELECTRON_RUN_AS_NODE) through resources/ui-entry.mjs, on a fixed loopback
 // port so the WebUI's localStorage (its origin includes the port) survives
-// between launches.
+// between launches. On macOS the app's helper executable runs it
+// (uiServerExec).
 import { createServer } from "node:net";
-import { basename, dirname } from "node:path";
+import { basename, dirname, posix } from "node:path";
 import { answers } from "./loopback";
 import {
   killTree,
@@ -91,6 +92,43 @@ export async function pickUiPort(
   const free = await tryListen(0);
   if (free === null) throw new Error("no free loopback port");
   return { port: free, fallback: true };
+}
+
+/**
+ * The executable that runs the UI server as Node. On macOS it is the app's
+ * helper (`<App>.app/Contents/Frameworks/<Name> Helper.app/Contents/MacOS/
+ * <Name> Helper`), not the app's own executable: the WebUI's server gives
+ * itself a process title, and for that Node registers the process with
+ * macOS. A process of the app's own executable is registered as an
+ * application of its own and gets a second icon in the Dock, a blank one
+ * under the app's name; the helper is registered too, but as one without a
+ * Dock icon (`LSUIElement` in its Info.plist). Elsewhere, and when there is
+ * no helper (the executable is not in an app bundle), it is `execPath`
+ * itself.
+ */
+export function uiServerExec(
+  execPath: string,
+  platform: NodeJS.Platform,
+  exists: (path: string) => boolean
+): string {
+  if (platform !== "darwin") return execPath;
+  const macos = posix.dirname(execPath);
+  const contents = posix.dirname(macos);
+  if (
+    posix.basename(macos) !== "MacOS" ||
+    posix.basename(contents) !== "Contents"
+  )
+    return execPath;
+  const name = `${posix.basename(execPath)} Helper`;
+  const helper = posix.join(
+    contents,
+    "Frameworks",
+    `${name}.app`,
+    "Contents",
+    "MacOS",
+    name
+  );
+  return exists(helper) ? helper : execPath;
 }
 
 export interface UiServer {

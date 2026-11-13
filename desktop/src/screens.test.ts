@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   errorScreen,
+  SHELL_PROFILE_NOTE,
   installScreen,
   mirrorQuestion,
   progressScreen,
@@ -333,6 +334,28 @@ describe("core update screens (W03c)", () => {
       expect(s.lines?.join(" ")).not.toMatch(/nothing is changed/);
     }
     expect(updateScreen(retry).actions).toEqual(["cancel_update"]);
+  });
+
+  // The install script adds uv's tool folder to PATH through the shell
+  // profile (uv tool update-shell) unless it is on PATH already.
+  it("says that the install adds EvoSci to the shell profile's PATH, where it does", () => {
+    const note =
+      "So that EvoSci also works in a terminal, the install adds its folder to PATH in your shell profile, unless it is already there.";
+    expect(SHELL_PROFILE_NOTE).toBe(note);
+    for (const state of [
+      { repair: false },
+      { repair: true },
+      { repair: true, update: true },
+    ]) {
+      const plain = installScreen({ ...state, lines: [] }).message;
+      expect(plain).not.toContain("shell profile");
+      expect(
+        installScreen({ ...state, lines: [], shellProfile: true }).message
+      ).toBe(`${plain} ${note}`);
+      expect(
+        installScreen({ ...state, lines: [], shellProfile: false }).message
+      ).toBe(plain);
+    }
   });
 
   it("the script as an update has its own title", () => {

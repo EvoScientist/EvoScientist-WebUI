@@ -103,12 +103,26 @@ export function mirrorQuestion(): QuestionScreen {
   };
 }
 
-/** The install script's progress: the last lines of its output. */
+/** On macOS and Linux the install script puts uv's tool folder on PATH
+ *  through the shell profile (`uv tool update-shell`), unless it is on PATH
+ *  already. */
+export const SHELL_PROFILE_NOTE =
+  "So that EvoSci also works in a terminal, the install adds its folder to PATH in your shell profile, unless it is already there.";
+
+/** The install script's progress: the last lines of its output.
+ *  `shellProfile`: the script may edit the shell profile, and the screen
+ *  says so. */
 export function installScreen(state: {
   repair: boolean;
   update?: boolean;
   lines: string[];
+  shellProfile?: boolean;
 }): InstallScreen {
+  const message = state.update
+    ? "Installing the EvoScientist release this app needs; your settings are kept. This takes a few minutes."
+    : state.repair
+    ? "The installed EvoScientist does not run. Installing it again; your settings are kept."
+    : "Downloading and installing EvoScientist. This takes a few minutes.";
   return {
     kind: "install",
     title: state.update
@@ -116,11 +130,7 @@ export function installScreen(state: {
       : state.repair
       ? "Repairing EvoScientist"
       : "Installing EvoScientist",
-    message: state.update
-      ? "Installing the EvoScientist release this app needs; your settings are kept. This takes a few minutes."
-      : state.repair
-      ? "The installed EvoScientist does not run. Installing it again; your settings are kept."
-      : "Downloading and installing EvoScientist. This takes a few minutes.",
+    message: state.shellProfile ? `${message} ${SHELL_PROFILE_NOTE}` : message,
     output: state.lines,
   };
 }
@@ -203,10 +213,16 @@ export function setupScreen(stages: Stage[]): SetupScreen {
 
 /** The progress screen for a launch phase, the UI start or a stop. */
 export function progressScreen(
-  state: BootState | "starting_ui" | "stopping" | "preparing_update"
+  state:
+    | BootState
+    | "starting_ui"
+    | "stopping"
+    | "preparing_update"
+    | "reading_path"
 ): ProgressScreen {
   const s = typeof state === "string" ? state : state.phase;
   const text: Record<string, [string, string]> = {
+    reading_path: ["Starting EvoScientist", "Reading your shell's PATH..."],
     checking_core: [
       "Starting EvoScientist",
       "Checking the installed EvoScientist...",

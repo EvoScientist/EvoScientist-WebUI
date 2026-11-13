@@ -10,6 +10,7 @@ import {
   pickUiPort,
   startUiServer,
   uiServerEnv,
+  uiServerExec,
   withLoopbackNoProxy,
 } from "./uiServer";
 
@@ -155,5 +156,61 @@ describe("the entry script", () => {
     expect(await withTimeout(exit, 5_000)).toBe(0);
     child.stdin?.destroy();
     rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("uiServerExec", () => {
+  const contents = "/Applications/EvoScientist.app/Contents";
+  const exe = `${contents}/MacOS/EvoScientist`;
+  const helper = `${contents}/Frameworks/EvoScientist Helper.app/Contents/MacOS/EvoScientist Helper`;
+  const never = () => {
+    throw new Error("not asked off macOS or outside an app bundle");
+  };
+
+  it("is the app's helper on macOS, which the Dock never shows", () => {
+    const asked: string[] = [];
+    const exists = (path: string) => {
+      asked.push(path);
+      return true;
+    };
+    expect(uiServerExec(exe, "darwin", exists)).toBe(helper);
+    expect(asked).toEqual([helper]);
+  });
+
+  it("names the helper after the executable (Electron in development)", () => {
+    const dist = "/repo/desktop/node_modules/electron/dist/Electron.app";
+    expect(
+      uiServerExec(`${dist}/Contents/MacOS/Electron`, "darwin", () => true)
+    ).toBe(
+      `${dist}/Contents/Frameworks/Electron Helper.app/Contents/MacOS/Electron Helper`
+    );
+  });
+
+  it("is the app's own executable when the helper is not there", () => {
+    expect(uiServerExec(exe, "darwin", () => false)).toBe(exe);
+  });
+
+  it("is the app's own executable when it is not inside an app bundle", () => {
+    expect(uiServerExec("/usr/local/bin/electron", "darwin", never)).toBe(
+      "/usr/local/bin/electron"
+    );
+    expect(uiServerExec("/opt/MacOS/EvoScientist", "darwin", never)).toBe(
+      "/opt/MacOS/EvoScientist"
+    );
+    expect(uiServerExec("/x/Contents/bin/electron", "darwin", never)).toBe(
+      "/x/Contents/bin/electron"
+    );
+  });
+
+  it("is the app's own executable off macOS", () => {
+    const win =
+      "C:\\Users\\a\\AppData\\Local\\Programs\\EvoScientist\\EvoScientist.exe";
+    expect(uiServerExec(win, "win32", never)).toBe(win);
+    expect(uiServerExec("/opt/EvoScientist/evoscientist", "linux", never)).toBe(
+      "/opt/EvoScientist/evoscientist"
+    );
+    // A path shaped like a Mac app's makes no difference off macOS.
+    expect(uiServerExec(exe, "win32", never)).toBe(exe);
+    expect(uiServerExec(exe, "linux", never)).toBe(exe);
   });
 });

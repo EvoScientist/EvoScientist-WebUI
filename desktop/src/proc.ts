@@ -7,6 +7,8 @@
 // pipes it inherited after `EvoSci.exe` has exited, and a pipe nobody reads
 // blocks its writer after about 128 KiB (measured on windows-latest).
 import {
+  execFile,
+  execFileSync,
   spawn,
   type ChildProcess,
   type SpawnOptions,
@@ -115,18 +117,105 @@ export function withTimeout<T>(
   ]);
 }
 
+/** One line of `ps`: a process, its parent and when it started. */
+export interface PsRow {
+  pid: number;
+  ppid: number;
+  /** As `ps` prints it; only compared with itself, never parsed. */
+  started: string;
+}
+
+/** The rows of `ps -axo pid=,ppid=,lstart=`. */
+export function parsePs(stdout: string): PsRow[] {
+  const rows: PsRow[] = [];
+  for (const line of stdout.split("\n")) {
+    const m = /^\s*(\d+)\s+(\d+)\s+(\S.*?)\s*$/.exec(line);
+    if (m) rows.push({ pid: Number(m[1]), ppid: Number(m[2]), started: m[3] });
+  }
+  return rows;
+}
+
+/** The process `root` and everything below it by parent links, which hold
+ *  across sessions and process groups. Empty when `root` is not listed. */
+export function treeOf(rows: PsRow[], root: number): PsRow[] {
+  const byParent = new Map<number, PsRow[]>();
+  for (const r of rows) {
+    const list = byParent.get(r.ppid);
+    if (list) list.push(r);
+    else byParent.set(r.ppid, [r]);
+  }
+  const first = rows.find((r) => r.pid === root);
+  if (!first) return [];
+  const tree = [first];
+  const seen = new Set([root]);
+  for (let i = 0; i < tree.length; i++)
+    for (const child of byParent.get(tree[i].pid) ?? [])
+      if (!seen.has(child.pid)) {
+        seen.add(child.pid);
+        tree.push(child);
+      }
+  return tree;
+}
+
+/** `ps`. On macOS by its full path: the app replaces its PATH with the login
+ *  shell's, where another `ps` may come first. */
+export const PS = process.platform === "darwin" ? "/bin/ps" : "ps";
+
+/** Every process of the system (macOS and Linux), or null when `ps` fails
+ *  or takes longer than 5 s. */
+export function listProcesses(): Promise<PsRow[] | null> {
+  return new Promise((resolve) => {
+    execFile(
+      PS,
+      ["-axo", "pid=,ppid=,lstart="],
+      { timeout: 5_000, maxBuffer: 16 * 1024 * 1024, encoding: "utf8" },
+      (error, stdout) => resolve(error ? null : parsePs(stdout))
+    );
+  });
+}
+
+/** `listProcesses` without waiting, for a caller that must finish in one
+ *  step (a process that is about to exit). It blocks the caller, so `ps`
+ *  gets 1 s (it takes some tens of milliseconds). Null when `ps` fails or
+ *  takes longer. */
+export function listProcessesNow(): PsRow[] | null {
+  try {
+    return parsePs(
+      execFileSync(PS, ["-axo", "pid=,ppid=,lstart="], {
+        encoding: "utf8",
+        timeout: 1_000,
+        maxBuffer: 16 * 1024 * 1024,
+      })
+    );
+  } catch {
+    return null;
+  }
+}
+
+/** How long a tree gets between SIGTERM and SIGKILL. */
+export const TREE_GRACE_MS = 5_000;
+
 /**
- * Ends a process. On Windows `taskkill /T /F` ends its descendants too, itself
- * started with `windowsHide`. Elsewhere the process gets SIGTERM, then SIGKILL
- * after a grace period; with `group` (a child started with `group: true`) the
- * signals go to its whole process group, else only to the process (the
- * backend's tree is not covered on macOS and Linux yet).
+ * Ends a process and everything it started. On Windows `taskkill /T /F` ends
+ * the descendants, itself started with `windowsHide`. Elsewhere the tree is
+ * recorded first (once a parent is gone its children hang under pid 1 and
+ * cannot be found), then every process in it gets SIGTERM, and what still
+ * runs after the grace period gets SIGKILL. The backend's server is a child
+ * of `EvoSci deploy` in a session of its own, so a signal to deploy's
+ * process group alone would leave it running. A recorded pid is sent SIGKILL
+ * only while `ps` still shows it with the same start time, the process
+ * itself included, so a pid the system reused meanwhile is left alone. With
+ * `group` (a child started with `group: true`) the signals for the process
+ * go to its whole process group. Without a process list only the process
+ * (or its group) is signalled, as before the tree was read. A process the
+ * list does not show is left alone; a group is still ended.
  */
 export async function killTree(
   pid: number,
   log: Logger,
   platform: NodeJS.Platform = process.platform,
-  group = false
+  group = false,
+  list: () => Promise<PsRow[] | null> = listProcesses
 ): Promise<void> {
   if (platform === "win32") {
     const k = run("taskkill.exe", ["/T", "/F", "/PID", String(pid)], {
@@ -143,30 +232,75 @@ export async function killTree(
     );
     return;
   }
+  const rows = await list();
+  const self = rows?.find((r) => r.pid === pid) ?? null;
+  const below = treeOf(rows ?? [], pid).filter((r) => r.pid !== pid);
   // A negative pid signals the process group whose leader is `pid`.
   const target = group ? -pid : pid;
   const what = group ? `process group ${pid}` : `pid ${pid}`;
-  const alive = () => {
+  const signal = (to: number, name: NodeJS.Signals | 0) => {
     try {
-      process.kill(target, 0);
+      process.kill(to, name);
       return true;
     } catch {
       return false;
     }
   };
-  try {
-    process.kill(target, "SIGTERM");
-  } catch {
-    return;
-  }
-  for (let i = 0; i < 50 && alive(); i++) await sleep(100);
-  if (alive()) {
-    log.warn(`${what} did not end on SIGTERM; sending SIGKILL`);
-    try {
-      process.kill(target, "SIGKILL");
-    } catch {
-      // already gone
+  if (!rows) log.warn(`no process list: ending only ${what}`);
+  else if (!self && signal(target, 0)) {
+    // ps lists every process, so a pid that runs but is not listed was
+    // given to another process after the one that was started had ended.
+    if (!group) {
+      log.warn(`pid ${pid} is not in the process list; left alone`);
+      return;
     }
+    log.warn(
+      `pid ${pid} is not in the process list: ending only its process group`
+    );
+  }
+  const running = () =>
+    signal(target, 0) || below.some((r) => signal(r.pid, 0));
+  const reached = signal(target, "SIGTERM");
+  for (const r of below) signal(r.pid, "SIGTERM");
+  if (!reached && below.length === 0) return;
+  for (let i = 0; i < TREE_GRACE_MS / 100 && running(); i++) await sleep(100);
+  if (!running()) return;
+  // SIGKILL only for what is still the process that was recorded: listed
+  // under the same pid with the same start time. A recorded pid that is not
+  // listed any more has ended.
+  const now = self || below.length ? await list() : null;
+  const same = (r: PsRow) =>
+    now?.some((n) => n.pid === r.pid && n.started === r.started) === true;
+  const listed = (r: PsRow) => now?.some((n) => n.pid === r.pid) === true;
+  if (signal(target, 0)) {
+    // Not recorded, or no second list: as before the tree was read. A group
+    // whose leader has ended is ended too, also as before: a group keeps its
+    // number while it has members. Left alone is the one case the list can
+    // show: the leader's pid belongs to a process that started later.
+    if (!self || !now || same(self) || (group && !listed(self))) {
+      log.warn(`${what} did not end on SIGTERM; sending SIGKILL`);
+      signal(target, "SIGKILL");
+    } else if (listed(self)) {
+      log.warn(`pid ${pid} is not the same process any more; left alone`);
+    } else {
+      log.warn(
+        `pid ${pid} still runs but is not in the process list any more; left alone`
+      );
+    }
+  }
+  for (const r of below) {
+    if (!signal(r.pid, 0)) continue;
+    if (!now)
+      log.warn(
+        `no process list: pid ${r.pid} (started by ${pid}) is left running`
+      );
+    else if (same(r)) {
+      log.warn(`pid ${r.pid} (started by ${pid}) did not end; sending SIGKILL`);
+      signal(r.pid, "SIGKILL");
+    } else if (listed(r))
+      log.warn(
+        `pid ${r.pid} is not the process recorded under ${pid} any more; left alone`
+      );
   }
 }
 

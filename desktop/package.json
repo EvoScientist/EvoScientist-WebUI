@@ -93,7 +93,26 @@
       "signAndEditExecutable": false
     },
     "mac": {
-      "target": "dir"
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "artifactName": "EvoScientist-${arch}-mac.${ext}",
+      "icon": "assets/mac/EvoScientist.icns"
+    },
+    "dmg": {
+      "artifactName": "EvoScientist-${arch}.${ext}",
+      "writeUpdateInfo": false
     },
     "linux": {
       "target": "dir"

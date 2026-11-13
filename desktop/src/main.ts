@@ -2,9 +2,11 @@
 // It runs the launch sequence (boot.ts) on the installed core, serves the
 // bundled WebUI with Electron's own Node (uiServer.ts) and shows it in a
 // sandboxed window. While the UI is not up, the window shows a static status
-// page (resources/status.html) that never calls the backend. Closing checks
+// page (resources/status.html) that never calls the backend. Quitting checks
 // for work on a backend the app started, hides the window, waits for the
-// memory workers, then stops the UI server and that backend.
+// memory workers, then stops the UI server and that backend. Closing the
+// window does the same on Windows and Linux; on macOS it only hides the
+// window, and a click on the Dock icon brings it back.
 //
 // The flows and their state live in app.ts; this file builds their
 // dependencies from Electron and the process helpers, and wires Electron's
@@ -34,6 +36,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { userInfo } from "node:os";
 import { join } from "node:path";
 import {
   QUIT_FOR_INSTALL,
@@ -68,6 +71,7 @@ import {
   updateLockHeld,
 } from "./install";
 import { DESKTOP_LOG, DESKTOP_UI_LOG, FileLog } from "./logs";
+import { endProbes, readLoginPath } from "./loginPath";
 import { answers } from "./loopback";
 import {
   folderEnv,
@@ -178,8 +182,15 @@ const desktop = createApp({
   log,
   uiLog,
 
+  // On the window. On macOS only while it is visible and staying: the user
+  // may have closed (hidden) it, or it is leaving full screen to be hidden,
+  // and a sheet on a hidden window would not be seen.
   messageBox: (opts) =>
-    win ? dialog.showMessageBox(win, opts) : dialog.showMessageBox(opts),
+    win &&
+    (process.platform !== "darwin" ||
+      (win.isVisible() && !hidingAfterFullScreen.has(win)))
+      ? dialog.showMessageBox(win, opts)
+      : dialog.showMessageBox(opts),
   chooseFolder: async (title, defaultPath) => {
     const opts = {
       title,
@@ -199,6 +210,9 @@ const desktop = createApp({
   copyText: (t) => clipboard.writeText(t),
   documentsDir: () => app.getPath("documents"),
   exit: (relaunch) => {
+    // A login shell that is still being asked for its PATH (a profile that
+    // hangs) would stay behind.
+    endProbes();
     if (relaunch) app.relaunch();
     app.exit(0);
   },
@@ -349,6 +363,28 @@ const desktop = createApp({
     waitForMemoryWorkers(backendRequest(url), { cancelled }),
 });
 
+/** Windows that hide once they have left full screen. */
+const hidingAfterFullScreen = new WeakSet<BrowserWindow>();
+
+/**
+ * Hides a window. On macOS a window in full screen leaves full screen first:
+ * hidden where it is, it leaves its empty space behind. `stayShown` drops a
+ * hide that still waits for that, when the window is asked for meanwhile.
+ */
+function hideWindow(w: BrowserWindow): void {
+  if (process.platform !== "darwin" || !w.isFullScreen()) return w.hide();
+  if (hidingAfterFullScreen.has(w)) return;
+  hidingAfterFullScreen.add(w);
+  w.once("leave-full-screen", () => {
+    if (hidingAfterFullScreen.delete(w) && !w.isDestroyed()) w.hide();
+  });
+  w.setFullScreen(false);
+}
+
+function stayShown(w: BrowserWindow): void {
+  hidingAfterFullScreen.delete(w);
+}
+
 /** The window as the controller drives it. */
 function appWindow(w: BrowserWindow): AppWindow {
   return {
@@ -357,16 +393,22 @@ function appWindow(w: BrowserWindow): AppWindow {
     loadUrl: (url) => w.loadURL(url),
     currentUrl: () => w.webContents.getURL(),
     bringToFront: () => {
+      stayShown(w);
       if (w.isMinimized()) w.restore();
       w.show();
       w.focus();
     },
     focus: () => w.focus(),
+    hide: () => hideWindow(w),
     hideAll: () => {
       const shown = BrowserWindow.getAllWindows().filter((x) => x.isVisible());
-      for (const x of shown) x.hide();
+      for (const x of shown) hideWindow(x);
       return () => {
-        for (const x of shown) if (!x.isDestroyed()) x.show();
+        for (const x of shown)
+          if (!x.isDestroyed()) {
+            stayShown(x);
+            x.show();
+          }
       };
     },
     // Each page's preload listens on its own channel.
@@ -401,7 +443,8 @@ function guard(contents: WebContents): void {
   });
 }
 
-/** The one app window, hidden instead of closed until the app exits. */
+/** The one app window, hidden instead of closed until the app exits. On
+ *  macOS closing it only hides it; elsewhere closing it quits the app. */
 function createWindow(): BrowserWindow {
   const w = new BrowserWindow({
     width: 1280,
@@ -413,11 +456,14 @@ function createWindow(): BrowserWindow {
     backgroundColor: nativeTheme.shouldUseDarkColors ? "#24221e" : "#faf9f4",
     webPreferences: WEB_PREFERENCES,
   });
-  w.once("ready-to-show", () => w.show());
+  w.once("ready-to-show", () => {
+    w.show();
+    desktop.windowShown();
+  });
   w.on("close", (e) => {
     if (desktop.exiting) return;
     e.preventDefault();
-    void desktop.requestQuit();
+    desktop.closeWindow();
   });
   w.on("query-session-end", (e) => desktop.querySessionEnd(e.reasons));
   w.on("session-end", (e) =>
@@ -537,6 +583,23 @@ function senderOrigin(e: IpcMainEvent | IpcMainInvokeEvent): string | null {
 
 // --- Start -------------------------------------------------------------------
 
+/**
+ * The login shell's PATH for the app and its children, or null when no shell
+ * answered. A Mac app opened from Finder or the Dock has launchd's minimal
+ * PATH, so the packaged app asks the login shell and uses its PATH however
+ * it was opened (`start` puts it in place); in development the terminal's
+ * PATH stays.
+ */
+async function loginShellPath(): Promise<string | null> {
+  let accountShell: string | null = null;
+  try {
+    accountShell = userInfo().shell;
+  } catch (e) {
+    log.warn(`cannot read the account's shell: ${e}`);
+  }
+  return (await readLoginPath({ accountShell, log }))?.path ?? null;
+}
+
 /** Logs the start, wires the app's events and opens the window. */
 function start(): void {
   log.info(
@@ -547,6 +610,11 @@ function start(): void {
     }, core range ${manifest.coreRange} (installs ${INSTALL_VERSION ?? "none"})`
   );
   log.info(`data ${folders.dataDir}, config ${folders.configDir}`);
+  // Runs while Electron gets ready and the first screen comes up.
+  const loginPath =
+    app.isPackaged && process.platform === "darwin"
+      ? loginShellPath()
+      : undefined;
   process.on("uncaughtException", (e) => {
     log.warn(`uncaught: ${e.stack ?? e}`);
     const report = desktop.crashReport("uncaught_exception", String(e));
@@ -562,6 +630,8 @@ function start(): void {
   app.on("second-instance", (_e, argv) =>
     desktop.secondInstance(argv.includes(QUIT_FOR_INSTALL))
   );
+  // macOS: a click on the Dock icon, or the app opened again from Finder.
+  app.on("activate", () => desktop.activate());
   app.on("before-quit", (e) => {
     if (desktop.exiting) return;
     e.preventDefault();
@@ -587,7 +657,7 @@ function start(): void {
     buildMenu();
     win = createWindow();
     desktop.attachWindow(appWindow(win));
-    desktop.start();
+    desktop.start(loginPath);
   });
 }
 

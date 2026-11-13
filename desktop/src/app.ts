@@ -56,7 +56,7 @@ import {
   type ErrorScreen,
   type Screen,
 } from "./screens";
-import type { UiServer } from "./uiServer";
+import { uiServerExec, type UiServer } from "./uiServer";
 import type { AppUpdate, UpdateState } from "./appUpdate";
 import type { UpdateRun, UpdateView } from "./update";
 
@@ -86,6 +86,9 @@ export interface AppWindow {
   /** Restores, shows and focuses the window (a second launch). */
   bringToFront(): void;
   focus(): void;
+  /** Hides the app's own window, with its page left as it is (closing the
+   *  window on macOS). */
+  hide(): void;
   /** Hides every visible window of the app, the ones the UI opened too, and
    *  returns a function that shows them again. */
   hideAll(): () => void;
@@ -111,7 +114,8 @@ export interface AppDeps {
   /** The bundled WebUI's `server.js` and the entry script that runs it. */
   uiServerJs: string;
   uiEntry: string;
-  /** Electron's binary, which runs the UI server as Node. */
+  /** Electron's binary. It runs the UI server as Node, on macOS through the
+   *  app's helper (`uiServerExec`). */
   execPath: string;
   /** The bundled WebUI's version, read again for each crash report: when the
    *  bundle cannot be read (a missing server.js), the manifest's uiVersion has
@@ -247,8 +251,13 @@ const QUIET_PHASES: ReadonlySet<BootState["phase"]> = new Set([
 
 export interface App {
   attachWindow(w: AppWindow): void;
-  /** Shows the first screen and starts the launch. */
-  start(): void;
+  /** Shows the first screen and starts the launch. With `loginPath` (the
+   *  login shell's PATH, being read: the packaged macOS app) the launch
+   *  waits for it, the screen says so meanwhile, and the PATH it gives
+   *  replaces the app's own and its children's, which the launch needs to
+   *  find and run EvoSci. Null (no shell answered) keeps the PATH; a failure
+   *  is only logged. */
+  start(loginPath?: Promise<string | null>): void;
   launch(): Promise<void>;
   restartBackend(): Promise<void>;
   /** The bridge's restart, for the WebUI's settings page. */
@@ -280,6 +289,17 @@ export interface App {
   /** A second launch; `forInstall` when the installer asks the app to quit
    *  (`--quit-for-install`). */
   secondInstance(forInstall?: boolean): void;
+  /** The user closes the app's window. On macOS the window only hides: the
+   *  app stays in the Dock with its backend and its page, as Mac apps do.
+   *  Elsewhere closing the window quits the app (`requestQuit`). */
+  closeWindow(): void;
+  /** The app's window was shown for the first time. */
+  windowShown(): void;
+  /** macOS: a click on the Dock icon, or the app opened again. Handled as a
+   *  second launch, so it shows the same window and cancels a quit that
+   *  waits for the memory workers. Ignored until the window was first
+   *  shown: macOS can send it while the app starts. */
+  activate(): void;
   querySessionEnd(reasons: string[]): void;
   endOfSession(why: string): void;
   /** The current screen, for `status:get`. */
@@ -325,6 +345,7 @@ export function createApp(deps: AppDeps): App {
   const sessionEnd = deps.sessionEnd ?? new SessionEnd();
 
   let win: AppWindow | null = null;
+  let windowWasShown = false;
   let screen: Screen = progressScreen({ phase: "checking_core" });
   let onStatusPage = false;
   let evosci: string | null = null;
@@ -508,7 +529,9 @@ export function createApp(deps: AppDeps): App {
       case "asking_update":
         return;
       case "installing":
-        return showSoon(installScreen(state));
+        return showSoon(
+          installScreen({ ...state, shellProfile: deps.platform !== "win32" })
+        );
       case "updating":
         updateView = state.view;
         return showSoon(updateScreen(state.view, quitAfterUpdate));
@@ -802,8 +825,17 @@ export function createApp(deps: AppDeps): App {
       );
     if (!deps.fileExists(deps.uiServerJs))
       throw new Error(`the bundled WebUI is missing: ${deps.uiServerJs}`);
+    const execPath = uiServerExec(
+      deps.execPath,
+      deps.platform,
+      deps.fileExists
+    );
+    if (deps.platform === "darwin" && execPath === deps.execPath)
+      log.warn(
+        "the app's helper executable was not found: the UI server runs as the app's own executable and gets a Dock icon of its own"
+      );
     const started = deps.startUiServer({
-      execPath: deps.execPath,
+      execPath,
       entryScript: deps.uiEntry,
       cwd: folders.dataDir,
       env: deps.uiServerEnv({
@@ -1395,7 +1427,10 @@ export function createApp(deps: AppDeps): App {
           quitState = "none";
           log.info("second launch during the wait: quit cancelled");
           showAgain();
-          win?.focus();
+          // On macOS the user may have closed the window before quitting;
+          // the click on the Dock icon that cancelled the quit asks for it.
+          if (deps.platform === "darwin") win?.bringToFront();
+          else win?.focus();
           resumeAfterCancelledQuit();
           return;
         }
@@ -1565,12 +1600,29 @@ export function createApp(deps: AppDeps): App {
 
   return {
     attachWindow: (w) => void (win = w),
-    start: () => {
-      showScreen(screen);
+    start: (loginPath) => {
+      // A shell profile can take seconds, up to the time limit of each shell.
+      showScreen(loginPath ? progressScreen("reading_path") : screen);
       // Also when the launch stops on the status page: `core_too_new` tells
       // the user to update the app.
       deps.appUpdate?.start();
-      void launch();
+      // The wait counts as part of the launch, so a restart from the menu
+      // meanwhile does not launch ahead of it.
+      void exclusive(async () => {
+        try {
+          const path = await loginPath;
+          if (path) {
+            // The UI server's environment is built from the app's own, the
+            // EvoSci children's from childEnv, which also is where EvoSci
+            // and uv are looked for.
+            deps.env.PATH = path;
+            deps.childEnv.PATH = path;
+          }
+        } catch (e) {
+          log.warn(`before the launch: ${e}`);
+        }
+        if (quitState === "none") await launchLocked();
+      });
     },
     launch,
     restartBackend,
@@ -1581,6 +1633,17 @@ export function createApp(deps: AppDeps): App {
     nativeError,
     crashReport,
     secondInstance,
+    closeWindow: () => {
+      if (deps.platform !== "darwin") return void requestQuit();
+      log.info("window closed: hidden, the app keeps running");
+      win?.hide();
+    },
+    windowShown: () => void (windowWasShown = true),
+    activate: () => {
+      if (!windowWasShown) return;
+      log.info("activated (the Dock icon, or the app opened again)");
+      secondInstance();
+    },
     querySessionEnd: (reasons) => {
       sessionEnd.queried();
       log.info(`query-session-end (${reasons.join(",")})`);

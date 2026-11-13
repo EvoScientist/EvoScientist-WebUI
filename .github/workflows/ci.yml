@@ -53,7 +53,9 @@ jobs:
       fail-fast: false
       matrix:
         # Windows runs in desktop.yml, with the build and the smoke test.
-        os: [ubuntu-latest]
+        # macOS runs here too: the tests of the process tree, the process
+        # groups and the login shell are skipped on Windows.
+        os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     # A hung test blocks no one for hours.
     timeout-minutes: 15

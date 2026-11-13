@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   FIRST_RELEASE_CORE,
+  appLayout,
   releaseFlagProblem,
   tagProblem,
   versionArgs,
@@ -86,6 +87,43 @@ describe("releaseFlagProblem", () => {
   });
 });
 
+// Where electron-builder puts the unpacked app, for the smoke test.
+describe("appLayout", () => {
+  it("is the unpacked folder, the executable and the resources per platform", () => {
+    expect(appLayout("win32", "C:/r")).toEqual({
+      appDir: join("C:/r", "win-unpacked"),
+      exe: join("C:/r", "win-unpacked", "EvoScientist.exe"),
+      resources: join("C:/r", "win-unpacked", "resources"),
+    });
+    expect(appLayout("linux", "/r")).toEqual({
+      appDir: join("/r", "linux-unpacked"),
+      exe: join("/r", "linux-unpacked", "evoscientist"),
+      resources: join("/r", "linux-unpacked", "resources"),
+    });
+  });
+
+  it("on macOS is the app bundle, with both inside Contents", () => {
+    const app = join("/r", "mac-arm64", "EvoScientist.app");
+    expect(appLayout("darwin", "/r")).toEqual({
+      appDir: app,
+      exe: join(app, "Contents", "MacOS", "EvoScientist"),
+      resources: join(app, "Contents", "Resources"),
+    });
+  });
+
+  it("takes another app folder, as --app gives one", () => {
+    const app = join("/Applications", "EvoScientist.app");
+    expect(appLayout("darwin", "/r", app)).toEqual({
+      appDir: app,
+      exe: join(app, "Contents", "MacOS", "EvoScientist"),
+      resources: join(app, "Contents", "Resources"),
+    });
+    expect(appLayout("linux", "/r", "/opt/app").exe).toBe(
+      join("/opt/app", "evoscientist")
+    );
+  });
+});
+
 // Upgrades, uninstall and the update feed depend on these; none may change
 // after the first release.
 describe("the installer's identity", () => {
@@ -110,6 +148,76 @@ describe("the installer's identity", () => {
       owner: "EvoScientist",
       repo: "EvoScientist-WebUI",
     });
+  });
+});
+
+// A dmg to install from and a zip for updates, Apple Silicon only. The
+// names are fixed, like the Windows installer's, so a download link never
+// changes with the version; they keep "arm64" because electron-updater picks
+// a Mac's update file by that word.
+describe("the macOS build", () => {
+  const mac = pkg.build.mac as Record<string, unknown>;
+  const dmg = pkg.build.dmg as Record<string, unknown>;
+  const desktop = join(__dirname, "..");
+
+  it("builds a dmg and a zip for arm64 only", () => {
+    expect(mac.target).toEqual([
+      { target: "dmg", arch: ["arm64"] },
+      { target: "zip", arch: ["arm64"] },
+    ]);
+  });
+
+  it("names the files without a version", () => {
+    expect(dmg.artifactName).toBe("EvoScientist-${arch}.${ext}");
+    expect(mac.artifactName).toBe("EvoScientist-${arch}-mac.${ext}");
+  });
+
+  // Updates use the zip; a blockmap written for the dmg would be wrong once
+  // the dmg is stapled.
+  it("writes no blockmap for the dmg", () => {
+    expect(dmg.writeUpdateInfo).toBe(false);
+  });
+
+  it("has an icon of its own", () => {
+    expect(mac.icon).toBe("assets/mac/EvoScientist.icns");
+    const icon = readFileSync(join(desktop, mac.icon as string));
+    expect(icon.subarray(0, 4).toString("latin1")).toBe("icns");
+  });
+
+  // electron-builder looks for these names in `build/` and in the project
+  // folder, also to make the Windows installer's icon (an icon.icns is
+  // converted for it). An icon for Windows is a change of its own.
+  it("keeps every default icon location empty, so Windows keeps its icon", () => {
+    const names = [
+      "icon.icns",
+      "icon.ico",
+      "icon.png",
+      "icon.svg",
+      "icons",
+      "icon",
+    ];
+    for (const dir of [desktop, join(desktop, "build")])
+      for (const name of names)
+        expect(existsSync(join(dir, name)), join(dir, name)).toBe(false);
+    expect(pkg.build.icon).toBeUndefined();
+    expect((pkg.build.win as Record<string, unknown>).icon).toBeUndefined();
+  });
+
+  it("leaves the Windows and Linux builds as they were", () => {
+    expect(pkg.build.win).toEqual({
+      target: "nsis",
+      executableName: "EvoScientist",
+      signAndEditExecutable: false,
+    });
+    expect(pkg.build.nsis).toEqual({
+      oneClick: true,
+      perMachine: false,
+      allowToChangeInstallationDirectory: false,
+      deleteAppDataOnUninstall: false,
+      artifactName: "EvoScientist-Setup.${ext}",
+      include: "installer/check-app-running.nsh",
+    });
+    expect(pkg.build.linux).toEqual({ target: "dir" });
   });
 });
 
