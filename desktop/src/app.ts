@@ -310,7 +310,9 @@ export interface App {
   closePasses(): boolean;
   /** macOS: a quit has begun while the app exits: the updater's (it closes
    *  the windows first, then quits) or the user's Quit. The closes that
-   *  follow are the quit's, and nothing brings the app back any more.
+   *  follow are the quit's, and nothing brings the app back any more: if
+   *  the quit has not ended the app when the wait for the update runs out,
+   *  the app ends itself.
    *  Ignored while the app runs, and on Windows: there electron-updater
    *  begins the quit right after it started the installer, on every
    *  install, and the 15 s wait is for a quit that does not end the app. */
@@ -1325,16 +1327,23 @@ export function createApp(deps: AppDeps): App {
       // What gives this install up acts only for it, and only while the app
       // still waits for it: a refusal brings the app back within seconds, so
       // a second Restart to update can run before the first one's wait ends.
-      // Not once the quit has begun on macOS: the windows are closing then.
       const attempt = ++installAttempt;
       const giveUp = (why: string): void => {
-        if (
-          attempt === installAttempt &&
-          exiting &&
-          quitState === "stopping" &&
-          !quitBegun
-        )
-          void updateDidNotStart(why);
+        if (attempt !== installAttempt || !exiting || quitState !== "stopping")
+          return;
+        if (!quitBegun) return void updateDidNotStart(why);
+        // macOS: the quit has closed the window, or is closing it, and has
+        // not ended the app. Without a window the app cannot come back, and
+        // left alone it would run on with a Dock icon that does nothing. It
+        // ends; the system installs what it holds once the app has ended.
+        // No relaunch, also after a click on the Dock icon: the app would
+        // start under that install.
+        installAttempt++;
+        log.warn(
+          `restart to update: the quit did not end the app (${why}); exiting`
+        );
+        relaunchAfterExit = false;
+        exitNow();
       };
       awaitingInstall = true;
       if (!update.install(() => giveUp("the system refused the update")))
