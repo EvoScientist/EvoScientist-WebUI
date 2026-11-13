@@ -10,7 +10,13 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { createApp, type AppDeps, type AppLog, type AppWindow } from "./app";
+import {
+  RELEASES_PAGE,
+  createApp,
+  type AppDeps,
+  type AppLog,
+  type AppWindow,
+} from "./app";
 import type { MemoryWaitResult, WorkCheck } from "./closeCheck";
 import type { CrashInfo } from "./crash";
 import type { DeployOutcome, DeploySession } from "./deploy";
@@ -202,6 +208,7 @@ function harness(over: Partial<AppDeps> = {}) {
     messageBox,
     chooseFolder: async () => null,
     openPath: vi.fn(),
+    openExternal: vi.fn(),
     showItemInFolder: vi.fn(),
     copyText: vi.fn(),
     documentsDir: () => "/docs",
@@ -2215,15 +2222,29 @@ describe("restart to update (W04)", () => {
       check: vi.fn(async () => {}),
       download: vi.fn(),
       installable: vi.fn(() => u.state.kind === "ready"),
-      install: vi.fn(() => {
+      /** What each install was given to call when the system refuses it. */
+      refusals: [] as ((() => void) | undefined)[],
+      install: vi.fn((onFailed?: () => void) => {
         calls?.push("install");
+        u.refusals.push(onFailed);
         return u.state.kind === "ready";
       }),
+      abandonInstall: vi.fn(),
+      installPending: vi.fn(() => false),
       stop: vi.fn(),
     };
     return u;
   }
   const never = () => new Promise<void>(() => {});
+  /** Lets what a resolved promise started run. */
+  const turn = () => new Promise<void>((r) => setTimeout(r, 0));
+  const NOT_INSTALLED = expect.objectContaining({
+    message: "The update could not be installed.",
+  });
+  const CANNOT_REPLACE = expect.objectContaining({
+    message: "EvoScientist can't update itself here.",
+    buttons: ["Open the download page", "OK"],
+  });
 
   it("starts the update checks with the app, also before the UI loads", () => {
     const appUpdate = fakeAppUpdate("none");
@@ -2402,6 +2423,325 @@ describe("restart to update (W04)", () => {
     );
   });
 
+  // macOS: the system checks the update while the app still runs, and says
+  // when it refuses it (a signature it does not accept).
+  it("starts again at once when the system refuses the update", async () => {
+    const appUpdate = fakeAppUpdate();
+    const h = await launched({ appUpdate, installWait: never });
+    await expect(h.app.restartToUpdate()).resolves.toEqual({ ok: true });
+    expect(h.sessions).toHaveLength(1);
+    expect(appUpdate.abandonInstall).not.toHaveBeenCalled();
+    appUpdate.refusals[0]?.();
+    await vi.waitFor(() => expect(h.sessions).toHaveLength(2));
+    expect(h.app.exiting).toBe(false);
+    expect(h.app.quitState).toBe("none");
+    expect(appUpdate.abandonInstall).toHaveBeenCalledTimes(1);
+    expect(appUpdate.start).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() =>
+      expect(h.messageBox).toHaveBeenCalledWith(NOT_INSTALLED)
+    );
+    expect(
+      h.log.lines.some((l) =>
+        l.includes("no update was installed (the system refused the update)")
+      )
+    ).toBe(true);
+    // The refusal counts once.
+    appUpdate.refusals[0]?.();
+    await turn();
+    expect(h.sessions).toHaveLength(2);
+  });
+
+  // Left alone, an answer the system gives later would quit the app again.
+  it("forgets the install when the wait runs out", async () => {
+    const appUpdate = fakeAppUpdate();
+    const h = await launched({ appUpdate, installWait: async () => {} });
+    await expect(h.app.restartToUpdate()).resolves.toEqual({ ok: true });
+    await vi.waitFor(() => expect(h.sessions).toHaveLength(2));
+    expect(appUpdate.abandonInstall).toHaveBeenCalledTimes(1);
+  });
+
+  it("an earlier attempt's wait and refusal do not end a later attempt", async () => {
+    const waits: (() => void)[] = [];
+    const appUpdate = fakeAppUpdate();
+    const h = await launched({
+      appUpdate,
+      installWait: () => new Promise<void>((r) => waits.push(r)),
+    });
+    await expect(h.app.restartToUpdate()).resolves.toEqual({ ok: true });
+    appUpdate.refusals[0]?.();
+    // The app is back once the box shows: the launch comes first.
+    await vi.waitFor(() =>
+      expect(h.messageBox).toHaveBeenCalledWith(NOT_INSTALLED)
+    );
+    await expect(h.app.restartToUpdate()).resolves.toEqual({ ok: true });
+    expect(h.app.quitState).toBe("stopping");
+    const boxes = h.messageBox.mock.calls.length;
+    const sessions = h.sessions.length;
+    waits[0](); // the first attempt's 15 s
+    appUpdate.refusals[0]?.();
+    await turn();
+    expect(h.app.exiting).toBe(true);
+    expect(h.app.quitState).toBe("stopping");
+    expect(h.sessions).toHaveLength(sessions);
+    expect(h.messageBox.mock.calls).toHaveLength(boxes);
+    expect(appUpdate.abandonInstall).toHaveBeenCalledTimes(1);
+    // The second attempt's own wait still counts.
+    waits[1]();
+    await vi.waitFor(() => expect(h.sessions).toHaveLength(sessions + 1));
+    expect(appUpdate.abandonInstall).toHaveBeenCalledTimes(2);
+  });
+
+  // macOS: the system needs seconds to check the update, and the whole wait
+  // when it gives no answer. A window the user closes meanwhile is hidden as
+  // at any other time: closed for good, it would be gone when the update is
+  // refused and the app comes back.
+  it("on macOS, while it waits for the system, only the quit itself closes the window", async () => {
+    const appUpdate = fakeAppUpdate();
+    const h = await launched({
+      appUpdate,
+      installWait: never,
+      platform: "darwin",
+    });
+    // The app runs: every close is the user's, and no quit has begun.
+    expect(h.app.closePasses()).toBe(false);
+    h.app.quitBegan();
+    expect(h.app.closePasses()).toBe(false);
+    await expect(h.app.restartToUpdate()).resolves.toEqual({ ok: true });
+    expect(h.app.exiting).toBe(true);
+    expect(h.app.closePasses()).toBe(false);
+    h.app.closeWindow();
+    expect(h.win.calls.at(-1)).toBe("hide window");
+    expect(h.exit).not.toHaveBeenCalled();
+    // The update is refused: the app is back, with its window.
+    appUpdate.refusals[0]?.();
+    await vi.waitFor(() => expect(h.sessions).toHaveLength(2));
+    expect(h.app.closePasses()).toBe(false);
+    // A quit of the app that came back closes the window as any quit does.
+    await vi.waitFor(() =>
+      expect(h.messageBox).toHaveBeenCalledWith(NOT_INSTALLED)
+    );
+    await h.app.requestQuit();
+    expect(h.exit).toHaveBeenCalled();
+    expect(h.app.closePasses()).toBe(true);
+  });
+
+  // The updater's quit closes the windows first; the user's Quit closes
+  // them too. From then on the app cannot come back: its window is closing,
+  // or closed. The quit gets a wait of its own, counted from its beginning;
+  // if the app still runs after it, the app ends itself, or it would run on
+  // without a window. The system installs what it holds once the app has
+  // ended.
+  it("on macOS, once the quit has begun, the window closes, and a quit that does not end the app ends with the app's own exit", async () => {
+    const waits: (() => void)[] = [];
+    const appUpdate = fakeAppUpdate();
+    const h = await launched({
+      appUpdate,
+      installWait: () => new Promise<void>((r) => waits.push(r)),
+      platform: "darwin",
+    });
+    await expect(h.app.restartToUpdate()).resolves.toEqual({ ok: true });
+    expect(waits).toHaveLength(1);
+    h.app.quitBegan();
+    expect(h.app.closePasses()).toBe(true);
+    // The quit's own wait; a second report of the quit starts no other.
+    expect(waits).toHaveLength(2);
+    h.app.quitBegan();
+    expect(waits).toHaveLength(2);
+    // The install's wait runs out, and the system reports an error: the
+    // quit is under way, so neither brings the app back nor ends it.
+    waits[0]();
+    appUpdate.refusals[0]?.();
+    await turn();
+    expect(h.exit).not.toHaveBeenCalled();
+    expect(h.app.exiting).toBe(true);
+    expect(h.sessions).toHaveLength(1);
+    expect(appUpdate.abandonInstall).not.toHaveBeenCalled();
+    // A click on the Dock icon meanwhile asks for a relaunch after the
+    // exit, as during any stop. Here it must not: the app would start under
+    // the install.
+    h.app.windowShown();
+    h.app.activate();
+    expect(
+      h.log.lines.some((l) => l.includes("second launch (quit state stopping)"))
+    ).toBe(true);
+    // The quit's wait runs out and the app is still there.
+    waits[1]();
+    await turn();
+    expect(h.exit).toHaveBeenCalledTimes(1);
+    expect(h.exit).toHaveBeenCalledWith(false);
+    expect(h.messageBox).not.toHaveBeenCalled();
+    expect(
+      h.log.lines.some((l) => l.includes("the quit did not end the app"))
+    ).toBe(true);
+  });
+
+  it("on macOS a quit that began outside an update's wait starts no wait", async () => {
+    const waits: (() => void)[] = [];
+    const h = await launched({
+      installWait: () => new Promise<void>((r) => waits.push(r)),
+      platform: "darwin",
+    });
+    await h.app.requestQuit();
+    expect(h.exit).toHaveBeenCalledTimes(1);
+    h.app.quitBegan();
+    expect(waits).toHaveLength(0);
+    expect(h.exit).toHaveBeenCalledTimes(1);
+  });
+
+  it("on Windows the window closes while the installer is awaited, as before", async () => {
+    const appUpdate = fakeAppUpdate();
+    const h = await launched({ appUpdate, installWait: never });
+    await expect(h.app.restartToUpdate()).resolves.toEqual({ ok: true });
+    expect(h.app.closePasses()).toBe(true);
+  });
+
+  // electron-updater begins the quit right after it started the installer,
+  // on every install. The wait is for a quit that then does not end the app.
+  it("on Windows the wait still brings the app back after the quit has begun", async () => {
+    const waits: (() => void)[] = [];
+    const appUpdate = fakeAppUpdate();
+    const h = await launched({
+      appUpdate,
+      installWait: () => new Promise<void>((r) => waits.push(r)),
+    });
+    await expect(h.app.restartToUpdate()).resolves.toEqual({ ok: true });
+    h.app.quitBegan();
+    waits[0]();
+    await vi.waitFor(() => expect(h.sessions).toHaveLength(2));
+    expect(h.app.exiting).toBe(false);
+    await vi.waitFor(() =>
+      expect(h.messageBox).toHaveBeenCalledWith(NOT_INSTALLED)
+    );
+  });
+
+  // The app came back from a refused update and now quits, within the 15 s
+  // of that install: its wait must not start the app again under the quit.
+  it("a given-up attempt's wait does nothing when the app quits afterwards", async () => {
+    const waits: (() => void)[] = [];
+    const appUpdate = fakeAppUpdate();
+    const h = await launched({
+      appUpdate,
+      installWait: () => new Promise<void>((r) => waits.push(r)),
+    });
+    await expect(h.app.restartToUpdate()).resolves.toEqual({ ok: true });
+    appUpdate.refusals[0]?.();
+    await vi.waitFor(() =>
+      expect(h.messageBox).toHaveBeenCalledWith(NOT_INSTALLED)
+    );
+    const boxes = h.messageBox.mock.calls.length;
+    const sessions = h.sessions.length;
+    await h.app.requestQuit();
+    expect(h.exit).toHaveBeenCalled();
+    expect(h.app.exiting).toBe(true);
+    waits[0](); // the refused attempt's 15 s
+    await turn();
+    expect(h.app.exiting).toBe(true);
+    expect(h.sessions).toHaveLength(sessions);
+    expect(h.messageBox.mock.calls).toHaveLength(boxes);
+  });
+
+  it("on macOS an exit that is no update closes the window", async () => {
+    const h = await launched({ platform: "darwin" });
+    await h.app.requestQuit();
+    expect(h.exit).toHaveBeenCalled();
+    expect(h.app.exiting).toBe(true);
+    expect(h.app.closePasses()).toBe(true);
+  });
+
+  // macOS: the wait ran out, but the system still works on that install.
+  it("answers update_pending, and stops nothing, while the system still works on an install that was given up", async () => {
+    const appUpdate = fakeAppUpdate();
+    appUpdate.installPending.mockReturnValue(true);
+    const h = await launched({ appUpdate });
+    await expect(h.app.restartToUpdate()).resolves.toEqual({
+      ok: false,
+      code: "update_pending",
+    });
+    expect(appUpdate.install).not.toHaveBeenCalled();
+    expect(appUpdate.stop).not.toHaveBeenCalled();
+    expect(h.sessions[0].stopped.count).toBe(0);
+    expect(h.app.quitState).toBe("none");
+    expect(h.messageBox).not.toHaveBeenCalled();
+    // Once it has answered, the same click goes on.
+    appUpdate.installPending.mockReturnValue(false);
+    await expect(h.app.restartToUpdate()).resolves.toEqual({ ok: true });
+    expect(appUpdate.install).toHaveBeenCalledTimes(1);
+  });
+
+  // macOS: on a read-only volume (run from the dmg) or in a folder the
+  // account cannot change, the system cannot put the new version in place.
+  it("answers cannot_replace before anything stops where the app can't be replaced, and offers the download page", async () => {
+    const appUpdate = fakeAppUpdate();
+    const h = await launched({ appUpdate, canReplaceApp: () => false });
+    await expect(h.app.restartToUpdate()).resolves.toEqual({
+      ok: false,
+      code: "cannot_replace",
+    });
+    expect(appUpdate.installable).not.toHaveBeenCalled();
+    expect(appUpdate.install).not.toHaveBeenCalled();
+    expect(appUpdate.stop).not.toHaveBeenCalled();
+    expect(h.sessions[0].stopped.count).toBe(0);
+    expect(h.app.quitState).toBe("none");
+    expect(h.app.exiting).toBe(false);
+    expect(h.messageBox).toHaveBeenCalledTimes(1);
+    expect(h.messageBox).toHaveBeenCalledWith(CANNOT_REPLACE);
+    // The box's first button (the harness answers 0).
+    await vi.waitFor(() =>
+      expect(h.deps.openExternal).toHaveBeenCalledWith(RELEASES_PAGE)
+    );
+    expect(RELEASES_PAGE).toBe(
+      "https://github.com/EvoScientist/EvoScientist-WebUI/releases/latest"
+    );
+  });
+
+  it("opens no page when that box is closed with OK", async () => {
+    const appUpdate = fakeAppUpdate();
+    const messageBox = vi.fn(async () => ({ response: 1 }));
+    const h = await launched({
+      appUpdate,
+      canReplaceApp: () => false,
+      messageBox,
+    });
+    await h.app.restartToUpdate();
+    expect(messageBox).toHaveBeenCalledWith(CANNOT_REPLACE);
+    await turn();
+    expect(h.deps.openExternal).not.toHaveBeenCalled();
+  });
+
+  it("starts no download where the app can't be replaced", async () => {
+    const appUpdate = {
+      ...fakeAppUpdate(),
+      state: { kind: "available", version: "0.4.3", failed: false } as const,
+    };
+    const h = await launched({ appUpdate, canReplaceApp: () => false });
+    h.win.calls.length = 0;
+    h.app.downloadUpdateFor(null, true);
+    expect(appUpdate.download).not.toHaveBeenCalled();
+    expect(h.messageBox).toHaveBeenCalledWith(CANNOT_REPLACE);
+    // The status page disabled its button for the click and waits for the
+    // offer: it comes again, as no change of state will bring it.
+    expect(h.win.calls).toEqual(["update available download_update"]);
+    // Where it can be replaced the download starts, without a box.
+    const ok = { ...appUpdate, download: vi.fn() };
+    const g = await launched({ appUpdate: ok, canReplaceApp: () => true });
+    g.app.downloadUpdateFor(null, true);
+    expect(ok.download).toHaveBeenCalledTimes(1);
+    expect(g.messageBox).not.toHaveBeenCalled();
+  });
+
+  it("asks where the app can be replaced only for an offer it would download", async () => {
+    const canReplaceApp = vi.fn(() => false);
+    const appUpdate = fakeAppUpdate("none");
+    const h = await launched({ appUpdate, canReplaceApp });
+    h.app.downloadUpdateFor(null, true);
+    expect(h.messageBox).not.toHaveBeenCalled();
+    await expect(h.app.restartToUpdate()).resolves.toEqual({
+      ok: false,
+      code: "not_ready",
+    });
+    expect(h.messageBox).not.toHaveBeenCalled();
+  });
+
   it("stops nothing when the downloaded installer cannot be opened", async () => {
     const appUpdate = fakeAppUpdate();
     appUpdate.installable.mockReturnValue(false);
@@ -2561,6 +2901,8 @@ describe("app update on the pages (W04)", () => {
     download: vi.fn(),
     installable: vi.fn(() => true),
     install: vi.fn(() => true),
+    abandonInstall: vi.fn(),
+    installPending: vi.fn(() => false),
     stop: vi.fn(),
   };
   const UI = "http://127.0.0.1:4718";
@@ -2721,6 +3063,8 @@ describe("the installer asks the app to quit (D12)", () => {
         download: vi.fn(),
         installable: vi.fn(() => true),
         install: vi.fn(() => true),
+        abandonInstall: vi.fn(),
+        installPending: vi.fn(() => false),
         stop: vi.fn(),
       },
     });

@@ -1,29 +1,47 @@
 name: Desktop
 
 # The desktop app (desktop/): lint and unit tests, a build and its smoke test
-# against the core on Windows and on macOS, and on release tags the Windows
-# installer.
+# against the core on Windows and on macOS, and on release tags the files of
+# a release.
 # - Pull requests and pushes to main (all but docs): tests, build (with the
-#   installer, so its NSIS script compiles; on macOS the dmg and the zip),
-#   smoke test.
+#   installer, so its NSIS script compiles; on macOS the dmg and the zip,
+#   unsigned), smoke test.
 # - Weekly: the same, so a new core release inside the app's range is tested
 #   without waiting for a WebUI change.
-# - Tags v*: the same on Windows only, then (once `evoscientist.release` is
-#   on, or always in a fork) the installer: built with publishing off, then
+# - Tags v*: the same on Windows, then (once `evoscientist.release` is on, or
+#   always in a fork) the installer: built with publishing off, then
 #   uploaded with `gh release upload` - installer and blockmap first,
 #   latest.yml last - to
 #   the tag's draft release (one published by hand gets the files and a
 #   warning), by a job of its own that holds the write token and runs no
 #   npm code. The last job publishes it after every
-#   platform job (only Windows until macOS comes) has succeeded and the
+#   platform job has succeeded and the
 #   release has notes of its own (a fork's test release needs none); a failed
 #   or unfinished run leaves the draft, and apps keep seeing the previous
 #   release. A fork's tag build gets its own app identity (W04Test) and
 #   publishes to the fork, so a test install never replaces a real one.
-# No signing secrets: the first releases are unsigned.
-# macOS: the app is built and smoke-tested, not signed and not released. Its
-# job does not run on tags and is no condition of the publish job, so a
-# release run has no macOS step.
+# - macOS on tags, once `evoscientist.releaseMac` is on as well (or always in
+#   a fork): the macOS smoke test on the unsigned build, then the `mac` job
+#   signs the app (Developer ID, hardened runtime), has it notarized and
+#   stapled, checks the result and hands over the dmg, the zip that installed
+#   apps update from, its blockmap and latest-mac.yml. They are uploaded with
+#   the Windows files, latest-mac.yml last, and nothing is published unless
+#   the `mac` job succeeded. While that switch is off, a tag run has no macOS
+#   step.
+# - Signing: the Windows installer is unsigned. The macOS secrets (CSC_LINK,
+#   CSC_KEY_PASSWORD, APPLE_API_KEY, APPLE_API_KEY_ID, APPLE_API_ISSUER)
+#   belong in the environment `release-macos`, set up so that only v* tags
+#   and main may use it and a reviewer approves each use: a repository secret
+#   can be read by a workflow on any branch. Only the `mac` job names that
+#   environment. In the upstream repository it fails when a secret is
+#   missing; a fork builds unsigned.
+# - A manual run on main with `mac_rehearsal`: the `mac` job for this version
+#   and for the next patch version, both signed and notarized, with the
+#   update feed on 127.0.0.1. Nothing goes to a release (on a tag, where a
+#   manual run uploads that tag's release, the plan job fails, so no job
+#   that builds, uploads or publishes runs). It is how
+#   the signing, and one update from the first build to the second, are
+#   tried before that switch goes on.
 
 on:
   pull_request:
@@ -41,9 +59,18 @@ on:
   schedule:
     - cron: "17 4 * * 1" # Mondays
   workflow_dispatch:
+    inputs:
+      mac_rehearsal:
+        description: "macOS signing rehearsal: this version and the next patch version, signed and notarized, with a local update feed. Nothing is released."
+        type: boolean
+        default: false
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # A rehearsal has a group of its own: while it waits for an approval it
+  # would hold the pushes to its branch. Every other manual run queues with
+  # the pushes to its ref, as before: on a tag both upload that tag's
+  # release.
+  group: ${{ github.workflow }}-${{ github.ref }}${{ github.event_name == 'workflow_dispatch' && inputs.mac_rehearsal && '-rehearsal' || '' }}
   # A release run is never cut off halfway.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
@@ -61,6 +88,10 @@ jobs:
     outputs:
       cores: ${{ steps.plan.outputs.cores }}
       installer: ${{ steps.plan.outputs.installer }}
+      # Whether a tag releases the macOS files, and the builds of the `mac`
+      # job in this run (none, the release's, or the rehearsal's two).
+      mac: ${{ steps.plan.outputs.mac }}
+      mac_builds: ${{ steps.plan.outputs.mac_builds }}
     defaults:
       run:
         working-directory: desktop
@@ -83,16 +114,49 @@ jobs:
             const problem = p.tagProblem(process.env.GITHUB_REF_NAME, v);
             if (problem) { console.error(problem); process.exit(1); }
           "
+      # `releaseMac` without `release`, or `release` with a core range that
+      # installs too old a core.
+      - name: Check the release switches
+        run: |
+          node -e "
+            const p = require('./dist/packaging.js');
+            const problem = p.releaseFlagProblem(require('./package.json').evoscientist);
+            if (problem) { console.error(problem); process.exit(1); }
+          "
       - name: Plan
         id: plan
+        env:
+          REHEARSAL: ${{ github.event_name == 'workflow_dispatch' && inputs.mac_rehearsal }}
         run: |
+          # A manual run on a tag builds and uploads that tag's release, as
+          # a push of the tag does: no place for test builds.
+          if [ "$REHEARSAL" = true ] && [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            echo "::error::mac_rehearsal builds test versions and releases nothing: run it on main, not on a tag."
+            exit 1
+          fi
           echo "cores=$(node scripts/smoke.mjs --list)" >> "$GITHUB_OUTPUT"
           release=$(node -p "require('./package.json').evoscientist.release === true")
-          if [ "$release" = true ] || [ "$GITHUB_REPOSITORY" != "$UPSTREAM" ]; then
+          release_mac=$(node -p "require('./package.json').evoscientist.releaseMac === true")
+          fork=true
+          if [ "$GITHUB_REPOSITORY" = "$UPSTREAM" ]; then fork=false; fi
+          if [ "$release" = true ] || [ "$fork" = true ]; then
             echo "installer=true" >> "$GITHUB_OUTPUT"
           else
             echo "installer=false" >> "$GITHUB_OUTPUT"
           fi
+          # The macOS files go out with the Windows ones.
+          mac=false
+          if [ "$fork" = true ] || { [ "$release" = true ] && [ "$release_mac" = true ]; }; then
+            mac=true
+          fi
+          echo "mac=$mac" >> "$GITHUB_OUTPUT"
+          builds='[]'
+          if [ "$REHEARSAL" = true ] && [ "$fork" = false ]; then
+            builds='["rehearsal","rehearsal-next"]'
+          elif [ "$mac" = true ] && [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            builds='["release"]'
+          fi
+          echo "mac_builds=$builds" >> "$GITHUB_OUTPUT"
           cat "$GITHUB_OUTPUT"
 
   test:
@@ -146,12 +210,12 @@ jobs:
   # The unsigned macOS app (Apple Silicon): the dmg and the zip build, the
   # core installs, sets up and deploys, and the packaged UI server answers
   # under the app's helper executable, without a Dock icon of its own.
-  # Nothing of it is released yet, so it does not run on tags and the publish
-  # job does not wait for it.
+  # On a tag it runs only when the macOS files are released: the `mac` job
+  # then needs it, so a failure here stops the release.
   smoke-macos:
     name: Smoke test (macOS, core ${{ matrix.core }})
     needs: [plan]
-    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+    if: ${{ !startsWith(github.ref, 'refs/tags/') || needs.plan.outputs.mac == 'true' }}
     runs-on: macos-latest
     timeout-minutes: 60
     strategy:
@@ -236,9 +300,206 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # The macOS app of a release (or of a rehearsal): signed with the Developer
+  # ID certificate, notarized, stapled and checked. Like the installer job it
+  # builds and runs dependency code, so it gets no write token and its
+  # checkout keeps no credential. It is the only job that names the
+  # environment with the signing secrets.
+  mac:
+    name: macOS app (${{ matrix.build }})
+    needs: [plan, smoke-macos]
+    if: needs.plan.outputs.mac_builds != '[]'
+    runs-on: macos-latest
+    timeout-minutes: 60
+    environment: release-macos
+    strategy:
+      fail-fast: false
+      matrix:
+        build: ${{ fromJSON(needs.plan.outputs.mac_builds) }}
+    env:
+      BUILD: ${{ matrix.build }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          # Else on: the root package.json names npm as packageManager.
+          package-manager-cache: false
+      # Without them electron-builder would quietly leave the app unsigned.
+      # Only the names of missing ones are printed.
+      - name: Check the signing secrets
+        if: github.repository == env.UPSTREAM
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          missing=()
+          for name in CSC_LINK CSC_KEY_PASSWORD APPLE_API_KEY APPLE_API_KEY_ID APPLE_API_ISSUER; do
+            [ -n "${!name}" ] || missing+=("$name")
+          done
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::Missing in the environment release-macos: ${missing[*]}"
+            exit 1
+          fi
+      # The second rehearsal build is the next patch version, so the first
+      # one has something to update to; both read their updates from this
+      # machine, so neither ever takes one from the releases.
+      - name: "Rehearsal: the version and a local update feed"
+        if: startsWith(matrix.build, 'rehearsal')
+        run: |
+          if [ "$BUILD" = rehearsal-next ]; then
+            npm version patch --no-git-tag-version
+          fi
+          node -e "
+            const fs = require('fs');
+            const file = 'desktop/package.json';
+            const pkg = JSON.parse(fs.readFileSync(file, 'utf8'));
+            pkg.build.publish = { provider: 'generic', url: 'http://127.0.0.1:4741/' };
+            fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + '\n');
+          "
+          node -p "'version ' + require('./package.json').version"
+      # Neither the WebUI's build nor the installs of the dependencies nor
+      # the app's own compile get a secret. Two steps do: the check above,
+      # which runs nothing else, and the step that signs.
+      - name: Build the WebUI
+        run: npm ci && npm run build
+      - name: Install the desktop dependencies
+        working-directory: desktop
+        run: npm ci
+      # What `npm run dist` does before it packages: done here, so that the
+      # step that signs runs electron-builder and nothing else.
+      - name: Compile and fetch the core's install scripts
+        working-directory: desktop
+        run: npm run fetch-core-scripts
+      - name: Build, sign and notarize the app (publishing off)
+        working-directory: desktop
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          args=()
+          if [ "$GITHUB_REPOSITORY" = "$UPSTREAM" ]; then
+            # The notarization key as a file that only this user can read,
+            # for this step only. (In a subshell: the build's own files keep
+            # their usual permissions.)
+            trap 'rm -f "$RUNNER_TEMP/notary-key.p8"' EXIT
+            (umask 077 && printf '%s\n' "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/notary-key.p8")
+            export APPLE_API_KEY="$RUNNER_TEMP/notary-key.p8"
+            unset APPLE_API_KEY_P8
+          else
+            # A fork has no certificate: an unsigned test build with its own
+            # identity and update feed, like its Windows installer.
+            # electron-builder refuses a notarization setup that is only
+            # partly there, so none of its variables stays.
+            unset CSC_LINK CSC_KEY_PASSWORD APPLE_API_KEY_P8 APPLE_API_KEY_ID APPLE_API_ISSUER
+            export CSC_IDENTITY_AUTO_DISCOVERY=false
+            args=(-c.appId=com.evoscientist.desktop.w04test
+              -c.productName=W04Test
+              -c.extraMetadata.name=W04Test
+              -c.extraMetadata.productName=W04Test
+              "-c.publish.owner=$GITHUB_REPOSITORY_OWNER"
+              "-c.publish.repo=${GITHUB_REPOSITORY#*/}")
+          fi
+          node scripts/builder.mjs --publish never "${args[@]}"
+          ls -l release
+      - name: Check the files
+        working-directory: desktop/release
+        run: |
+          for f in EvoScientist-arm64.dmg EvoScientist-arm64-mac.zip EvoScientist-arm64-mac.zip.blockmap latest-mac.yml; do
+            [ -s "$f" ] || { echo "::error::$f is missing or empty"; exit 1; }
+          done
+          # Installed apps update from the zip.
+          grep -q "EvoScientist-arm64-mac.zip" latest-mac.yml || { echo "::error::latest-mac.yml does not name the zip"; exit 1; }
+          if ls ./*.dmg.blockmap >/dev/null 2>&1; then
+            echo "::error::a blockmap was written for the dmg"
+            exit 1
+          fi
+      # What a user's Mac checks before it opens the app. The signer's name
+      # is not printed.
+      - name: Check the signature and the notarization
+        if: github.repository == env.UPSTREAM
+        working-directory: desktop
+        run: |
+          app=release/mac-arm64/EvoScientist.app
+          problem() { echo "::error::$1"; exit 1; }
+          signed() {
+            codesign --verify --deep --strict "$1" || problem "the signature of $2 is not valid"
+            xcrun stapler validate -q "$1" || problem "$2 carries no notarization ticket"
+          }
+          signed "$app" "the app"
+          info=$(codesign --display --verbose=4 "$app" 2>&1)
+          echo "$info" | grep -q "^Authority=Developer ID Application: " || problem "the app is not signed with a Developer ID Application certificate"
+          echo "$info" | grep -Eq "^CodeDirectory .*flags=0x[0-9a-f]+\(([a-z-]+,)*runtime(,[a-z-]+)*\)" || problem "the app is not signed with the hardened runtime"
+          # The JIT entitlement and none that weakens the hardened runtime,
+          # in the app and in the helper that runs the UI server.
+          for bin in "$app" "$app/Contents/Frameworks/EvoScientist Helper.app"; do
+            ent=$(codesign --display --entitlements - --xml "$bin" 2>/dev/null) || problem "the entitlements of $bin cannot be read"
+            echo "$ent" | grep -q "com.apple.security.cs.allow-jit" || problem "no JIT entitlement in $bin"
+            for no in disable-library-validation allow-unsigned-executable-memory allow-dyld-environment-variables disable-executable-page-protection; do
+              if echo "$ent" | grep -q "com.apple.security.cs.$no"; then
+                problem "$bin has the entitlement $no"
+              fi
+            done
+          done
+          spctl --assess --type execute -vv "$app" > "$RUNNER_TEMP/spctl.txt" 2>&1 || true
+          grep -q "source=Notarized Developer ID" "$RUNNER_TEMP/spctl.txt" || {
+            grep -v "^origin=" "$RUNNER_TEMP/spctl.txt" || true
+            problem "Gatekeeper does not accept the app as a notarized Developer ID app"
+          }
+          # The copies users get: in the zip that apps update from, and in the dmg.
+          mkdir "$RUNNER_TEMP/from-zip" "$RUNNER_TEMP/from-dmg"
+          ditto -x -k release/EvoScientist-arm64-mac.zip "$RUNNER_TEMP/from-zip"
+          signed "$RUNNER_TEMP/from-zip/EvoScientist.app" "the app in the zip"
+          hdiutil attach -quiet -nobrowse -readonly -mountpoint "$RUNNER_TEMP/from-dmg" release/EvoScientist-arm64.dmg
+          signed "$RUNNER_TEMP/from-dmg/EvoScientist.app" "the app in the dmg"
+          hdiutil detach -quiet "$RUNNER_TEMP/from-dmg"
+          echo "signed with a Developer ID, hardened runtime, notarized and stapled: the app, the zip's copy, the dmg's copy"
+      # The full smoke test ran on the unsigned build; this is the part that
+      # runs the built app's own code: the UI server under the helper.
+      - name: Run the UI server from the built app
+        working-directory: desktop
+        run: |
+          app=$(ls -d "$PWD"/release/mac-arm64/*.app)
+          node scripts/smoke.mjs --ui-only --app "$app"
+          if [ "$GITHUB_REPOSITORY" = "$UPSTREAM" ]; then
+            # Running it changed nothing inside the bundle.
+            codesign --verify --deep --strict "$app"
+          fi
+      # Here, so a template error stops the run with nothing uploaded.
+      - name: Render the macOS section of the release notes
+        working-directory: desktop
+        run: node scripts/release-notes.mjs section release/EvoScientist-arm64.dmg > release/desktop-notes-mac.md
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.build == 'release' && 'mac' || format('mac-{0}', matrix.build) }}
+          path: |
+            desktop/release/EvoScientist-arm64.dmg
+            desktop/release/EvoScientist-arm64-mac.zip
+            desktop/release/EvoScientist-arm64-mac.zip.blockmap
+            desktop/release/latest-mac.yml
+            desktop/release/desktop-notes-mac.md
+          if-no-files-found: error
+          retention-days: ${{ matrix.build == 'release' && 7 || 1 }}
+
   release:
     name: Upload to the draft release
-    needs: [installer]
+    needs: [plan, installer, mac]
+    # With the macOS files: only after the `mac` job succeeded. It may be
+    # skipped only while a tag releases no macOS files; skipped because its
+    # smoke test failed, it stops the release. Not in a cancelled run.
+    if: >-
+      !cancelled() && startsWith(github.ref, 'refs/tags/v') &&
+      needs.installer.result == 'success' &&
+      (needs.mac.result == 'success' ||
+      (needs.mac.result == 'skipped' && needs.plan.outputs.mac != 'true'))
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # The token can change the release that every installed app updates from:
@@ -263,6 +524,11 @@ jobs:
         with:
           name: installer
           path: ${{ runner.temp }}/installer
+      - uses: actions/download-artifact@v8
+        if: needs.mac.result == 'success'
+        with:
+          name: mac
+          path: ${{ runner.temp }}/mac
       - name: Create the draft release
         run: |
           if draft=$(gh release view "$TAG" --json isDraft --jq .isDraft 2>"$RUNNER_TEMP/view.err"); then
@@ -279,17 +545,29 @@ jobs:
             cat "$RUNNER_TEMP/view.err"
             exit 1
           fi
-      - name: Upload the installer and its blockmap, then latest.yml
-        working-directory: ${{ runner.temp }}/installer
+      # latest.yml and latest-mac.yml are what installed apps read to find
+      # an update: they go last, after the files they name.
+      - name: Upload the apps and their blockmaps, then latest.yml and latest-mac.yml
+        working-directory: ${{ runner.temp }}
         run: |
-          gh release upload "$TAG" EvoScientist-Setup.exe EvoScientist-Setup.exe.blockmap --clobber
-          gh release upload "$TAG" latest.yml --clobber
+          gh release upload "$TAG" installer/EvoScientist-Setup.exe installer/EvoScientist-Setup.exe.blockmap --clobber
+          if [ -d mac ]; then
+            gh release upload "$TAG" mac/EvoScientist-arm64.dmg mac/EvoScientist-arm64-mac.zip mac/EvoScientist-arm64-mac.zip.blockmap --clobber
+          fi
+          gh release upload "$TAG" installer/latest.yml --clobber
+          if [ -d mac ]; then
+            gh release upload "$TAG" mac/latest-mac.yml --clobber
+          fi
       # The body is read right before it is written, so notes typed on the
       # draft during the uploads stay.
       - name: Add the desktop section to the release notes
         run: |
           gh release view "$TAG" --json body --jq .body > "$RUNNER_TEMP/body.md"
-          node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON desktop/scripts/release-notes.mjs merge "$RUNNER_TEMP/body.md" "$RUNNER_TEMP/installer/desktop-notes.md" > "$RUNNER_TEMP/notes.md"
+          sections=("$RUNNER_TEMP/installer/desktop-notes.md")
+          if [ -f "$RUNNER_TEMP/mac/desktop-notes-mac.md" ]; then
+            sections+=("$RUNNER_TEMP/mac/desktop-notes-mac.md")
+          fi
+          node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON desktop/scripts/release-notes.mjs merge "$RUNNER_TEMP/body.md" "${sections[@]}" > "$RUNNER_TEMP/notes.md"
           gh release edit "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
 
   publish:
@@ -297,9 +575,11 @@ jobs:
     needs: [plan, smoke, installer, release]
     # Also when the installer was not built (`evoscientist.release` off): the
     # release then carries no desktop files, as before the first desktop
-    # release.
+    # release. With desktop files it waits for the upload, which runs only
+    # after every platform's job that this tag releases has succeeded. Not in
+    # a cancelled run.
     if: >-
-      always() && startsWith(github.ref, 'refs/tags/v') &&
+      !cancelled() && startsWith(github.ref, 'refs/tags/v') &&
       needs.smoke.result == 'success' &&
       (needs.release.result == 'success' || needs.installer.result == 'skipped')
     runs-on: ubuntu-latest

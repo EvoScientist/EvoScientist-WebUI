@@ -156,7 +156,11 @@ const UPDATE_LABELS = {
 /** What a "Restart to update" that did not happen says. */
 const UPDATE_NOTES = {
   busy: "The app is busy. Try again in a moment.",
-  not_ready: "The downloaded installer could not be opened. Download it again.",
+  not_ready: "The downloaded update could not be opened. Download it again.",
+  cannot_replace:
+    "EvoScientist can't update itself here. Move it into Applications, or download the new version.",
+  update_pending:
+    "macOS is still working on the update. Try again in a minute. If this stays, quit EvoScientist and open it again.",
 };
 let shownOffer = null;
 

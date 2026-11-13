@@ -15,6 +15,7 @@ import {
   BrowserWindow,
   Menu,
   app,
+  autoUpdater as systemUpdater,
   clipboard,
   dialog,
   ipcMain,
@@ -44,7 +45,12 @@ import {
   createApp,
   type AppWindow,
 } from "./app";
-import { configureUpdater, createAppUpdate } from "./appUpdate";
+import {
+  canReplaceApp,
+  configureUpdater,
+  createAppUpdate,
+  updatesItself,
+} from "./appUpdate";
 import type { Manifest } from "./boot";
 import { backendRequest, checkWork, waitForMemoryWorkers } from "./closeCheck";
 import { writeCrashReport } from "./crash";
@@ -153,18 +159,20 @@ function readKeptMirror(): boolean | null {
   }
 }
 
-/** App updates from GitHub Releases: only an installed Windows app updates
- *  itself. electron-updater's own lines go to desktop.log too. */
-const appUpdate =
-  app.isPackaged && process.platform === "win32"
-    ? createAppUpdate({
-        updater: configureUpdater(autoUpdater, log),
-        newToken: () => new CancellationToken(),
-        online: () => net.isOnline(),
-        log,
-        onChange: (s) => desktop.updateChanged(s),
-      })
-    : null;
+/** App updates from GitHub Releases: only an installed app updates itself,
+ *  on Windows and on macOS. On macOS Electron's own updater installs what
+ *  electron-updater downloaded. electron-updater's own lines go to
+ *  desktop.log too. */
+const appUpdate = updatesItself(process.platform, app.isPackaged)
+  ? createAppUpdate({
+      updater: configureUpdater(autoUpdater, log),
+      native: process.platform === "darwin" ? systemUpdater : null,
+      newToken: () => new CancellationToken(),
+      online: () => net.isOnline(),
+      log,
+      onChange: (s) => desktop.updateChanged(s),
+    })
+  : null;
 
 const desktop = createApp({
   appVersion: app.getVersion(),
@@ -206,6 +214,7 @@ const desktop = createApp({
     return r.canceled || !r.filePaths[0] ? null : r.filePaths[0];
   },
   openPath: (p) => void shell.openPath(p),
+  openExternal: (url) => void shell.openExternal(url),
   showItemInFolder: (p) => shell.showItemInFolder(p),
   copyText: (t) => clipboard.writeText(t),
   documentsDir: () => app.getPath("documents"),
@@ -347,6 +356,10 @@ const desktop = createApp({
     }),
 
   appUpdate,
+  canReplaceApp:
+    process.platform === "darwin"
+      ? () => canReplaceApp(process.execPath)
+      : undefined,
   installQuitCancelled: () => {
     try {
       writeFileSync(
@@ -461,7 +474,7 @@ function createWindow(): BrowserWindow {
     desktop.windowShown();
   });
   w.on("close", (e) => {
-    if (desktop.exiting) return;
+    if (desktop.closePasses()) return;
     e.preventDefault();
     desktop.closeWindow();
   });
@@ -633,10 +646,13 @@ function start(): void {
   // macOS: a click on the Dock icon, or the app opened again from Finder.
   app.on("activate", () => desktop.activate());
   app.on("before-quit", (e) => {
-    if (desktop.exiting) return;
+    if (desktop.exiting) return desktop.quitBegan();
     e.preventDefault();
     void desktop.requestQuit();
   });
+  // The updater's quit: on macOS it closes the windows first and quits once
+  // they are closed.
+  systemUpdater.on("before-quit-for-update", () => desktop.quitBegan());
   // The window is hidden, never closed, until the app exits.
   app.on("window-all-closed", () => {});
   app.on("web-contents-created", (_e, contents) => guard(contents));

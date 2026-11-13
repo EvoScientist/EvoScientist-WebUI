@@ -19,7 +19,11 @@ const ID = "desktop-app-update";
 /** What a "Restart to update" that did not happen says. */
 const RESTART_NOTES: Record<string, string> = {
   busy: "The app is busy. Try again in a moment.",
-  not_ready: "The downloaded installer could not be opened. Download it again.",
+  not_ready: "The downloaded update could not be opened. Download it again.",
+  cannot_replace:
+    "EvoScientist can't update itself here. Move it into Applications, or download the new version.",
+  update_pending:
+    "macOS is still working on the update. Try again in a minute. If this stays, quit EvoScientist and open it again.",
 };
 
 interface UpdateNotice {
@@ -135,7 +139,7 @@ export function DesktopUpdateNotice() {
                 void update.restartToUpdate().then(async (r) => {
                   restarting = false;
                   // On success the app ends; otherwise the offer stays and
-                  // says why, from the app's state now (an installer that
+                  // says why, from the app's state now (an update that
                   // could not be opened is offered for download again).
                   if (!r.ok) show(await update.state(), RESTART_NOTES[r.code]);
                 });

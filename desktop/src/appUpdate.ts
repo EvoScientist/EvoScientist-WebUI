@@ -20,7 +20,28 @@
 //   can still be opened (an antivirus may have removed it); otherwise the
 //   download is offered again. The updater quits the app as soon as it has
 //   asked for the installer, so a start that fails after that is not seen.
-import { closeSync, openSync } from "node:fs";
+// On macOS the download is a zip, and Electron's own updater (Squirrel.Mac)
+// installs it: at "Restart to update" electron-updater hands it the zip
+// through a local server and adds a listener there that quits the app once
+// the system has checked the zip's signature and staged the update. So:
+// - the system can refuse the update while the app still runs (a signature
+//   it does not accept, a read-only volume): `install(onFailed)` tells the
+//   caller, who brings the app back at once;
+// - an install that did not end the app is abandoned (`abandonInstall`):
+//   electron-updater's listener is removed, or an answer that comes late
+//   would quit an app the user works in again. An update the system staged
+//   after that is installed when the app next quits;
+// - while the system still works on an abandoned install, a new one is not
+//   started (`installPending`): the system refuses a second check while one
+//   runs, and the first one's refusal would be taken for the second's;
+// - the app cannot be replaced on a read-only volume (run from the dmg, or
+//   from the random path macOS runs a quarantined app from) or where its
+//   folder is not writable (`canReplaceApp`): the caller asks before it
+//   stops anything. (In such a folder the system would ask for an
+//   administrator's password, and answer nothing while that prompt is
+//   open.)
+import { accessSync, closeSync, constants, openSync } from "node:fs";
+import { posix } from "node:path";
 import type { AppUpdater, CancellationToken } from "electron-updater";
 import type { Logger } from "./proc";
 
@@ -52,6 +73,21 @@ export interface Updater {
   ): unknown;
 }
 
+/** Electron's own updater (Squirrel.Mac), which electron-updater drives on
+ *  macOS: the part the app uses. */
+export interface NativeUpdater {
+  on(event: "error", listener: (e: Error) => void): unknown;
+  on(
+    event: "update-downloaded" | "update-not-available",
+    listener: () => void
+  ): unknown;
+  listeners(event: "update-downloaded"): unknown[];
+  removeListener(
+    event: "update-downloaded",
+    listener: (...args: unknown[]) => void
+  ): unknown;
+}
+
 export interface Timers {
   setTimeout(fn: () => void, ms: number): unknown;
   clearTimeout(handle: unknown): void;
@@ -77,6 +113,8 @@ export interface UpdateDeps {
   checkLimitMs?: number;
   /** Whether the downloaded installer can be opened. */
   canOpen?(path: string): boolean;
+  /** macOS: Electron's own updater. Absent elsewhere. */
+  native?: NativeUpdater | null;
 }
 
 export interface AppUpdate {
@@ -93,10 +131,63 @@ export interface AppUpdate {
   installable(): boolean;
   /** Starts the installer of a downloaded update; false when none is ready
    *  or its file cannot be opened. The caller has stopped everything and lets
-   *  the app quit. */
-  install(): boolean;
+   *  the app quit. On macOS `onFailed` is called, once, when the system
+   *  refuses the update while the app still runs. */
+  install(onFailed?: () => void): boolean;
+  /** The install asked for did not end the app (the system refused it, or
+   *  gave no answer in time): an answer that comes later does not quit the
+   *  app. Does nothing without an install, and off macOS. */
+  abandonInstall(): void;
+  /** macOS: the system has not answered an install yet (it took the update,
+   *  or refused it). Until it has, another install must not be started.
+   *  Always false elsewhere. */
+  installPending(): boolean;
   /** Stops the timers; `start()` schedules them again. */
   stop(): void;
+}
+
+/** Whether this app updates itself: the packaged app, on Windows and on
+ *  macOS. */
+export function updatesItself(
+  platform: NodeJS.Platform,
+  packaged: boolean
+): boolean {
+  return packaged && (platform === "win32" || platform === "darwin");
+}
+
+/** macOS: the app bundle the executable is in
+ *  (`<bundle>.app/Contents/MacOS/<name>`), or null. */
+export function appBundle(execPath: string): string | null {
+  const macos = posix.dirname(execPath);
+  const contents = posix.dirname(macos);
+  const bundle = posix.dirname(contents);
+  return posix.basename(macos) === "MacOS" &&
+    posix.basename(contents) === "Contents" &&
+    bundle.endsWith(".app")
+    ? bundle
+    : null;
+}
+
+function canWritePath(path: string): boolean {
+  try {
+    accessSync(path, constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** macOS: whether the system can put a new version in the app's place: the
+ *  bundle and the folder it is in are writable. Neither is on a read-only
+ *  volume. True where the executable is in no bundle. */
+export function canReplaceApp(
+  execPath: string,
+  canWrite: (path: string) => boolean = canWritePath
+): boolean {
+  const bundle = appBundle(execPath);
+  if (!bundle) return true;
+  const folder = canWrite(posix.dirname(bundle));
+  return canWrite(bundle) && folder;
 }
 
 /** electron-updater's settings for the app: it downloads and installs only
@@ -176,6 +267,7 @@ export function createAppUpdate(deps: UpdateDeps): AppUpdate {
   const stallMs = deps.stallMs ?? STALL_MS;
   const checkLimitMs = deps.checkLimitMs ?? CHECK_LIMIT_MS;
   const canOpen = deps.canOpen ?? canOpenFile;
+  const native = deps.native ?? null;
 
   let state: UpdateState = { kind: "none" };
   let started = false;
@@ -188,6 +280,12 @@ export function createAppUpdate(deps: UpdateDeps): AppUpdate {
   let download: { token: CancellationToken; watchdog: unknown } | null = null;
   /** The installer of the update that is ready. */
   let installer: string | null = null;
+  /** macOS: the install asked for, until it is abandoned: who to tell when
+   *  the system refuses it, and the listeners electron-updater added to the
+   *  system's updater for it. */
+  let asked: { onFailed?: () => void; added: unknown[] } | null = null;
+  /** macOS: the system works on an install and has not answered it. */
+  let pending = false;
 
   /** A download runs or is ready: checks leave the state alone. */
   const busy = (): boolean =>
@@ -204,6 +302,34 @@ export function createAppUpdate(deps: UpdateDeps): AppUpdate {
     const percent = Math.max(0, Math.min(100, Math.floor(p.percent)));
     if (percent !== state.percent) set({ ...state, percent });
   });
+
+  // The system's check ends with one of three answers.
+  for (const answer of ["update-downloaded", "update-not-available"] as const)
+    native?.on(answer, () => {
+      pending = false;
+    });
+  native?.on("error", (e) => {
+    pending = false;
+    const onFailed = asked?.onFailed;
+    if (!asked || !onFailed) return;
+    asked.onFailed = undefined;
+    log.warn(`update install: the system refused the update: ${brief(e)}`);
+    onFailed();
+  });
+
+  function removeAdded(listeners: unknown[]): void {
+    for (const listener of listeners)
+      native?.removeListener(
+        "update-downloaded",
+        listener as (...args: unknown[]) => void
+      );
+  }
+
+  function abandonInstall(): void {
+    const current = asked;
+    asked = null;
+    if (current) removeAdded(current.added);
+  }
 
   function armWatchdog(): void {
     if (!download) return;
@@ -319,13 +445,35 @@ export function createAppUpdate(deps: UpdateDeps): AppUpdate {
       );
     },
     installable,
-    install() {
+    install(onFailed) {
       if (!installable() || state.kind !== "ready") return false;
       log.info(`update install: ${state.version}`);
       forgetEarlierInstall(updater);
+      // An earlier install nobody abandoned leaves no listener behind.
+      abandonInstall();
+      if (!native) {
+        updater.quitAndInstall(false, true);
+        return true;
+      }
+      const before = native.listeners("update-downloaded");
+      // Set first: the system may refuse before `quitAndInstall` returns.
+      const current: NonNullable<typeof asked> = { onFailed, added: [] };
+      asked = current;
+      pending = true;
       updater.quitAndInstall(false, true);
+      const added = native
+        .listeners("update-downloaded")
+        .filter((l) => !before.includes(l));
+      // No listener: the system already held the update, and electron-updater
+      // installed it at once without asking the system anything.
+      if (added.length === 0) pending = false;
+      // Abandoned meanwhile (refused at once): they go now.
+      if (asked === current) current.added = added;
+      else removeAdded(added);
       return true;
     },
+    abandonInstall,
+    installPending: () => pending,
     stop() {
       if (firstTimer !== null) timers.clearTimeout(firstTimer);
       if (interval !== null) timers.clearInterval(interval);

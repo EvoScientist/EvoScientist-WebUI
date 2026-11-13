@@ -8,7 +8,11 @@
 // - Desktop files go out only while `evoscientist.release` is true, and the
 //   flag may be on only while the core range installs a core with the
 //   Windows clean stop (EvoScientist#712, fixed by #716 in v0.4.1).
-import { join } from "node:path";
+// - The macOS files go out only while `evoscientist.releaseMac` is true as
+//   well: they need the signing secrets, and they are uploaded next to the
+//   Windows files, so that flag may be on only while `release` is.
+import { lstatSync, readdirSync } from "node:fs";
+import { basename, join } from "node:path";
 import { compareReleases, installVersion, parseRelease } from "./versions";
 
 /** The first core version a desktop release may install. */
@@ -32,11 +36,16 @@ export function tagProblem(tag: string, version: string): string | null {
     : `the tag ${tag} does not name the version v${version} (root package.json)`;
 }
 
-/** Why the `release` flag cannot be on with this core range, or null. */
+/** Why the release flags cannot be as they are, or null: `release` with a
+ *  core range that installs a core before the first release core, or
+ *  `releaseMac` without `release`. */
 export function releaseFlagProblem(meta: {
   coreRange: string;
   release?: unknown;
+  releaseMac?: unknown;
 }): string | null {
+  if (meta.releaseMac === true && meta.release !== true)
+    return "releaseMac is on, but release is off: the macOS files go out with the Windows release";
   if (meta.release !== true) return null;
   const installs = installVersion(meta.coreRange);
   const release = installs ? parseRelease(installs) : null;
@@ -48,10 +57,44 @@ export function releaseFlagProblem(meta: {
   return null;
 }
 
+/** What was added to `dir`, changed in it or removed from it after
+ *  `sinceMs`: files, links and folders at any depth, as paths relative to
+ *  `dir` (`.` is the folder itself). A removal shows as its folder, whose
+ *  own time changes. Links are looked at themselves and never followed,
+ *  so nothing outside the folder is listed and nothing twice. For the
+ *  smoke test: the UI server must leave the app's folder as it was. On macOS
+ *  that folder is the signed bundle, where one added file breaks the
+ *  signature. Throws when the folder cannot be read: a check that could not
+ *  look must not pass. */
+export function changedSince(dir: string, sinceMs: number): string[] {
+  const changed: string[] = [];
+  const look = (rel: string): boolean => {
+    try {
+      const st = lstatSync(join(dir, rel));
+      if (st.mtimeMs > sinceMs) changed.push(rel);
+      return st.isDirectory();
+    } catch {
+      // Gone, or unreadable, since its folder was listed: a change.
+      changed.push(rel);
+      return false;
+    }
+  };
+  // A folder that cannot be listed throws; a link to a folder is not one.
+  const walk = (rel: string): void => {
+    for (const name of readdirSync(join(dir, rel))) {
+      const child = rel === "." ? name : join(rel, name);
+      if (look(child)) walk(child);
+    }
+  };
+  if (lstatSync(dir).mtimeMs > sinceMs) changed.push(".");
+  walk(".");
+  return changed;
+}
+
 /** Where an unpacked build (`npm run pack`) keeps the app: its folder, the
  *  executable and the resources folder. On macOS the folder is the app
- *  bundle. `appDir` names another copy of the app, as the smoke test's
- *  `--app` does. */
+ *  bundle, and its executable has the bundle's name. `appDir` names another
+ *  copy of the app, as the smoke test's `--app` does. */
 export function appLayout(
   platform: NodeJS.Platform,
   releaseDir: string,
@@ -61,7 +104,7 @@ export function appLayout(
     const app = appDir ?? join(releaseDir, "mac-arm64", "EvoScientist.app");
     return {
       appDir: app,
-      exe: join(app, "Contents", "MacOS", "EvoScientist"),
+      exe: join(app, "Contents", "MacOS", basename(app, ".app")),
       resources: join(app, "Contents", "Resources"),
     };
   }

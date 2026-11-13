@@ -8,11 +8,17 @@
 // 4. `EvoSci deploy --json` until `ready`;
 // 5. the bundled UI server under the packaged executable (on macOS the app's
 //    helper) with ELECTRON_RUN_AS_NODE=1: `/` and one static asset answer
-//    200, and on macOS it has no Dock icon of its own (after a control
-//    process showed that a Dock icon would be seen).
+//    200, on macOS it has no Dock icon of its own (after a control
+//    process showed that a Dock icon would be seen), and it wrote nothing
+//    into the app's folder.
 // Usage: node scripts/smoke.mjs --core pinned|newest|<version> [--app <dir>]
 //                                [--use-my-folders]
 //        (<dir>: the unpacked app's folder; on macOS the .app bundle)
+//        node scripts/smoke.mjs --ui-only [--app <dir>]   (step 5 alone, with
+//        a backend address nothing listens on and scratch folders: for a
+//        build that step 1 to 4 already ran on in another form, as the signed
+//        macOS app of a release. It installs nothing, so it needs no
+//        --use-my-folders.)
 //        node scripts/smoke.mjs --list   (the versions to test, as JSON: one
 //        when the newest release inside the range is the pinned one)
 // The test installs the core and runs setup in this user's own folders, as
@@ -22,9 +28,15 @@
 // throwaway account, or with HOME / USERPROFILE / APPDATA / LOCALAPPDATA
 // pointed at a scratch folder.
 // `pinned` is the version the app installs, `newest` the newest release
-// inside its range (PyPI). Ends with `SMOKE OK core <version>` or
-// `SMOKE FAILED: <why>`, followed by the cleanups' lines.
-import { existsSync, mkdirSync, mkdtempSync, readFileSync } from "node:fs";
+// inside its range (PyPI). Ends with `SMOKE OK core <version>` (`SMOKE OK ui
+// only`) or `SMOKE FAILED: <why>`, followed by the cleanups' lines.
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -50,6 +62,7 @@ const { values } = parseArgs({
     app: { type: "string" },
     list: { type: "boolean" },
     "use-my-folders": { type: "boolean" },
+    "ui-only": { type: "boolean" },
   },
 });
 const { appDir, exe, resources } = packaging.appLayout(
@@ -179,8 +192,19 @@ async function main() {
   const ready = outcome.ready;
   log.info(`ready at ${ready.url}`);
 
+  await checkUiServer({
+    backendUrl: ready.url,
+    dataDir: ready.dataDir || folders.dataDir,
+    configDir: ready.configDir || folders.configDir,
+  });
+  return `core ${version}`;
+}
+
+/** Step 5: the bundled UI server under the packaged executable. */
+async function checkUiServer({ backendUrl, dataDir, configDir }) {
   step("UI server under the packaged executable");
   {
+    const startedAt = Date.now();
     const { port } = await uiServer.pickUiPort(pkg.evoscientist.uiPort);
     const ui = uiServer.startUiServer({
       execPath: uiServer.uiServerExec(exe, process.platform, existsSync),
@@ -188,15 +212,21 @@ async function main() {
       cwd: resources,
       env: uiServer.uiServerEnv(process.env, {
         uiPort: port,
-        backendUrl: ready.url,
-        dataDir: ready.dataDir || folders.dataDir,
-        configDir: ready.configDir || folders.configDir,
+        backendUrl,
+        dataDir,
+        configDir,
         serverJs,
       }),
       port,
       log,
     });
-    cleanups.unshift(() => ui.stop());
+    let stopped = false;
+    const stopUi = async () => {
+      if (stopped) return;
+      stopped = true;
+      await ui.stop();
+    };
+    cleanups.unshift(stopUi);
     let uiEnded = false;
     void ui.exited.then(() => (uiEnded = true));
     await ui.whenAnswering(60_000);
@@ -209,6 +239,19 @@ async function main() {
     await a.arrayBuffer();
     if (a.status !== 200) fail(`GET ${asset} answered ${a.status}`);
     log.info(`GET / 200, GET ${asset} 200`);
+    // Two more kinds of request that made the server write a page to its
+    // cache: a file route and a page that is not there. Each must be served
+    // as such, or the folder check below proves nothing about them.
+    for (const [path, want] of [
+      ["/icon.png", 200],
+      ["/no-such-page-for-the-smoke-test", 404],
+    ]) {
+      const r = await fetch(new URL(path, ui.url));
+      await r.arrayBuffer();
+      if (r.status !== want)
+        fail(`GET ${path} answered ${r.status}, not ${want}`);
+    }
+    log.info("GET /icon.png 200, GET of a missing page 404");
     if (process.platform === "darwin") {
       // The server has set its process title by now (Next does before it
       // listens), which is what registers it with macOS, so it is in the
@@ -226,13 +269,53 @@ async function main() {
       log.info("Dock: no icon for the UI server (a control process has one)");
     }
     if (uiEnded) fail("the UI server ended during the checks");
+    // The server leaves the app's folder as it was, also while it stops. On
+    // macOS that folder is the signed bundle: one file added there breaks
+    // the signature, and the system reports an app that was used once as
+    // modified.
+    await stopUi();
+    // A stop that timed out ends the tree and returns: the folder is looked
+    // at only once the server has really gone.
+    const gone = await Promise.race([
+      ui.exited.then(() => true),
+      new Promise((r) => setTimeout(() => r(false), 15_000)),
+    ]);
+    if (!gone) fail("the UI server still ran 15 s after it was stopped");
+    const written = packaging.changedSince(appDir, startedAt);
+    if (written.length)
+      fail(
+        `the UI server wrote into the app's folder: ${written
+          .slice(0, 4)
+          .join(", ")}${
+          written.length > 4 ? ` and ${written.length - 4} more` : ""
+        }`
+      );
+    log.info("the UI server wrote nothing into the app's folder");
   }
-  return version;
+}
+
+/** `--ui-only`: the page and its assets are served without a backend. */
+async function uiOnly() {
+  if (!versions.bundledUiVersion(serverJs))
+    fail(`no bundled WebUI at ${serverJs}`);
+  console.log(`UI server only, app ${appDir}`);
+  const scratch = mkdtempSync(join(tmpdir(), "evo-smoke-ui-"));
+  cleanups.unshift(() => rmSync(scratch, { recursive: true, force: true }));
+  await checkUiServer({
+    // The discard port: nothing answers there.
+    backendUrl: "http://127.0.0.1:9",
+    dataDir: join(scratch, "data"),
+    // Named evoscientist: only then does the UI server look for config.yaml
+    // here (uiServerEnv sets XDG_CONFIG_HOME to its parent), not in the
+    // user's own config folder.
+    configDir: join(scratch, "config", "evoscientist"),
+  });
+  return "ui only";
 }
 
 let code = 0;
 try {
-  console.log(`SMOKE OK core ${await main()}`);
+  console.log(`SMOKE OK ${await (values["ui-only"] ? uiOnly() : main())}`);
 } catch (e) {
   console.error(`SMOKE FAILED: ${e instanceof Error ? e.message : e}`);
   code = 1;

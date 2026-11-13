@@ -1,9 +1,22 @@
-import { existsSync, readFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  lutimesSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   FIRST_RELEASE_CORE,
   appLayout,
+  changedSince,
   releaseFlagProblem,
   tagProblem,
   versionArgs,
@@ -13,7 +26,7 @@ import { QUIT_FOR_INSTALL, QUIT_FOR_INSTALL_CANCELLED } from "./app";
 const pkg = JSON.parse(
   readFileSync(join(__dirname, "..", "package.json"), "utf8")
 ) as {
-  evoscientist: { coreRange: string; release?: unknown };
+  evoscientist: { coreRange: string; release?: unknown; releaseMac?: unknown };
   build: Record<string, unknown> & {
     nsis: Record<string, unknown>;
     publish: Record<string, unknown>;
@@ -85,6 +98,31 @@ describe("releaseFlagProblem", () => {
   it("is on in this package.json", () => {
     expect(pkg.evoscientist.release).toBe(true);
   });
+
+  // The release job uploads the macOS files next to the Windows ones, and
+  // the publish job publishes without desktop files while the installer is
+  // not built.
+  it("refuses the macOS switch while the release switch is off", () => {
+    const range = `>=${FIRST_RELEASE_CORE},<0.5`;
+    expect(
+      releaseFlagProblem({ coreRange: range, release: false, releaseMac: true })
+    ).toMatch(/releaseMac is on, but release is off/);
+    expect(releaseFlagProblem({ coreRange: range, releaseMac: true })).toMatch(
+      /releaseMac is on, but release is off/
+    );
+    expect(
+      releaseFlagProblem({ coreRange: range, release: true, releaseMac: true })
+    ).toBeNull();
+    expect(
+      releaseFlagProblem({ coreRange: range, release: true, releaseMac: false })
+    ).toBeNull();
+  });
+
+  // Off until a signed, notarized build has been made and updated once:
+  // a tag then builds no macOS files, as before.
+  it("keeps the macOS release off in this package.json", () => {
+    expect(pkg.evoscientist.releaseMac).toBe(false);
+  });
 });
 
 // Where electron-builder puts the unpacked app, for the smoke test.
@@ -120,6 +158,142 @@ describe("appLayout", () => {
     });
     expect(appLayout("linux", "/r", "/opt/app").exe).toBe(
       join("/opt/app", "evoscientist")
+    );
+  });
+
+  // A fork's test build has its own product name: the bundle and the
+  // executable in it carry that name.
+  it("on macOS names the executable after the bundle", () => {
+    const app = join("/r", "mac-arm64", "W04Test.app");
+    expect(appLayout("darwin", "/r", app)).toEqual({
+      appDir: app,
+      exe: join(app, "Contents", "MacOS", "W04Test"),
+      resources: join(app, "Contents", "Resources"),
+    });
+  });
+});
+
+// The smoke test's check that the UI server leaves the app's folder alone.
+describe("changedSince", () => {
+  it("lists what was added or changed in a folder after a moment, at any depth", () => {
+    const dir = mkdtempSync(join(tmpdir(), "evo-changed-"));
+    try {
+      mkdirSync(join(dir, "a", "b"), { recursive: true });
+      writeFileSync(join(dir, "kept.txt"), "1");
+      writeFileSync(join(dir, "a", "b", "changed.txt"), "1");
+      // Everything so far is older than the moment.
+      const before = new Date(Date.now() - 60_000);
+      for (const p of ["kept.txt", "a/b/changed.txt", "a/b", "a", "."])
+        utimesSync(join(dir, p), before, before);
+      const since = Date.now() - 30_000;
+      expect(changedSince(dir, since)).toEqual([]);
+      writeFileSync(join(dir, "a", "b", "changed.txt"), "2");
+      mkdirSync(join(dir, "a", "cache"));
+      writeFileSync(join(dir, "a", "cache", "new.bin"), "x");
+      expect(changedSince(dir, since).sort()).toEqual(
+        [
+          "a",
+          join("a", "b", "changed.txt"),
+          join("a", "cache"),
+          join("a", "cache", "new.bin"),
+        ].sort()
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("sees a file that was removed, also one directly in the folder", () => {
+    const dir = mkdtempSync(join(tmpdir(), "evo-changed-"));
+    try {
+      mkdirSync(join(dir, "sub"));
+      writeFileSync(join(dir, "top.txt"), "1");
+      writeFileSync(join(dir, "sub", "deep.txt"), "1");
+      const before = new Date(Date.now() - 60_000);
+      for (const p of ["top.txt", "sub/deep.txt", "sub", "."])
+        utimesSync(join(dir, p), before, before);
+      const since = Date.now() - 30_000;
+      expect(changedSince(dir, since)).toEqual([]);
+      rmSync(join(dir, "sub", "deep.txt"));
+      expect(changedSince(dir, since)).toEqual(["sub"]);
+      rmSync(join(dir, "top.txt"));
+      expect(changedSince(dir, since).sort()).toEqual([".", "sub"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // A link is looked at itself: one that points nowhere is no change, and
+  // the walk does not go through a link to a folder (a framework's
+  // `Versions/Current`, or a folder outside the app).
+  it("looks at a symbolic link, not at what it points to", () => {
+    const dir = mkdtempSync(join(tmpdir(), "evo-changed-"));
+    const outside = mkdtempSync(join(tmpdir(), "evo-outside-"));
+    try {
+      mkdirSync(join(dir, "Versions", "A"), { recursive: true });
+      writeFileSync(join(dir, "Versions", "A", "lib"), "1");
+      symlinkSync("A", join(dir, "Versions", "Current"));
+      symlinkSync(join(dir, "nowhere"), join(dir, "dangling"));
+      symlinkSync(outside, join(dir, "out"));
+      const before = new Date(Date.now() - 60_000);
+      for (const p of ["Versions/Current", "dangling", "out"])
+        lutimesSync(join(dir, p), before, before);
+      for (const p of ["Versions/A/lib", "Versions/A", "Versions", "."])
+        utimesSync(join(dir, p), before, before);
+      const since = Date.now() - 30_000;
+      expect(changedSince(dir, since)).toEqual([]);
+      // New files behind both links: one is in the folder (seen once, under
+      // its real path), the other is not in the folder at all.
+      writeFileSync(join(dir, "Versions", "A", "new"), "x");
+      writeFileSync(join(outside, "new"), "x");
+      expect(changedSince(dir, since).sort()).toEqual(
+        [join("Versions", "A"), join("Versions", "A", "new")].sort()
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  // Permissions mean nothing to root, and Windows has none of these modes.
+  const modes = process.platform !== "win32" && process.getuid?.() !== 0;
+
+  it.runIf(modes)("fails when a folder inside cannot be listed", () => {
+    const dir = mkdtempSync(join(tmpdir(), "evo-changed-"));
+    try {
+      mkdirSync(join(dir, "locked"));
+      chmodSync(join(dir, "locked"), 0o000);
+      expect(() => changedSince(dir, 0)).toThrow(/EACCES/);
+    } finally {
+      chmodSync(join(dir, "locked"), 0o755);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // A folder that can be listed but not entered: its entries are named,
+  // and none can be looked at.
+  it.runIf(modes)("counts an entry it cannot look at as changed", () => {
+    const dir = mkdtempSync(join(tmpdir(), "evo-changed-"));
+    try {
+      mkdirSync(join(dir, "shut"));
+      writeFileSync(join(dir, "shut", "f.txt"), "1");
+      const before = new Date(Date.now() - 60_000);
+      for (const p of ["shut/f.txt", "shut", "."])
+        utimesSync(join(dir, p), before, before);
+      chmodSync(join(dir, "shut"), 0o444);
+      expect(changedSince(dir, Date.now() - 30_000)).toEqual([
+        join("shut", "f.txt"),
+      ]);
+    } finally {
+      chmodSync(join(dir, "shut"), 0o755);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // A check that could not look must not pass.
+  it("fails when the folder cannot be read", () => {
+    expect(() => changedSince(join(tmpdir(), "evo-no-such-folder"), 0)).toThrow(
+      /ENOENT/
     );
   });
 });
@@ -176,6 +350,31 @@ describe("the macOS build", () => {
   // the dmg is stapled.
   it("writes no blockmap for the dmg", () => {
     expect(dmg.writeUpdateInfo).toBe(false);
+  });
+
+  // Notarization needs the hardened runtime. electron-builder turns it on
+  // by default; the line keeps it on if that default changes.
+  it("signs with the hardened runtime", () => {
+    expect(mac.hardenedRuntime).toBe(true);
+  });
+
+  // V8 needs the JIT entitlement under the hardened runtime, in the app and
+  // in its helpers (one runs the UI server). Without files of its own
+  // electron-builder signs with its template, which also turns library
+  // validation off.
+  it("gives the app and what inherits the JIT entitlement and nothing else", () => {
+    expect(mac.entitlements).toBe("assets/mac/entitlements.mac.plist");
+    expect(mac.entitlementsInherit).toBe(
+      "assets/mac/entitlements.mac.inherit.plist"
+    );
+    for (const name of [mac.entitlements, mac.entitlementsInherit]) {
+      const plist = readFileSync(join(desktop, name as string), "utf8");
+      const keys = [...plist.matchAll(/<key>([^<]*)<\/key>/g)].map((m) => m[1]);
+      expect(keys, name as string).toEqual(["com.apple.security.cs.allow-jit"]);
+      expect(plist, name as string).toMatch(
+        /<key>com\.apple\.security\.cs\.allow-jit<\/key>\s*<true\/>/
+      );
+    }
   });
 
   it("has an icon of its own", () => {
