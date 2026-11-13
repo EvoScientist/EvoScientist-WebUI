@@ -64,18 +64,32 @@ describe("the signing secrets", () => {
     expect(checkout.with?.["persist-credentials"]).toBe(false);
   });
 
-  it("must all be there in the upstream repository, and are never printed", () => {
+  it("must all be there in the upstream repository", () => {
     const check = jobs.mac.steps.find(
       (s) => s.name === "Check the signing secrets"
     );
     expect(check?.if).toBe("github.repository == env.UPSTREAM");
     for (const secret of SECRETS) expect(check?.run).toContain(secret);
     expect(check?.run).toContain("exit 1");
-    // Only names reach the log: no step echoes a secret's variable.
-    for (const secret of SECRETS)
-      expect(runs(jobs.mac)).not.toMatch(
-        new RegExp(`echo[^\\n]*\\$\\{?${secret}\\b`)
-      );
+  });
+
+  // A secret's value is read in two places only: the check whether it is
+  // empty, and the line that writes the notarization key to its file. That
+  // file is named only where it is written and where its path is exported.
+  // Everything else in the job's scripts handles names.
+  it("have their values read by no other line of the job's scripts", () => {
+    const lines = runs(jobs.mac)
+      .split("\n")
+      .map((l) => l.trim());
+    const reads = new RegExp(`\\$\\{?!?(${SECRETS.join("|")}|name)\\b|\\$\\{!`);
+    expect(lines.filter((l) => reads.test(l))).toEqual([
+      `[ -n "\${!name}" ] || missing+=("$name")`,
+      `printf '%s\\n' "$APPLE_API_KEY" > "$RUNNER_TEMP/notary-key.p8"`,
+    ]);
+    expect(lines.filter((l) => l.includes("notary-key.p8"))).toEqual([
+      `printf '%s\\n' "$APPLE_API_KEY" > "$RUNNER_TEMP/notary-key.p8"`,
+      `export APPLE_API_KEY="$RUNNER_TEMP/notary-key.p8"`,
+    ]);
   });
 
   // electron-builder throws when only some of the notarization variables

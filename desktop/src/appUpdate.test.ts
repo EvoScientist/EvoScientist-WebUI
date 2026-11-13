@@ -420,28 +420,39 @@ describe("on macOS", () => {
   // works in again.
   it("removes the quit listeners electron-updater added once the install is abandoned, and keeps the others", async () => {
     const t = await readyOnMac();
+    // Someone else's listener, as electron-updater has one of its own.
     const own = vi.fn();
     t.native.on("update-downloaded", own);
+    const before = t.native.listeners("update-downloaded");
     expect(t.u.install()).toBe(true);
-    expect(t.native.listenerCount("update-downloaded")).toBe(2);
+    expect(t.native.listenerCount("update-downloaded")).toBe(before.length + 1);
     t.u.abandonInstall();
-    expect(t.native.listeners("update-downloaded")).toEqual([own]);
+    expect(t.native.listeners("update-downloaded")).toEqual(before);
     t.native.emit("update-downloaded");
     expect(t.quits).toEqual([]);
     expect(own).toHaveBeenCalledTimes(1);
     // Nothing left to remove: a second call changes nothing.
     t.u.abandonInstall();
-    expect(t.native.listeners("update-downloaded")).toEqual([own]);
+    expect(t.native.listeners("update-downloaded")).toEqual(before);
   });
 
   it("a second install after an abandoned one adds one listener, not two", async () => {
     const t = await readyOnMac();
+    const base = t.native.listenerCount("update-downloaded");
     expect(t.u.install()).toBe(true);
     t.u.abandonInstall();
     expect(t.u.install()).toBe(true);
-    expect(t.native.listenerCount("update-downloaded")).toBe(1);
+    expect(t.native.listenerCount("update-downloaded")).toBe(base + 1);
     t.native.emit("update-downloaded");
     expect(t.quits).toEqual([2]);
+  });
+
+  it("a second install leaves one listener also when nobody abandoned the first", async () => {
+    const t = await readyOnMac();
+    const base = t.native.listenerCount("update-downloaded");
+    expect(t.u.install()).toBe(true);
+    expect(t.u.install()).toBe(true);
+    expect(t.native.listenerCount("update-downloaded")).toBe(base + 1);
   });
 
   // The caller abandons the install from `onFailed`: when the system
@@ -454,9 +465,39 @@ describe("on macOS", () => {
       t.native.on("update-downloaded", () => t.quits.push(1));
     });
     const onFailed = vi.fn(() => t.u.abandonInstall());
+    const base = t.native.listenerCount("update-downloaded");
     expect(t.u.install(onFailed)).toBe(true);
     expect(onFailed).toHaveBeenCalledTimes(1);
-    expect(t.native.listenerCount("update-downloaded")).toBe(0);
+    expect(t.native.listenerCount("update-downloaded")).toBe(base);
+    expect(t.u.installPending()).toBe(false);
+  });
+
+  // The system's check of an install that was given up still runs: a second
+  // one would be refused at once, and the first one's late refusal would be
+  // taken for the second's.
+  it("says the system is still at work on an install until it has answered", async () => {
+    const t = await readyOnMac();
+    expect(t.u.installPending()).toBe(false);
+    expect(t.u.install()).toBe(true);
+    expect(t.u.installPending()).toBe(true);
+    t.u.abandonInstall(); // the wait ran out
+    expect(t.u.installPending()).toBe(true);
+    t.native.emit("update-downloaded"); // the system took the update, late
+    expect(t.u.installPending()).toBe(false);
+
+    const refusedLate = await readyOnMac();
+    expect(refusedLate.u.install()).toBe(true);
+    refusedLate.u.abandonInstall();
+    refusedLate.native.emit("error", refused());
+    expect(refusedLate.u.installPending()).toBe(false);
+  });
+
+  it("has nothing pending once the system already holds the update", async () => {
+    const t = await readyOnMac();
+    // electron-updater installs at once then, without a listener or a check.
+    t.updater.quitAndInstall.mockImplementation(() => {});
+    expect(t.u.install()).toBe(true);
+    expect(t.u.installPending()).toBe(false);
   });
 
   it("without the system's updater an install is as before", async () => {
@@ -470,6 +511,7 @@ describe("on macOS", () => {
     const onFailed = vi.fn();
     expect(t.u.install(onFailed)).toBe(true);
     expect(t.updater.quitAndInstall).toHaveBeenCalledWith(false, true);
+    expect(t.u.installPending()).toBe(false);
     t.u.abandonInstall();
     expect(onFailed).not.toHaveBeenCalled();
   });

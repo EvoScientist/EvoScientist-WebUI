@@ -2230,6 +2230,7 @@ describe("restart to update (W04)", () => {
         return u.state.kind === "ready";
       }),
       abandonInstall: vi.fn(),
+      installPending: vi.fn(() => false),
       stop: vi.fn(),
     };
     return u;
@@ -2490,6 +2491,26 @@ describe("restart to update (W04)", () => {
     expect(appUpdate.abandonInstall).toHaveBeenCalledTimes(2);
   });
 
+  // macOS: the wait ran out, but the system still works on that install.
+  it("answers busy, and stops nothing, while the system still works on an install that was given up", async () => {
+    const appUpdate = fakeAppUpdate();
+    appUpdate.installPending.mockReturnValue(true);
+    const h = await launched({ appUpdate });
+    await expect(h.app.restartToUpdate()).resolves.toEqual({
+      ok: false,
+      code: "busy",
+    });
+    expect(appUpdate.install).not.toHaveBeenCalled();
+    expect(appUpdate.stop).not.toHaveBeenCalled();
+    expect(h.sessions[0].stopped.count).toBe(0);
+    expect(h.app.quitState).toBe("none");
+    expect(h.messageBox).not.toHaveBeenCalled();
+    // Once it has answered, the same click goes on.
+    appUpdate.installPending.mockReturnValue(false);
+    await expect(h.app.restartToUpdate()).resolves.toEqual({ ok: true });
+    expect(appUpdate.install).toHaveBeenCalledTimes(1);
+  });
+
   // macOS: on a read-only volume (run from the dmg) or in a folder the
   // account cannot change, the system cannot put the new version in place.
   it("answers cannot_replace before anything stops where the app can't be replaced, and offers the download page", async () => {
@@ -2720,6 +2741,7 @@ describe("app update on the pages (W04)", () => {
     installable: vi.fn(() => true),
     install: vi.fn(() => true),
     abandonInstall: vi.fn(),
+    installPending: vi.fn(() => false),
     stop: vi.fn(),
   };
   const UI = "http://127.0.0.1:4718";
@@ -2881,6 +2903,7 @@ describe("the installer asks the app to quit (D12)", () => {
         installable: vi.fn(() => true),
         install: vi.fn(() => true),
         abandonInstall: vi.fn(),
+        installPending: vi.fn(() => false),
         stop: vi.fn(),
       },
     });

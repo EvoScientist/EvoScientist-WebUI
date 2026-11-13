@@ -274,7 +274,8 @@ export interface App {
   /** "Restart to update": busy checks and stops as at quit, then the
    *  installer of the downloaded update. `not_ready` without one (or when
    *  its file cannot be opened), `busy` while a launch, restart, install,
-   *  setup, core update or quit runs or when the session ends meanwhile,
+   *  setup, core update or quit runs, when the session ends meanwhile, or
+   *  while the system still works on an install that was given up (macOS),
    *  `cannot_replace` where the app cannot be replaced (macOS: nothing
    *  stops, a box offers the download page), `cancelled` on Cancel,
    *  `update_failed` when the app started again on the current version. On
@@ -393,8 +394,8 @@ export function createApp(deps: AppDeps): App {
   /** The running quit was asked for by the installer. */
   let quitForInstall = false;
   let exiting = false;
-  /** Counts the installs of an app update asked for and given up: what
-   *  gives one up acts only for its own. */
+  /** Counts the installs of an app update asked for: what gives one up
+   *  acts only for its own. */
   let installAttempt = 0;
   /** The install script, setup or `EvoSci update` while it runs: closing
    *  asks, then stops the script or setup or waits for the update,
@@ -1233,6 +1234,12 @@ export function createApp(deps: AppDeps): App {
       return { ok: false, code: "busy" };
     }
     if (deps.canReplaceApp?.() === false) return cannotReplace();
+    // macOS: an install that was given up after the wait is still with the
+    // system. It takes no second one meanwhile.
+    if (update.installPending()) {
+      log.info("restart to update: the system still works on the last install");
+      return { ok: false, code: "busy" };
+    }
     if (!update.installable()) return { ok: false, code: "not_ready" };
     quitState = "checking";
     heldError = null;
@@ -1330,7 +1337,6 @@ export function createApp(deps: AppDeps): App {
     log.warn(
       `restart to update: no update was installed (${why}); launching again`
     );
-    installAttempt++;
     deps.appUpdate?.abandonInstall();
     exiting = false;
     quitState = "none";
