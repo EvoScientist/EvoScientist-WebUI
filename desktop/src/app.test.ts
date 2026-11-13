@@ -2555,6 +2555,51 @@ describe("restart to update (W04)", () => {
     expect(h.app.closePasses()).toBe(true);
   });
 
+  // electron-updater begins the quit right after it started the installer,
+  // on every install. The wait is for a quit that then does not end the app.
+  it("on Windows the wait still brings the app back after the quit has begun", async () => {
+    const waits: (() => void)[] = [];
+    const appUpdate = fakeAppUpdate();
+    const h = await launched({
+      appUpdate,
+      installWait: () => new Promise<void>((r) => waits.push(r)),
+    });
+    await expect(h.app.restartToUpdate()).resolves.toEqual({ ok: true });
+    h.app.quitBegan();
+    waits[0]();
+    await vi.waitFor(() => expect(h.sessions).toHaveLength(2));
+    expect(h.app.exiting).toBe(false);
+    await vi.waitFor(() =>
+      expect(h.messageBox).toHaveBeenCalledWith(NOT_INSTALLED)
+    );
+  });
+
+  // The app came back from a refused update and now quits, within the 15 s
+  // of that install: its wait must not start the app again under the quit.
+  it("a given-up attempt's wait does nothing when the app quits afterwards", async () => {
+    const waits: (() => void)[] = [];
+    const appUpdate = fakeAppUpdate();
+    const h = await launched({
+      appUpdate,
+      installWait: () => new Promise<void>((r) => waits.push(r)),
+    });
+    await expect(h.app.restartToUpdate()).resolves.toEqual({ ok: true });
+    appUpdate.refusals[0]?.();
+    await vi.waitFor(() =>
+      expect(h.messageBox).toHaveBeenCalledWith(NOT_INSTALLED)
+    );
+    const boxes = h.messageBox.mock.calls.length;
+    const sessions = h.sessions.length;
+    await h.app.requestQuit();
+    expect(h.exit).toHaveBeenCalled();
+    expect(h.app.exiting).toBe(true);
+    waits[0](); // the refused attempt's 15 s
+    await turn();
+    expect(h.app.exiting).toBe(true);
+    expect(h.sessions).toHaveLength(sessions);
+    expect(h.messageBox.mock.calls).toHaveLength(boxes);
+  });
+
   it("on macOS an exit that is no update closes the window", async () => {
     const h = await launched({ platform: "darwin" });
     await h.app.requestQuit();

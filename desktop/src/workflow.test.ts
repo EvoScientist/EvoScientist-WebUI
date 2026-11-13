@@ -17,6 +17,7 @@ interface Step {
 interface Job {
   needs?: string[];
   if?: string;
+  env?: Record<string, string>;
   environment?: string;
   permissions?: Record<string, string>;
   steps: Step[];
@@ -28,7 +29,12 @@ const workflow = load(
     join(__dirname, "..", "..", ".github", "workflows", "desktop.yml"),
     "utf8"
   ).replace(/\r\n/g, "\n")
-) as { permissions: Record<string, string>; jobs: Record<string, Job> };
+) as {
+  permissions: Record<string, string>;
+  env?: Record<string, string>;
+  concurrency: { group: string };
+  jobs: Record<string, Job>;
+};
 const jobs = workflow.jobs;
 const SECRETS = [
   "CSC_LINK",
@@ -103,11 +109,19 @@ describe("the signing secrets", () => {
   it("reach the step that signs only, after the dependencies were installed", () => {
     const steps = jobs.mac.steps;
     const SIGN = "Build, sign and notarize the app (publishing off)";
+    // Two steps name them: the check that they are there, which runs
+    // nothing else, and the step that signs. Not the job's or the
+    // workflow's own environment, which every step would get.
     expect(
       steps
         .filter((s) => JSON.stringify(s.env ?? {}).includes("secrets."))
         .map((s) => s.name)
     ).toEqual(["Check the signing secrets", SIGN]);
+    expect(JSON.stringify(jobs.mac.env ?? {})).not.toContain("secrets.");
+    expect(JSON.stringify(workflow.env ?? {})).not.toContain("secrets.");
+    expect(
+      steps.find((s) => s.name === "Check the signing secrets")?.run
+    ).not.toMatch(/\b(npm|npx|node)\b/);
     const names = steps.map((s) => s.name);
     const BEFORE = [
       "Build the WebUI",
@@ -222,6 +236,14 @@ describe("what a tag releases", () => {
 });
 
 describe("the manual rehearsal", () => {
+  // Any other manual run on a tag uploads that tag's release, as the tag's
+  // push does: the two must queue, or their uploads could interleave.
+  it("is the only run with a concurrency group of its own", () => {
+    expect(workflow.concurrency.group).toBe(
+      "${{ github.workflow }}-${{ github.ref }}${{ github.event_name == 'workflow_dispatch' && inputs.mac_rehearsal && '-rehearsal' || '' }}"
+    );
+  });
+
   // A manual run on a tag uploads and publishes that tag's release, as a
   // push of the tag does.
   it("fails at once on a tag, before anything is planned", () => {

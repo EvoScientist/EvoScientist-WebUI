@@ -66,9 +66,11 @@ on:
         default: false
 
 concurrency:
-  # A manual run has a group of its own: while it waits for an approval it
-  # would hold the pushes to its branch.
-  group: ${{ github.workflow }}-${{ github.ref }}${{ github.event_name == 'workflow_dispatch' && '-manual' || '' }}
+  # A rehearsal has a group of its own: while it waits for an approval it
+  # would hold the pushes to its branch. Every other manual run queues with
+  # the pushes to its ref, as before: on a tag both upload that tag's
+  # release.
+  group: ${{ github.workflow }}-${{ github.ref }}${{ github.event_name == 'workflow_dispatch' && inputs.mac_rehearsal && '-rehearsal' || '' }}
   # A release run is never cut off halfway.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
@@ -362,7 +364,8 @@ jobs:
           "
           node -p "'version ' + require('./package.json').version"
       # Neither the WebUI's build nor the installs of the dependencies nor
-      # the app's own compile get a secret: only the step that signs does.
+      # the app's own compile get a secret. Two steps do: the check above,
+      # which runs nothing else, and the step that signs.
       - name: Build the WebUI
         run: npm ci && npm run build
       - name: Install the desktop dependencies

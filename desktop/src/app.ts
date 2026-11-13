@@ -308,10 +308,12 @@ export interface App {
    *  for its check, and a window the user closed meanwhile would be gone
    *  when the update is refused and the app comes back. */
   closePasses(): boolean;
-  /** A quit has begun while the app exits: the updater's (on macOS it
-   *  closes the windows first, then quits) or the user's Quit. The closes
-   *  that follow are the quit's, and nothing brings the app back any more.
-   *  Ignored while the app runs. */
+  /** macOS: a quit has begun while the app exits: the updater's (it closes
+   *  the windows first, then quits) or the user's Quit. The closes that
+   *  follow are the quit's, and nothing brings the app back any more.
+   *  Ignored while the app runs, and on Windows: there electron-updater
+   *  begins the quit right after it started the installer, on every
+   *  install, and the 15 s wait is for a quit that does not end the app. */
   quitBegan(): void;
   /** The user closes the app's window. On macOS the window only hides: the
    *  app stays in the Dock with its backend and its page, as Mac apps do.
@@ -406,13 +408,13 @@ export function createApp(deps: AppDeps): App {
   /** The running quit was asked for by the installer. */
   let quitForInstall = false;
   let exiting = false;
-  /** Counts the installs of an app update asked for: what gives one up
-   *  acts only for its own. */
+  /** Counts the installs of an app update asked for and given up: what
+   *  gives one up acts only for its own, and only once. */
   let installAttempt = 0;
   /** The app has asked for the install of an update and waits for it to
    *  end the app. */
   let awaitingInstall = false;
-  /** A quit has begun while the app exits (`quitBegan`). */
+  /** macOS: a quit has begun while the app exits (`quitBegan`). */
   let quitBegun = false;
   /** The install script, setup or `EvoSci update` while it runs: closing
    *  asks, then stops the script or setup or waits for the update,
@@ -1323,7 +1325,7 @@ export function createApp(deps: AppDeps): App {
       // What gives this install up acts only for it, and only while the app
       // still waits for it: a refusal brings the app back within seconds, so
       // a second Restart to update can run before the first one's wait ends.
-      // Not once the quit has begun: the windows are closing then.
+      // Not once the quit has begun on macOS: the windows are closing then.
       const attempt = ++installAttempt;
       const giveUp = (why: string): void => {
         if (
@@ -1361,6 +1363,9 @@ export function createApp(deps: AppDeps): App {
     log.warn(
       `restart to update: no update was installed (${why}); launching again`
     );
+    // The attempt is over: what else would give it up (its wait, after a
+    // refusal) finds another number, also when the app quits meanwhile.
+    installAttempt++;
     deps.appUpdate?.abandonInstall();
     awaitingInstall = false;
     exiting = false;
@@ -1725,7 +1730,7 @@ export function createApp(deps: AppDeps): App {
       exiting &&
       (quitBegun || !(awaitingInstall && deps.platform === "darwin")),
     quitBegan: () => {
-      if (exiting) quitBegun = true;
+      if (exiting && deps.platform === "darwin") quitBegun = true;
     },
     closeWindow: () => {
       if (deps.platform !== "darwin") return void requestQuit();
