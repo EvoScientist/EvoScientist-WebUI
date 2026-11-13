@@ -289,7 +289,10 @@ async function uiOnly() {
     // The discard port: nothing answers there.
     backendUrl: "http://127.0.0.1:9",
     dataDir: join(scratch, "data"),
-    configDir: join(scratch, "config"),
+    // Named evoscientist: only then does the UI server look for config.yaml
+    // here (uiServerEnv sets XDG_CONFIG_HOME to its parent), not in the
+    // user's own config folder.
+    configDir: join(scratch, "config", "evoscientist"),
   });
   return "ui only";
 }
