@@ -517,12 +517,16 @@ describe("listPinnableSkills", () => {
     expect(await list()).toEqual([["wordy", emoji.repeat(1024), "global"]]);
   });
 
-  it("doesn't wait on a SKILL.md that isn't a regular file", async () => {
-    await fs.mkdir(join(global, "pipe"));
-    execFileSync("mkfifo", [join(global, "pipe", "SKILL.md")]);
-    await write(global, "ok", "name: ok\ndescription: Fine");
-    expect(await list()).toEqual([["ok", "Fine", "global"]]);
-  });
+  // A named pipe: Windows has no mkfifo.
+  it.skipIf(process.platform === "win32")(
+    "doesn't wait on a SKILL.md that isn't a regular file",
+    async () => {
+      await fs.mkdir(join(global, "pipe"));
+      execFileSync("mkfifo", [join(global, "pipe", "SKILL.md")]);
+      await write(global, "ok", "name: ok\ndescription: Fine");
+      expect(await list()).toEqual([["ok", "Fine", "global"]]);
+    }
+  );
 
   it("stays quick on a long run of spaces inside a value", async () => {
     const value = `x${" ".repeat(60_000)}y`;

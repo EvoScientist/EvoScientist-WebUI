@@ -47,6 +47,29 @@ jobs:
       - name: Build
         run: npm run build
 
+  # The server routes that read and write this machine's files (skills,
+  # workspace, projects, settings, AutoSkills) and their helpers, on Windows:
+  # its paths, links and file locking differ, and the rest of the WebUI's
+  # tests run on Linux only.
+  server-windows:
+    name: Server-side tests (windows)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Server-side unit tests
+        run: npx vitest run src/app/api src/lib/server
+
   desktop:
     name: Desktop lint & test (${{ matrix.os }})
     strategy:

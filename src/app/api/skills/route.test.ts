@@ -139,8 +139,15 @@ describe("/api/skills for a project", () => {
     DELETE(request("DELETE", SAME_ORIGIN_DELETE, `${query}&name=${name}`));
 
   beforeEach(() => {
-    project = realpathSync(mkdtempSync(join(tmpdir(), "skills-project-")));
-    outside = realpathSync(mkdtempSync(join(tmpdir(), "skills-outside-")));
+    // The native realpath, as the route's fs.promises.realpath: the JS one
+    // keeps a spelling the native one resolves (Windows' short names, as
+    // C:\Users\RUNNER~1 on CI; another case on macOS).
+    project = realpathSync.native(
+      mkdtempSync(join(tmpdir(), "skills-project-"))
+    );
+    outside = realpathSync.native(
+      mkdtempSync(join(tmpdir(), "skills-outside-"))
+    );
     vi.mocked(projectDir).mockResolvedValue(project);
   });
   afterEach(() => {
