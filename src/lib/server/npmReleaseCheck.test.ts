@@ -331,9 +331,10 @@ describe.runIf(process.platform !== "win32")("readPackedFile", () => {
     );
   });
 
-  // npm reads the later manifest and would publish 0.5.999: both checks
-  // refuse it, whichever a tar program reads.
-  it("refuses a second manifest npm would publish", () => {
+  // npm 11 reads the second manifest from each of these and would publish
+  // 0.5.999; npm 10 reads the first one beside `package//package.json`. The
+  // entry rules refuse each tarball, whichever manifest npm reads.
+  it("refuses a second manifest, whichever one npm reads", () => {
     for (const second of [
       "package/./package.json",
       "package//package.json",
@@ -346,18 +347,25 @@ describe.runIf(process.platform !== "win32")("readPackedFile", () => {
         ],
         (tgz) => {
           const packed = readPackedFile(tgz);
-          expect(packed.manifest?.version, second).toBe("0.5.999");
-          expect(packedProblem(packed, pkg), second).not.toBeNull();
-          expect(
-            packedProblem(
-              { ...packed, entries: ["package/package.json"] },
-              pkg
-            ),
-            second
-          ).toMatch(/0\.5\.999/);
+          expect(["0.5.4", "0.5.999"], second).toContain(
+            packed.manifest?.version
+          );
+          expect(packedProblem(packed, pkg), second).toMatch(
+            /outside package\/|odd entry/
+          );
         }
       );
     }
+  });
+
+  it("refuses a tarball whose manifest names another version", () => {
+    withTarball([["package/package.json", manifest("0.5.999")]], (tgz) => {
+      const packed = readPackedFile(tgz);
+      expect(packed.manifest).toEqual({ name: pkg.name, version: "0.5.999" });
+      expect(packedProblem(packed, pkg)).toBe(
+        "the tarball holds @evoscientist/webui@0.5.999, not @evoscientist/webui@0.5.4"
+      );
+    });
   });
 });
 

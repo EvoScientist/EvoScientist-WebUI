@@ -133,11 +133,11 @@ export function releaseAction(tag, version, npm, tags) {
 
 /**
  * Why the tarball is not this package's, or null. `packed` holds its entries
- * and the name and version npm reads from it. npm takes the manifest from any
- * one folder of a tarball, the last one it meets, and reads
- * `package/./package.json` or `package//package.json` as
- * `package/package.json`: every entry must be a plain path in `package/`,
- * once.
+ * and the name and version npm reads from it. npm can read the manifest from
+ * another entry: npm 11 takes the last one it meets, in any one folder,
+ * `package/./package.json` and `package//package.json` included (npm 10
+ * keeps the first beside `package//package.json`). So every entry must be a
+ * plain path in `package/`, once, whichever manifest npm reads.
  * @param {{ entries: string[], manifest: any } | null} packed
  * @param {{ name: string, version: string }} pkg
  * @returns {string | null}

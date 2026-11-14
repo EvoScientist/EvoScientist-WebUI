@@ -2,7 +2,15 @@
 // test. These pin what its jobs may do and when, where a slip would publish
 // a release it should not, or hand the signing secrets to code that should
 // not have them.
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { load } from "js-yaml";
 import { describe, expect, it } from "vitest";
@@ -488,20 +496,105 @@ describe("the npm jobs", () => {
   });
 
   // The publish waits for a review, which can take longer than a day.
-  it("hand over the tarball by one path, checked before it is published", () => {
+  it("hand over the tarball by one path", () => {
     const upload = pack.steps[uses(pack, "actions/upload-artifact")];
     expect(upload.with?.path).toBe("*.tgz");
     expect(Number(upload.with?.["retention-days"])).toBeGreaterThanOrEqual(7);
     const download = npm.steps[uses(npm, "actions/download-artifact")];
     expect(download.with?.path).toBe("npm-package");
-    const publish = npm.steps[at(npm, /npm publish/)].run ?? "";
-    const lines = publish.split("\n").map((l) => l.trim());
-    const tarball = lines.indexOf("set -- npm-package/*.tgz");
-    const checked = lines.indexOf(
-      'node scripts/npm-release-check.mjs "$GITHUB_REF_NAME" --tarball "$1"'
-    );
-    const published = lines.findIndex((l) => l.startsWith('npm publish "$1" '));
-    expect(tarball).toBeGreaterThan(-1);
-    expect(tarball < checked && checked < published).toBe(true);
   });
+
+  // The step's own shell under GitHub's `bash -e`, with stand-ins for the
+  // check (`node`) and `npm`: only a check that says publish, read back
+  // without an error, publishes, and then the tarball it checked.
+  describe.runIf(process.platform !== "win32")(
+    "the publish step's shell",
+    () => {
+      const script = npm.steps[at(npm, /npm publish/)].run ?? "";
+      const check =
+        "node scripts/npm-release-check.mjs v0.5.4 --tarball npm-package/p.tgz";
+      const publish =
+        "npm publish npm-package/p.tgz --provenance --ignore-scripts --loglevel verbose";
+
+      /** Runs the step in a folder holding `tarballs`. The check answers
+       *  `decision`: "fail" exits 1, "none" writes nothing. */
+      function step(
+        decision: string,
+        { tarballs = ["p.tgz"], catFails = false } = {}
+      ) {
+        const dir = mkdtempSync(join(tmpdir(), "npm-step-"));
+        try {
+          const bin = join(dir, "bin");
+          mkdirSync(bin);
+          mkdirSync(join(dir, "npm-package"));
+          for (const t of tarballs) {
+            writeFileSync(join(dir, "npm-package", t), "");
+          }
+          const stub = (name: string, body: string) =>
+            writeFileSync(join(bin, name), `#!/bin/sh\n${body}\n`, {
+              mode: 0o755,
+            });
+          stub(
+            "node",
+            [
+              'echo "node $*" >> "$CALLS"',
+              'case "$DECISION" in',
+              "  fail) exit 1 ;;",
+              "  none) ;;",
+              '  *) echo "action=$DECISION" >> "$GITHUB_OUTPUT" ;;',
+              "esac",
+            ].join("\n")
+          );
+          stub("npm", 'echo "npm $*" >> "$CALLS"');
+          // Prints the decision, then fails as if the read broke off.
+          if (catFails) stub("cat", '/bin/cat "$@"\nexit 7');
+          const calls = join(dir, "calls");
+          writeFileSync(calls, "");
+          const r = spawnSync("bash", ["-e", "-c", script], {
+            cwd: dir,
+            encoding: "utf8",
+            env: {
+              PATH: `${bin}:/usr/bin:/bin`,
+              // The step makes its decision file in here, removed below.
+              RUNNER_TEMP: dir,
+              CALLS: calls,
+              DECISION: decision,
+              GITHUB_REF_NAME: "v0.5.4",
+              GITHUB_OUTPUT: join(dir, "step-output"),
+            },
+          });
+          const ran = readFileSync(calls, "utf8").split("\n").filter(Boolean);
+          return { exit: r.status, ran };
+        } finally {
+          rmSync(dir, { recursive: true, force: true });
+        }
+      }
+
+      it("publishes the tarball it checked when the check says publish", () => {
+        expect(step("publish")).toEqual({ exit: 0, ran: [check, publish] });
+      });
+
+      it("ends without publishing when the check says skip", () => {
+        expect(step("skip")).toEqual({ exit: 0, ran: [check] });
+      });
+
+      it("stops on a failed check, no decision, an unknown one or a failed read", () => {
+        for (const decision of ["fail", "none", "maybe"]) {
+          expect(step(decision), decision).toEqual({ exit: 1, ran: [check] });
+        }
+        expect(step("publish", { catFails: true })).toEqual({
+          exit: 7,
+          ran: [check],
+        });
+      });
+
+      it("stops before the check without exactly one tarball", () => {
+        expect(step("publish", { tarballs: [] })).toEqual({ exit: 1, ran: [] });
+        expect(step("publish", { tarballs: ["a.tgz", "b.tgz"] })).toEqual({
+          exit: 1,
+          ran: [],
+        });
+      });
+    }
+  );
 });

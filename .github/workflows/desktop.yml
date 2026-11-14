@@ -724,13 +724,21 @@ jobs:
           path: npm-package
       # The pack job's tarball, once npm reads this name and version from it
       # and every entry is a plain path in package/: npm runs no package
-      # script for it. The
-      # provenance statement is required, and the verbose log says why when
-      # npm refuses the OIDC token.
+      # script for it. A version npm shows only at this check (published by
+      # hand meanwhile) is skipped too, and a check that decides nothing stops
+      # the job. The provenance statement is required, and the verbose log
+      # says why when npm refuses the OIDC token.
       - name: Publish
         if: steps.check.outputs.action != 'skip'
         run: |
           set -- npm-package/*.tgz
           [ "$#" -eq 1 ] && [ -f "$1" ] || { echo "::error::expected one tarball, found: $*"; exit 1; }
-          node scripts/npm-release-check.mjs "$GITHUB_REF_NAME" --tarball "$1"
+          decision=$(mktemp "$RUNNER_TEMP/npm-decision.XXXXXX")
+          GITHUB_OUTPUT="$decision" node scripts/npm-release-check.mjs "$GITHUB_REF_NAME" --tarball "$1"
+          decided=$(cat "$decision")
+          case "$decided" in
+            action=publish) ;;
+            action=skip) exit 0 ;;
+            *) echo "::error::the check before publishing decided nothing"; exit 1 ;;
+          esac
           npm publish "$1" --provenance --ignore-scripts --loglevel verbose
