@@ -23,7 +23,7 @@
   },
   "homepage": "https://github.com/EvoScientist/EvoScientist-WebUI#readme",
   "bin": {
-    "evoscientist-webui": "./bin/evoscientist-webui.mjs"
+    "evoscientist-webui": "bin/evoscientist-webui.mjs"
   },
   "files": [
     "bin/",
