@@ -727,11 +727,12 @@ jobs:
       # script for it. A version npm shows only at this check (published by
       # hand meanwhile) is skipped too, and a check that decides nothing stops
       # the job. The provenance statement is required, and the verbose log
-      # says why when npm refuses the OIDC token.
+      # says why when npm refuses the OIDC token. The path starts with ./:
+      # npm reads npm-package/<name>.tgz as a GitHub repository (user/repo).
       - name: Publish
         if: steps.check.outputs.action != 'skip'
         run: |
-          set -- npm-package/*.tgz
+          set -- ./npm-package/*.tgz
           [ "$#" -eq 1 ] && [ -f "$1" ] || { echo "::error::expected one tarball, found: $*"; exit 1; }
           decision=$(mktemp "$RUNNER_TEMP/npm-decision.XXXXXX")
           GITHUB_OUTPUT="$decision" node scripts/npm-release-check.mjs "$GITHUB_REF_NAME" --tarball "$1"

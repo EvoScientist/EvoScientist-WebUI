@@ -2,16 +2,19 @@
 // test. These pin what its jobs may do and when, where a slip would publish
 // a release it should not, or hand the signing secrets to code that should
 // not have them.
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { load } from "js-yaml";
 import { describe, expect, it } from "vitest";
 
@@ -366,6 +369,35 @@ describe("the manual rehearsal", () => {
 // the environment `npm`: the publish job proves with GitHub's OIDC token that
 // it is that publisher, so no npm token exists anywhere. The package is built
 // in a job of its own, so no dependency code runs next to that token.
+/**
+ * npm's own spec parser (npm-package-arg), from the npm that runs the tests:
+ * beside `npm_execpath` (set under `npm test` and `npx`), else beside the
+ * `npm` on PATH, else in `npm root -g`, which a custom global prefix can
+ * leave without npm.
+ */
+function npmSpecParser(): (spec: string) => { type: string } {
+  const nearCli = (cli: string) => dirname(dirname(realpathSync(cli)));
+  const run = (file: string, args: string[]) =>
+    execFileSync(file, args, { encoding: "utf8" }).trim();
+  const candidates = [
+    () => nearCli(process.env.npm_execpath ?? ""),
+    () => nearCli(run("bash", ["-c", "command -v npm"])),
+    () => join(run("npm", ["root", "-g"]), "npm"),
+  ];
+  const tried: string[] = [];
+  for (const candidate of candidates) {
+    let parser: string;
+    try {
+      parser = join(candidate(), "node_modules", "npm-package-arg");
+    } catch {
+      continue;
+    }
+    tried.push(parser);
+    if (existsSync(parser)) return createRequire(__filename)(parser);
+  }
+  throw new Error(`npm-package-arg is in none of: ${tried.join(", ")}`);
+}
+
 describe("the npm jobs", () => {
   const pack = jobs["npm-pack"];
   const npm = jobs.npm;
@@ -512,9 +544,9 @@ describe("the npm jobs", () => {
     () => {
       const script = npm.steps[at(npm, /npm publish/)].run ?? "";
       const check =
-        "node scripts/npm-release-check.mjs v0.5.4 --tarball npm-package/p.tgz";
+        "node scripts/npm-release-check.mjs v0.5.4 --tarball ./npm-package/p.tgz";
       const publish =
-        "npm publish npm-package/p.tgz --provenance --ignore-scripts --loglevel verbose";
+        "npm publish ./npm-package/p.tgz --provenance --ignore-scripts --loglevel verbose";
 
       /** Runs the step in a folder holding `tarballs`. The check answers
        *  `decision`: "fail" exits 1, "none" writes nothing. */
@@ -594,6 +626,17 @@ describe("the npm jobs", () => {
           exit: 1,
           ran: [],
         });
+      });
+
+      // npm reads `npm-package/<name>.tgz` as a GitHub repository
+      // (user/repo) and fails on git before it reaches the registry: ask
+      // npm's own parser how it reads what the step hands to npm publish.
+      it("hands npm publish a path npm reads as a file", () => {
+        const [, published] = step("publish").ran;
+        const tarball = published.split(" ")[2];
+        const parse = npmSpecParser();
+        expect(parse(tarball).type).toBe("file");
+        expect(parse("npm-package/p.tgz").type).toBe("git");
       });
     }
   );
