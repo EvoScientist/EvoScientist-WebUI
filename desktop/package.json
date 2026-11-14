@@ -22,7 +22,7 @@
     ],
     "uiPort": 4718,
     "release": true,
-    "releaseMac": false
+    "releaseMac": true
   },
   "dependencies": {
     "electron-updater": "^6.8.11",

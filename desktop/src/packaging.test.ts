@@ -119,10 +119,11 @@ describe("releaseFlagProblem", () => {
     ).toBeNull();
   });
 
-  // Off until a signed, notarized build has been made and updated once:
-  // a tag then builds no macOS files, as before.
-  it("keeps the macOS release off in this package.json", () => {
-    expect(pkg.evoscientist.releaseMac).toBe(false);
+  // On since 0.5.3: a rehearsal in CI built, signed, notarized and checked
+  // two versions, and the first, as built there, then updated itself to the
+  // second.
+  it("is on for macOS in this package.json", () => {
+    expect(pkg.evoscientist.releaseMac).toBe(true);
   });
 
   // The WebUI the app bundles reads the AutoSkills routes, which came with
