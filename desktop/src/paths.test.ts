@@ -1,8 +1,11 @@
 import {
+  chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   realpathSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -10,15 +13,18 @@ import { tmpdir } from "node:os";
 import { join, resolve, win32 } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  ensureServerHome,
   expandWorkdir,
   folderEnv,
   folderKey,
+  logFolder,
   readStartConfig,
   resolveFolders,
   runtimeDir,
   runtimeDirs,
   sharedDirFromEnv,
   withReadyFolders,
+  writableFolder,
 } from "./paths";
 import { evoscientist } from "../package.json";
 import { compareReleases, installVersion, parseRelease } from "./versions";
@@ -172,11 +178,13 @@ describe("withReadyFolders", () => {
       () => false,
       HOME
     );
+    // The log where the core the app installs keeps it: the server home of
+    // the data folder.
     expect(r.ready).toEqual({
       url: "u",
       dataDir: folders.dataDir,
       configDir: folders.configDir,
-      logFile: join(HOME, ".config", "evoscientist", "langgraph_dev.log"),
+      logFile: join(folders.dataDir, "server", "langgraph_dev.log"),
     });
     expect(r.missing).toEqual(["data_dir", "config_dir", "log_file"]);
   });
@@ -213,17 +221,245 @@ describe("runtimeDir", () => {
     expect(runtimeDir(dirs, has)).toBe(older);
   });
 
-  it("takes the older cores' folder when neither holds the backend's log", () => {
-    expect(runtimeDir(dirs, () => false)).toBe(older);
+  // Where the core the app installs keeps it: a first session's own lines,
+  // crash report and error screen are next to the backend's log.
+  it("takes the server home when neither holds the backend's log", () => {
+    expect(runtimeDir(dirs, () => false)).toBe(serverHome);
   });
 
-  it("falls back to the older cores' folder only while the app installs a core that keeps its log there", () => {
+  it("falls back to the server home only while the app installs a core that keeps its log there", () => {
     const installs = parseRelease(installVersion(evoscientist.coreRange) ?? "");
     expect(installs).not.toBeNull();
     expect(
       compareReleases(installs as number[], [0, 4, 2]),
-      "the app now installs a core that keeps its log in the server home: revisit runtimeDir's fallback"
-    ).toBeLessThan(0);
+      "the app now installs a core that keeps its log in ~/.config/evoscientist: revisit runtimeDir's fallback"
+    ).toBeGreaterThanOrEqual(0);
+  });
+});
+
+// Where the app's own logs open at its start, before `ready` names the
+// backend's log.
+describe("logFolder", () => {
+  const dirs = runtimeDirs(join(HOME, ".evoscientist"), HOME);
+  const [serverHome, older] = dirs;
+  const logIn = (dir: string) => join(dir, "langgraph_dev.log");
+  // A disk that holds `paths`; a folder among them can be written to unless
+  // it is `locked`. `make` adds one.
+  const disk = (paths: string[], locked: string[] = []) => {
+    const there = new Set(paths);
+    return {
+      exists: (p: string) => there.has(p),
+      writable: (p: string) => there.has(p) && !locked.includes(p),
+      make: (p: string) => {
+        there.add(p);
+      },
+    };
+  };
+  const never = () => {
+    throw new Error("must not be called");
+  };
+
+  it("takes the folder that holds the backend's log and makes nothing", () => {
+    expect(
+      logFolder(dirs, disk([older, logIn(older)]), "darwin", never)
+    ).toEqual({ dir: older, problem: null });
+    const both = disk([serverHome, logIn(serverHome), older, logIn(older)]);
+    expect(logFolder(dirs, both, "win32", never)).toEqual({
+      dir: serverHome,
+      problem: null,
+    });
+  });
+
+  it("takes a server home the core has made, on every platform, and makes nothing", () => {
+    for (const platform of ["darwin", "linux", "win32"] as const)
+      expect(logFolder(dirs, disk([serverHome]), platform, never)).toEqual({
+        dir: serverHome,
+        problem: null,
+      });
+  });
+
+  // `sudo EvoSci` can leave a server home that belongs to root.
+  it("passes over a folder it cannot write to, and says why", () => {
+    for (const platform of ["darwin", "win32"] as const)
+      expect(
+        logFolder(dirs, disk([serverHome], [serverHome]), platform, never)
+      ).toEqual({ dir: older, problem: expect.stringMatching(/write/) });
+    const both = disk(
+      [serverHome, logIn(serverHome), older, logIn(older)],
+      [serverHome]
+    );
+    expect(logFolder(dirs, both, "linux", never)).toEqual({
+      dir: older,
+      problem: null,
+    });
+  });
+
+  it("makes the server home off Windows while there is none", () => {
+    for (const platform of ["darwin", "linux"] as const) {
+      const d = disk([]);
+      const made: string[] = [];
+      const make = (p: string) => {
+        made.push(p);
+        d.make(p);
+      };
+      expect(logFolder(dirs, d, platform, make)).toEqual({
+        dir: serverHome,
+        problem: null,
+      });
+      expect(made).toEqual([serverHome]);
+    }
+  });
+
+  // A link to a volume that is not mounted: the folder is not there, and
+  // making it leaves the link as it is.
+  it("passes over a server home it made but still cannot write to", () => {
+    const keep = () => {};
+    expect(logFolder(dirs, disk([]), "darwin", keep)).toEqual({
+      dir: older,
+      problem: expect.stringMatching(/write/),
+    });
+  });
+
+  // A folder Node makes on Windows takes the access of the folder above it;
+  // the core's Python makes one that only its owner can open.
+  it("leaves the server home to the core on Windows", () => {
+    expect(logFolder(dirs, disk([]), "win32", never)).toEqual({
+      dir: older,
+      problem: null,
+    });
+  });
+
+  // A data folder on a drive that is gone or read-only: the app still logs.
+  it("logs in the older folder, and says why, when the server home cannot be made", () => {
+    const refuse = () => {
+      throw new Error("EACCES: permission denied, mkdir '/x'");
+    };
+    expect(logFolder(dirs, disk([]), "linux", refuse)).toEqual({
+      dir: older,
+      problem: "EACCES: permission denied, mkdir '/x'",
+    });
+  });
+
+  describe.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
+    "on this disk",
+    () => {
+      let base: string;
+      let data: string;
+      beforeEach(() => {
+        base = mkdtempSync(join(tmpdir(), "evo-logs-"));
+        data = join(base, ".evoscientist");
+        mkdirSync(data);
+      });
+      afterEach(() => {
+        chmodSync(data, 0o755);
+        const home = join(data, "server");
+        if (existsSync(home)) chmodSync(home, 0o755);
+        rmSync(base, { recursive: true, force: true });
+      });
+      const pick = () =>
+        logFolder(
+          runtimeDirs(data, base),
+          { exists: existsSync, writable: writableFolder },
+          process.platform,
+          ensureServerHome
+        );
+
+      it("logs in the older folder when the data folder cannot be written", () => {
+        chmodSync(data, 0o555);
+        const r = pick();
+        expect(r.dir).toBe(join(base, ".config", "evoscientist"));
+        expect(r.problem).toMatch(/EACCES/);
+      });
+
+      it("logs in the older folder when the server home links to nothing", () => {
+        symlinkSync(join(base, "unmounted"), join(data, "server"));
+        const r = pick();
+        expect(r.dir).toBe(join(base, ".config", "evoscientist"));
+        expect(r.problem).toMatch(/write/);
+      });
+
+      it("logs in the older folder when the server home cannot be written", () => {
+        const home = join(data, "server");
+        mkdirSync(home);
+        writeFileSync(join(home, "langgraph_dev.log"), "x");
+        chmodSync(home, 0o500);
+        const r = pick();
+        expect(r.dir).toBe(join(base, ".config", "evoscientist"));
+        expect(r.problem).toMatch(/write/);
+      });
+    }
+  );
+});
+
+describe("writableFolder", () => {
+  let base: string;
+  beforeEach(() => {
+    base = mkdtempSync(join(tmpdir(), "evo-writable-"));
+  });
+  afterEach(() => {
+    chmodSync(base, 0o755);
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  it("is true for a folder, and false for a file or for nothing", () => {
+    expect(writableFolder(base)).toBe(true);
+    // Executable, so only its kind tells it from a folder.
+    writeFileSync(join(base, "file"), "x", { mode: 0o755 });
+    expect(writableFolder(join(base, "file"))).toBe(false);
+    expect(writableFolder(join(base, "none"))).toBe(false);
+  });
+
+  it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
+    "is false for a folder this account cannot make files in",
+    () => {
+      chmodSync(base, 0o500);
+      expect(writableFolder(base)).toBe(false);
+    }
+  );
+});
+
+// The app may need the server home before the core has made it (its own logs
+// open there at start). The core makes it readable by its owner only, and
+// narrows a wider one with a warning that the local secret was exposed.
+describe("ensureServerHome", () => {
+  let base: string;
+  beforeEach(() => {
+    base = mkdtempSync(join(tmpdir(), "evo-home-"));
+  });
+  afterEach(() => rmSync(base, { recursive: true, force: true }));
+  const mode = (p: string) => statSync(p).mode & 0o777;
+  const posix = process.platform !== "win32";
+
+  it.runIf(posix)(
+    "makes it as the core does: readable by its owner only",
+    () => {
+      const data = join(base, ".evoscientist");
+      const home = join(data, "server");
+      ensureServerHome(home);
+      expect(mode(home)).toBe(0o700);
+      // The data folder above it is made as the core makes it, with the usual
+      // mode: as a folder made beside it under the same umask.
+      const plain = join(base, "plain");
+      mkdirSync(plain);
+      expect(mode(data)).toBe(mode(plain));
+    }
+  );
+
+  it.runIf(posix)("leaves one that exists as it is", () => {
+    const home = join(base, "server");
+    mkdirSync(home);
+    chmodSync(home, 0o755);
+    writeFileSync(join(home, "langgraph_dev.log"), "x");
+    ensureServerHome(home);
+    expect(mode(home)).toBe(0o755);
+    ensureServerHome(home);
+    expect(mode(home)).toBe(0o755);
+  });
+
+  it("makes the folders on every platform", () => {
+    const home = join(base, "a", "b", "server");
+    ensureServerHome(home);
+    expect(statSync(home).isDirectory()).toBe(true);
   });
 });
 

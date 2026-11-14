@@ -2,7 +2,14 @@
 // backend answers, found the way the core finds them (EvoScientist/paths.py,
 // config/settings.py) and the way the WebUI's server does
 // (src/lib/server/paths.ts, coreConfig.ts).
-import { readFileSync, realpathSync } from "node:fs";
+import {
+  accessSync,
+  constants as fsConstants,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import * as nodePath from "node:path";
 import { join, resolve, sep } from "node:path";
@@ -95,17 +102,91 @@ export function runtimeDirs(dataDir: string, home = homedir()): string[] {
 }
 
 /**
- * Where the backend's log, and so the app's own logs, live before `ready`
- * names it: the first of `dirs` that holds the backend's log, else the last,
- * where the core the app installs keeps it.
+ * Where the backend's log is before `ready` names it: the first of `dirs`
+ * that holds it, else the first, the server home, where the core the app
+ * installs keeps it (cores from 0.4.2 on). Where the app's own logs open is
+ * logFolder's choice.
  */
 export function runtimeDir(
   dirs: string[],
   exists: (path: string) => boolean
 ): string {
-  return (
-    dirs.find((dir) => exists(join(dir, BACKEND_LOG))) ?? dirs[dirs.length - 1]
+  return dirs.find((dir) => exists(join(dir, BACKEND_LOG))) ?? dirs[0];
+}
+
+/**
+ * Makes the server home as the core makes it, readable by its owner only
+ * (`0700`; the folders above it with the usual mode, as the core makes the
+ * data folder). The core narrows a server home that others can read, and then
+ * warns that its local secret may have been exposed. One that exists is left
+ * as it is. Not for Windows, where Node ignores the mode (see logFolder).
+ */
+export function ensureServerHome(path: string): void {
+  mkdirSync(nodePath.dirname(path), { recursive: true });
+  try {
+    mkdirSync(path, { mode: 0o700 });
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+  }
+}
+
+/** Whether `path` is a folder this account can make files in. Node does not
+ *  read a folder's access list on Windows, so there it says whether the folder
+ *  exists. */
+export function writableFolder(path: string): boolean {
+  try {
+    if (!statSync(path).isDirectory()) return false;
+    accessSync(path, fsConstants.W_OK | fsConstants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Where the app's own logs open at its start, before `ready` names the
+ * backend's log; `dirs` are runtimeDirs' two folders. The first that holds
+ * the backend's log and can be written to, else the server home. One the
+ * core has not made yet the app makes as the core does (`makeServerHome`),
+ * but not on Windows: a folder Node makes there takes the access of the
+ * folder above it, where the core's Python makes one that only its owner can
+ * open, and the core does not narrow it later. There the logs open in the
+ * older folder until `ready` names the backend's. So they do wherever the
+ * server home cannot be made or written to, and then `problem` says why
+ * (`sudo EvoSci` can leave one that belongs to root; a link to a volume that
+ * is not mounted makes no folder).
+ */
+export function logFolder(
+  dirs: string[],
+  disk: {
+    exists: (path: string) => boolean;
+    writable: (path: string) => boolean;
+  },
+  platform: NodeJS.Platform,
+  makeServerHome: (path: string) => void
+): { dir: string; problem: string | null } {
+  const [serverHome, older] = dirs;
+  const cannotWrite = {
+    dir: older,
+    problem: "it is not a folder this account can write to",
+  };
+  const withLog = dirs.find(
+    (dir) => disk.exists(join(dir, BACKEND_LOG)) && disk.writable(dir)
   );
+  if (withLog !== undefined) return { dir: withLog, problem: null };
+  if (disk.exists(serverHome))
+    return disk.writable(serverHome)
+      ? { dir: serverHome, problem: null }
+      : cannotWrite;
+  if (platform === "win32") return { dir: older, problem: null };
+  try {
+    makeServerHome(serverHome);
+  } catch (e) {
+    return { dir: older, problem: e instanceof Error ? e.message : String(e) };
+  }
+  return disk.writable(serverHome)
+    ? { dir: serverHome, problem: null }
+    : cannotWrite;
 }
 
 /**

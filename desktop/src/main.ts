@@ -80,11 +80,13 @@ import { DESKTOP_LOG, DESKTOP_UI_LOG, FileLog } from "./logs";
 import { endProbes, readLoginPath } from "./loginPath";
 import { answers } from "./loopback";
 import {
+  ensureServerHome,
   folderEnv,
+  logFolder,
   readStartConfig,
   resolveFolders,
-  runtimeDir,
   runtimeDirs,
+  writableFolder,
 } from "./paths";
 import { killTree, runCollect } from "./proc";
 import type { ActionId } from "./screens";
@@ -131,9 +133,18 @@ const folders = resolveFolders(process.env);
 const childEnv = folderEnv(process.env, folders) as NodeJS.ProcessEnv;
 const echo = app.isPackaged ? undefined : (l: string) => console.log(l);
 const backendLogDirs = runtimeDirs(folders.dataDir);
-const logDir = runtimeDir(backendLogDirs, existsSync);
-const log = new FileLog(logDir, DESKTOP_LOG, echo);
-const uiLog = new FileLog(logDir, DESKTOP_UI_LOG);
+const logStart = logFolder(
+  backendLogDirs,
+  { exists: existsSync, writable: writableFolder },
+  process.platform,
+  ensureServerHome
+);
+const log = new FileLog(logStart.dir, DESKTOP_LOG, echo);
+const uiLog = new FileLog(logStart.dir, DESKTOP_UI_LOG);
+if (logStart.problem !== null)
+  log.warn(
+    `the server home ${backendLogDirs[0]} is not used (${logStart.problem}); the logs are in ${logStart.dir} until the backend names its log`
+  );
 
 const WEB_PREFERENCES = {
   preload: PRELOAD,
