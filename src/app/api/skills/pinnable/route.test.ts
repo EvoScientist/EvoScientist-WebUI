@@ -1,3 +1,4 @@
+import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 
@@ -37,8 +38,9 @@ describe("GET /api/skills/pinnable", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("no-store");
     expect(await res.json()).toEqual({ skills: [skill] });
+    // A path of this platform: \ws\skills on Windows.
     expect(listPinnableSkills).toHaveBeenCalledWith({
-      workspace: "/ws/skills",
+      workspace: join("/ws", "skills"),
       global: SKILLS_INSTALL_DIR,
     });
   });
