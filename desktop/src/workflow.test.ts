@@ -9,9 +9,11 @@ import { describe, expect, it } from "vitest";
 
 interface Step {
   name?: string;
+  id?: string;
   if?: string;
   run?: string;
   uses?: string;
+  with?: Record<string, unknown>;
   env?: Record<string, string>;
 }
 interface Job {
@@ -20,6 +22,7 @@ interface Job {
   env?: Record<string, string>;
   environment?: string;
   permissions?: Record<string, string>;
+  concurrency?: { group: string; queue?: string };
   steps: Step[];
 }
 
@@ -110,7 +113,9 @@ describe("the signing secrets", () => {
         for (const secret of SECRETS)
           expect(text, secret).toContain(`secrets.${secret}`);
       } else {
-        expect(job.environment, name).toBeUndefined();
+        // The npm job's environment names npm's trusted publisher and
+        // holds no secret; no other job has one.
+        expect(job.environment, name).toBe(name === "npm" ? "npm" : undefined);
         expect(namesSecret(job), name).toBe(false);
       }
     }
@@ -346,5 +351,157 @@ describe("the manual rehearsal", () => {
     expect(step?.run).toMatch(
       /if \[ "\$BUILD" = rehearsal-next \]; then\n\s*npm version patch --no-git-tag-version/
     );
+  });
+});
+
+// npm's trusted publisher for @evoscientist/webui names this workflow file and
+// the environment `npm`: the publish job proves with GitHub's OIDC token that
+// it is that publisher, so no npm token exists anywhere. The package is built
+// in a job of its own, so no dependency code runs next to that token.
+describe("the npm jobs", () => {
+  const pack = jobs["npm-pack"];
+  const npm = jobs.npm;
+  const at = (job: Job, re: RegExp) =>
+    job.steps.findIndex((s) => re.test(s.run ?? ""));
+  const uses = (job: Job, action: string) =>
+    job.steps.findIndex((s) => s.uses?.startsWith(action));
+  const UPSTREAM_TAG =
+    "!cancelled() && startsWith(github.ref, 'refs/tags/v') && ";
+  const CHECK = /^node scripts\/npm-release-check\.mjs "\$GITHUB_REF_NAME"$/m;
+  const NOT_SKIPPED = "steps.check.outputs.action != 'skip'";
+
+  it("pack only on an upstream tag, after the release is published, and not in a cancelled run", () => {
+    expect(pack.needs).toEqual(["publish"]);
+    expect(flat(pack.if)).toBe(
+      UPSTREAM_TAG +
+        "needs.publish.result == 'success' && " +
+        "github.repository == 'EvoScientist/EvoScientist-WebUI'"
+    );
+    expect(npm.needs).toEqual(["npm-pack"]);
+    expect(flat(npm.if)).toBe(
+      UPSTREAM_TAG +
+        "needs.npm-pack.result == 'success' && " +
+        "needs.npm-pack.outputs.action != 'skip' && " +
+        "github.repository == 'EvoScientist/EvoScientist-WebUI'"
+    );
+    expect(workflow.env?.UPSTREAM).toBe("EvoScientist/EvoScientist-WebUI");
+  });
+
+  // Trusted publishing runs on GitHub's runners only.
+  it("run on GitHub's runners, with no secret and no credential kept by the checkout", () => {
+    for (const job of [pack, npm]) {
+      expect((job as unknown as Record<string, unknown>)["runs-on"]).toBe(
+        "ubuntu-latest"
+      );
+      expect(job.env).toBeUndefined();
+      for (const s of job.steps) {
+        for (const text of [s.run, s.if, s.with, s.env]) {
+          expect(namesSecret(text ?? ""), s.name ?? s.uses).toBe(false);
+        }
+      }
+      const checkout = job.steps[uses(job, "actions/checkout")];
+      expect(checkout?.with?.["persist-credentials"]).toBe(false);
+    }
+  });
+
+  it("build the package without an OIDC token, and publish it with one in the environment npm", () => {
+    expect(pack.environment).toBeUndefined();
+    expect(pack.permissions).toEqual({ contents: "read" });
+    expect(npm.environment).toBe("npm");
+    expect(npm.permissions).toEqual({ contents: "read", "id-token": "write" });
+    expect(workflow.permissions["id-token"]).toBeUndefined();
+    for (const [name, job] of Object.entries(jobs)) {
+      if (name !== "npm")
+        expect(job.permissions?.["id-token"], name).toBeUndefined();
+    }
+  });
+
+  it("pack after the check, and hand the tarball over", () => {
+    const check = at(pack, CHECK);
+    expect(check).toBeGreaterThan(-1);
+    expect(pack.steps[check].id).toBe("check");
+    const ci = at(pack, /^npm ci$/m);
+    const packed = at(pack, /^npm pack$/m);
+    const upload = uses(pack, "actions/upload-artifact");
+    expect(check < ci && ci < packed && packed < upload).toBe(true);
+    for (const i of [ci, packed, upload]) {
+      expect(pack.steps[i].if).toBe(NOT_SKIPPED);
+    }
+    expect(pack.steps[upload].with?.name).toBe("npm-package");
+    expect(
+      (pack as unknown as { outputs: Record<string, string> }).outputs
+    ).toEqual({
+      action: "${{ steps.check.outputs.action }}",
+    });
+  });
+
+  // In its own lines the publish job runs npm only to upgrade itself and to
+  // publish the tarball; the check script also reads the tarball with
+  // `npm pack --dry-run`. None of them runs a package script.
+  it("publish the pack job's tarball and run no dependency code", () => {
+    const npmLines = runs(npm)
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => /^(npm|npx)\s/.test(l));
+    expect(npmLines).toEqual([
+      "npm install -g npm@11.21.1 --ignore-scripts",
+      'npm publish "$1" --provenance --ignore-scripts --loglevel verbose',
+    ]);
+    expect(runs(npm)).not.toMatch(
+      /\bnpm\s+(ci|run|exec|rebuild|install(?!\s+-g\s+npm@))\b|\bnpx\b/
+    );
+    const check = at(npm, CHECK);
+    const upgrade = at(npm, /^npm install -g npm@/m);
+    const download = uses(npm, "actions/download-artifact");
+    const publish = at(npm, /npm publish/);
+    expect(upgrade).toBeLessThan(publish);
+    expect(check).toBeLessThan(publish);
+    expect(download).toBeLessThan(publish);
+    expect(npm.steps[download].with?.name).toBe("npm-package");
+    expect(npm.steps[check].id).toBe("check");
+    for (const i of [download, publish]) {
+      expect(npm.steps[i].if).toBe(NOT_SKIPPED);
+    }
+  });
+
+  // Trusted publishing needs Node 22.14 and npm 11.5.1 or later.
+  it("run a Node and an npm that can publish as a trusted publisher, with no cache", () => {
+    for (const job of [pack, npm]) {
+      const setup = job.steps[uses(job, "actions/setup-node")];
+      expect(Number(setup?.with?.["node-version"])).toBeGreaterThanOrEqual(24);
+      expect(setup?.with?.["package-manager-cache"]).toBe(false);
+    }
+    const setup = npm.steps[uses(npm, "actions/setup-node")];
+    expect(setup?.with?.["registry-url"]).toBe("https://registry.npmjs.org");
+    const pinned = /npm install -g npm@(\d+)\.(\d+)\.(\d+) /.exec(runs(npm));
+    expect(pinned).not.toBeNull();
+    const [major, minor, patch] = (pinned ?? []).slice(1).map(Number);
+    expect(major * 1e6 + minor * 1e3 + patch).toBeGreaterThanOrEqual(11005001);
+  });
+
+  // Without `queue: max` GitHub cancels a waiting job when another queues.
+  it("publish one tag at a time, the others waiting in line", () => {
+    expect(npm.concurrency).toEqual({
+      group: "${{ github.workflow }}-npm",
+      queue: "max",
+    });
+  });
+
+  // The publish waits for a review, which can take longer than a day.
+  it("hand over the tarball by one path, checked before it is published", () => {
+    const upload = pack.steps[uses(pack, "actions/upload-artifact")];
+    expect(upload.with?.path).toBe("*.tgz");
+    expect(Number(upload.with?.["retention-days"])).toBeGreaterThanOrEqual(7);
+    const download = npm.steps[uses(npm, "actions/download-artifact")];
+    expect(download.with?.path).toBe("npm-package");
+    const publish = npm.steps[at(npm, /npm publish/)].run ?? "";
+    const lines = publish.split("\n").map((l) => l.trim());
+    const tarball = lines.indexOf("set -- npm-package/*.tgz");
+    const checked = lines.indexOf(
+      'node scripts/npm-release-check.mjs "$GITHUB_REF_NAME" --tarball "$1"'
+    );
+    const published = lines.findIndex((l) => l.startsWith('npm publish "$1" '));
+    expect(tarball).toBeGreaterThan(-1);
+    expect(tarball < checked && checked < published).toBe(true);
   });
 });

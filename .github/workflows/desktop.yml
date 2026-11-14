@@ -35,6 +35,16 @@ name: Desktop
 #   can be read by a workflow on any branch. Only the `mac` job names that
 #   environment. In the upstream repository it fails when a secret is
 #   missing; a fork builds unsigned.
+# - npm, upstream only: once the release is published, `npm-pack` builds
+#   the package from the tag with no token at hand, and `npm` publishes that
+#   tarball as npm's trusted publisher for this workflow and the environment
+#   `npm` (v* tags only, a reviewer approves each use): GitHub's OIDC token,
+#   no secret, no login, and no dependency code runs next to the
+#   token. scripts/npm-release-check.mjs runs in both: the tag must name the
+#   version, a version npm has already is skipped (a publish by hand, then a
+#   re-run), a pre-release or a version below a newer release tag or npm's
+#   latest stops the job, and npm must read this name and version from the
+#   tarball, whose entries are plain paths in package/.
 # - A manual run on main with `mac_rehearsal`: the `mac` job for this version
 #   and for the next patch version, both signed and notarized, with the
 #   update feed on 127.0.0.1. Nothing goes to a release (on a tag, where a
@@ -619,3 +629,108 @@ jobs:
             make_latest=false
           fi
           gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest="$make_latest"
+
+  npm-pack:
+    name: Pack for npm
+    needs: [publish]
+    # After the release: EvoScientist's WebUI updates come from npm, so a
+    # version reaches them only once its release is out. Upstream only (a
+    # fork's tag build never reaches npm), and not in a cancelled run. No
+    # OIDC token here: the dependencies' scripts and the build run in this
+    # job, the publish in the next.
+    if: >-
+      !cancelled() && startsWith(github.ref, 'refs/tags/v') &&
+      needs.publish.result == 'success' &&
+      github.repository == 'EvoScientist/EvoScientist-WebUI'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    outputs:
+      action: ${{ steps.check.outputs.action }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: The tag names this version, and npm doesn't have it yet
+        id: check
+        run: node scripts/npm-release-check.mjs "$GITHUB_REF_NAME"
+      # A missing output builds and publishes: a version npm has already then
+      # fails loudly instead of the job passing with nothing published.
+      - name: Install dependencies
+        if: steps.check.outputs.action != 'skip'
+        run: npm ci
+      # `prepack` builds the bundle.
+      - name: Pack
+        if: steps.check.outputs.action != 'skip'
+        run: npm pack
+      - uses: actions/upload-artifact@v7
+        if: steps.check.outputs.action != 'skip'
+        with:
+          name: npm-package
+          path: "*.tgz"
+          if-no-files-found: error
+          # Kept as long as the installers: the publish waits for a review.
+          retention-days: 7
+
+  npm:
+    name: Publish to npm
+    needs: [npm-pack]
+    if: >-
+      !cancelled() && startsWith(github.ref, 'refs/tags/v') &&
+      needs.npm-pack.result == 'success' &&
+      needs.npm-pack.outputs.action != 'skip' &&
+      github.repository == 'EvoScientist/EvoScientist-WebUI'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # npm's trusted publisher for @evoscientist/webui names this workflow file
+    # and this environment, which only v* tags may use and whose reviewer
+    # approves each publish. The job proves with GitHub's OIDC token that it
+    # is that publisher: no secret anywhere.
+    environment: npm
+    # One publish at a time, the others waiting in line: without `queue:
+    # max` GitHub cancels a waiting job when another one queues.
+    concurrency:
+      group: ${{ github.workflow }}-npm
+      queue: max
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      # For the check: no dependency is installed in this job.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      # Node 22.14 or later, and no cache in a release build.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      # Trusted publishing needs npm 11.5.1 or later.
+      - name: npm 11.21.1
+        run: npm install -g npm@11.21.1 --ignore-scripts
+      - name: The tag names this version, and npm doesn't have it yet
+        id: check
+        run: node scripts/npm-release-check.mjs "$GITHUB_REF_NAME"
+      - uses: actions/download-artifact@v8
+        if: steps.check.outputs.action != 'skip'
+        with:
+          name: npm-package
+          path: npm-package
+      # The pack job's tarball, once npm reads this name and version from it
+      # and every entry is a plain path in package/: npm runs no package
+      # script for it. The
+      # provenance statement is required, and the verbose log says why when
+      # npm refuses the OIDC token.
+      - name: Publish
+        if: steps.check.outputs.action != 'skip'
+        run: |
+          set -- npm-package/*.tgz
+          [ "$#" -eq 1 ] && [ -f "$1" ] || { echo "::error::expected one tarball, found: $*"; exit 1; }
+          node scripts/npm-release-check.mjs "$GITHUB_REF_NAME" --tarball "$1"
+          npm publish "$1" --provenance --ignore-scripts --loglevel verbose
