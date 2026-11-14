@@ -377,6 +377,11 @@ export function createApp(deps: AppDeps): App {
   let screen: Screen = progressScreen({ phase: "checking_core" });
   let onStatusPage = false;
   let evosci: string | null = null;
+  /** For crash reports: the core of the last version check (boot's
+   *  coreFound), none from the start of a boot until its check answers and
+   *  while an install or an update may replace the core. Until the next boot
+   *  starts (a restart's question, wait and stop included), it keeps what the
+   *  last boot left. */
   let core: VersionInfo | null = null;
   let startConfig: StartConfig | null = null;
   /** The current `deploy` process, from its start on (also before `ready`). */
@@ -783,6 +788,9 @@ export function createApp(deps: AppDeps): App {
           track("setup", deps.runSetup(file, cn, stages, onUpdate)),
         setupRecord: deps.readSetupRecord,
         recordSetup: deps.writeSetupRecord,
+        coreFound: (info) => {
+          core = info;
+        },
         askUpdate: (from) =>
           askOnScreen(updateQuestion(from, deps.manifest.coreRange)),
         askSeparateInstall: (message, from) =>

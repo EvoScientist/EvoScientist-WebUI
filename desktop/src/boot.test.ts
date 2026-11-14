@@ -47,6 +47,10 @@ function session(outcome: DeployOutcome): DeploySession {
   };
 }
 
+/** The versions `coreFound` was told, in order (null for none). */
+const told = (coreFound: ReturnType<typeof vi.fn>) =>
+  coreFound.mock.calls.map(([info]) => info?.version ?? null);
+
 function deps(over: Partial<BootDeps> = {}): BootDeps {
   return {
     manifest,
@@ -75,6 +79,7 @@ function deps(over: Partial<BootDeps> = {}): BootDeps {
     // This version was set up before: the node stage runs instead of setup.
     setupRecord: () => "0.3.8",
     recordSetup: () => {},
+    coreFound: () => {},
     askUpdate: async () => {},
     askSeparateInstall: async () => {},
     stopOwnBackend: async () => true,
@@ -178,6 +183,34 @@ describe("boot", () => {
       ok: false,
       error: { code: "version_check_timeout" },
     });
+  });
+
+  // For the crash report: the core this run checked, none before.
+  it("tells which core it found once the version check answers", async () => {
+    const run = async (over: Partial<BootDeps>) => {
+      const coreFound = vi.fn();
+      const { result } = await runBoot(deps({ coreFound, ...over }));
+      return { result, found: told(coreFound) };
+    };
+    const ready = await run({});
+    expect(ready.result.ok).toBe(true);
+    expect(ready.found).toEqual([null, "0.3.8"]);
+    const refused = await run({
+      runCollect: async () => ok([versionLine("0.4.0")]),
+    });
+    expect(refused.result).toMatchObject({
+      ok: false,
+      error: { code: "core_too_new" },
+    });
+    expect(refused.found).toEqual([null, "0.4.0"]);
+    const hangs = await run({
+      runCollect: async () => ({ timedOut: true, code: null, stdout: [] }),
+    });
+    expect(hangs.result).toMatchObject({
+      ok: false,
+      error: { code: "version_check_timeout" },
+    });
+    expect(hangs.found).toEqual([null]);
   });
 
   it("continues past a failed node stage", async () => {
@@ -1133,6 +1166,74 @@ describe("core update (W03c)", () => {
       error: { code: "version_check_timeout" },
     });
     expect(broken.recordSetup).not.toHaveBeenCalled();
+  });
+
+  // A crash report names the core checked last: none while it is replaced.
+  it("forgets the old core while the update replaces it, until the new one answers", async () => {
+    const coreFound = vi.fn();
+    const c = oldCore("0.3.7", { coreFound });
+    let whileUpdating: (string | null)[] = [];
+    const { result } = await runBoot({
+      ...c.d,
+      runUpdate: (file, version, stages, onUpdate) => {
+        whileUpdating = told(coreFound);
+        return c.runUpdate(file, version, stages, onUpdate);
+      },
+    });
+    expect(result).toMatchObject({ ok: true, core: { version: "0.3.8" } });
+    expect(whileUpdating).toEqual([null, "0.3.7", null]);
+    expect(told(coreFound)).toEqual([null, "0.3.7", null, "0.3.8"]);
+  });
+
+  it("names no core when the updated core's version check hangs", async () => {
+    const coreFound = vi.fn();
+    let updated = false;
+    const c = oldCore("0.3.7", { coreFound });
+    const { result } = await runBoot({
+      ...c.d,
+      runCollect: async (_f: string, args: string[]) =>
+        args[0] !== "--version"
+          ? ok([UPDATE_MANIFEST])
+          : updated
+          ? { timedOut: true, code: null, stdout: [] }
+          : ok([versionLine("0.3.7")]),
+      runUpdate: () => {
+        updated = true;
+        return updateRun({ kind: "done", version: "0.3.8" });
+      },
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "version_check_timeout" },
+    });
+    expect(told(coreFound)).toEqual([null, "0.3.7", null]);
+  });
+
+  it("names no core when the core the bundled script installed hangs", async () => {
+    const coreFound = vi.fn();
+    let installed = false;
+    let whileInstalling: (string | null)[] = [];
+    const c = oldCore("0.3.6", { coreFound });
+    const { result } = await runBoot({
+      ...c.d,
+      runCollect: async (_f: string, args: string[]) =>
+        args[0] !== "--version"
+          ? ok(['{"protocol":1,"stage":"node","status":"done"}'])
+          : installed
+          ? { timedOut: true, code: null, stdout: [] }
+          : ok([versionLine("0.3.6")]),
+      runInstall: () => {
+        whileInstalling = told(coreFound);
+        installed = true;
+        return installRun(0, ["Done."]);
+      },
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "version_check_timeout" },
+    });
+    expect(whileInstalling).toEqual([null, "0.3.6", null]);
+    expect(told(coreFound)).toEqual([null, "0.3.6", null]);
   });
 
   it("records nothing when the updated core is still outside the range", async () => {

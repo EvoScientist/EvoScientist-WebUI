@@ -166,6 +166,10 @@ export interface BootDeps {
   setupRecord(): string | null;
   /** Records a setup that exited 0; null forgets the record. */
   recordSetup(coreVersion: string | null): void;
+  /** The core this launch checked, for a crash report: what its version
+   *  check answered, null before that and while an install or an update
+   *  may replace it. */
+  coreFound(info: VersionInfo | null): void;
 
   // Core updates
   /** Shows the update offer; resolves when the user chooses Update (Quit
@@ -415,6 +419,8 @@ async function installCore(
   );
   const shown: string[] = [];
   onState({ phase: "installing", repair, update, lines: [] });
+  // The script may replace the core: unknown until it is checked again.
+  deps.coreFound(null);
   const run = deps.runInstall(cn, (line) => {
     shown.push(line);
     if (shown.length > INSTALL_TAIL_LINES) shown.shift();
@@ -651,6 +657,8 @@ async function updateCore(
     phase: "updating",
     view: { update: {}, stages, waiting: null },
   });
+  // The update replaces the core: unknown until it is checked again.
+  deps.coreFound(null);
   const run = deps.runUpdate(evosci, found.version, stages, (view) =>
     onState({ phase: "updating", view })
   );
@@ -754,6 +762,9 @@ export async function boot(
     return { ok: false, error };
   };
 
+  // Each run checks again: a Retry, or a run after an update, may find
+  // another core.
+  deps.coreFound(null);
   if (!(await waitForUpdate(deps, onState))) return fail(QUITTING);
   onState({ phase: "checking_core" });
   let evosci = await deps.locate();
@@ -783,6 +794,7 @@ export async function boot(
     freshInstall = !repair;
   }
   let info = check.info;
+  deps.coreFound(info);
   deps.log.info(
     `core ${info.version}, protocol ${info.protocol}, webui_compat ${info.webuiCompat}`
   );
@@ -809,6 +821,7 @@ export async function boot(
       ({ evosci, cn: installedCn, info } = installed);
       notice = updated.notice;
     } else info = updated.info;
+    deps.coreFound(info);
     incompatible = checkCore(info, deps.manifest, deps.platform);
   }
   if (incompatible) return fail(incompatible);
