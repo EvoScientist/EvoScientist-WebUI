@@ -147,14 +147,16 @@ export function writableFolder(path: string): boolean {
  * Where the app's own logs open at its start, before `ready` names the
  * backend's log; `dirs` are runtimeDirs' two folders. The first that holds
  * the backend's log and can be written to, else the server home. One the
- * core has not made yet the app makes as the core does (`makeServerHome`),
- * but not on Windows: a folder Node makes there takes the access of the
- * folder above it, where the core's Python makes one that only its owner can
- * open, and the core does not narrow it later. There the logs open in the
- * older folder until `ready` names the backend's. So they do wherever the
- * server home cannot be made or written to, and then `problem` says why
- * (`sudo EvoSci` can leave one that belongs to root; a link to a volume that
- * is not mounted makes no folder).
+ * core has not made yet the app makes as the core does (`makeServerHome`).
+ * Not on Windows: a folder Node makes there takes the access of the folder
+ * above it, where the core's Python makes one that only its owner can open,
+ * and the core does not narrow it later; Node does not read a folder's access
+ * list there either, and a server home an elevated EvoSci made shuts this
+ * account's programs out. So on Windows the logs open in the older folder
+ * until the server home shows the backend's log, as before. They do so too
+ * wherever the server home cannot be made or written to, and then `problem`
+ * says why (`sudo EvoSci` can leave one that belongs to root; a link to a
+ * volume that is not mounted makes no folder).
  */
 export function logFolder(
   dirs: string[],
@@ -174,11 +176,11 @@ export function logFolder(
     (dir) => disk.exists(join(dir, BACKEND_LOG)) && disk.writable(dir)
   );
   if (withLog !== undefined) return { dir: withLog, problem: null };
+  if (platform === "win32") return { dir: older, problem: null };
   if (disk.exists(serverHome))
     return disk.writable(serverHome)
       ? { dir: serverHome, problem: null }
       : cannotWrite;
-  if (platform === "win32") return { dir: older, problem: null };
   try {
     makeServerHome(serverHome);
   } catch (e) {

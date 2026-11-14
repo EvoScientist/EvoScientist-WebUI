@@ -270,8 +270,8 @@ describe("logFolder", () => {
     });
   });
 
-  it("takes a server home the core has made, on every platform, and makes nothing", () => {
-    for (const platform of ["darwin", "linux", "win32"] as const)
+  it("takes a server home the core has made off Windows, and makes nothing", () => {
+    for (const platform of ["darwin", "linux"] as const)
       expect(logFolder(dirs, disk([serverHome]), platform, never)).toEqual({
         dir: serverHome,
         problem: null,
@@ -280,7 +280,7 @@ describe("logFolder", () => {
 
   // `sudo EvoSci` can leave a server home that belongs to root.
   it("passes over a folder it cannot write to, and says why", () => {
-    for (const platform of ["darwin", "win32"] as const)
+    for (const platform of ["darwin", "linux"] as const)
       expect(
         logFolder(dirs, disk([serverHome], [serverHome]), platform, never)
       ).toEqual({ dir: older, problem: expect.stringMatching(/write/) });
@@ -321,12 +321,16 @@ describe("logFolder", () => {
   });
 
   // A folder Node makes on Windows takes the access of the folder above it;
-  // the core's Python makes one that only its owner can open.
+  // the core's Python makes one that only its owner can open. Node does not
+  // read a folder's access list there either, and a server home an elevated
+  // EvoSci made shuts this account's programs out: only a server home that
+  // shows the backend's log is taken, as before.
   it("leaves the server home to the core on Windows", () => {
-    expect(logFolder(dirs, disk([]), "win32", never)).toEqual({
-      dir: older,
-      problem: null,
-    });
+    for (const d of [disk([]), disk([serverHome])])
+      expect(logFolder(dirs, d, "win32", never)).toEqual({
+        dir: older,
+        problem: null,
+      });
   });
 
   // A data folder on a drive that is gone or read-only: the app still logs.
