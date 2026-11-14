@@ -545,6 +545,61 @@ describe("crash report", () => {
     });
   }
 
+  /** The only crash report written. */
+  const report = (h: ReturnType<typeof harness>) => {
+    const calls = vi.mocked(h.deps.writeCrashReport).mock.calls;
+    expect(calls).toHaveLength(1);
+    return calls[0][1] as CrashInfo;
+  };
+
+  // The launch checked core 0.3.8 before its start failed.
+  it("names the core a failed launch found", async () => {
+    const h = failingStart({});
+    await h.app.launch();
+    expect(report(h).coreVersion).toBe("0.3.8");
+  });
+
+  it("names the core a launch found before it threw", async () => {
+    const h = harness({
+      startDeploy: () => {
+        throw new Error("boom");
+      },
+    });
+    await h.app.launch();
+    expect(report(h)).toMatchObject({
+      code: "internal_error",
+      coreVersion: "0.3.8",
+    });
+  });
+
+  // Until the new launch's boot starts, the core is the running backend's.
+  it("names the running core when its backend fails to stop for a restart", async () => {
+    const h = await launched();
+    h.sessions[0].stop = async () => {
+      throw new Error("kill failed");
+    };
+    await h.app.restartBackend();
+    expect(report(h)).toMatchObject({
+      code: "internal_error",
+      coreVersion: "0.3.8",
+    });
+  });
+
+  // The core may have been replaced since the launch before.
+  it("names no core when a restart fails before it finds one", async () => {
+    const h = await launched();
+    h.deps.runCollect = async () => ({
+      timedOut: true,
+      code: null,
+      stdout: [],
+    });
+    await h.app.restartBackend();
+    expect(report(h)).toMatchObject({
+      code: "version_check_timeout",
+      coreVersion: null,
+    });
+  });
+
   it("attaches the log a failure before ready names", async () => {
     const h = failingStart({ log_file: "/elsewhere/langgraph_dev.log" });
     await h.app.launch();
