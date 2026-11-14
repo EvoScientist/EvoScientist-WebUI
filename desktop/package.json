@@ -16,13 +16,13 @@
     "dist": "npm run fetch-core-scripts && node scripts/builder.mjs --publish never"
   },
   "evoscientist": {
-    "coreRange": ">=0.4.1,<0.5",
+    "coreRange": ">=0.4.3,<0.5",
     "protocols": [
       1
     ],
     "uiPort": 4718,
     "release": true,
-    "releaseMac": false
+    "releaseMac": true
   },
   "dependencies": {
     "electron-updater": "^6.8.11",

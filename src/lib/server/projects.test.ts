@@ -92,7 +92,7 @@ describe("projectDir", () => {
     registry([{ workspace_dir: projA }]);
 
     await expect(projectDir(request(projectHandle(projA)))).resolves.toBe(
-      realpathSync(projA)
+      realpathSync.native(projA)
     );
     expect(fetchMock).toHaveBeenCalledWith(
       "http://127.0.0.1:6606/api/workspaces",
@@ -222,7 +222,7 @@ describe("projectDir", () => {
     );
     registry([{ workspace_dir: projA }]);
     await expect(projectDir(request(projectHandle(projA)))).resolves.toBe(
-      realpathSync(projA)
+      realpathSync.native(projA)
     );
   });
 

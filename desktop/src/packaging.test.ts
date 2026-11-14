@@ -22,6 +22,7 @@ import {
   versionArgs,
 } from "./packaging";
 import { QUIT_FOR_INSTALL, QUIT_FOR_INSTALL_CANCELLED } from "./app";
+import { compareReleases, installVersion, parseRelease } from "./versions";
 
 const pkg = JSON.parse(
   readFileSync(join(__dirname, "..", "package.json"), "utf8")
@@ -118,10 +119,24 @@ describe("releaseFlagProblem", () => {
     ).toBeNull();
   });
 
-  // Off until a signed, notarized build has been made and updated once:
-  // a tag then builds no macOS files, as before.
-  it("keeps the macOS release off in this package.json", () => {
-    expect(pkg.evoscientist.releaseMac).toBe(false);
+  // On since 0.5.3: a rehearsal in CI built, signed, notarized and checked
+  // two versions, and the first, as built there, then updated itself to the
+  // second.
+  it("is on for macOS in this package.json", () => {
+    expect(pkg.evoscientist.releaseMac).toBe(true);
+  });
+
+  // The WebUI the app bundles reads the AutoSkills routes, which came with
+  // core 0.4.3; the app installs the range's lower bound.
+  it("installs a core that has the routes of the WebUI it bundles", () => {
+    const installs = parseRelease(
+      installVersion(pkg.evoscientist.coreRange) ?? ""
+    );
+    expect(installs).not.toBeNull();
+    expect(
+      compareReleases(installs as number[], [0, 4, 3]),
+      "the app would install a core older than 0.4.3, without the AutoSkills routes"
+    ).toBeGreaterThanOrEqual(0);
   });
 });
 
