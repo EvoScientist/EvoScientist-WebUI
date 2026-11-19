@@ -30,12 +30,18 @@ export function getMessageTimestamp(
 }
 
 /**
- * `HH:MM:SS` in the local timezone.
+ * `HH:MM:SS DD/MM/YYYY` in the local timezone.
  */
 export function formatTimestamp(date: Date): string {
-  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(
-    date.getSeconds()
-  )}`;
+  const time = [date.getHours(), date.getMinutes(), date.getSeconds()]
+    .map(pad)
+    .join(":");
+  const day = [
+    pad(date.getDate()),
+    pad(date.getMonth() + 1),
+    date.getFullYear(),
+  ].join("/");
+  return `${time} ${day}`;
 }
 
 function pad(n: number): string {

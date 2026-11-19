@@ -6,7 +6,6 @@ import type { Message } from "@langchain/langgraph-sdk";
 import type { SubAgentStep } from "@/lib/subAgentActivity";
 import type { ActionRequest, ReviewConfig, ToolCall } from "@/app/types/types";
 import { getMessageTimestamp, formatTimestamp } from "@/lib/messageTimestamp";
-import { formatFullTime } from "@/lib/time";
 import { ChatMessage } from "./ChatMessage";
 import { CompactionSummary } from "./CompactionSummary";
 import { autoApproveDecisions } from "@/lib/hitlPolicy";
@@ -204,10 +203,7 @@ export const ActionGroup = React.memo<ActionGroupProps>(function ActionGroup({
         {(() => {
           const ts = getMessageTimestamp(items[0]?.message);
           return ts !== null ? (
-            <span
-              className="shrink-0 text-[10px] text-muted-foreground/50"
-              title={formatFullTime(ts)}
-            >
+            <span className="shrink-0 text-[10px] text-muted-foreground/50">
               {formatTimestamp(ts)}
             </span>
           ) : null;

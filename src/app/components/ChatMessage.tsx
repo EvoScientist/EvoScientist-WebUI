@@ -40,7 +40,6 @@ import {
 import { cn } from "@/lib/utils";
 import { copyText } from "@/lib/clipboard";
 import { getMessageTimestamp, formatTimestamp } from "@/lib/messageTimestamp";
-import { formatFullTime } from "@/lib/time";
 import { toast } from "sonner";
 
 interface ChatMessageProps {
@@ -447,10 +446,7 @@ export const ChatMessage = React.memo<ChatMessageProps>(
               {(() => {
                 const ts = getMessageTimestamp(message);
                 return ts !== null ? (
-                  <span
-                    className="shrink-0 text-[10px] text-muted-foreground/50"
-                    title={formatFullTime(ts)}
-                  >
+                  <span className="shrink-0 text-[10px] text-muted-foreground/50">
                     {formatTimestamp(ts)}
                   </span>
                 ) : null;
@@ -477,10 +473,7 @@ export const ChatMessage = React.memo<ChatMessageProps>(
               {(() => {
                 const ts = getMessageTimestamp(message);
                 return ts !== null ? (
-                  <span
-                    className="text-[10px] text-muted-foreground/50"
-                    title={formatFullTime(ts)}
-                  >
+                  <span className="text-[10px] text-muted-foreground/50">
                     {formatTimestamp(ts)}
                   </span>
                 ) : null;

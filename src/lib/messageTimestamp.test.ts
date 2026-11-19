@@ -44,7 +44,12 @@ describe("getMessageTimestamp", () => {
 });
 
 describe("formatTimestamp", () => {
-  it("formats local time as HH:MM:SS", () => {
-    expect(formatTimestamp(new Date(2026, 10, 19, 9, 5, 7))).toBe("09:05:07");
+  it("formats local time as HH:MM:SS DD/MM/YYYY", () => {
+    expect(formatTimestamp(new Date(2026, 10, 19, 9, 5, 7))).toBe(
+      "09:05:07 19/11/2026"
+    );
+    expect(formatTimestamp(new Date(2027, 0, 3, 23, 0, 0))).toBe(
+      "23:00:00 03/01/2027"
+    );
   });
 });
