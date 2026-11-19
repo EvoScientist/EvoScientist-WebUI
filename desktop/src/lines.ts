@@ -1,8 +1,8 @@
 // The JSON lines of `EvoSci --version --json`, `deploy --json`,
-// `setup --json` and `update --json`. Each command prints one
-// JSON object per line on stdout; later core versions may add fields and
-// events, never rename or remove them, so unknown fields are kept and unknown
-// events are passed through rather than refused.
+// `setup --json`, `update --json` and `login` / `logout chatgpt --json`.
+// Each command prints one JSON object per line on stdout; later core versions
+// may add fields and events, never rename or remove them, so unknown fields
+// are kept and unknown events are passed through rather than refused.
 import { StringDecoder } from "node:string_decoder";
 
 /** Splits a byte stream into lines, across chunk and UTF-8 boundaries. */
@@ -181,4 +181,38 @@ export function parseStageEvent(line: string): StageEvent | null {
 /** A stage's terminal line: `done`, `skipped` or `error`. */
 export function isTerminal(e: StageEvent): boolean {
   return e.status !== "running";
+}
+
+// --- EvoSci login / logout chatgpt --json --------------------------------------
+
+export type ChatgptEvent =
+  | { event: "url"; url: string }
+  | { event: "signed_in"; plan: string | null }
+  | { event: "signed_out" }
+  | { event: "error"; code: string; message: string }
+  | { event: "other"; raw: Json };
+
+/** One `login chatgpt --json` / `logout chatgpt --json` stdout line as an
+ *  event, or null when it is not a protocol line. */
+export function parseChatgptEvent(line: string): ChatgptEvent | null {
+  const v = parseJsonLine(line);
+  if (!v || typeof v.event !== "string") return null;
+  switch (v.event) {
+    case "url": {
+      const url = str(v.url);
+      return url ? { event: "url", url } : { event: "other", raw: v };
+    }
+    case "signed_in":
+      return { event: "signed_in", plan: str(v.plan) ?? null };
+    case "signed_out":
+      return { event: "signed_out" };
+    case "error":
+      return {
+        event: "error",
+        code: str(v.code) ?? "internal_error",
+        message: str(v.message) ?? "",
+      };
+    default:
+      return { event: "other", raw: v };
+  }
 }

@@ -12,7 +12,7 @@ import type { ModelRegistryEntry } from "@/app/hooks/useAvailableModels";
 import {
   ModelField,
   MirrorField,
-  ProviderAccessFields,
+  ProviderAccess,
   ProviderField,
   SecretField,
   TextField,
@@ -25,14 +25,17 @@ import {
   type FieldContext,
 } from "@/app/components/setupFieldContext";
 import {
+  chatgptStatusText,
   currentText,
   fieldLabel,
   isMaskedSecret,
+  openaiAuthMode,
   sourceNote,
   stepOfField,
   wizardSteps,
   type WizardStep,
 } from "@/lib/settingsForm";
+import { chatgptStatus } from "@/lib/settings";
 import type { SaveResult } from "@/app/hooks/useSettingsDraft";
 
 const STEP_TITLES: Record<WizardStep, string> = {
@@ -81,6 +84,7 @@ export function SetupWizard({
     );
   };
 
+  const viaPlan = connectsViaPlan(ctx);
   const blocker = (s: WizardStep): string | null => {
     // A saved provider EvoScientist no longer knows has no key step.
     if (s === "provider" && !info) return "Choose a provider.";
@@ -92,7 +96,12 @@ export function SetupWizard({
       ) {
         return "Enter the endpoint's address.";
       }
-      if (info.needs_key && !keySet(info.key_field)) {
+      // The ChatGPT plan needs a sign-in instead of a key.
+      if (viaPlan) {
+        if (!chatgptStatus(ctx.payload)?.signed_in) {
+          return "Sign in with ChatGPT.";
+        }
+      } else if (info.needs_key && !keySet(info.key_field)) {
         return "Enter the API key.";
       }
     }
@@ -169,7 +178,7 @@ export function SetupWizard({
       <div className="mt-4 space-y-4">
         {step === "provider" && <ProviderField ctx={ctx} />}
         {step === "key" && info && (
-          <ProviderAccessFields
+          <ProviderAccess
             ctx={ctx}
             provider={provider}
             info={info}
@@ -281,6 +290,15 @@ export function SetupWizard({
   );
 }
 
+/** OpenAI is the provider and connects with the ChatGPT plan, in the app. */
+function connectsViaPlan(ctx: FieldContext): boolean {
+  return (
+    !!ctx.chatgpt &&
+    currentProvider(ctx) === "openai" &&
+    openaiAuthMode(ctx.payload, ctx.draft.edits) === "oauth"
+  );
+}
+
 function Summary({
   ctx,
   steps,
@@ -315,7 +333,14 @@ function Summary({
       currentText(ctx.payload, edits, info.base_url_field) || "default",
     ]);
   }
-  if (info?.key_field) {
+  const status = chatgptStatus(ctx.payload);
+  if (connectsViaPlan(ctx) && status) {
+    rows.push([
+      "key",
+      "Connect with",
+      `ChatGPT plan (${chatgptStatusText(status)})`,
+    ]);
+  } else if (info?.key_field) {
     rows.push([
       "key",
       fieldLabel(info.key_field, ctx.payload.providers),

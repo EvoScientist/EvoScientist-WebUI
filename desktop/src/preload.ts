@@ -6,12 +6,13 @@
 //   src/lib/config.ts), keeping the other keys, so ConfigDialog never opens.
 //   Then expose the bridge src/lib/desktop.ts reads
 //   (`window.evoscientistDesktop`): `restartBackend()`, `defaultFolder`,
-//   `appUpdate`, `projectFolders` and `pickFolder()`. The main process
-//   answers them only for the UI's own origin.
+//   `appUpdate`, `projectFolders`, `pickFolder()` and `chatgpt`. The main
+//   process answers them only for the UI's own origin.
 // - On the status page (file:): expose what it needs to show the current
 //   screen, run its actions and offer the app update.
 import { contextBridge, ipcRenderer } from "electron";
 import type { ProjectFolders, RestartResult } from "./app";
+import type { SignInOutcome, SignOutOutcome } from "./chatgpt";
 import type { UpdateState } from "./appUpdate";
 import type { ActionId, Screen, UpdateOffer } from "./screens";
 
@@ -95,6 +96,14 @@ function exposeBridge(): void {
         ipcRenderer.invoke("desktop:update-download"),
       restartToUpdate: (): Promise<RestartResult> =>
         ipcRenderer.invoke("desktop:update-restart"),
+    },
+    chatgpt: {
+      signIn: (): Promise<SignInOutcome> =>
+        ipcRenderer.invoke("desktop:chatgpt-sign-in"),
+      cancelSignIn: (): Promise<void> =>
+        ipcRenderer.invoke("desktop:chatgpt-cancel-sign-in"),
+      signOut: (): Promise<SignOutOutcome> =>
+        ipcRenderer.invoke("desktop:chatgpt-sign-out"),
     },
     ...(folder ? { defaultFolder: folder } : {}),
     projectFolders: {

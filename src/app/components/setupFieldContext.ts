@@ -4,6 +4,7 @@
 
 import type { ModelRegistryEntry } from "@/app/hooks/useAvailableModels";
 import type { SettingsDraft } from "@/app/hooks/useSettingsDraft";
+import type { DesktopChatgpt } from "@/lib/desktop";
 import type { SettingsPayload } from "@/lib/settings";
 import {
   currentText,
@@ -16,6 +17,9 @@ export interface FieldContext {
   draft: SettingsDraft;
   /** The page can save (WebUI#55, point 4). */
   writable: boolean;
+  /** The desktop app's ChatGPT sign-in, when the app has it and the core
+   *  reports the sign-in state; else null (a browser, an older app or core). */
+  chatgpt?: DesktopChatgpt | null;
 }
 
 export function shadowOf(ctx: FieldContext, field: string) {

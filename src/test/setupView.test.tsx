@@ -2223,3 +2223,311 @@ describe("the first-run gate", () => {
     await waitFor(() => expect(setView).toHaveBeenCalledWith("setup"));
   });
 });
+
+describe("ChatGPT sign-in (desktop)", () => {
+  type Status = {
+    signed_in: boolean;
+    plan: string | null;
+    problem: string | null;
+  };
+  const SIGNED_OUT: Status = { signed_in: false, plan: null, problem: null };
+  const SIGNED_IN: Status = { signed_in: true, plan: "plus", problem: null };
+  const PORT_TEXT =
+    "The sign-in needs port 1455, and another program uses it (another ChatGPT or Codex sign-in, for example). Close it, then sign in again.";
+
+  function bridge() {
+    return {
+      signIn: vi.fn(async () => ({ ok: true, plan: "plus" } as unknown)),
+      cancelSignIn: vi.fn(async () => undefined),
+      signOut: vi.fn(async () => ({ ok: true } as unknown)),
+    };
+  }
+
+  /** The desktop app with the bridge, and a core with the sign-in block. */
+  function desktop(
+    status: Status = SIGNED_OUT,
+    saved: Record<string, unknown> = {},
+    extra: Record<string, unknown> = {}
+  ) {
+    const chatgpt = bridge();
+    window.evoscientistDesktop = { chatgpt };
+    server.settings = settings({
+      settings: { ...settings().settings, ...saved },
+      chatgpt: status,
+      ...extra,
+    });
+    return chatgpt;
+  }
+
+  const chatgptPlan = () =>
+    screen.getByLabelText("ChatGPT plan") as HTMLInputElement;
+  const apiKey = () => screen.getByLabelText("API key") as HTMLInputElement;
+  const saveButton = () => screen.getByRole("button", { name: "Save" });
+
+  it("shows nothing new in a browser, also with the mode set to oauth", async () => {
+    server.settings = settings({
+      settings: { ...settings().settings, openai_auth_mode: "oauth" },
+      chatgpt: SIGNED_OUT,
+    });
+    renderSettingsPage();
+    expect(await screen.findByLabelText("OpenAI API key")).toBeTruthy();
+    expect(screen.queryByText("Connect with")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Sign in/ })).toBeNull();
+  });
+
+  it("shows nothing new against a core without the sign-in block", async () => {
+    window.evoscientistDesktop = { chatgpt: bridge() };
+    renderSettingsPage();
+    expect(await screen.findByLabelText("OpenAI API key")).toBeTruthy();
+    expect(screen.queryByText("Connect with")).toBeNull();
+  });
+
+  it("shows nothing new for another provider while the mode is api_key", async () => {
+    desktop(SIGNED_OUT, { provider: "ollama", model: "llama3.2" });
+    renderSettingsPage();
+    expect(await screen.findByLabelText("Ollama base URL")).toBeTruthy();
+    expect(screen.queryByText(/connect with/i)).toBeNull();
+  });
+
+  it("shows the choice and hides the key under ChatGPT plan", async () => {
+    desktop();
+    renderSettingsPage();
+    expect(await screen.findByText("Connect with")).toBeTruthy();
+    expect(apiKey().checked).toBe(true);
+    expect(keyInput()).toBeTruthy();
+    fireEvent.click(chatgptPlan());
+    expect(chatgptPlan().checked).toBe(true);
+    expect(screen.queryByLabelText("OpenAI API key")).toBeNull();
+    expect(screen.getByText("Not signed in")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Sign in with ChatGPT" })
+    ).toBeTruthy();
+  });
+
+  it("keeps the choice for another provider while the mode is oauth", async () => {
+    desktop(SIGNED_IN, {
+      provider: "ollama",
+      model: "llama3.2",
+      openai_auth_mode: "oauth",
+    });
+    renderSettingsPage();
+    expect(await screen.findByText("OpenAI models connect with")).toBeTruthy();
+    expect(screen.getByLabelText("Ollama base URL")).toBeTruthy();
+    expect(chatgptPlan().checked).toBe(true);
+    expect(screen.getByText("Signed in · Plus")).toBeTruthy();
+  });
+
+  it("Sign in with ChatGPT calls the app, then reads the settings again", async () => {
+    const chatgpt = desktop(SIGNED_OUT, { openai_auth_mode: "oauth" });
+    renderSettingsPage();
+    const signIn = await screen.findByRole("button", {
+      name: "Sign in with ChatGPT",
+    });
+    server.settings = { ...server.settings, chatgpt: SIGNED_IN };
+    fireEvent.click(signIn);
+    expect(await screen.findByText("Signed in · Plus")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Sign out" })).toBeTruthy();
+    expect(chatgpt.signIn).toHaveBeenCalledOnce();
+  });
+
+  it("offers Cancel while signing in, and says why it failed", async () => {
+    const chatgpt = desktop(SIGNED_OUT, { openai_auth_mode: "oauth" });
+    let answer!: (r: unknown) => void;
+    chatgpt.signIn.mockImplementationOnce(
+      () => new Promise((resolve) => (answer = resolve))
+    );
+    renderSettingsPage();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Sign in with ChatGPT" })
+    );
+    const waiting = await screen.findByRole("button", {
+      name: "Finish signing in in your browser…",
+    });
+    expect((waiting as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(chatgpt.cancelSignIn).toHaveBeenCalledOnce();
+    await act(async () =>
+      answer({ ok: false, code: "port_in_use", message: "" })
+    );
+    expect(await screen.findByText(PORT_TEXT)).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Sign in with ChatGPT" })
+    ).toBeTruthy();
+  });
+
+  it("a sign-out the user cancelled in the app keeps the status, without a note", async () => {
+    const chatgpt = desktop(SIGNED_IN, { openai_auth_mode: "oauth" });
+    chatgpt.signOut.mockResolvedValueOnce({
+      ok: false,
+      code: "cancelled",
+      message: "",
+    });
+    renderSettingsPage();
+    fireEvent.click(await screen.findByRole("button", { name: "Sign out" }));
+    await waitFor(() => expect(chatgpt.signOut).toHaveBeenCalledOnce());
+    await waitFor(() =>
+      expect(
+        (screen.getByRole("button", { name: "Sign out" }) as HTMLButtonElement)
+          .disabled
+      ).toBe(false)
+    );
+    expect(screen.getByText("Signed in · Plus")).toBeTruthy();
+    expect(screen.queryByText(/sign-out failed/i)).toBeNull();
+  });
+
+  it("a sign-out reads the settings again", async () => {
+    desktop(SIGNED_IN, { openai_auth_mode: "oauth" });
+    renderSettingsPage();
+    const out = await screen.findByRole("button", { name: "Sign out" });
+    server.settings = { ...server.settings, chatgpt: SIGNED_OUT };
+    fireEvent.click(out);
+    expect(await screen.findByText("Not signed in")).toBeTruthy();
+  });
+
+  it("saves openai_auth_mode with the form", async () => {
+    desktop();
+    renderSettingsPage();
+    fireEvent.click(await screen.findByLabelText("ChatGPT plan"));
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(server.patch).toHaveBeenCalledOnce());
+    expect(server.patch.mock.calls[0][0]).toEqual({
+      openai_auth_mode: "oauth",
+      revision: "rev-1",
+    });
+  });
+
+  it("does not send a key the ChatGPT choice hides; switching back shows it", async () => {
+    desktop();
+    renderSettingsPage();
+    await screen.findByText("Connect with");
+    fireEvent.change(keyInput(), { target: { value: "sk-typed-1234" } });
+    fireEvent.click(chatgptPlan());
+    fireEvent.click(apiKey());
+    expect(keyInput().value).toBe("sk-typed-1234");
+    fireEvent.click(chatgptPlan());
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(server.patch).toHaveBeenCalledOnce());
+    expect(server.patch.mock.calls[0][0]).toEqual({
+      openai_auth_mode: "oauth",
+      revision: "rev-1",
+    });
+  });
+
+  it("disables the choice while the environment sets the mode", async () => {
+    desktop(
+      SIGNED_OUT,
+      {},
+      { sources: { openai_auth_mode: { source: "env", shadowed: true } } }
+    );
+    renderSettingsPage();
+    await screen.findByText("Connect with");
+    expect(chatgptPlan().disabled).toBe(true);
+    expect(apiKey().disabled).toBe(true);
+    expect(
+      screen.getByText(
+        "Set by an environment variable, which overrides the saved value. Change it there."
+      )
+    ).toBeTruthy();
+  });
+
+  it("disables Sign in on a page that can't save", async () => {
+    desktop(SIGNED_OUT, { openai_auth_mode: "oauth" });
+    server.access = { writable: false, reason: "not_loopback" };
+    renderSettingsPage();
+    const signIn = await screen.findByRole("button", {
+      name: "Sign in with ChatGPT",
+    });
+    expect((signIn as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("the wizard's key step waits for the sign-in, not a key", async () => {
+    const chatgpt = desktop(
+      SIGNED_OUT,
+      { openai_api_key: { set: false } },
+      { setup_needed: true }
+    );
+    renderView();
+    const wizard = await screen.findByRole("region", { name: "Setup wizard" });
+    const next = () =>
+      fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    next();
+    next();
+    expect(within(wizard).getByText("Connect to it")).toBeTruthy();
+    fireEvent.click(chatgptPlan());
+    const nextButton = () =>
+      screen.getByRole("button", { name: "Next" }) as HTMLButtonElement;
+    expect(nextButton().disabled).toBe(true);
+    expect(within(wizard).getByText("Sign in with ChatGPT.")).toBeTruthy();
+    server.settings = { ...server.settings, chatgpt: SIGNED_IN };
+    fireEvent.click(
+      screen.getByRole("button", { name: "Sign in with ChatGPT" })
+    );
+    await waitFor(() => expect(nextButton().disabled).toBe(false));
+    expect(chatgpt.signIn).toHaveBeenCalledOnce();
+    next();
+    fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+    next();
+    expect(within(wizard).getByText("Check and finish")).toBeTruthy();
+    expect(
+      within(wizard).getByText("ChatGPT plan (Signed in · Plus)")
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Finish" }));
+    await waitFor(() => expect(server.patch).toHaveBeenCalledOnce());
+    expect(server.patch.mock.calls[0][0]).toEqual({
+      openai_auth_mode: "oauth",
+      revision: "rev-1",
+    });
+  });
+
+  it("a refused key does not hold the wizard once the ChatGPT plan is chosen", async () => {
+    desktop(
+      SIGNED_OUT,
+      { openai_api_key: { set: false } },
+      { setup_needed: true }
+    );
+    server.patch.mockImplementationOnce(() =>
+      json({ errors: { openai_api_key: "The key was refused." } }, 400)
+    );
+    renderView();
+    const wizard = await screen.findByRole("region", { name: "Setup wizard" });
+    const next = () =>
+      fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    next();
+    next();
+    fireEvent.change(keyInput(), { target: { value: "sk-bad-1234" } });
+    next();
+    fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+    next();
+    fireEvent.click(screen.getByRole("button", { name: "Finish" }));
+    await waitFor(() =>
+      expect(within(wizard).getByText("Connect to it")).toBeTruthy()
+    );
+    expect(screen.getByText("The key was refused.")).toBeTruthy();
+    fireEvent.click(chatgptPlan());
+    server.settings = { ...server.settings, chatgpt: SIGNED_IN };
+    fireEvent.click(
+      screen.getByRole("button", { name: "Sign in with ChatGPT" })
+    );
+    await screen.findByText("Signed in · Plus");
+    await waitFor(() =>
+      expect(
+        (screen.getByRole("button", { name: "Next" }) as HTMLButtonElement)
+          .disabled
+      ).toBe(false)
+    );
+  });
+
+  it("names a pending openai_auth_mode among what a restart applies", async () => {
+    server.settings = settings({
+      restart_required: true,
+      restart_fields: ["provider", "model", "openai_auth_mode"],
+    });
+    renderSettingsPage();
+    expect(
+      await screen.findByText(
+        "These changes take effect after EvoScientist restarts: Provider, Model, OpenAI connection.",
+        { exact: false }
+      )
+    ).toBeTruthy();
+  });
+});

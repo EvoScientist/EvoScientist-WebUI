@@ -269,8 +269,9 @@ export async function waitForMemoryWorkers(
 
 /** What the stop is for: quitting the app, or a stop after which the backend
  *  comes back ("Restart backend", a core update; "Restart to update"
- *  uses the same check). */
-export type StopPurpose = "quit" | "restart" | "update";
+ *  uses the same check). `sign_out` stops nothing: the work keeps running
+ *  without the ChatGPT sign-in. */
+export type StopPurpose = "quit" | "restart" | "update" | "sign_out";
 
 export interface Confirmation {
   message: string;
@@ -291,6 +292,7 @@ export function confirmation(
   check: WorkCheck,
   purpose: StopPurpose
 ): Confirmation | null {
+  if (purpose === "sign_out") return signOutConfirmation(check);
   if (!hasWork(check)) return null;
   const buttons: [string, string] =
     purpose === "quit"
@@ -341,6 +343,52 @@ export function confirmation(
     message: running
       ? "Work is still running."
       : "Scheduled tasks are enabled.",
+    detail: lines.join("\n"),
+    buttons,
+    defaultId: 1,
+  };
+}
+
+/** The question before signing out of ChatGPT. Background jobs run commands,
+ *  not models, so only chats and scheduled tasks count. */
+function signOutConfirmation(check: WorkCheck): Confirmation | null {
+  const buttons: [string, string] = ["Sign out", "Cancel"];
+  if (check.kind === "unknown") {
+    return {
+      message: "EvoScientist could not tell whether work is running.",
+      detail: `Work that uses ChatGPT models fails once you sign out. (The check failed: ${check.reason}.)`,
+      buttons,
+      defaultId: 0,
+    };
+  }
+  const work = { ...check, jobs: [], jobIds: [] };
+  if (!hasWork(work)) return null;
+  const lines: string[] = [];
+  if (work.busyThreads > 0) {
+    lines.push(
+      work.busyThreads >= BUSY_LIMIT
+        ? `${BUSY_LIMIT} or more chats are still running.`
+        : `${plural(work.busyThreads, "chat is", "chats are")} still running.`
+    );
+    lines.push(
+      work.busyThreads === 1
+        ? "Its next call to a ChatGPT model fails once you sign out."
+        : "Their next calls to a ChatGPT model fail once you sign out."
+    );
+  }
+  if (work.scheduledTasks > 0)
+    lines.push(
+      `${plural(
+        work.scheduledTasks,
+        "scheduled task",
+        "scheduled tasks"
+      )} can't use ChatGPT models until you sign in again.`
+    );
+  return {
+    message:
+      work.busyThreads > 0
+        ? "Work is still running."
+        : "Scheduled tasks are enabled.",
     detail: lines.join("\n"),
     buttons,
     defaultId: 1,

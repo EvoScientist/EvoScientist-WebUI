@@ -295,6 +295,54 @@ describe("confirmation", () => {
     );
   });
 
+  it("before a sign-out: running chats and scheduled tasks, no background jobs", () => {
+    const c = confirmation(
+      {
+        ...idle,
+        busyThreads: 1,
+        jobs: ["train"],
+        jobIds: ["p1"],
+        scheduledTasks: 2,
+      },
+      "sign_out"
+    );
+    expect(c).toEqual({
+      message: "Work is still running.",
+      detail:
+        "1 chat is still running.\nIts next call to a ChatGPT model fails once you sign out.\n2 scheduled tasks can't use ChatGPT models until you sign in again.",
+      buttons: ["Sign out", "Cancel"],
+      defaultId: 1,
+    });
+    expect(
+      confirmation({ ...idle, jobs: ["train"], jobIds: ["p1"] }, "sign_out")
+    ).toBeNull();
+    expect(confirmation({ ...idle, scheduledTasks: 1 }, "sign_out")).toEqual({
+      message: "Scheduled tasks are enabled.",
+      detail:
+        "1 scheduled task can't use ChatGPT models until you sign in again.",
+      buttons: ["Sign out", "Cancel"],
+      defaultId: 1,
+    });
+  });
+
+  it("before a sign-out: chats in the plural", () => {
+    expect(confirmation({ ...idle, busyThreads: 2 }, "sign_out")?.detail).toBe(
+      "2 chats are still running.\nTheir next calls to a ChatGPT model fail once you sign out."
+    );
+  });
+
+  it("before a sign-out when the check failed", () => {
+    expect(
+      confirmation({ kind: "unknown", reason: "timeout" }, "sign_out")
+    ).toEqual({
+      message: "EvoScientist could not tell whether work is running.",
+      detail:
+        "Work that uses ChatGPT models fails once you sign out. (The check failed: timeout.)",
+      buttons: ["Sign out", "Cancel"],
+      defaultId: 0,
+    });
+  });
+
   it("asks with the could-not-tell text and Quit as the default when a probe failed", () => {
     const c = confirmation({ kind: "unknown", reason: "timeout" }, "quit")!;
     expect(c.message).toBe(

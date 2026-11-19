@@ -138,6 +138,18 @@ describe("releaseFlagProblem", () => {
       "the app would install a core older than 0.4.3, without the AutoSkills routes"
     ).toBeGreaterThanOrEqual(0);
   });
+
+  // The sign_in_required screen and Settings run `EvoSci login chatgpt
+  // --json` and `EvoSci logout chatgpt --json`.
+  it("installs a core that has the ChatGPT sign-in commands", () => {
+    const installs = parseRelease(
+      installVersion(pkg.evoscientist.coreRange) ?? ""
+    );
+    expect(
+      compareReleases(installs as number[], [0, 4, 4]),
+      "the app would install a core without EvoSci login chatgpt --json"
+    ).toBeGreaterThanOrEqual(0);
+  });
 });
 
 // Where electron-builder puts the unpacked app, for the smoke test.

@@ -26,9 +26,10 @@ import {
   useAvailableModels,
   type ModelRegistryEntry,
 } from "@/app/hooks/useAvailableModels";
+import { useChatgptSignIn } from "@/app/hooks/useChatgptSignIn";
 import { desktopBridge } from "@/lib/desktop";
 import { typedFolder } from "@/lib/projectActions";
-import type { ProviderInfo } from "@/lib/settings";
+import { chatgptStatus, type ProviderInfo } from "@/lib/settings";
 import {
   currentProvider,
   isEditable,
@@ -38,12 +39,16 @@ import {
   type FieldContext,
 } from "@/app/components/setupFieldContext";
 import {
+  OPENAI_AUTH_MODE,
+  chatgptStatusText,
   currentText,
   keyStatusText,
   fieldLabel,
   isMaskedSecret,
   modelForProvider,
+  openaiAuthMode,
   savedText,
+  showsConnectChoice,
   sourceNote,
 } from "@/lib/settingsForm";
 import { INPUT_LIKE_TRIGGER, LIST_MAX_HEIGHT } from "@/lib/fieldStyles";
@@ -562,6 +567,186 @@ export function ProviderAccessFields({
         )
       )}
     </>
+  );
+}
+
+/**
+ * A provider's access fields, and in the desktop app the choice of how
+ * OpenAI models connect: an API key, or the ChatGPT plan with its sign-in.
+ * The choice shows for OpenAI, and for another provider while the mode is
+ * the ChatGPT plan (it applies to auxiliary and fallback OpenAI models too).
+ */
+export function ProviderAccess({
+  ctx,
+  provider,
+  info,
+}: {
+  ctx: FieldContext;
+  provider: string;
+  info: ProviderInfo | undefined;
+}) {
+  const fields = info ? (
+    <ProviderAccessFields
+      ctx={ctx}
+      provider={provider}
+      info={info}
+    />
+  ) : null;
+  if (
+    !ctx.chatgpt ||
+    !chatgptStatus(ctx.payload) ||
+    !showsConnectChoice(ctx.payload, ctx.draft.edits)
+  ) {
+    return fields;
+  }
+  const viaPlan = openaiAuthMode(ctx.payload, ctx.draft.edits) === "oauth";
+  if (provider === "openai") {
+    return (
+      <>
+        <ConnectWithField
+          ctx={ctx}
+          legend="Connect with"
+        />
+        {viaPlan ? <ChatgptAccount ctx={ctx} /> : fields}
+      </>
+    );
+  }
+  return (
+    <>
+      {fields}
+      <ConnectWithField
+        ctx={ctx}
+        legend="OpenAI models connect with"
+      />
+      {viaPlan && <ChatgptAccount ctx={ctx} />}
+    </>
+  );
+}
+
+const RADIO_CLASS =
+  "size-4 border border-muted-foreground bg-transparent text-[var(--brand-solid)] focus:ring-0 focus:ring-offset-0 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background";
+
+function ConnectWithField({
+  ctx,
+  legend,
+}: {
+  ctx: FieldContext;
+  legend: string;
+}) {
+  const mode = openaiAuthMode(ctx.payload, ctx.draft.edits);
+  const editable = isEditable(ctx, OPENAI_AUTH_MODE);
+  const option = (value: "oauth" | "api_key", label: string) => (
+    <label className="flex items-center gap-2 text-sm">
+      <input
+        type="radio"
+        name="setting-openai_auth_mode"
+        value={value}
+        checked={mode === value}
+        disabled={!editable}
+        onChange={() => ctx.draft.setField(OPENAI_AUTH_MODE, value, false)}
+        className={RADIO_CLASS}
+      />
+      {label}
+    </label>
+  );
+  return (
+    <fieldset
+      className={cn(
+        "space-y-1.5",
+        shadowOf(ctx, OPENAI_AUTH_MODE) !== null && "opacity-60"
+      )}
+    >
+      <legend className="text-sm font-medium leading-none">{legend}</legend>
+      <div className="flex flex-wrap gap-x-5 gap-y-2 pt-1">
+        {option("oauth", "ChatGPT plan")}
+        {option("api_key", "API key")}
+      </div>
+      <FieldNotes
+        ctx={ctx}
+        field={OPENAI_AUTH_MODE}
+      />
+    </fieldset>
+  );
+}
+
+/** Who is signed in to ChatGPT, and Sign in / Sign out through the app. */
+function ChatgptAccount({ ctx }: { ctx: FieldContext }) {
+  const status = chatgptStatus(ctx.payload);
+  const account = useChatgptSignIn(ctx.chatgpt ?? null);
+  if (!status) return null;
+  const canAct = ctx.writable && !ctx.draft.saving && account.phase === "idle";
+  let actions: React.ReactNode;
+  if (account.phase === "signing_in") {
+    actions = (
+      <>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled
+        >
+          <Loader2
+            className="size-4 animate-spin"
+            aria-hidden="true"
+          />
+          Finish signing in in your browser…
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={account.cancel}
+        >
+          Cancel
+        </Button>
+      </>
+    );
+  } else if (status.signed_in) {
+    actions = (
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={!canAct}
+        onClick={() => void account.signOut()}
+      >
+        {account.phase === "signing_out" && (
+          <Loader2
+            className="size-4 animate-spin"
+            aria-hidden="true"
+          />
+        )}
+        Sign out
+      </Button>
+    );
+  } else {
+    actions = (
+      <Button
+        type="button"
+        size="sm"
+        disabled={!canAct}
+        onClick={() => void account.signIn()}
+      >
+        Sign in with ChatGPT
+      </Button>
+    );
+  }
+  return (
+    <div className="space-y-1.5">
+      <p className="text-sm font-medium leading-none">ChatGPT</p>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-sm">{chatgptStatusText(status)}</span>
+        {actions}
+      </div>
+      {account.message && (
+        <p
+          role="alert"
+          className="text-sm text-destructive"
+        >
+          {account.message}
+        </p>
+      )}
+    </div>
   );
 }
 
