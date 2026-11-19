@@ -3179,7 +3179,8 @@ const SIGN_IN_URL = "https://auth.openai.com/oauth/authorize?x=1";
 const SIGN_IN_REQUIRED = {
   event: "error" as const,
   code: "sign_in_required",
-  message: "ChatGPT sign-in required. Start EvoSci in a terminal to sign in.",
+  message:
+    'ChatGPT sign-in required (openai_auth_mode is "oauth"). Sign in with EvoSci login chatgpt, or from Settings in the desktop app.',
   detail: { provider: "openai" },
 };
 

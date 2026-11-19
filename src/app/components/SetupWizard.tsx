@@ -47,6 +47,9 @@ const STEP_TITLES: Record<WizardStep, string> = {
   summary: "Check and finish",
 };
 
+/** Next waits for the ChatGPT sign-in; the line itself is not shown. */
+const SIGN_IN_FIRST = "Sign in with ChatGPT.";
+
 interface SetupWizardProps {
   ctx: FieldContext;
   registry: ReadonlyArray<ModelRegistryEntry>;
@@ -99,7 +102,7 @@ export function SetupWizard({
       // The ChatGPT plan needs a sign-in instead of a key.
       if (viaPlan) {
         if (!chatgptStatus(ctx.payload)?.signed_in) {
-          return "Sign in with ChatGPT.";
+          return SIGN_IN_FIRST;
         }
       } else if (info.needs_key && !keySet(info.key_field)) {
         return "Enter the API key.";
@@ -114,6 +117,8 @@ export function SetupWizard({
     (field) => stepOfField(field, info) === step
   );
   const stepBlocker = blocker(step);
+  // The Sign in button already says what the ChatGPT plan needs.
+  const blockerNote = stepBlocker === SIGN_IN_FIRST ? null : stepBlocker;
 
   const goTo = (s: WizardStep) => setStepName(s);
   const offeredFolder = useRef(false);
@@ -237,8 +242,8 @@ export function SetupWizard({
           shown={(field) => stepOfField(field, info) !== "summary"}
         />
       </div>
-      {stepBlocker && (
-        <p className="mt-4 text-xs text-muted-foreground">{stepBlocker}</p>
+      {blockerNote && (
+        <p className="mt-4 text-xs text-muted-foreground">{blockerNote}</p>
       )}
 
       <div className="mt-5 flex flex-wrap items-center gap-2">

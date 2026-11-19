@@ -2453,11 +2453,14 @@ describe("ChatGPT sign-in (desktop)", () => {
     next();
     next();
     expect(within(wizard).getByText("Connect to it")).toBeTruthy();
+    // The other blocker lines still show.
+    expect(within(wizard).getByText("Enter the API key.")).toBeTruthy();
     fireEvent.click(chatgptPlan());
     const nextButton = () =>
       screen.getByRole("button", { name: "Next" }) as HTMLButtonElement;
     expect(nextButton().disabled).toBe(true);
-    expect(within(wizard).getByText("Sign in with ChatGPT.")).toBeTruthy();
+    // The Sign in button says it; no line repeats it under the step.
+    expect(within(wizard).queryByText("Sign in with ChatGPT.")).toBeNull();
     server.settings = { ...server.settings, chatgpt: SIGNED_IN };
     fireEvent.click(
       screen.getByRole("button", { name: "Sign in with ChatGPT" })
@@ -2477,6 +2480,19 @@ describe("ChatGPT sign-in (desktop)", () => {
       openai_auth_mode: "oauth",
       revision: "rev-1",
     });
+  });
+
+  it("the wizard still says what the model step needs under the ChatGPT plan", async () => {
+    desktop(
+      SIGNED_IN,
+      { openai_auth_mode: "oauth", model: "" },
+      { setup_needed: true }
+    );
+    renderView();
+    const wizard = await screen.findByRole("region", { name: "Setup wizard" });
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    expect(within(wizard).getByText("Choose a model")).toBeTruthy();
+    expect(within(wizard).getByText("Choose or type a model.")).toBeTruthy();
   });
 
   it("a refused key does not hold the wizard once the ChatGPT plan is chosen", async () => {
