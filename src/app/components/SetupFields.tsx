@@ -599,7 +599,10 @@ export function ProviderAccess({
   ) {
     return fields;
   }
+  // A mode the environment sets is not known here: both ways stay offered.
+  const shadowed = shadowOf(ctx, OPENAI_AUTH_MODE) !== null;
   const viaPlan = openaiAuthMode(ctx.payload, ctx.draft.edits) === "oauth";
+  const account = (viaPlan || shadowed) && <ChatgptAccount ctx={ctx} />;
   if (provider === "openai") {
     return (
       <>
@@ -607,7 +610,8 @@ export function ProviderAccess({
           ctx={ctx}
           legend="Connect with"
         />
-        {viaPlan ? <ChatgptAccount ctx={ctx} /> : fields}
+        {account}
+        {(!viaPlan || shadowed) && fields}
       </>
     );
   }
@@ -618,7 +622,7 @@ export function ProviderAccess({
         ctx={ctx}
         legend="OpenAI models connect with"
       />
-      {viaPlan && <ChatgptAccount ctx={ctx} />}
+      {account}
     </>
   );
 }

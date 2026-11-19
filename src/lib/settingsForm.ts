@@ -401,28 +401,36 @@ export function openaiAuthMode(
     : "api_key";
 }
 
-/** The choice shows for OpenAI, and while the mode is `oauth` whatever the
- *  provider: a provider change does not reset it, and a sign-in it needs
- *  still stops the start. */
+/** The choice shows for OpenAI, and whatever the provider while the mode is
+ *  `oauth` (a provider change does not reset it, and a sign-in it needs still
+ *  stops the start), while the saved mode is `oauth` (so a switch to API key
+ *  stays visible), and while the environment sets the mode (its value is not
+ *  known here, and a sign-in may be needed). */
 export function showsConnectChoice(
   payload: SettingsPayload,
   edits: Edits
 ): boolean {
   return (
     currentText(payload, edits, "provider") === "openai" ||
-    openaiAuthMode(payload, edits) === "oauth"
+    openaiAuthMode(payload, edits) === "oauth" ||
+    savedText(payload, OPENAI_AUTH_MODE) === "oauth" ||
+    shadowedSource(payload, OPENAI_AUTH_MODE) !== null
   );
 }
 
 /** Fields a save leaves out: the OpenAI key while the choice (`offered`)
- *  hides it under the ChatGPT plan. The edit stays, for a switch back. */
+ *  hides it under the ChatGPT plan. The edit stays, for a switch back. A
+ *  mode the environment sets hides nothing: the key may be the one in use. */
 export function hiddenKeyFields(
   payload: SettingsPayload,
   edits: Edits,
   offered: boolean
 ): string[] {
   const key = payload.providers.openai?.key_field;
-  return offered && key && openaiAuthMode(payload, edits) === "oauth"
+  return offered &&
+    key &&
+    openaiAuthMode(payload, edits) === "oauth" &&
+    !shadowedSource(payload, OPENAI_AUTH_MODE)
     ? [key]
     : [];
 }

@@ -2326,7 +2326,10 @@ describe("ChatGPT sign-in (desktop)", () => {
     server.settings = { ...server.settings, chatgpt: SIGNED_IN };
     fireEvent.click(signIn);
     expect(await screen.findByText("Signed in · Plus")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Sign out" })).toBeTruthy();
+    // The status can show a moment before the waiting button goes.
+    expect(
+      await screen.findByRole("button", { name: "Sign out" })
+    ).toBeTruthy();
     expect(chatgpt.signIn).toHaveBeenCalledOnce();
   });
 
@@ -2474,6 +2477,8 @@ describe("ChatGPT sign-in (desktop)", () => {
     expect(
       within(wizard).getByText("ChatGPT plan (Signed in · Plus)")
     ).toBeTruthy();
+    // The plan replaces the key: no key row.
+    expect(within(wizard).queryByText("OpenAI API key")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Finish" }));
     await waitFor(() => expect(server.patch).toHaveBeenCalledOnce());
     expect(server.patch.mock.calls[0][0]).toEqual({
@@ -2493,6 +2498,235 @@ describe("ChatGPT sign-in (desktop)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
     expect(within(wizard).getByText("Choose a model")).toBeTruthy();
     expect(within(wizard).getByText("Choose or type a model.")).toBeTruthy();
+  });
+
+  it("Finish goes back to the key step when the sign-in went away meanwhile", async () => {
+    desktop(
+      SIGNED_OUT,
+      { openai_api_key: { set: false } },
+      { setup_needed: true }
+    );
+    renderView();
+    const wizard = await screen.findByRole("region", { name: "Setup wizard" });
+    const next = () =>
+      fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    next();
+    next();
+    fireEvent.click(chatgptPlan());
+    server.settings = { ...server.settings, chatgpt: SIGNED_IN };
+    fireEvent.click(
+      screen.getByRole("button", { name: "Sign in with ChatGPT" })
+    );
+    await screen.findByText("Signed in · Plus");
+    await waitFor(() =>
+      expect(
+        (screen.getByRole("button", { name: "Next" }) as HTMLButtonElement)
+          .disabled
+      ).toBe(false)
+    );
+    next();
+    fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+    next();
+    expect(within(wizard).getByText("Check and finish")).toBeTruthy();
+    // Signed out elsewhere (a terminal), seen at the next read.
+    server.settings = { ...server.settings, chatgpt: SIGNED_OUT };
+    fireEvent.click(screen.getByRole("button", { name: "Reload" }));
+    await within(wizard).findByText("ChatGPT plan (Not signed in)");
+    fireEvent.click(screen.getByRole("button", { name: "Finish" }));
+    await waitFor(() =>
+      expect(within(wizard).getByText("Connect to it")).toBeTruthy()
+    );
+    expect(server.patch).not.toHaveBeenCalled();
+  });
+
+  it("another provider's OpenAI models on the ChatGPT plan: the key step waits for the sign-in", async () => {
+    desktop(
+      SIGNED_OUT,
+      { provider: "ollama", model: "llama3.2", openai_auth_mode: "oauth" },
+      { setup_needed: true }
+    );
+    renderView();
+    const wizard = await screen.findByRole("region", { name: "Setup wizard" });
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    expect(within(wizard).getByText("Connect to it")).toBeTruthy();
+    expect(within(wizard).getByText("OpenAI models connect with")).toBeTruthy();
+    const nextButton = () =>
+      screen.getByRole("button", { name: "Next" }) as HTMLButtonElement;
+    expect(nextButton().disabled).toBe(true);
+    // Here the sign-in is a side section: the step says why Next waits.
+    expect(
+      within(wizard).getByText(
+        "OpenAI models are set to use the ChatGPT plan, and EvoScientist doesn't start without its sign-in. Sign in, or choose API key if you don't use OpenAI models."
+      )
+    ).toBeTruthy();
+    // An API key for OpenAI models needs no sign-in; the choice stays shown.
+    fireEvent.click(apiKey());
+    expect(nextButton().disabled).toBe(false);
+    expect(apiKey().checked).toBe(true);
+    expect(within(wizard).getByText("OpenAI models connect with")).toBeTruthy();
+  });
+
+  it("another provider: the environment's mode leaves the key step to the core", async () => {
+    desktop(
+      SIGNED_OUT,
+      { provider: "ollama", model: "llama3.2", openai_auth_mode: "oauth" },
+      {
+        setup_needed: true,
+        sources: { openai_auth_mode: { source: "env", shadowed: true } },
+      }
+    );
+    renderView();
+    const wizard = await screen.findByRole("region", { name: "Setup wizard" });
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    expect(within(wizard).getByText("Connect to it")).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "Next" }) as HTMLButtonElement)
+        .disabled
+    ).toBe(false);
+  });
+
+  it("OpenAI with the mode set by the environment: a key or the sign-in lets the wizard go on", async () => {
+    desktop(
+      SIGNED_OUT,
+      { openai_api_key: { set: false }, openai_auth_mode: "oauth" },
+      {
+        setup_needed: true,
+        sources: { openai_auth_mode: { source: "env", shadowed: true } },
+      }
+    );
+    renderView();
+    const wizard = await screen.findByRole("region", { name: "Setup wizard" });
+    const next = () =>
+      fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    next();
+    next();
+    expect(within(wizard).getByText("Connect to it")).toBeTruthy();
+    // Both ways are offered: the page cannot tell which one is in use.
+    expect(keyInput()).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Sign in with ChatGPT" })
+    ).toBeTruthy();
+    const nextButton = () =>
+      screen.getByRole("button", { name: "Next" }) as HTMLButtonElement;
+    expect(nextButton().disabled).toBe(true);
+    expect(
+      within(wizard).getByText("Enter the API key, or sign in with ChatGPT.")
+    ).toBeTruthy();
+    fireEvent.change(keyInput(), { target: { value: "sk-env-1234" } });
+    expect(nextButton().disabled).toBe(false);
+    next();
+    fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+    next();
+    expect(
+      within(wizard).getByText("set by an environment variable")
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Finish" }));
+    await waitFor(() => expect(server.patch).toHaveBeenCalledOnce());
+    expect(server.patch.mock.calls[0][0]).toEqual({
+      openai_api_key: "sk-env-1234",
+      revision: "rev-1",
+    });
+  });
+
+  it("the environment's mode on Settings: the sign-in and the key are both offered, under any provider", async () => {
+    // config.yaml keeps the default api_key; the environment says otherwise.
+    desktop(
+      SIGNED_OUT,
+      {},
+      { sources: { openai_auth_mode: { source: "env", shadowed: true } } }
+    );
+    renderSettingsPage();
+    expect(await screen.findByText("Connect with")).toBeTruthy();
+    expect(keyInput()).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Sign in with ChatGPT" })
+    ).toBeTruthy();
+    cleanup();
+    desktop(
+      SIGNED_OUT,
+      { provider: "ollama", model: "llama3.2" },
+      { sources: { openai_auth_mode: { source: "env", shadowed: true } } }
+    );
+    renderSettingsPage();
+    expect(await screen.findByText("OpenAI models connect with")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Sign in with ChatGPT" })
+    ).toBeTruthy();
+  });
+
+  it("OpenAI with the mode set by the environment: a sign-in alone lets the wizard go on", async () => {
+    desktop(
+      SIGNED_IN,
+      { openai_api_key: { set: false }, openai_auth_mode: "oauth" },
+      {
+        setup_needed: true,
+        sources: { openai_auth_mode: { source: "env", shadowed: true } },
+      }
+    );
+    renderView();
+    const wizard = await screen.findByRole("region", { name: "Setup wizard" });
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    expect(within(wizard).getByText("Connect to it")).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "Next" }) as HTMLButtonElement)
+        .disabled
+    ).toBe(false);
+  });
+
+  it("another provider: a switch to API key shows in the summary", async () => {
+    desktop(
+      SIGNED_OUT,
+      { provider: "ollama", model: "llama3.2", openai_auth_mode: "oauth" },
+      { setup_needed: true }
+    );
+    renderView();
+    const wizard = await screen.findByRole("region", { name: "Setup wizard" });
+    const next = () =>
+      fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    next();
+    fireEvent.click(apiKey());
+    next();
+    await waitFor(() =>
+      expect(
+        (screen.getByRole("button", { name: "Next" }) as HTMLButtonElement)
+          .disabled
+      ).toBe(false)
+    );
+    next();
+    fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+    next();
+    expect(within(wizard).getByText("Check and finish")).toBeTruthy();
+    expect(within(wizard).getByText("OpenAI models")).toBeTruthy();
+    expect(within(wizard).getByText("API key")).toBeTruthy();
+  });
+
+  it("another provider: the summary names the ChatGPT plan of OpenAI models", async () => {
+    desktop(
+      SIGNED_IN,
+      { provider: "ollama", model: "llama3.2", openai_auth_mode: "oauth" },
+      { setup_needed: true }
+    );
+    renderView();
+    const wizard = await screen.findByRole("region", { name: "Setup wizard" });
+    const next = () =>
+      fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    next();
+    next();
+    await waitFor(() =>
+      expect(
+        (screen.getByRole("button", { name: "Next" }) as HTMLButtonElement)
+          .disabled
+      ).toBe(false)
+    );
+    next();
+    fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+    next();
+    expect(within(wizard).getByText("Check and finish")).toBeTruthy();
+    expect(within(wizard).getByText("OpenAI models")).toBeTruthy();
+    expect(
+      within(wizard).getByText("ChatGPT plan (Signed in · Plus)")
+    ).toBeTruthy();
   });
 
   it("a refused key does not hold the wizard once the ChatGPT plan is chosen", async () => {

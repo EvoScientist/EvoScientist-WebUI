@@ -25,11 +25,13 @@ import {
   type FieldContext,
 } from "@/app/components/setupFieldContext";
 import {
+  OPENAI_AUTH_MODE,
   chatgptStatusText,
   currentText,
   fieldLabel,
   isMaskedSecret,
   openaiAuthMode,
+  showsConnectChoice,
   sourceNote,
   stepOfField,
   wizardSteps,
@@ -49,6 +51,10 @@ const STEP_TITLES: Record<WizardStep, string> = {
 
 /** Next waits for the ChatGPT sign-in; the line itself is not shown. */
 const SIGN_IN_FIRST = "Sign in with ChatGPT.";
+/** The same wait under another provider, where the sign-in is a side
+ *  section of the step. */
+const PLAN_SIGN_IN_ELSEWHERE =
+  "OpenAI models are set to use the ChatGPT plan, and EvoScientist doesn't start without its sign-in. Sign in, or choose API key if you don't use OpenAI models.";
 
 interface SetupWizardProps {
   ctx: FieldContext;
@@ -87,6 +93,12 @@ export function SetupWizard({
     );
   };
 
+  // EvoScientist does not start under the ChatGPT plan without a sign-in,
+  // whichever provider is the main one (the mode covers every OpenAI call).
+  const planSignInMissing =
+    !!ctx.chatgpt &&
+    openaiAuthMode(ctx.payload, edits) === "oauth" &&
+    !chatgptStatus(ctx.payload)?.signed_in;
   const viaPlan = connectsViaPlan(ctx);
   const blocker = (s: WizardStep): string | null => {
     // A saved provider EvoScientist no longer knows has no key step.
@@ -99,13 +111,25 @@ export function SetupWizard({
       ) {
         return "Enter the endpoint's address.";
       }
-      // The ChatGPT plan needs a sign-in instead of a key.
-      if (viaPlan) {
-        if (!chatgptStatus(ctx.payload)?.signed_in) {
-          return SIGN_IN_FIRST;
+      // The environment sets OpenAI's mode: a key or the sign-in will do.
+      const eitherWay =
+        !!ctx.chatgpt &&
+        provider === "openai" &&
+        shadowOf(ctx, OPENAI_AUTH_MODE) !== null;
+      if (eitherWay) {
+        if (!keySet(info.key_field) && !chatgptStatus(ctx.payload)?.signed_in) {
+          return "Enter the API key, or sign in with ChatGPT.";
         }
-      } else if (info.needs_key && !keySet(info.key_field)) {
+      } else if (!viaPlan && info.needs_key && !keySet(info.key_field)) {
+        // For OpenAI the ChatGPT plan's sign-in replaces the key.
         return "Enter the API key.";
+      }
+      if (planSignInMissing) {
+        if (viaPlan) return SIGN_IN_FIRST;
+        // A mode the environment sets is not known here: the core decides.
+        if (shadowOf(ctx, OPENAI_AUTH_MODE) === null) {
+          return PLAN_SIGN_IN_ELSEWHERE;
+        }
       }
     }
     if (s === "model" && !currentText(ctx.payload, edits, "model")) {
@@ -160,6 +184,12 @@ export function SetupWizard({
   }, [listModels, info, provider, testKey]);
 
   const finish = async () => {
+    // A re-read may have taken back what a step needs (a sign-out elsewhere).
+    const back = steps.find((s) => s !== "summary" && blocker(s) !== null);
+    if (back) {
+      goTo(back);
+      return;
+    }
     const outcome = await ctx.draft.save();
     if (outcome.ok) {
       onFinished(outcome.result);
@@ -299,6 +329,7 @@ export function SetupWizard({
 function connectsViaPlan(ctx: FieldContext): boolean {
   return (
     !!ctx.chatgpt &&
+    shadowOf(ctx, OPENAI_AUTH_MODE) === null &&
     currentProvider(ctx) === "openai" &&
     openaiAuthMode(ctx.payload, ctx.draft.edits) === "oauth"
   );
@@ -339,17 +370,24 @@ function Summary({
     ]);
   }
   const status = chatgptStatus(ctx.payload);
-  if (connectsViaPlan(ctx) && status) {
-    rows.push([
-      "key",
-      "Connect with",
-      `ChatGPT plan (${chatgptStatusText(status)})`,
-    ]);
-  } else if (info?.key_field) {
+  if (info?.key_field && !connectsViaPlan(ctx)) {
     rows.push([
       "key",
       fieldLabel(info.key_field, ctx.payload.providers),
       secretText(info.key_field),
+    ]);
+  }
+  // How OpenAI models connect, where the app offers the choice.
+  if (ctx.chatgpt && status && showsConnectChoice(ctx.payload, edits)) {
+    const shadow = shadowOf(ctx, OPENAI_AUTH_MODE);
+    rows.push([
+      "key",
+      provider === "openai" ? "Connect with" : "OpenAI models",
+      shadow
+        ? `set by ${sourceNote(shadow)}`
+        : openaiAuthMode(ctx.payload, edits) === "oauth"
+        ? `ChatGPT plan (${chatgptStatusText(status)})`
+        : "API key",
     ]);
   }
   rows.push(

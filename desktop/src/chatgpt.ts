@@ -23,7 +23,9 @@ export type SignOutOutcome =
   | { ok: false; code: string; message: string };
 
 export interface SignInRun {
-  /** The terminal line; `internal_error` when EvoSci exits without one. */
+  /** The terminal line (`internal_error` when EvoSci exits without one),
+   *  given once the process has gone, or after the bounded attempts to end
+   *  it (a failed kill is logged). */
   done: Promise<SignInOutcome>;
   /** Closes stdin (the core answers `cancelled`), then ends the tree when it
    *  has not exited after SIGN_IN_STOP_MS. Resolves once the process has
@@ -96,7 +98,29 @@ export function startSignIn(
     deps.log.info(
       `chatgpt sign-in: ${o.ok ? `signed in (${o.plan ?? "no plan"})` : o.code}`
     );
-    resolveDone(o);
+    // The run is answered once its process has gone: until then it may hold
+    // the port, and a quit must still be able to wait for it.
+    void (async () => {
+      try {
+        if ((await withTimeout(proc.closed, stopMs)) !== "timeout") return;
+        if (exitedYet) {
+          deps.log.warn(
+            "EvoSci login exited, but its output stayed open after its answer"
+          );
+          return;
+        }
+        // A cancel already under way (the ceiling, a refused link) logs its own.
+        if (!cancelled)
+          deps.log.warn(
+            "EvoSci login did not exit after its answer; ending it"
+          );
+        await cancel();
+      } catch (e) {
+        deps.log.warn(`ending EvoSci login failed: ${e}`);
+      } finally {
+        resolveDone(o);
+      }
+    })();
   };
 
   const proc = spawnFn(evosci, SIGN_IN_ARGS, {
@@ -139,17 +163,30 @@ export function startSignIn(
     onStderrLine: (line) => deps.log.info(`login stderr: ${line}`),
   });
 
+  let exitedYet = false;
+  void proc.exited.then(() => (exitedYet = true));
+
   function cancel(): Promise<void> {
     proc.closeStdin();
     cancelled = true;
-    stopping ??= withTimeout(proc.exited, stopMs).then(async (r) => {
-      if (r !== "timeout") return;
-      deps.log.warn(
-        `EvoSci login did not stop within ${stopMs} ms; ending its tree`
-      );
-      if (proc.child.pid) await kill(proc.child.pid);
-    });
+    stopping ??= stop();
     return stopping;
+  }
+
+  /** Waits for the exit; past `stopMs` ends the tree and waits for the exit
+   *  again, as a kill can return before the process has gone. */
+  async function stop(): Promise<void> {
+    if ((await withTimeout(proc.exited, stopMs)) !== "timeout") return;
+    deps.log.warn(
+      `EvoSci login did not stop within ${stopMs} ms; ending its tree`
+    );
+    try {
+      if (proc.child.pid) await kill(proc.child.pid);
+    } catch (e) {
+      deps.log.warn(`ending EvoSci login failed: ${e}`);
+    }
+    if ((await withTimeout(proc.exited, stopMs)) === "timeout")
+      deps.log.warn("EvoSci login still runs after its tree was ended");
   }
 
   // The answer comes once the login has stopped, so a new sign-in finds the

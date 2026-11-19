@@ -450,6 +450,23 @@ describe("the OpenAI connection (desktop ChatGPT sign-in)", () => {
     expect(
       showsConnectChoice(p({ provider: "openai" }), { provider: "anthropic" })
     ).toBe(false);
+    // The environment sets the mode: the choice shows whatever is saved.
+    expect(
+      showsConnectChoice(
+        {
+          ...p({ provider: "anthropic" }),
+          sources: { openai_auth_mode: { source: "env", shadowed: true } },
+        },
+        {}
+      )
+    ).toBe(true);
+    // Switched to API key under another provider: the choice stays shown.
+    expect(
+      showsConnectChoice(
+        p({ provider: "anthropic", openai_auth_mode: "oauth" }),
+        { openai_auth_mode: "api_key" }
+      )
+    ).toBe(true);
   });
 
   it("hides the OpenAI key from a save only where the choice hides it", () => {
@@ -470,6 +487,17 @@ describe("the OpenAI connection (desktop ChatGPT sign-in)", () => {
     expect(hiddenKeyFields(p({ openai_auth_mode: "oauth" }), {}, true)).toEqual(
       ["openai_api_key"]
     );
+    // The environment sets the mode: the key may be the one in use.
+    expect(
+      hiddenKeyFields(
+        {
+          ...p({ openai_auth_mode: "oauth" }),
+          sources: { openai_auth_mode: { source: "env", shadowed: true } },
+        },
+        {},
+        true
+      )
+    ).toEqual([]);
   });
 
   it("says the sign-in state", () => {
