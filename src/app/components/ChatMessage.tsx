@@ -446,7 +446,7 @@ export const ChatMessage = React.memo<ChatMessageProps>(
               {(() => {
                 const ts = getMessageTimestamp(message);
                 return ts !== null ? (
-                  <span className="shrink-0 text-[10px] text-muted-foreground/50">
+                  <span className="shrink-0 text-[10px] text-muted-foreground">
                     {formatTimestamp(ts)}
                   </span>
                 ) : null;
@@ -473,7 +473,7 @@ export const ChatMessage = React.memo<ChatMessageProps>(
               {(() => {
                 const ts = getMessageTimestamp(message);
                 return ts !== null ? (
-                  <span className="text-[10px] text-muted-foreground/50">
+                  <span className="text-[10px] text-muted-foreground">
                     {formatTimestamp(ts)}
                   </span>
                 ) : null;

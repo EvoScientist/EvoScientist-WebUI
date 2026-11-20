@@ -203,7 +203,7 @@ export const ActionGroup = React.memo<ActionGroupProps>(function ActionGroup({
         {(() => {
           const ts = getMessageTimestamp(items[0]?.message);
           return ts !== null ? (
-            <span className="shrink-0 text-[10px] text-muted-foreground/50">
+            <span className="shrink-0 text-[10px] text-muted-foreground">
               {formatTimestamp(ts)}
             </span>
           ) : null;
