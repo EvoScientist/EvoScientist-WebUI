@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { formatTimestamp, getMessageTimestamp } from "./messageTimestamp";
 
 describe("getMessageTimestamp", () => {
@@ -40,16 +40,46 @@ describe("getMessageTimestamp", () => {
     expect(
       getMessageTimestamp({ response_metadata: { created: "1700000000" } })
     ).toBeNull();
+    expect(
+      getMessageTimestamp({ response_metadata: { created: 1e13 } })
+    ).toBeNull();
   });
 });
 
 describe("formatTimestamp", () => {
-  it("formats local time as HH:MM:SS DD/MM/YYYY", () => {
-    expect(formatTimestamp(new Date(2026, 10, 19, 9, 5, 7))).toBe(
-      "09:05:07 19/11/2026"
+  it("formats the time and the date in the reader's own order", () => {
+    const date = new Date(2026, 10, 5, 9, 5, 7);
+    expect(formatTimestamp(date, "en-GB")).toBe("09:05:07 05/11/2026");
+    expect(formatTimestamp(date, "en-US")).toBe("09:05:07 11/05/2026");
+    expect(formatTimestamp(date, "zh-CN")).toBe("09:05:07 2026/11/05");
+    expect(formatTimestamp(new Date(2027, 0, 3, 0, 0, 0), "en-GB")).toBe(
+      "00:00:00 03/01/2027"
     );
-    expect(formatTimestamp(new Date(2027, 0, 3, 23, 0, 0))).toBe(
-      "23:00:00 03/01/2027"
-    );
+  });
+
+  it("uses the browser's locale by default", () => {
+    const Real = Intl.DateTimeFormat;
+    const made = vi
+      .spyOn(Intl, "DateTimeFormat")
+      .mockImplementation(function (
+        locales?: Intl.LocalesArgument,
+        options?: Intl.DateTimeFormatOptions
+      ) {
+        return new Real(locales, options);
+      });
+    try {
+      formatTimestamp(new Date(2026, 10, 5, 9, 5, 7));
+      expect(made).toHaveBeenCalled();
+      expect(made.mock.calls.map(([locales]) => locales)).toEqual(
+        made.mock.calls.map(() => undefined)
+      );
+    } finally {
+      made.mockRestore();
+    }
+  });
+
+  it("keeps the time and the date in the same digits", () => {
+    const date = new Date(2026, 10, 5, 9, 5, 7);
+    expect(formatTimestamp(date, "ar-EG")).not.toMatch(/[0-9]/);
   });
 });

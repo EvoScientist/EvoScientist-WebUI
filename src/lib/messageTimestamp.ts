@@ -23,27 +23,28 @@ export function getMessageTimestamp(
   }
 
   const created = meta.created;
-  if (typeof created === "number" && Number.isFinite(created)) {
-    return new Date(created * 1000);
+  if (typeof created === "number") {
+    const date = new Date(created * 1000);
+    if (Number.isFinite(date.getTime())) return date;
   }
   return null;
 }
 
 /**
- * `HH:MM:SS DD/MM/YYYY` in the local timezone.
+ * `HH:MM:SS` and the date, both in the reader's own format and the local
+ * timezone.
  */
-export function formatTimestamp(date: Date): string {
-  const time = [date.getHours(), date.getMinutes(), date.getSeconds()]
-    .map(pad)
-    .join(":");
-  const day = [
-    pad(date.getDate()),
-    pad(date.getMonth() + 1),
-    date.getFullYear(),
-  ].join("/");
+export function formatTimestamp(date: Date, locales?: string): string {
+  const time = new Intl.DateTimeFormat(locales, {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  }).format(date);
+  const day = new Intl.DateTimeFormat(locales, {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
   return `${time} ${day}`;
-}
-
-function pad(n: number): string {
-  return String(n).padStart(2, "0");
 }
