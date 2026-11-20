@@ -10,6 +10,7 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent, within } from "@testing-library/react";
 import { ActionGroup, type GroupedActionItem } from "./ActionGroup";
 import { executeActionRequest } from "@/test/fixtures/actionRequests";
+import { formatTimestamp } from "@/lib/messageTimestamp";
 
 // Stub ChatMessage so we can assert what props ActionGroup passes without
 // mounting the full message-rendering tree. Each stub renders a div with
@@ -172,6 +173,38 @@ describe("ActionGroup header", () => {
     expect(header.getAttribute("aria-expanded")).toBe("false");
     fireEvent.click(header);
     expect(header.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("shows the time of the group's latest reply that has one", () => {
+    const A = "2026-11-19T14:32:05.000Z";
+    const B = "2026-11-19T14:40:00.000Z";
+    const at = (item: GroupedActionItem, iso: string): GroupedActionItem => ({
+      ...item,
+      message: {
+        ...item.message,
+        response_metadata: { evo_created_at: iso },
+      } as GroupedActionItem["message"],
+    });
+    const first = formatTimestamp(new Date(A));
+    const last = formatTimestamp(new Date(B));
+    const header = () => screen.getByRole("button", { expanded: false });
+    const { rerender } = render(
+      <ActionGroup
+        {...defaultProps({
+          items: [at(makeItem("m1"), A), at(makeItem("m2"), B)],
+        })}
+      />
+    );
+    expect(header().textContent).toContain(last);
+    expect(header().textContent).not.toContain(first);
+    expect(header().getAttribute("aria-label")).toContain(last);
+
+    rerender(
+      <ActionGroup
+        {...defaultProps({ items: [at(makeItem("m1"), A), makeItem("m2")] })}
+      />
+    );
+    expect(header().textContent).toContain(first);
   });
 });
 

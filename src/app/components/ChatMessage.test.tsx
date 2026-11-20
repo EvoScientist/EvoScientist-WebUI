@@ -16,6 +16,7 @@ import {
 import type { Message } from "@langchain/langgraph-sdk";
 import { ChatMessage } from "./ChatMessage";
 import { copyText } from "@/lib/clipboard";
+import { formatTimestamp } from "@/lib/messageTimestamp";
 
 vi.mock("@/lib/clipboard", () => ({ copyText: vi.fn(async () => true) }));
 import { createThinkingClock } from "@/lib/thinkingTimer";
@@ -738,5 +739,32 @@ describe("ChatMessage pinned skill chips", () => {
     );
     expect(document.querySelector('[data-slot="composer-chip"]')).toBeNull();
     expect(screen.getByText("/paper-review hi")).toBeTruthy();
+  });
+});
+
+describe("ChatMessage time label", () => {
+  const SENT = "2026-11-19T14:32:05.000Z";
+  const label = () => formatTimestamp(new Date(SENT));
+  const stamped = (type: "ai" | "human", stamp?: string): Message =>
+    ({
+      id: `t-${type}`,
+      type,
+      content: "Hello",
+      response_metadata: stamp ? { evo_created_at: stamp } : {},
+    } as unknown as Message);
+
+  it("shows the time under a reply", () => {
+    renderMessage(stamped("ai", SENT));
+    expect(screen.getByText(label())).toBeTruthy();
+  });
+
+  it("shows the time next to the user's message, outside the hover-only buttons", () => {
+    renderMessage(stamped("human", SENT));
+    expect(screen.getByText(label()).closest(".opacity-0")).toBeNull();
+  });
+
+  it("shows no time for a message without one", () => {
+    renderMessage(stamped("ai"));
+    expect(screen.queryByText(/\d\d:\d\d:\d\d/)).toBeNull();
   });
 });
