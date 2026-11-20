@@ -37,6 +37,8 @@ export interface ProgressScreen {
   kind: "progress";
   title: string;
   message: string;
+  /** The ChatGPT sign-in's Cancel, before its link arrives. */
+  actions?: ActionId[];
 }
 
 /** A question with one button per answer (the mirror question). */
@@ -639,8 +641,7 @@ export function signInWaitingScreen(): WaitingScreen {
     kind: "waiting",
     title: "Finish signing in in your browser",
     lines: [
-      "A ChatGPT sign-in page opened in your browser. Come back here when it says you're signed in.",
-      "When the page says to return to your terminal, come back to this window.",
+      "A ChatGPT sign-in page opened in your browser. When it says you're signed in (or tells you to return to your terminal), come back to this window.",
     ],
     actions: ["open_sign_in_page", "copy_sign_in_link", "cancel_sign_in"],
   };
@@ -660,8 +661,6 @@ export function signInFailureLine(
       return "The sign-in needs port 1455, and another program uses it (another ChatGPT or Codex sign-in, for example). Close it, then sign in again.";
     case "timed_out":
       return "The sign-in was not finished within 5 minutes. Sign in again.";
-    case "busy":
-      return "A ChatGPT sign-in is already running. Finish it in the browser, or wait for it to end.";
     case "sign_in_failed":
       return `The sign-in did not finish: ${message}`;
     default:

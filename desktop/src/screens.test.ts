@@ -267,8 +267,7 @@ describe("errorScreen", () => {
       kind: "waiting",
       title: "Finish signing in in your browser",
       lines: [
-        "A ChatGPT sign-in page opened in your browser. Come back here when it says you're signed in.",
-        "When the page says to return to your terminal, come back to this window.",
+        "A ChatGPT sign-in page opened in your browser. When it says you're signed in (or tells you to return to your terminal), come back to this window.",
       ],
       actions: ["open_sign_in_page", "copy_sign_in_link", "cancel_sign_in"],
     });
@@ -286,9 +285,6 @@ describe("errorScreen", () => {
     );
     expect(signInFailureLine("timed_out", "x")).toBe(
       "The sign-in was not finished within 5 minutes. Sign in again."
-    );
-    expect(signInFailureLine("busy", "")).toBe(
-      "A ChatGPT sign-in is already running. Finish it in the browser, or wait for it to end."
     );
     expect(signInFailureLine("sign_in_failed", "OpenAI refused it.")).toBe(
       "The sign-in did not finish: OpenAI refused it."

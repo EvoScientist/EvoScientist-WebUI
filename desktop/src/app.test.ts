@@ -3274,6 +3274,26 @@ describe("ChatGPT sign-in", () => {
     expect(linesOf(h).at(-1)).toBe("The sign-in did not finish: m");
   });
 
+  it("offers Cancel before the link arrives", async () => {
+    const h = await signInError();
+    const before = linesOf(h);
+    const acting = h.app.act("sign_in", undefined);
+    await settle();
+    expect(h.app.screen).toMatchObject({
+      kind: "progress",
+      title: "Signing in to ChatGPT",
+      actions: ["cancel_sign_in"],
+    });
+    await h.app.act("cancel_sign_in", undefined);
+    expect(h.fake.runs[0].cancel).toHaveBeenCalledTimes(1);
+    await acting;
+    expect(h.app.screen).toMatchObject({
+      kind: "error",
+      code: "sign_in_required",
+    });
+    expect(linesOf(h)).toEqual(before);
+  });
+
   it("a cancel returns to the error screen without a line", async () => {
     const h = await signInError();
     const before = linesOf(h);

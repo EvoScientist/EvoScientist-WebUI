@@ -147,6 +147,12 @@ export function startSignIn(
             void cancel();
             return;
           }
+          // The core prints the link before it notices a cancel: a page
+          // whose sign-in is already gone is not opened.
+          if (cancelled) {
+            deps.log.info("chatgpt sign-in: link after a cancel; not opened");
+            return;
+          }
           onUrl(ev.url);
           return;
         case "signed_in":

@@ -1718,7 +1718,11 @@ export function createApp(deps: AppDeps): App {
     const back = signInScreen;
     if (signIn?.url) showScreen(signInWaitingScreen());
     else {
-      signInProgress = progressScreen("starting_sign_in");
+      // Cancel works before the link too: a slow or stuck core start.
+      signInProgress = {
+        ...progressScreen("starting_sign_in"),
+        actions: ["cancel_sign_in"],
+      };
       showScreen(signInProgress);
     }
     const r = await signInNow(true);

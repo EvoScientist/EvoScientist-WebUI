@@ -149,6 +149,27 @@ describe("startSignIn", () => {
     expect(await r.done).toMatchObject({ ok: false, code: "cancelled" });
   });
 
+  it("never opens a link that arrives after a cancel", async () => {
+    const onUrl = vi.fn();
+    // The core still prints the link after its stdin closed, then cancels.
+    const r = startSignIn("EvoSci", onUrl, {
+      ...base,
+      spawn: fake(
+        `process.stdin.on("end", () => { ${say({
+          event: "url",
+          url: URL,
+        })} ${say({
+          event: "error",
+          code: "cancelled",
+          message: "ChatGPT sign-in was cancelled.",
+        })} process.exit(1); }); process.stdin.resume();`
+      ),
+    });
+    void r.cancel();
+    expect(await r.done).toMatchObject({ ok: false, code: "cancelled" });
+    expect(onUrl).not.toHaveBeenCalled();
+  });
+
   it("opens only the first url", async () => {
     const urls: string[] = [];
     const r = startSignIn("EvoSci", (u) => urls.push(u), {
