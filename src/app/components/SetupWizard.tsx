@@ -12,7 +12,7 @@ import type { ModelRegistryEntry } from "@/app/hooks/useAvailableModels";
 import {
   ModelField,
   MirrorField,
-  ProviderAccessFields,
+  ProviderAccess,
   ProviderField,
   SecretField,
   TextField,
@@ -25,14 +25,19 @@ import {
   type FieldContext,
 } from "@/app/components/setupFieldContext";
 import {
+  OPENAI_AUTH_MODE,
+  chatgptStatusText,
   currentText,
   fieldLabel,
   isMaskedSecret,
+  openaiAuthMode,
+  showsConnectChoice,
   sourceNote,
   stepOfField,
   wizardSteps,
   type WizardStep,
 } from "@/lib/settingsForm";
+import { chatgptStatus } from "@/lib/settings";
 import type { SaveResult } from "@/app/hooks/useSettingsDraft";
 
 const STEP_TITLES: Record<WizardStep, string> = {
@@ -43,6 +48,13 @@ const STEP_TITLES: Record<WizardStep, string> = {
   folder: "Workspace and mirrors",
   summary: "Check and finish",
 };
+
+/** Next waits for the ChatGPT sign-in; the line itself is not shown. */
+const SIGN_IN_FIRST = "Sign in with ChatGPT.";
+/** The same wait under another provider, where the sign-in is a side
+ *  section of the step. */
+const PLAN_SIGN_IN_ELSEWHERE =
+  "OpenAI models are set to use the ChatGPT plan, and EvoScientist doesn't start without its sign-in. Sign in, or choose API key if you don't use OpenAI models.";
 
 interface SetupWizardProps {
   ctx: FieldContext;
@@ -81,6 +93,13 @@ export function SetupWizard({
     );
   };
 
+  // EvoScientist does not start under the ChatGPT plan without a sign-in,
+  // whichever provider is the main one (the mode covers every OpenAI call).
+  const planSignInMissing =
+    !!ctx.chatgpt &&
+    openaiAuthMode(ctx.payload, edits) === "oauth" &&
+    !chatgptStatus(ctx.payload)?.signed_in;
+  const viaPlan = connectsViaPlan(ctx);
   const blocker = (s: WizardStep): string | null => {
     // A saved provider EvoScientist no longer knows has no key step.
     if (s === "provider" && !info) return "Choose a provider.";
@@ -92,8 +111,25 @@ export function SetupWizard({
       ) {
         return "Enter the endpoint's address.";
       }
-      if (info.needs_key && !keySet(info.key_field)) {
+      // The environment sets OpenAI's mode: a key or the sign-in will do.
+      const eitherWay =
+        !!ctx.chatgpt &&
+        provider === "openai" &&
+        shadowOf(ctx, OPENAI_AUTH_MODE) !== null;
+      if (eitherWay) {
+        if (!keySet(info.key_field) && !chatgptStatus(ctx.payload)?.signed_in) {
+          return "Enter the API key, or sign in with ChatGPT.";
+        }
+      } else if (!viaPlan && info.needs_key && !keySet(info.key_field)) {
+        // For OpenAI the ChatGPT plan's sign-in replaces the key.
         return "Enter the API key.";
+      }
+      if (planSignInMissing) {
+        if (viaPlan) return SIGN_IN_FIRST;
+        // A mode the environment sets is not known here: the core decides.
+        if (shadowOf(ctx, OPENAI_AUTH_MODE) === null) {
+          return PLAN_SIGN_IN_ELSEWHERE;
+        }
       }
     }
     if (s === "model" && !currentText(ctx.payload, edits, "model")) {
@@ -105,6 +141,8 @@ export function SetupWizard({
     (field) => stepOfField(field, info) === step
   );
   const stepBlocker = blocker(step);
+  // The Sign in button already says what the ChatGPT plan needs.
+  const blockerNote = stepBlocker === SIGN_IN_FIRST ? null : stepBlocker;
 
   const goTo = (s: WizardStep) => setStepName(s);
   const offeredFolder = useRef(false);
@@ -146,6 +184,12 @@ export function SetupWizard({
   }, [listModels, info, provider, testKey]);
 
   const finish = async () => {
+    // A re-read may have taken back what a step needs (a sign-out elsewhere).
+    const back = steps.find((s) => s !== "summary" && blocker(s) !== null);
+    if (back) {
+      goTo(back);
+      return;
+    }
     const outcome = await ctx.draft.save();
     if (outcome.ok) {
       onFinished(outcome.result);
@@ -169,7 +213,7 @@ export function SetupWizard({
       <div className="mt-4 space-y-4">
         {step === "provider" && <ProviderField ctx={ctx} />}
         {step === "key" && info && (
-          <ProviderAccessFields
+          <ProviderAccess
             ctx={ctx}
             provider={provider}
             info={info}
@@ -228,8 +272,8 @@ export function SetupWizard({
           shown={(field) => stepOfField(field, info) !== "summary"}
         />
       </div>
-      {stepBlocker && (
-        <p className="mt-4 text-xs text-muted-foreground">{stepBlocker}</p>
+      {blockerNote && (
+        <p className="mt-4 text-xs text-muted-foreground">{blockerNote}</p>
       )}
 
       <div className="mt-5 flex flex-wrap items-center gap-2">
@@ -281,6 +325,16 @@ export function SetupWizard({
   );
 }
 
+/** OpenAI is the provider and connects with the ChatGPT plan, in the app. */
+function connectsViaPlan(ctx: FieldContext): boolean {
+  return (
+    !!ctx.chatgpt &&
+    shadowOf(ctx, OPENAI_AUTH_MODE) === null &&
+    currentProvider(ctx) === "openai" &&
+    openaiAuthMode(ctx.payload, ctx.draft.edits) === "oauth"
+  );
+}
+
 function Summary({
   ctx,
   steps,
@@ -315,11 +369,25 @@ function Summary({
       currentText(ctx.payload, edits, info.base_url_field) || "default",
     ]);
   }
-  if (info?.key_field) {
+  const status = chatgptStatus(ctx.payload);
+  if (info?.key_field && !connectsViaPlan(ctx)) {
     rows.push([
       "key",
       fieldLabel(info.key_field, ctx.payload.providers),
       secretText(info.key_field),
+    ]);
+  }
+  // How OpenAI models connect, where the app offers the choice.
+  if (ctx.chatgpt && status && showsConnectChoice(ctx.payload, edits)) {
+    const shadow = shadowOf(ctx, OPENAI_AUTH_MODE);
+    rows.push([
+      "key",
+      provider === "openai" ? "Connect with" : "OpenAI models",
+      shadow
+        ? `set by ${sourceNote(shadow)}`
+        : openaiAuthMode(ctx.payload, edits) === "oauth"
+        ? `ChatGPT plan (${chatgptStatusText(status)})`
+        : "API key",
     ]);
   }
   rows.push(

@@ -10,6 +10,7 @@ import {
   keyedBaseUrlErrors,
   keyIsSet,
   currentText,
+  hiddenKeyFields,
   patchBody,
   saveErrorText,
   sendableEdits,
@@ -62,7 +63,10 @@ export interface SettingsDraft {
  */
 export function useSettingsDraft(
   payload: SettingsPayload | undefined,
-  refresh: () => Promise<unknown>
+  refresh: () => Promise<unknown>,
+  /** The page offers the ChatGPT plan (the desktop app): the OpenAI key it
+   *  hides is not sent. */
+  chatgptOffered = false
 ): SettingsDraft {
   const { deploymentUrl } = useDeployment();
   const [edits, setEdits] = useState<Edits>({});
@@ -138,18 +142,25 @@ export function useSettingsDraft(
     baseRevision.current = null;
   }, [dropChecks]);
 
-  // What a save sends: the selected provider's key fields, not another's.
-  const sendable = useMemo(
-    () =>
-      payload
-        ? sendableEdits(
-            edits,
-            payload.providers,
-            currentText(payload, edits, "provider")
-          )
-        : edits,
-    [payload, edits]
+  // A key the ChatGPT plan hides: not sent, and its errors hold nothing.
+  const hidden = useMemo(
+    () => (payload ? hiddenKeyFields(payload, edits, chatgptOffered) : []),
+    [payload, edits, chatgptOffered]
   );
+
+  // What a save sends: the selected provider's key fields, not another's,
+  // and no hidden key.
+  const sendable = useMemo(() => {
+    if (!payload) return edits;
+    const own = sendableEdits(
+      edits,
+      payload.providers,
+      currentText(payload, edits, "provider")
+    );
+    return Object.fromEntries(
+      Object.entries(own).filter(([field]) => !hidden.includes(field))
+    );
+  }, [payload, edits, hidden]);
 
   const localErrors = useMemo(
     () => ({
@@ -160,8 +171,13 @@ export function useSettingsDraft(
   );
 
   const fieldErrors = useMemo(
-    () => ({ ...serverErrors, ...localErrors }),
-    [serverErrors, localErrors]
+    () =>
+      Object.fromEntries(
+        Object.entries({ ...serverErrors, ...localErrors }).filter(
+          ([field]) => !hidden.includes(field)
+        )
+      ),
+    [serverErrors, localErrors, hidden]
   );
 
   const save = useCallback(async (): Promise<SaveOutcome> => {

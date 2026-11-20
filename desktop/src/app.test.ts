@@ -18,6 +18,7 @@ import {
   type AppWindow,
 } from "./app";
 import type { MemoryWaitResult, WorkCheck } from "./closeCheck";
+import type { SignInOutcome, SignInRun } from "./chatgpt";
 import type { CrashInfo } from "./crash";
 import type { DeployOutcome, DeploySession } from "./deploy";
 import type { DeployError, DeployReady } from "./lines";
@@ -273,6 +274,10 @@ function harness(over: Partial<AppDeps> = {}) {
     },
     backendAnswers: async () => false,
     uvToolEnvExists: async () => true,
+    startSignIn: () => {
+      throw new Error("no sign-in expected");
+    },
+    signOut: vi.fn(async () => ({ ok: true as const })),
     sessionEnd,
     ...over,
   };
@@ -3127,5 +3132,490 @@ describe("the installer asks the app to quit (D12)", () => {
     h.app.secondInstance(true);
     expect(h.app.quitState).toBe("stopping");
     expect(h.messageBox).not.toHaveBeenCalled();
+  });
+});
+
+/** `EvoSci login chatgpt --json` stand-ins: each run waits for `finish`;
+ *  cancel answers `cancelled`, as the core does. */
+function fakeSignIn() {
+  const runs: {
+    onUrl: (url: string) => void;
+    done: ReturnType<typeof deferred<SignInOutcome>>;
+    cancel: ReturnType<typeof vi.fn>;
+    closeStdinNow: ReturnType<typeof vi.fn>;
+  }[] = [];
+  const startSignIn = vi.fn(
+    (_evosci: string, onUrl: (url: string) => void): SignInRun => {
+      const done = deferred<SignInOutcome>();
+      const r = {
+        onUrl,
+        done,
+        cancel: vi.fn(async () =>
+          done.resolve({
+            ok: false,
+            code: "cancelled",
+            message: "ChatGPT sign-in was cancelled.",
+          })
+        ),
+        closeStdinNow: vi.fn(),
+      };
+      runs.push(r);
+      return {
+        done: done.promise,
+        cancel: r.cancel,
+        closeStdinNow: r.closeStdinNow,
+      };
+    }
+  );
+  return {
+    startSignIn,
+    runs,
+    url: (u: string) => runs[runs.length - 1].onUrl(u),
+    finish: (o: SignInOutcome) => runs[runs.length - 1].done.resolve(o),
+  };
+}
+
+const SIGN_IN_URL = "https://auth.openai.com/oauth/authorize?x=1";
+const SIGN_IN_REQUIRED = {
+  event: "error" as const,
+  code: "sign_in_required",
+  message:
+    'ChatGPT sign-in required (openai_auth_mode is "oauth"). Sign in with EvoSci login chatgpt, or from Settings in the desktop app.',
+  detail: { provider: "openai" },
+};
+
+describe("ChatGPT sign-in", () => {
+  /** A launch that stops on `sign_in_required` until `signedIn` is set. */
+  async function signInError(over: Partial<AppDeps> = {}) {
+    const fake = fakeSignIn();
+    const state = { signedIn: false };
+    const deploys: DeploySession[] = [];
+    const h = harness({
+      startSignIn: fake.startSignIn,
+      startDeploy: () => {
+        const s = fakeSession();
+        deploys.push(s);
+        if (!state.signedIn)
+          s.outcome = Promise.resolve({
+            kind: "error",
+            error: SIGN_IN_REQUIRED,
+          });
+        return s;
+      },
+      ...over,
+    });
+    await h.app.launch();
+    expect(h.app.screen).toMatchObject({
+      kind: "error",
+      code: "sign_in_required",
+      title: "Sign in to ChatGPT",
+    });
+    return { ...h, fake, state, deploys };
+  }
+  const linesOf = (h: { app: { screen: unknown } }) =>
+    (h.app.screen as { lines: string[] }).lines;
+
+  it("shows progress, then the waiting screen at the url, opens it, and launches again on success", async () => {
+    const h = await signInError();
+    const acting = h.app.act("sign_in", undefined);
+    await settle();
+    expect(h.app.screen).toMatchObject({
+      kind: "progress",
+      title: "Signing in to ChatGPT",
+    });
+    h.fake.url(SIGN_IN_URL);
+    expect(h.app.screen).toMatchObject({
+      kind: "waiting",
+      title: "Finish signing in in your browser",
+    });
+    expect(h.deps.openExternal).toHaveBeenCalledWith(SIGN_IN_URL);
+    h.state.signedIn = true;
+    h.fake.finish({ ok: true, plan: "plus" });
+    await acting;
+    expect(h.fake.startSignIn).toHaveBeenCalledWith(
+      "C:\\bin\\EvoSci.exe",
+      expect.any(Function)
+    );
+    expect(h.deploys).toHaveLength(2);
+    expect(h.win.calls.at(-1)).toBe("load http://127.0.0.1:4718/");
+  });
+
+  it("port_in_use returns to the error screen with its line, without a browser", async () => {
+    const h = await signInError();
+    const acting = h.app.act("sign_in", undefined);
+    await settle();
+    h.fake.finish({
+      ok: false,
+      code: "port_in_use",
+      message: "Port 1455 is in use.",
+    });
+    await acting;
+    expect(h.app.screen).toMatchObject({
+      kind: "error",
+      code: "sign_in_required",
+    });
+    expect(linesOf(h).at(-1)).toBe(
+      "The sign-in needs port 1455, and another program uses it (another ChatGPT or Codex sign-in, for example). Close it, then sign in again."
+    );
+    expect(h.deps.openExternal).not.toHaveBeenCalled();
+    expect(h.deploys).toHaveLength(1);
+  });
+
+  it("a failure line replaces the one from an earlier attempt", async () => {
+    const h = await signInError();
+    const before = linesOf(h).length;
+    for (const code of ["timed_out", "sign_in_failed"]) {
+      const acting = h.app.act("sign_in", undefined);
+      await settle();
+      h.fake.finish({ ok: false, code, message: "m" });
+      await acting;
+    }
+    expect(linesOf(h)).toHaveLength(before + 1);
+    expect(linesOf(h).at(-1)).toBe("The sign-in did not finish: m");
+  });
+
+  it("offers Cancel before the link arrives", async () => {
+    const h = await signInError();
+    const before = linesOf(h);
+    const acting = h.app.act("sign_in", undefined);
+    await settle();
+    expect(h.app.screen).toMatchObject({
+      kind: "progress",
+      title: "Signing in to ChatGPT",
+      actions: ["cancel_sign_in"],
+    });
+    await h.app.act("cancel_sign_in", undefined);
+    expect(h.fake.runs[0].cancel).toHaveBeenCalledTimes(1);
+    await acting;
+    expect(h.app.screen).toMatchObject({
+      kind: "error",
+      code: "sign_in_required",
+    });
+    expect(linesOf(h)).toEqual(before);
+  });
+
+  it("a cancel returns to the error screen without a line", async () => {
+    const h = await signInError();
+    const before = linesOf(h);
+    const acting = h.app.act("sign_in", undefined);
+    await settle();
+    h.fake.url(SIGN_IN_URL);
+    await h.app.act("cancel_sign_in", undefined);
+    expect(h.fake.runs[0].cancel).toHaveBeenCalledTimes(1);
+    await acting;
+    expect(h.app.screen).toMatchObject({
+      kind: "error",
+      code: "sign_in_required",
+    });
+    expect(linesOf(h)).toEqual(before);
+  });
+
+  it("open_sign_in_page and copy_sign_in_link use the running sign-in's url", async () => {
+    const h = await signInError();
+    const acting = h.app.act("sign_in", undefined);
+    await settle();
+    await h.app.act("open_sign_in_page", undefined);
+    await h.app.act("copy_sign_in_link", undefined);
+    expect(h.deps.openExternal).not.toHaveBeenCalled();
+    expect(h.deps.copyText).not.toHaveBeenCalled();
+    h.fake.url(SIGN_IN_URL);
+    await h.app.act("open_sign_in_page", undefined);
+    await h.app.act("copy_sign_in_link", undefined);
+    expect(h.deps.openExternal).toHaveBeenCalledTimes(2);
+    expect(h.deps.copyText).toHaveBeenCalledWith(SIGN_IN_URL);
+    h.fake.finish({ ok: false, code: "cancelled", message: "" });
+    await acting;
+  });
+
+  it("use_api_key saves openai_auth_mode=api_key, then launches", async () => {
+    const calls: string[][] = [];
+    const h = await signInError({
+      runCollect: async (_f, args) => {
+        calls.push(args);
+        return args[0] === "--version" ? ok([VERSION_LINE]) : ok([]);
+      },
+    });
+    await h.app.act("use_api_key", undefined);
+    expect(calls).toContainEqual([
+      "config",
+      "set",
+      "openai_auth_mode",
+      "api_key",
+    ]);
+    expect(h.deploys).toHaveLength(2);
+  });
+
+  it("a failed save of the mode adds its output and launches nothing", async () => {
+    const h = await signInError({
+      runCollect: async (_f, args) =>
+        args[0] === "config"
+          ? ok(["locked"], 1)
+          : args[0] === "--version"
+          ? ok([VERSION_LINE])
+          : ok([]),
+    });
+    await h.app.act("use_api_key", undefined);
+    expect(linesOf(h).at(-1)).toBe("Could not save openai_auth_mode: locked");
+    expect(h.deploys).toHaveLength(1);
+  });
+
+  it("offers no API key when the environment sets the mode", async () => {
+    const h = await signInError({
+      env: { EVOSCIENTIST_OPENAI_AUTH_MODE: "oauth" },
+    });
+    expect((h.app.screen as { actions: string[] }).actions).toEqual([
+      "sign_in",
+      "retry",
+      "copy_command",
+    ]);
+  });
+
+  it("a quit cancels the sign-in; its answer shows nothing and launches nothing", async () => {
+    const h = await signInError();
+    const acting = h.app.act("sign_in", undefined);
+    await settle();
+    h.fake.url(SIGN_IN_URL);
+    await h.app.requestQuit();
+    expect(h.fake.runs[0].cancel).toHaveBeenCalled();
+    expect(h.exit).toHaveBeenCalledWith(false);
+    await acting;
+    expect(h.deploys).toHaveLength(1);
+  });
+
+  it("a quit waits for the login to stop before the app exits", async () => {
+    const stopped = deferred<void>();
+    const fake = fakeSignIn();
+    const startSignIn = vi.fn((evosci: string, onUrl: (u: string) => void) => {
+      const r = fake.startSignIn(evosci, onUrl);
+      // A login that takes its time to end.
+      return { ...r, cancel: vi.fn(() => stopped.promise) };
+    });
+    const h = await signInError({ startSignIn });
+    void h.app.act("sign_in", undefined);
+    await settle();
+    fake.url(SIGN_IN_URL);
+    const quitting = h.app.requestQuit();
+    await settle();
+    expect(h.exit).not.toHaveBeenCalled();
+    stopped.resolve();
+    await quitting;
+    expect(h.exit).toHaveBeenCalledWith(false);
+  });
+
+  it("the end of the session closes the login's stdin", async () => {
+    const h = await signInError();
+    void h.app.act("sign_in", undefined);
+    await settle();
+    h.app.endOfSession("session-end");
+    expect(h.fake.runs[0].closeStdinNow).toHaveBeenCalled();
+  });
+});
+
+describe("ChatGPT from the page", () => {
+  const UI = "http://127.0.0.1:4718";
+
+  it("answers only the UI's own origin", async () => {
+    const fake = fakeSignIn();
+    const h = await launched({ startSignIn: fake.startSignIn });
+    expect(await h.app.chatgptSignInFor("http://evil.example")).toEqual({
+      ok: false,
+      code: "not_allowed",
+      message: "",
+    });
+    expect(await h.app.chatgptSignOutFor(null)).toEqual({
+      ok: false,
+      code: "not_allowed",
+      message: "",
+    });
+    h.app.cancelChatgptSignInFor("http://evil.example");
+    expect(fake.startSignIn).not.toHaveBeenCalled();
+    expect(h.deps.signOut).not.toHaveBeenCalled();
+  });
+
+  it("a sign-in from the page opens the browser and never changes the window", async () => {
+    const fake = fakeSignIn();
+    const h = await launched({ startSignIn: fake.startSignIn });
+    const calls = [...h.win.calls];
+    const result = h.app.chatgptSignInFor(UI);
+    fake.url(SIGN_IN_URL);
+    expect(h.deps.openExternal).toHaveBeenCalledWith(SIGN_IN_URL);
+    fake.finish({ ok: true, plan: "plus" });
+    expect(await result).toEqual({ ok: true, plan: "plus" });
+    expect(h.win.calls).toEqual(calls);
+  });
+
+  it("a second sign-in joins the running one and opens its page again", async () => {
+    const fake = fakeSignIn();
+    const h = await launched({ startSignIn: fake.startSignIn });
+    const first = h.app.chatgptSignInFor(UI);
+    fake.url(SIGN_IN_URL);
+    const second = h.app.chatgptSignInFor(UI);
+    expect(fake.startSignIn).toHaveBeenCalledTimes(1);
+    expect(h.deps.openExternal).toHaveBeenNthCalledWith(2, SIGN_IN_URL);
+    fake.finish({ ok: true, plan: "plus" });
+    expect(await first).toEqual({ ok: true, plan: "plus" });
+    expect(await second).toEqual({ ok: true, plan: "plus" });
+    // Done: the next one starts a new run.
+    void h.app.chatgptSignInFor(UI);
+    expect(fake.startSignIn).toHaveBeenCalledTimes(2);
+  });
+
+  /** Deploys that answer in this order: ready, or sign_in_required. */
+  function deploysOf(kinds: ("ready" | "sign_in")[]) {
+    let i = 0;
+    const deploys: DeploySession[] = [];
+    return {
+      deploys,
+      startDeploy: () => {
+        const s = fakeSession();
+        if (kinds[Math.min(i++, kinds.length - 1)] === "sign_in")
+          s.outcome = Promise.resolve({
+            kind: "error",
+            error: SIGN_IN_REQUIRED,
+          });
+        deploys.push(s);
+        return s;
+      },
+    };
+  }
+
+  it("a page sign-in that succeeds on the sign-in error screen launches again", async () => {
+    const fake = fakeSignIn();
+    const d = deploysOf(["ready", "sign_in", "ready"]);
+    const h = await launched({
+      startSignIn: fake.startSignIn,
+      startDeploy: d.startDeploy,
+    });
+    const page = h.app.chatgptSignInFor(UI);
+    fake.url(SIGN_IN_URL);
+    // Restart now before the browser part is done.
+    await h.app.restartFor(UI);
+    expect(h.app.screen).toMatchObject({
+      kind: "error",
+      code: "sign_in_required",
+    });
+    fake.finish({ ok: true, plan: "plus" });
+    expect(await page).toEqual({ ok: true, plan: "plus" });
+    await vi.waitFor(() => expect(d.deploys).toHaveLength(3));
+    await settle();
+    expect(h.app.screen.kind).not.toBe("error");
+  });
+
+  it("the sign-in error screen joins a page sign-in and launches once", async () => {
+    const fake = fakeSignIn();
+    const d = deploysOf(["ready", "sign_in", "ready"]);
+    const h = await launched({
+      startSignIn: fake.startSignIn,
+      startDeploy: d.startDeploy,
+    });
+    const page = h.app.chatgptSignInFor(UI);
+    fake.url(SIGN_IN_URL);
+    await h.app.restartFor(UI);
+    const acting = h.app.act("sign_in", undefined);
+    await settle();
+    expect(h.app.screen).toMatchObject({ kind: "waiting" });
+    expect(fake.startSignIn).toHaveBeenCalledTimes(1);
+    fake.finish({ ok: true, plan: "plus" });
+    await acting;
+    expect(await page).toEqual({ ok: true, plan: "plus" });
+    await settle();
+    expect(d.deploys).toHaveLength(3);
+  });
+
+  it("the page's Cancel cancels the running sign-in", async () => {
+    const fake = fakeSignIn();
+    const h = await launched({ startSignIn: fake.startSignIn });
+    const result = h.app.chatgptSignInFor(UI);
+    h.app.cancelChatgptSignInFor(UI);
+    expect(fake.runs[0].cancel).toHaveBeenCalledTimes(1);
+    expect(await result).toMatchObject({ ok: false, code: "cancelled" });
+  });
+
+  it("sign-out asks first; Cancel keeps the token", async () => {
+    const messageBox = vi.fn(async () => ({ response: 1 }));
+    const h = await launched({ checkWork: async () => BUSY, messageBox });
+    expect(await h.app.chatgptSignOutFor(UI)).toEqual({
+      ok: false,
+      code: "cancelled",
+      message: "",
+    });
+    expect(messageBox).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Work is still running.",
+        buttons: ["Sign out", "Cancel"],
+      })
+    );
+    expect(h.deps.signOut).not.toHaveBeenCalled();
+  });
+
+  it("sign-out runs logout once confirmed, or at once when nothing runs", async () => {
+    const h = await launched();
+    expect(await h.app.chatgptSignOutFor(UI)).toEqual({ ok: true });
+    expect(h.deps.signOut).toHaveBeenCalledWith("C:\\bin\\EvoSci.exe");
+    expect(h.messageBox).not.toHaveBeenCalled();
+  });
+
+  it("sign-out is busy while a sign-in or another sign-out runs", async () => {
+    const fake = fakeSignIn();
+    const out = deferred<{ ok: true }>();
+    const h = await launched({
+      startSignIn: fake.startSignIn,
+      signOut: vi.fn(() => out.promise),
+    });
+    const signingIn = h.app.chatgptSignInFor(UI);
+    expect(await h.app.chatgptSignOutFor(UI)).toMatchObject({
+      ok: false,
+      code: "busy",
+    });
+    fake.finish({ ok: true, plan: null });
+    await signingIn;
+    const first = h.app.chatgptSignOutFor(UI);
+    expect(await h.app.chatgptSignOutFor(UI)).toMatchObject({
+      ok: false,
+      code: "busy",
+    });
+    out.resolve({ ok: true });
+    expect(await first).toEqual({ ok: true });
+  });
+
+  it("a sign-in while the sign-out question is open is busy", async () => {
+    const fake = fakeSignIn();
+    const answer = deferred<{ response: number }>();
+    const h = await launched({
+      startSignIn: fake.startSignIn,
+      checkWork: async () => BUSY,
+      messageBox: vi.fn(() => answer.promise),
+    });
+    const out = h.app.chatgptSignOutFor(UI);
+    await settle();
+    expect(await h.app.chatgptSignInFor(UI)).toMatchObject({
+      ok: false,
+      code: "busy",
+    });
+    expect(fake.startSignIn).not.toHaveBeenCalled();
+    answer.resolve({ response: 0 });
+    expect(await out).toEqual({ ok: true });
+  });
+
+  it("is busy during a quit", async () => {
+    const fake = fakeSignIn();
+    const gate = deferred<{ response: number }>();
+    const h = await launched({
+      startSignIn: fake.startSignIn,
+      checkWork: async () => BUSY,
+      messageBox: vi.fn(() => gate.promise),
+    });
+    void h.app.requestQuit();
+    await settle();
+    expect(await h.app.chatgptSignInFor(UI)).toMatchObject({
+      ok: false,
+      code: "busy",
+    });
+    expect(await h.app.chatgptSignOutFor(UI)).toMatchObject({
+      ok: false,
+      code: "busy",
+    });
+    expect(fake.startSignIn).not.toHaveBeenCalled();
+    gate.resolve({ response: 1 });
   });
 });

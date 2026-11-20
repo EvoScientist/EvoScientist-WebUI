@@ -1,5 +1,5 @@
-// The desktop app's bridge: backend restart, its folders, a folder dialog and
-// its own updates. The WebUI runs in a plain browser as well, so every member
+// The desktop app's bridge: backend restart, its folders, a folder dialog,
+// its own updates and the ChatGPT sign-in. The WebUI runs in a plain browser as well, so every member
 // is feature-detected: a page without the bridge gets null, and one with an
 // older bridge gets only what it has.
 
@@ -38,6 +38,28 @@ export interface DesktopAppUpdate {
   restartToUpdate(): Promise<RestartResult>;
 }
 
+/** A sign-in's end. Codes: the core's (`port_in_use`, `timed_out`,
+ *  `cancelled`, `sign_in_failed`, `internal_error`), the app's (`busy`,
+ *  `not_allowed`), or `failed` (no answer the bridge could read). */
+export type ChatgptSignInResult =
+  | { ok: true; plan: string | null }
+  | { ok: false; code: string; message: string };
+
+/** A sign-out's end: `cancelled` when the user answered Cancel to the
+ *  app's question (the token stays), else as for a sign-in. */
+export type ChatgptSignOutResult =
+  | { ok: true }
+  | { ok: false; code: string; message: string };
+
+export interface DesktopChatgpt {
+  /** Opens the ChatGPT sign-in in the browser and resolves when it ends; a
+   *  call while one runs joins it and opens its page again. */
+  signIn(): Promise<ChatgptSignInResult>;
+  cancelSignIn(): Promise<void>;
+  /** Removes the stored sign-in; the app asks first while work runs. */
+  signOut(): Promise<ChatgptSignOutResult>;
+}
+
 export interface DesktopBridge {
   /** Restart the backend the app started. Resolves once the restarted
    *  backend answers again: the page reads the settings right after. A
@@ -64,6 +86,8 @@ export interface DesktopBridge {
   pickFolder?: (defaultPath?: string) => Promise<string | null>;
   /** App updates; missing in an app that does not update itself. */
   appUpdate?: DesktopAppUpdate;
+  /** The ChatGPT sign-in; missing in an older app. */
+  chatgpt?: DesktopChatgpt;
 }
 
 const NONE: AppUpdateState = { kind: "none" };
@@ -144,6 +168,63 @@ function appUpdateOf(raw: unknown): DesktopAppUpdate | undefined {
   };
 }
 
+const FAILED = { ok: false as const, code: "failed", message: "" };
+
+/** A failure the app answered, or `failed`. */
+function failureOf(r: Record<string, unknown> | null) {
+  return typeof r?.code === "string"
+    ? {
+        ok: false as const,
+        code: r.code,
+        message: typeof r.message === "string" ? r.message : "",
+      }
+    : FAILED;
+}
+
+function chatgptOf(raw: unknown): DesktopChatgpt | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const c = raw as Record<string, unknown>;
+  const { signIn, cancelSignIn, signOut } = c;
+  if (
+    typeof signIn !== "function" ||
+    typeof cancelSignIn !== "function" ||
+    typeof signOut !== "function"
+  )
+    return undefined;
+  const record = (v: unknown) =>
+    typeof v === "object" && v !== null ? (v as Record<string, unknown>) : null;
+  return {
+    signIn: async () => {
+      try {
+        const r = record(await signIn.call(raw));
+        if (r?.ok === true)
+          return {
+            ok: true,
+            plan: typeof r.plan === "string" ? r.plan : null,
+          };
+        return failureOf(r);
+      } catch {
+        return FAILED;
+      }
+    },
+    cancelSignIn: async () => {
+      try {
+        await cancelSignIn.call(raw);
+      } catch {
+        // The app logs it; the sign-in ends on its own.
+      }
+    },
+    signOut: async () => {
+      try {
+        const r = record(await signOut.call(raw));
+        return r?.ok === true ? { ok: true } : failureOf(r);
+      } catch {
+        return FAILED;
+      }
+    },
+  };
+}
+
 declare global {
   interface Window {
     evoscientistDesktop?: unknown;
@@ -198,5 +279,7 @@ export function desktopBridge(): DesktopBridge | null {
   }
   const appUpdate = appUpdateOf(candidate.appUpdate);
   if (appUpdate) bridge.appUpdate = appUpdate;
+  const chatgpt = chatgptOf(candidate.chatgpt);
+  if (chatgpt) bridge.chatgpt = chatgpt;
   return bridge;
 }

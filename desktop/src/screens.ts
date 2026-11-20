@@ -26,12 +26,19 @@ export type ActionId =
   | "continue"
   | "update"
   | "install_copy"
-  | "cancel_update";
+  | "cancel_update"
+  | "sign_in"
+  | "use_api_key"
+  | "open_sign_in_page"
+  | "copy_sign_in_link"
+  | "cancel_sign_in";
 
 export interface ProgressScreen {
   kind: "progress";
   title: string;
   message: string;
+  /** The ChatGPT sign-in's Cancel, before its link arrives. */
+  actions?: ActionId[];
 }
 
 /** A question with one button per answer (the mirror question). */
@@ -60,6 +67,15 @@ export interface SetupScreen {
   actions?: ActionId[];
 }
 
+/** The ChatGPT sign-in waits for the browser: what to do there, and the
+ *  actions for the page (open it again, copy its link, cancel). */
+export interface WaitingScreen {
+  kind: "waiting";
+  title: string;
+  lines: string[];
+  actions: ActionId[];
+}
+
 export interface ErrorScreen {
   kind: "error";
   code: string;
@@ -84,6 +100,7 @@ export type Screen =
   | QuestionScreen
   | InstallScreen
   | SetupScreen
+  | WaitingScreen
   | ErrorScreen;
 
 /** Shown next to "Retry with mainland China mirrors": the choice stays. */
@@ -219,6 +236,7 @@ export function progressScreen(
     | "stopping"
     | "preparing_update"
     | "reading_path"
+    | "starting_sign_in"
 ): ProgressScreen {
   const s = typeof state === "string" ? state : state.phase;
   const text: Record<string, [string, string]> = {
@@ -244,6 +262,7 @@ export function progressScreen(
       "The app waits until it is done, then goes on.",
     ],
     setting_up: ["Setting up EvoScientist", "Preparing the setup steps..."],
+    starting_sign_in: ["Signing in to ChatGPT", "Opening the sign-in page..."],
     looking_up_release: [
       "Updating EvoScientist",
       "Looking for the newest release this app supports...",
@@ -273,10 +292,15 @@ export interface ScreenContext {
    *  they win over what the app saves, so the screen offers no choice. */
   portFromEnv?: boolean;
   workspaceFromEnv?: boolean;
+  /** `EVOSCIENTIST_OPENAI_AUTH_MODE` is set: it wins over the saved mode, so
+   *  "Use an API key instead" could not change it. */
+  authModeFromEnv?: boolean;
 }
 
 const ENV_PORT_LINE =
   "EVOSCIENTIST_LANGGRAPH_DEV_PORT is set in the app's environment and wins over a saved port. Change or remove it, restart the app, then press Retry.";
+const ENV_AUTH_MODE_LINE =
+  "EVOSCIENTIST_OPENAI_AUTH_MODE is set in the app's environment and wins over the saved setting, so the app cannot switch to an API key. Sign in with ChatGPT, or change or remove the variable and restart the app.";
 const ENV_WORKSPACE_LINE =
   "EVOSCIENTIST_WORKSPACE_DIR is set in the app's environment and wins over a saved folder. Change or remove it, restart the app, then press Retry.";
 
@@ -530,6 +554,29 @@ export function errorScreen(error: BootError, ctx: ScreenContext): ErrorScreen {
       };
       break;
     case "sign_in_required":
+      // The core's message says to sign in in a terminal; the app signs in
+      // itself, so it has its own text.
+      if (d.provider === "openai") {
+        const problem = str(d.problem);
+        screen = {
+          title: "Sign in to ChatGPT",
+          lines: [
+            'EvoScientist is set to use your ChatGPT plan for OpenAI models (openai_auth_mode is "oauth"), and no ChatGPT account is signed in.',
+            ...(problem
+              ? [`The saved sign-in can't be used: ${problem}.`]
+              : []),
+            ctx.authModeFromEnv
+              ? ENV_AUTH_MODE_LINE
+              : "Sign in with your ChatGPT account in the browser, or use an OpenAI API key instead.",
+            `Or sign in with this command in ${terminal}, then press Retry.`,
+          ],
+          command: "EvoSci login chatgpt",
+          actions: ctx.authModeFromEnv
+            ? ["sign_in", "retry", "copy_command"]
+            : ["sign_in", "use_api_key", "retry", "copy_command"],
+        };
+        break;
+      }
       screen = {
         title: `Sign in${str(d.provider) ? ` to ${d.provider}` : ""}`,
         lines: [
@@ -585,6 +632,40 @@ export function errorScreen(error: BootError, ctx: ScreenContext): ErrorScreen {
         }
       : {}),
   };
+}
+
+/** The sign-in waits for the browser. Its success page (the core's,
+ *  upstream text) says to return to a terminal. */
+export function signInWaitingScreen(): WaitingScreen {
+  return {
+    kind: "waiting",
+    title: "Finish signing in in your browser",
+    lines: [
+      "A ChatGPT sign-in page opened in your browser. When it says you're signed in (or tells you to return to your terminal), come back to this window.",
+    ],
+    actions: ["open_sign_in_page", "copy_sign_in_link", "cancel_sign_in"],
+  };
+}
+
+/** The line the sign-in error screen adds after a failed sign-in, or null
+ *  after a cancel. The WebUI's Settings page says the same
+ *  (src/lib/settingsForm.ts `chatgptFailureText`). */
+export function signInFailureLine(
+  code: string,
+  message: string
+): string | null {
+  switch (code) {
+    case "cancelled":
+      return null;
+    case "port_in_use":
+      return "The sign-in needs port 1455, and another program uses it (another ChatGPT or Codex sign-in, for example). Close it, then sign in again.";
+    case "timed_out":
+      return "The sign-in was not finished within 5 minutes. Sign in again.";
+    case "sign_in_failed":
+      return `The sign-in did not finish: ${message}`;
+    default:
+      return `The sign-in failed (${code})${message ? `: ${message}` : "."}`;
+  }
 }
 
 /** The status page's line for an app update, with its button. The

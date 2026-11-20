@@ -52,6 +52,7 @@ import {
   updatesItself,
 } from "./appUpdate";
 import type { Manifest } from "./boot";
+import { signOut, startSignIn } from "./chatgpt";
 import { backendRequest, checkWork, waitForMemoryWorkers } from "./closeCheck";
 import { writeCrashReport } from "./crash";
 import { startDeploy } from "./deploy";
@@ -365,6 +366,11 @@ const desktop = createApp({
       env: childEnv,
       toolDir: uvToolDir(childEnv, folders.dataDir),
     }),
+  // In the data folder, as `EvoSci config set`: the token goes there.
+  startSignIn: (file, onUrl) =>
+    startSignIn(file, onUrl, { cwd: folders.dataDir, env: childEnv, log }),
+  signOut: (file) =>
+    signOut(file, { cwd: folders.dataDir, env: childEnv, log }),
 
   appUpdate,
   canReplaceApp:
@@ -580,6 +586,15 @@ function registerIpc(): void {
   );
   ipcMain.handle("desktop:restart-backend", (e) =>
     desktop.restartFor(senderOrigin(e))
+  );
+  ipcMain.handle("desktop:chatgpt-sign-in", (e) =>
+    desktop.chatgptSignInFor(senderOrigin(e))
+  );
+  ipcMain.handle("desktop:chatgpt-cancel-sign-in", (e) =>
+    desktop.cancelChatgptSignInFor(senderOrigin(e))
+  );
+  ipcMain.handle("desktop:chatgpt-sign-out", (e) =>
+    desktop.chatgptSignOutFor(senderOrigin(e))
   );
   // The app update, for the WebUI page and the status page.
   ipcMain.handle("desktop:update-state", (e) =>

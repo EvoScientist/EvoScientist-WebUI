@@ -8,7 +8,7 @@
 // and chat display (BrowserSettings, applies at once). On a first run
 // `view=setup` shows the General fields as a wizard (SetupWizard) instead.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Loader2,
   Plug,
@@ -30,7 +30,7 @@ import { useWideEnough } from "@/app/hooks/useWideEnough";
 import {
   MirrorField,
   ModelField,
-  ProviderAccessFields,
+  ProviderAccess,
   ProviderField,
   SecretField,
   TextField,
@@ -45,11 +45,12 @@ import { desktopBridge } from "@/lib/desktop";
 import { toast } from "sonner";
 import { isSetupDeferred } from "@/lib/setupDeferral";
 import {
+  OPENAI_AUTH_MODE,
   fieldLabel,
   readOnlyReason,
   restartFieldsShown,
 } from "@/lib/settingsForm";
-import type { SettingsPayload } from "@/lib/settings";
+import { chatgptStatus, type SettingsPayload } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { useDeployment } from "@/providers/ClientProvider";
 
@@ -115,7 +116,12 @@ export function SetupView({
   const settings = useSettings();
   const { access, refresh } = useSettingsAccess();
   const { registry } = useAvailableModels();
-  const draft = useSettingsDraft(settings.payload, refresh);
+  // The ChatGPT sign-in: the desktop app runs it, and only a core that
+  // reports its state gets the choice.
+  const desktopChatgpt = useMemo(() => desktopBridge()?.chatgpt ?? null, []);
+  const chatgpt =
+    settings.payload && chatgptStatus(settings.payload) ? desktopChatgpt : null;
+  const draft = useSettingsDraft(settings.payload, refresh, chatgpt !== null);
   const [mode, setMode] = useState<"wizard" | "form" | null>(null);
   const payload = settings.payload;
   const decidable = !!payload && access !== undefined;
@@ -190,7 +196,12 @@ export function SetupView({
   if (wizardScreen) {
     let body: React.ReactNode = loading;
     if (payload && access !== undefined) {
-      const ctx: FieldContext = { payload, draft, writable: access.writable };
+      const ctx: FieldContext = {
+        payload,
+        draft,
+        writable: access.writable,
+        chatgpt,
+      };
       body = (
         <div className="space-y-4">
           <RestartNotice
@@ -270,7 +281,12 @@ export function SetupView({
     // A failed re-read (EvoSci restarting) keeps the form and its draft.
     evoBody = <SettingsCard>{loading}</SettingsCard>;
   } else {
-    const ctx: FieldContext = { payload, draft, writable: access.writable };
+    const ctx: FieldContext = {
+      payload,
+      draft,
+      writable: access.writable,
+      chatgpt,
+    };
     const reason = readOnlyReason(access);
     evoBody = (
       <div className="space-y-4">
@@ -602,11 +618,13 @@ export function RestartNotice({
   const provider = payload.settings.provider;
   const info =
     typeof provider === "string" ? payload.providers[provider] : undefined;
+  // The OpenAI connection (key or ChatGPT plan) is also read at the start.
   const newChatsAtOnce =
     restartFields.some((f) => f === "model" || f === "provider") &&
     ![info?.key_field, info?.base_url_field].some(
       (f) => !!f && restartFields.includes(f)
-    );
+    ) &&
+    !(provider === "openai" && restartFields.includes(OPENAI_AUTH_MODE));
   // The model and provider are then said apart from the other fields.
   const names = restartFields
     .filter((f) => !newChatsAtOnce || (f !== "model" && f !== "provider"))
@@ -702,6 +720,7 @@ function SetupForm({
       "model",
       info?.key_field,
       info?.base_url_field,
+      OPENAI_AUTH_MODE,
       "tavily_api_key",
       "default_workdir",
       "mirror",
@@ -730,13 +749,11 @@ function SetupForm({
         >
           <legend className="mb-2 text-sm font-semibold">Model</legend>
           <ProviderField ctx={ctx} />
-          {info && (
-            <ProviderAccessFields
-              ctx={ctx}
-              provider={provider}
-              info={info}
-            />
-          )}
+          <ProviderAccess
+            ctx={ctx}
+            provider={provider}
+            info={info}
+          />
           <ModelField
             ctx={ctx}
             registry={registry}

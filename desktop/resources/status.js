@@ -1,6 +1,7 @@
 // The status page: shows the screen the main process sends (progress, the
 // install script's last lines, the stages of setup or an update, a question
-// (mirrors, the update offer), or an error with its actions). It never calls
+// (mirrors, the update offer), the ChatGPT sign-in waiting for the browser,
+// or an error with its actions). It never calls
 // the backend: the core's browser boundary refuses requests from a file://
 // page (Origin: null). Below the screen, an app update the app offers
 // ("Download", then "Restart to update"), also on an error screen such as
@@ -24,6 +25,11 @@ const LABELS = {
   update: "Update",
   install_copy: "Install a separate copy",
   cancel_update: "Cancel the update",
+  sign_in: "Sign in with ChatGPT",
+  use_api_key: "Use an API key instead",
+  open_sign_in_page: "Open again",
+  copy_sign_in_link: "Copy link",
+  cancel_sign_in: "Cancel",
 };
 
 /** A stage's state as a short word next to its title. */
@@ -101,7 +107,8 @@ function render(s) {
     }
     $("lines").replaceChildren(...lines.map((l) => paragraph(l)));
   }
-  const busy = s.kind === "progress" || s.kind === "install";
+  const busy =
+    s.kind === "progress" || s.kind === "install" || s.kind === "waiting";
   $("spinner").hidden = !busy;
   const output = s.output ?? [];
   $("output").hidden = output.length === 0;

@@ -92,6 +92,90 @@ describe("desktopBridge", () => {
   });
 });
 
+describe("desktopBridge().chatgpt", () => {
+  afterEach(() => {
+    delete window.evoscientistDesktop;
+  });
+
+  const members = () => ({
+    signIn: vi.fn(async () => ({ ok: true, plan: "plus" })),
+    cancelSignIn: vi.fn(async () => undefined),
+    signOut: vi.fn(async () => ({ ok: true })),
+  });
+
+  it("offers chatgpt only with all three members", async () => {
+    const all = members();
+    window.evoscientistDesktop = { chatgpt: all };
+    const chatgpt = desktopBridge()?.chatgpt;
+    await expect(chatgpt?.signIn()).resolves.toEqual({
+      ok: true,
+      plan: "plus",
+    });
+    await expect(chatgpt?.signOut()).resolves.toEqual({ ok: true });
+    await chatgpt?.cancelSignIn();
+    expect(all.cancelSignIn).toHaveBeenCalledOnce();
+    for (const missing of ["signIn", "cancelSignIn", "signOut"] as const) {
+      const some: Record<string, unknown> = members();
+      delete some[missing];
+      window.evoscientistDesktop = { chatgpt: some };
+      expect(desktopBridge()?.chatgpt).toBeUndefined();
+    }
+    window.evoscientistDesktop = { chatgpt: "yes" };
+    expect(desktopBridge()?.chatgpt).toBeUndefined();
+  });
+
+  it("reads a throw or another shape as failed", async () => {
+    window.evoscientistDesktop = {
+      chatgpt: {
+        signIn: () => {
+          throw new Error("ipc");
+        },
+        cancelSignIn: () => {
+          throw new Error("ipc");
+        },
+        signOut: async () => undefined,
+      },
+    };
+    const chatgpt = desktopBridge()?.chatgpt;
+    const failed = { ok: false, code: "failed", message: "" };
+    await expect(chatgpt?.signIn()).resolves.toEqual(failed);
+    await expect(chatgpt?.signOut()).resolves.toEqual(failed);
+    await expect(chatgpt?.cancelSignIn()).resolves.toBeUndefined();
+  });
+
+  it("keeps the app's code and message, and a plan only as text", async () => {
+    window.evoscientistDesktop = {
+      chatgpt: {
+        ...members(),
+        signIn: async () => ({ ok: true, plan: 3 }),
+        signOut: async () => ({ ok: false, code: "cancelled" }),
+      },
+    };
+    const chatgpt = desktopBridge()?.chatgpt;
+    await expect(chatgpt?.signIn()).resolves.toEqual({ ok: true, plan: null });
+    await expect(chatgpt?.signOut()).resolves.toEqual({
+      ok: false,
+      code: "cancelled",
+      message: "",
+    });
+    window.evoscientistDesktop = {
+      chatgpt: {
+        ...members(),
+        signIn: async () => ({
+          ok: false,
+          code: "port_in_use",
+          message: "Port 1455 is in use.",
+        }),
+      },
+    };
+    await expect(desktopBridge()?.chatgpt?.signIn()).resolves.toEqual({
+      ok: false,
+      code: "port_in_use",
+      message: "Port 1455 is in use.",
+    });
+  });
+});
+
 describe("setupDeferral", () => {
   afterEach(() => {
     resetSetupDeferral();

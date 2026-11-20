@@ -1,18 +1,24 @@
 import { describe, expect, it } from "vitest";
 import {
   applyEdit,
+  chatgptFailureText,
+  chatgptSignOutFailureText,
+  chatgptStatusText,
   currentText,
   draftErrors,
   fieldLabel,
+  hiddenKeyFields,
   keyedBaseUrlErrors,
   keyIsSet,
   modelForProvider,
+  openaiAuthMode,
   patchBody,
   readOnlyReason,
   restartFieldsShown,
   saveErrorText,
   sendableEdits,
   shadowedSource,
+  showsConnectChoice,
   sourceNote,
   stepOfField,
   testKeyErrorText,
@@ -402,5 +408,162 @@ describe("restartFieldsShown", () => {
         "scheduler_default_timezone",
       ])
     ).toEqual(["model", "tavily_api_key", "scheduler_default_timezone"]);
+  });
+});
+
+describe("the OpenAI connection (desktop ChatGPT sign-in)", () => {
+  const p = (settings: Record<string, unknown>): SettingsPayload => ({
+    ...payload,
+    settings: { ...payload.settings, ...settings },
+  });
+
+  it("reads the mode, saved or edited; anything but oauth is api_key", () => {
+    expect(openaiAuthMode(p({}), {})).toBe("api_key");
+    expect(openaiAuthMode(p({ openai_auth_mode: "oauth" }), {})).toBe("oauth");
+    expect(
+      openaiAuthMode(p({ openai_auth_mode: "oauth" }), {
+        openai_auth_mode: "api_key",
+      })
+    ).toBe("api_key");
+    expect(openaiAuthMode(p({}), { openai_auth_mode: "oauth" })).toBe("oauth");
+    expect(openaiAuthMode(p({ openai_auth_mode: "bogus" }), {})).toBe(
+      "api_key"
+    );
+  });
+
+  it("shows the choice for OpenAI, or while the mode is oauth", () => {
+    expect(showsConnectChoice(p({ provider: "openai" }), {})).toBe(true);
+    expect(
+      showsConnectChoice(
+        p({ provider: "anthropic", openai_auth_mode: "oauth" }),
+        {}
+      )
+    ).toBe(true);
+    expect(showsConnectChoice(p({ provider: "anthropic" }), {})).toBe(false);
+    // Switching the provider keeps the mode, and the choice with it.
+    expect(
+      showsConnectChoice(p({ provider: "openai" }), {
+        provider: "anthropic",
+        openai_auth_mode: "oauth",
+      })
+    ).toBe(true);
+    expect(
+      showsConnectChoice(p({ provider: "openai" }), { provider: "anthropic" })
+    ).toBe(false);
+    // The environment sets the mode: the choice shows whatever is saved.
+    expect(
+      showsConnectChoice(
+        {
+          ...p({ provider: "anthropic" }),
+          sources: { openai_auth_mode: { source: "env", shadowed: true } },
+        },
+        {}
+      )
+    ).toBe(true);
+    // Switched to API key under another provider: the choice stays shown.
+    expect(
+      showsConnectChoice(
+        p({ provider: "anthropic", openai_auth_mode: "oauth" }),
+        { openai_auth_mode: "api_key" }
+      )
+    ).toBe(true);
+  });
+
+  it("hides the OpenAI key from a save only where the choice hides it", () => {
+    expect(hiddenKeyFields(p({}), { openai_auth_mode: "oauth" }, true)).toEqual(
+      ["openai_api_key"]
+    );
+    // In a browser the key field still shows.
+    expect(
+      hiddenKeyFields(p({}), { openai_auth_mode: "oauth" }, false)
+    ).toEqual([]);
+    expect(
+      hiddenKeyFields(
+        p({ openai_auth_mode: "oauth" }),
+        { openai_auth_mode: "api_key" },
+        true
+      )
+    ).toEqual([]);
+    expect(hiddenKeyFields(p({ openai_auth_mode: "oauth" }), {}, true)).toEqual(
+      ["openai_api_key"]
+    );
+    // The environment sets the mode: the key may be the one in use.
+    expect(
+      hiddenKeyFields(
+        {
+          ...p({ openai_auth_mode: "oauth" }),
+          sources: { openai_auth_mode: { source: "env", shadowed: true } },
+        },
+        {},
+        true
+      )
+    ).toEqual([]);
+  });
+
+  it("says the sign-in state", () => {
+    expect(
+      chatgptStatusText({ signed_in: true, plan: "plus", problem: null })
+    ).toBe("Signed in · Plus");
+    expect(
+      chatgptStatusText({ signed_in: true, plan: null, problem: null })
+    ).toBe("Signed in");
+    expect(
+      chatgptStatusText({ signed_in: false, plan: null, problem: null })
+    ).toBe("Not signed in");
+    expect(
+      chatgptStatusText({
+        signed_in: false,
+        plan: null,
+        problem: "token file is unreadable",
+      })
+    ).toBe("Not signed in (token file is unreadable)");
+  });
+
+  it("words a failed sign-in or sign-out as the desktop's error screen does", () => {
+    expect(chatgptFailureText("cancelled", "")).toBeNull();
+    expect(chatgptFailureText("port_in_use", "x")).toBe(
+      "The sign-in needs port 1455, and another program uses it (another ChatGPT or Codex sign-in, for example). Close it, then sign in again."
+    );
+    expect(chatgptFailureText("timed_out", "x")).toBe(
+      "The sign-in was not finished within 5 minutes. Sign in again."
+    );
+    expect(chatgptFailureText("busy", "")).toBe(
+      "The app is busy. Try again in a moment."
+    );
+    expect(chatgptFailureText("sign_in_failed", "OpenAI refused it.")).toBe(
+      "The sign-in did not finish: OpenAI refused it."
+    );
+    expect(chatgptFailureText("failed", "")).toBe(
+      "The app did not answer. Try again."
+    );
+    expect(chatgptFailureText("not_allowed", "")).toBe(
+      "The app did not answer. Try again."
+    );
+    expect(chatgptFailureText("internal_error", "boom")).toBe(
+      "The sign-in failed (internal_error): boom"
+    );
+  });
+
+  it("words a sign-out that did not happen", () => {
+    expect(chatgptSignOutFailureText("cancelled", "")).toBeNull();
+    expect(chatgptSignOutFailureText("busy", "")).toBe(
+      "The app is busy. Try again in a moment."
+    );
+    expect(chatgptSignOutFailureText("failed", "")).toBe(
+      "The app did not answer. Try again."
+    );
+    expect(chatgptSignOutFailureText("internal_error", "locked")).toBe(
+      "The sign-out failed (internal_error): locked"
+    );
+    expect(chatgptSignOutFailureText("internal_error", "")).toBe(
+      "The sign-out failed (internal_error)."
+    );
+  });
+
+  it("labels the mode and places its errors on the key step", () => {
+    expect(fieldLabel("openai_auth_mode", payload.providers)).toBe(
+      "OpenAI connection"
+    );
+    expect(stepOfField("openai_auth_mode", openai)).toBe("key");
   });
 });

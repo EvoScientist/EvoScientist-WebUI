@@ -51,6 +51,15 @@ export interface ProviderInfo {
   lists_models: boolean;
 }
 
+/** Who is signed in to ChatGPT on the backend's machine (the token itself
+ *  is never sent). */
+export interface ChatgptStatus {
+  signed_in: boolean;
+  plan: string | null;
+  /** Why a stored sign-in can't be used, e.g. an unreadable token file. */
+  problem: string | null;
+}
+
 /** The backend's GET /api/settings body. */
 export interface SettingsPayload {
   settings: Record<string, unknown>;
@@ -65,6 +74,21 @@ export interface SettingsPayload {
   config_error: { error: string; path: string; detail: string } | null;
   /** Names the backend's local secret; absent before the field existed. */
   instance?: string | null;
+  /** Absent from cores before the ChatGPT sign-in commands. */
+  chatgpt?: ChatgptStatus;
+}
+
+/** The ChatGPT sign-in state, or null from a core without it. */
+export function chatgptStatus(payload: SettingsPayload): ChatgptStatus | null {
+  const c = payload.chatgpt as unknown;
+  if (typeof c !== "object" || c === null) return null;
+  const v = c as Record<string, unknown>;
+  if (typeof v.signed_in !== "boolean") return null;
+  return {
+    signed_in: v.signed_in,
+    plan: typeof v.plan === "string" ? v.plan : null,
+    problem: typeof v.problem === "string" ? v.problem : null,
+  };
 }
 
 /** Whether the page can save settings to the backend it shows. */

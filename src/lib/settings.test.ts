@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  chatgptStatus,
   isLocalDeployment,
   isSettingsPayload,
   settingsWriteAccess,
   type SettingsAccess,
+  type SettingsPayload,
 } from "@/lib/settings";
 
 const ACCESS: SettingsAccess = {
@@ -136,4 +138,44 @@ describe("isSettingsPayload", () => {
       expect(isSettingsPayload(value)).toBe(false);
     }
   );
+});
+
+describe("chatgptStatus", () => {
+  const base: SettingsPayload = {
+    settings: {},
+    sources: {},
+    read_only: [],
+    providers: {},
+    setup_needed: false,
+    restart_required: false,
+    restart_fields: [],
+    revision: null,
+    config_error: null,
+  };
+  const withBlock = (chatgpt: unknown) =>
+    ({ ...base, chatgpt } as SettingsPayload);
+
+  it("reads the block a newer core sends", () => {
+    expect(
+      chatgptStatus(withBlock({ signed_in: true, plan: "plus", problem: null }))
+    ).toEqual({ signed_in: true, plan: "plus", problem: null });
+    expect(
+      chatgptStatus(
+        withBlock({ signed_in: false, problem: "token file is unreadable" })
+      )
+    ).toEqual({
+      signed_in: false,
+      plan: null,
+      problem: "token file is unreadable",
+    });
+  });
+
+  it("is null without the block or with another shape", () => {
+    expect(chatgptStatus(base)).toBeNull();
+    expect(chatgptStatus(withBlock({ signed_in: "yes" }))).toBeNull();
+    expect(chatgptStatus(withBlock(null))).toBeNull();
+    expect(
+      chatgptStatus(withBlock({ signed_in: true, plan: 3, problem: {} }))
+    ).toEqual({ signed_in: true, plan: null, problem: null });
+  });
 });

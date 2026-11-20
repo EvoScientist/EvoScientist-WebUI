@@ -3,6 +3,7 @@
 // backend's answers (EvoScientist's /api/settings, WebUI#55).
 
 import type {
+  ChatgptStatus,
   ProviderInfo,
   RelayRefusal,
   SettingSource,
@@ -222,6 +223,7 @@ export function stepOfField(
   if (field === "model") return "model";
   if (field === "tavily_api_key") return "tavily";
   if (field === "default_workdir" || field === "mirror") return "folder";
+  if (field === OPENAI_AUTH_MODE) return "key";
   if (field === provider?.key_field || field === provider?.base_url_field) {
     return "key";
   }
@@ -230,6 +232,7 @@ export function stepOfField(
 
 const FIELD_LABELS: Record<string, string> = {
   provider: "Provider",
+  openai_auth_mode: "OpenAI connection",
   model: "Model",
   tavily_api_key: "Tavily API key",
   default_workdir: "Default folder",
@@ -380,4 +383,110 @@ export function saveErrorText(body: unknown, status: number): string {
     return REFUSAL_TEXT[code as RelayRefusal];
   }
   return `Saving failed (HTTP ${status}).`;
+}
+
+// --- The OpenAI connection: an API key or the ChatGPT plan (desktop) --------
+
+/** How OpenAI models connect: `api_key`, or `oauth` (the ChatGPT plan). It
+ *  applies to every OpenAI call, auxiliary and fallback models included. */
+export const OPENAI_AUTH_MODE = "openai_auth_mode";
+
+/** The mode with the unsaved change; anything but `oauth` reads `api_key`. */
+export function openaiAuthMode(
+  payload: SettingsPayload,
+  edits: Edits
+): "api_key" | "oauth" {
+  return currentText(payload, edits, OPENAI_AUTH_MODE) === "oauth"
+    ? "oauth"
+    : "api_key";
+}
+
+/** The choice shows for OpenAI, and whatever the provider while the mode is
+ *  `oauth` (a provider change does not reset it, and a sign-in it needs still
+ *  stops the start), while the saved mode is `oauth` (so a switch to API key
+ *  stays visible), and while the environment sets the mode (its value is not
+ *  known here, and a sign-in may be needed). */
+export function showsConnectChoice(
+  payload: SettingsPayload,
+  edits: Edits
+): boolean {
+  return (
+    currentText(payload, edits, "provider") === "openai" ||
+    openaiAuthMode(payload, edits) === "oauth" ||
+    savedText(payload, OPENAI_AUTH_MODE) === "oauth" ||
+    shadowedSource(payload, OPENAI_AUTH_MODE) !== null
+  );
+}
+
+/** Fields a save leaves out: the OpenAI key while the choice (`offered`)
+ *  hides it under the ChatGPT plan. The edit stays, for a switch back. A
+ *  mode the environment sets hides nothing: the key may be the one in use. */
+export function hiddenKeyFields(
+  payload: SettingsPayload,
+  edits: Edits,
+  offered: boolean
+): string[] {
+  const key = payload.providers.openai?.key_field;
+  return offered &&
+    key &&
+    openaiAuthMode(payload, edits) === "oauth" &&
+    !shadowedSource(payload, OPENAI_AUTH_MODE)
+    ? [key]
+    : [];
+}
+
+/** "Signed in · Plus", "Not signed in", and why a stored sign-in can't be
+ *  used. */
+export function chatgptStatusText(status: ChatgptStatus): string {
+  if (status.signed_in) {
+    const plan = status.plan
+      ? status.plan.charAt(0).toUpperCase() + status.plan.slice(1)
+      : null;
+    return plan ? `Signed in · ${plan}` : "Signed in";
+  }
+  return status.problem ? `Not signed in (${status.problem})` : "Not signed in";
+}
+
+/** The words for a sign-in or sign-out that did not happen, or null after a
+ *  cancel. The desktop's error screen says the same for the core's codes
+ *  (desktop/src/screens.ts `signInFailureLine`). */
+export function chatgptFailureText(
+  code: string,
+  message: string
+): string | null {
+  switch (code) {
+    case "cancelled":
+      return null;
+    case "port_in_use":
+      return "The sign-in needs port 1455, and another program uses it (another ChatGPT or Codex sign-in, for example). Close it, then sign in again.";
+    case "timed_out":
+      return "The sign-in was not finished within 5 minutes. Sign in again.";
+    case "busy":
+      return "The app is busy. Try again in a moment.";
+    case "sign_in_failed":
+      return `The sign-in did not finish: ${message}`;
+    case "failed":
+    case "not_allowed":
+      return "The app did not answer. Try again.";
+    default:
+      return `The sign-in failed (${code})${message ? `: ${message}` : "."}`;
+  }
+}
+
+/** The words for a sign-out that did not happen, or null after a cancel
+ *  (the user kept the sign-in). */
+export function chatgptSignOutFailureText(
+  code: string,
+  message: string
+): string | null {
+  switch (code) {
+    case "cancelled":
+      return null;
+    case "busy":
+    case "failed":
+    case "not_allowed":
+      return chatgptFailureText(code, message);
+    default:
+      return `The sign-out failed (${code})${message ? `: ${message}` : "."}`;
+  }
 }

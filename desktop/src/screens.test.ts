@@ -9,6 +9,8 @@ import {
   progressScreen,
   separateInstallQuestion,
   setupScreen,
+  signInFailureLine,
+  signInWaitingScreen,
   updateOffer,
   updateQuestion,
   updateScreen,
@@ -189,10 +191,11 @@ describe("errorScreen", () => {
 
   it("gives sign_in_required, start failures and the workspace their own actions", () => {
     expect(
-      errorScreen(err("sign_in_required", { provider: "openai" }), ctx)
+      errorScreen(err("sign_in_required", { provider: "anthropic" }), ctx)
     ).toMatchObject({
-      title: "Sign in to openai",
+      title: "Sign in to anthropic",
       command: "EvoSci onboard",
+      actions: ["retry", "copy_command"],
     });
     for (const code of [
       "ccproxy_failed",
@@ -206,6 +209,91 @@ describe("errorScreen", () => {
       ]);
     expect(errorScreen(err("workspace_unavailable"), ctx).actions[0]).toBe(
       "choose_folder"
+    );
+  });
+
+  describe("sign_in_required for OpenAI", () => {
+    const OPENAI = err("sign_in_required", { provider: "openai" });
+
+    it("offers the ChatGPT sign-in, never the core's terminal message", () => {
+      const s = errorScreen(OPENAI, ctx);
+      expect(s).toMatchObject({
+        title: "Sign in to ChatGPT",
+        command: "EvoSci login chatgpt",
+        actions: ["sign_in", "use_api_key", "retry", "copy_command"],
+      });
+      expect(s.lines).toEqual([
+        'EvoScientist is set to use your ChatGPT plan for OpenAI models (openai_auth_mode is "oauth"), and no ChatGPT account is signed in.',
+        "Sign in with your ChatGPT account in the browser, or use an OpenAI API key instead.",
+        "Or sign in with this command in PowerShell, then press Retry.",
+      ]);
+    });
+
+    it("names a sign-in that can't be used", () => {
+      const s = errorScreen(
+        err("sign_in_required", {
+          provider: "openai",
+          problem: "token file is unreadable",
+        }),
+        ctx
+      );
+      expect(s.lines[1]).toBe(
+        "The saved sign-in can't be used: token file is unreadable."
+      );
+    });
+
+    it("hides use_api_key when the environment sets the mode", () => {
+      const s = errorScreen(OPENAI, { ...ctx, authModeFromEnv: true });
+      expect(s.actions).toEqual(["sign_in", "retry", "copy_command"]);
+      expect(s.lines).toContain(
+        "EVOSCIENTIST_OPENAI_AUTH_MODE is set in the app's environment and wins over the saved setting, so the app cannot switch to an API key. Sign in with ChatGPT, or change or remove the variable and restart the app."
+      );
+      expect(s.lines).not.toContain(
+        "Sign in with your ChatGPT account in the browser, or use an OpenAI API key instead."
+      );
+    });
+
+    it("says a terminal off Windows", () => {
+      expect(
+        errorScreen(OPENAI, { ...ctx, platform: "darwin" }).lines
+      ).toContain(
+        "Or sign in with this command in a terminal, then press Retry."
+      );
+    });
+  });
+
+  it("the sign-in's waiting screen", () => {
+    expect(signInWaitingScreen()).toEqual({
+      kind: "waiting",
+      title: "Finish signing in in your browser",
+      lines: [
+        "A ChatGPT sign-in page opened in your browser. When it says you're signed in (or tells you to return to your terminal), come back to this window.",
+      ],
+      actions: ["open_sign_in_page", "copy_sign_in_link", "cancel_sign_in"],
+    });
+    expect(progressScreen("starting_sign_in")).toEqual({
+      kind: "progress",
+      title: "Signing in to ChatGPT",
+      message: "Opening the sign-in page...",
+    });
+  });
+
+  it("one line per sign-in failure; none for a cancel", () => {
+    expect(signInFailureLine("cancelled", "")).toBeNull();
+    expect(signInFailureLine("port_in_use", "x")).toBe(
+      "The sign-in needs port 1455, and another program uses it (another ChatGPT or Codex sign-in, for example). Close it, then sign in again."
+    );
+    expect(signInFailureLine("timed_out", "x")).toBe(
+      "The sign-in was not finished within 5 minutes. Sign in again."
+    );
+    expect(signInFailureLine("sign_in_failed", "OpenAI refused it.")).toBe(
+      "The sign-in did not finish: OpenAI refused it."
+    );
+    expect(signInFailureLine("internal_error", "boom")).toBe(
+      "The sign-in failed (internal_error): boom"
+    );
+    expect(signInFailureLine("internal_error", "")).toBe(
+      "The sign-in failed (internal_error)."
     );
   });
 
@@ -558,5 +646,31 @@ describe("updateOffer (W04)", () => {
     expect(progressScreen("preparing_update")).toMatchObject({
       title: "Updating the EvoScientist app",
     });
+  });
+});
+
+describe("the status page", () => {
+  const js = () =>
+    readFileSync(
+      join(__dirname, "..", "resources", "status.js"),
+      "utf8"
+    ).replace(/\r\n/g, "\n");
+
+  it("labels the sign-in's actions and spins on the waiting screen", () => {
+    const body = js().match(/const LABELS = \{([\s\S]*?)\n\};/)?.[1] ?? "";
+    const labels = Object.fromEntries(
+      [...body.matchAll(/(\w+):\s*"((?:[^"\\]|\\.)*)"/g)].map((m) => [
+        m[1],
+        m[2],
+      ])
+    );
+    expect(labels).toMatchObject({
+      sign_in: "Sign in with ChatGPT",
+      use_api_key: "Use an API key instead",
+      open_sign_in_page: "Open again",
+      copy_sign_in_link: "Copy link",
+      cancel_sign_in: "Cancel",
+    });
+    expect(js()).toMatch(/s\.kind === "waiting"/);
   });
 });

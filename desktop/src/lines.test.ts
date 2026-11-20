@@ -3,6 +3,7 @@ import {
   LineSplitter,
   detailLogFile,
   isTerminal,
+  parseChatgptEvent,
   parseDeployEvent,
   parseJsonLine,
   parseStageEvent,
@@ -144,5 +145,53 @@ describe("parseStageEvent", () => {
 
   it("is null for an unknown status", () => {
     expect(parseStageEvent('{"stage":"node","status":"paused"}')).toBeNull();
+  });
+});
+
+describe("parseChatgptEvent", () => {
+  it("reads the login and logout events", () => {
+    expect(
+      parseChatgptEvent(
+        '{"protocol":1,"event":"url","url":"https://auth.openai.com/x"}'
+      )
+    ).toEqual({ event: "url", url: "https://auth.openai.com/x" });
+    expect(
+      parseChatgptEvent('{"protocol":1,"event":"signed_in","plan":"plus"}')
+    ).toEqual({ event: "signed_in", plan: "plus" });
+    expect(
+      parseChatgptEvent('{"protocol":1,"event":"signed_in","plan":null}')
+    ).toEqual({ event: "signed_in", plan: null });
+    expect(
+      parseChatgptEvent('{"protocol":1,"event":"signed_in","plan":7}')
+    ).toEqual({ event: "signed_in", plan: null });
+    expect(parseChatgptEvent('{"protocol":1,"event":"signed_out"}')).toEqual({
+      event: "signed_out",
+    });
+    expect(
+      parseChatgptEvent(
+        '{"protocol":1,"event":"error","code":"port_in_use","message":"busy"}'
+      )
+    ).toEqual({ event: "error", code: "port_in_use", message: "busy" });
+    expect(parseChatgptEvent('{"protocol":1,"event":"error"}')).toEqual({
+      event: "error",
+      code: "internal_error",
+      message: "",
+    });
+  });
+
+  it("passes a url without a link and unknown events through as other", () => {
+    expect(parseChatgptEvent('{"protocol":1,"event":"url"}')).toEqual({
+      event: "other",
+      raw: { protocol: 1, event: "url" },
+    });
+    expect(parseChatgptEvent('{"protocol":1,"event":"hello","x":1}')).toEqual({
+      event: "other",
+      raw: { protocol: 1, event: "hello", x: 1 },
+    });
+  });
+
+  it("is null for text and lines without an event", () => {
+    expect(parseChatgptEvent("Signing in…")).toBeNull();
+    expect(parseChatgptEvent('{"protocol":1}')).toBeNull();
   });
 });

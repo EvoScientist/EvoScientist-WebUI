@@ -13,6 +13,7 @@ import {
   type BootState,
   type Manifest,
 } from "./boot";
+import type { SignInOutcome, SignInRun, SignOutOutcome } from "./chatgpt";
 import {
   confirmation,
   workStartedSince,
@@ -48,6 +49,8 @@ import {
   progressScreen,
   separateInstallQuestion,
   setupScreen,
+  signInFailureLine,
+  signInWaitingScreen,
   updateQuestion,
   updateOffer,
   updateScreen,
@@ -214,6 +217,12 @@ export interface AppDeps {
   backendAnswers(port: number): Promise<boolean>;
   uvToolEnvExists(): Promise<boolean | null>;
 
+  // ChatGPT sign-in
+  /** `EvoSci login chatgpt --json` (chatgpt.ts `startSignIn`). */
+  startSignIn(evosci: string, onUrl: (url: string) => void): SignInRun;
+  /** `EvoSci logout chatgpt --json` (chatgpt.ts `signOut`). */
+  signOut(evosci: string): Promise<SignOutOutcome>;
+
   sessionEnd?: SessionEnd;
 
   // App updates: null where the app does not update itself (not
@@ -353,9 +362,28 @@ export interface App {
   /** The bridge's `restartBackend()` for a page from `senderOrigin`; another
    *  origin gets `not_allowed` and restarts nothing. */
   restartFor(senderOrigin: string | null): Promise<RestartResult>;
+  /** The bridge's ChatGPT sign-in for a page from `senderOrigin`: starts it,
+   *  or joins the one that runs (its page opens again), and resolves with
+   *  its end. `not_allowed` for another origin, `busy` during a quit. */
+  chatgptSignInFor(senderOrigin: string | null): Promise<SignInOutcome>;
+  cancelChatgptSignInFor(senderOrigin: string | null): void;
+  /** The bridge's sign-out: the work check first (Cancel answers
+   *  `cancelled` and keeps the token), then `EvoSci logout chatgpt`.
+   *  `not_allowed` for another origin; `busy` during a quit, a sign-in or
+   *  another sign-out. */
+  chatgptSignOutFor(senderOrigin: string | null): Promise<SignOutOutcome>;
   /** True once the app exits: close and quit events go through. */
   readonly exiting: boolean;
   readonly quitState: QuitState;
+}
+
+/** The ChatGPT sign-in that runs: its link once the core sent it, and
+ *  whether the status page follows it (the sign-in from the error screen). */
+interface SignInState {
+  run: SignInRun;
+  url: string | null;
+  done: Promise<SignInOutcome>;
+  onScreen: boolean;
 }
 
 export interface ProjectFolders {
@@ -436,6 +464,15 @@ export function createApp(deps: AppDeps): App {
     /** Cancels the update only while it waits now. */
     cancelNow?(): boolean;
   } | null = null;
+  /** The ChatGPT sign-in while it runs: one at a time. */
+  let signIn: SignInState | null = null;
+  /** The sign_in_required screen as showError built it, without a failure
+   *  line, so the lines of failed attempts do not pile up. */
+  let signInScreen: ErrorScreen | null = null;
+  /** The progress screen of the sign-in from the status page, shown until
+   *  the link comes. */
+  let signInProgress: Screen | null = null;
+  let signingOut = false;
   /** Answers the mirror question on the screen. */
   let answerMirror: ((cn: boolean) => void) | null = null;
   /** Answers the update offer or the separate-install question. */
@@ -698,16 +735,17 @@ export function createApp(deps: AppDeps): App {
     const report = FATAL_CODES.has(error.code)
       ? crashReport(error.code, error.message, error.detail)
       : null;
-    showScreen(
-      errorScreen(error, {
-        platform: deps.platform,
-        port: startConfig?.port ?? DEFAULT_BACKEND_PORT,
-        logFolder: log.folder,
-        crashReport: report,
-        portFromEnv: Boolean(deps.env.EVOSCIENTIST_LANGGRAPH_DEV_PORT?.trim()),
-        workspaceFromEnv: Boolean(deps.env.EVOSCIENTIST_WORKSPACE_DIR?.trim()),
-      })
-    );
+    const built = errorScreen(error, {
+      platform: deps.platform,
+      port: startConfig?.port ?? DEFAULT_BACKEND_PORT,
+      logFolder: log.folder,
+      crashReport: report,
+      portFromEnv: Boolean(deps.env.EVOSCIENTIST_LANGGRAPH_DEV_PORT?.trim()),
+      workspaceFromEnv: Boolean(deps.env.EVOSCIENTIST_WORKSPACE_DIR?.trim()),
+      authModeFromEnv: Boolean(deps.env.EVOSCIENTIST_OPENAI_AUTH_MODE?.trim()),
+    });
+    signInScreen = error.code === "sign_in_required" ? built : null;
+    showScreen(built);
   }
 
   /** The renderer or the preload is broken: the status page may not render
@@ -1311,6 +1349,7 @@ export function createApp(deps: AppDeps): App {
         if (sessionEnd.ending) return { ok: false, code: "busy" };
       }
       quitState = "stopping";
+      await cancelSignIn();
       stopping = true;
       await stopUi();
       if (session) {
@@ -1473,6 +1512,7 @@ export function createApp(deps: AppDeps): App {
     );
     session?.closeStdinNow();
     ui?.closeStdinNow();
+    signIn?.run.closeStdinNow();
   }
 
   /** Closing the window or Quit: asks when work runs on an owned backend, hides the windows, waits for the memory workers, stops what the app started, then exits. */
@@ -1538,6 +1578,7 @@ export function createApp(deps: AppDeps): App {
         }
       }
       quitState = "stopping";
+      await cancelSignIn();
       if (step) {
         const running = step;
         log.info(
@@ -1605,6 +1646,114 @@ export function createApp(deps: AppDeps): App {
       return;
     }
     win?.bringToFront();
+  }
+
+  // --- ChatGPT sign-in -------------------------------------------------------
+
+  /** Starts the ChatGPT sign-in, or joins the one that runs and opens its
+   *  page again (the user may have closed it). The link goes to the browser;
+   *  from the status page, the waiting screen shows once it is there. */
+  function signInNow(fromScreen: boolean): Promise<SignInOutcome> {
+    const running = signIn;
+    if (running) {
+      if (fromScreen) running.onScreen = true;
+      if (running.url) deps.openExternal(running.url);
+      log.info("chatgpt sign-in: joined the one that runs");
+      return running.done;
+    }
+    if (!evosci)
+      return Promise.resolve({
+        ok: false,
+        code: "internal_error",
+        message: "EvoSci was not found.",
+      });
+    const current = { url: null, onScreen: fromScreen } as SignInState;
+    current.run = deps.startSignIn(evosci, (url) => {
+      current.url = url;
+      deps.openExternal(url);
+      if (
+        current.onScreen &&
+        signIn === current &&
+        (screen === signInProgress || screen.kind === "waiting")
+      )
+        showScreen(signInWaitingScreen());
+    });
+    current.done = current.run.done.finally(() => {
+      if (signIn === current) signIn = null;
+    });
+    // A sign-in from the page can end while the window shows the sign-in
+    // error screen (Restart now came first): the start goes on. One the
+    // screen joined launches from there.
+    void current.done.then((r) => {
+      if (
+        r.ok &&
+        !current.onScreen &&
+        quitState === "none" &&
+        !working &&
+        screen.kind === "error" &&
+        screen.code === "sign_in_required"
+      ) {
+        log.info("signed in to ChatGPT on the sign-in error screen: launching");
+        void launch();
+      }
+    });
+    signIn = current;
+    log.info(
+      `chatgpt sign-in started from the ${fromScreen ? "status page" : "page"}`
+    );
+    return current.done;
+  }
+
+  /** A quit or an update ends the app: the sign-in stops with it, and the
+   *  app waits until it has, so nothing keeps the callback port. */
+  async function cancelSignIn(): Promise<void> {
+    if (!signIn) return;
+    log.info("cancelling the ChatGPT sign-in");
+    await signIn.run.cancel();
+  }
+
+  /** "Sign in with ChatGPT" on the error screen: on success the launch
+   *  starts again; otherwise the error screen comes back with the reason. */
+  async function signInFromScreen(): Promise<void> {
+    const back = signInScreen;
+    if (signIn?.url) showScreen(signInWaitingScreen());
+    else {
+      // Cancel works before the link too: a slow or stuck core start.
+      signInProgress = {
+        ...progressScreen("starting_sign_in"),
+        actions: ["cancel_sign_in"],
+      };
+      showScreen(signInProgress);
+    }
+    const r = await signInNow(true);
+    signInProgress = null;
+    if (quitState !== "none") return;
+    if (r.ok) return launchLocked();
+    const line = signInFailureLine(r.code, r.message);
+    if (back)
+      showScreen(line ? { ...back, lines: [...back.lines, line] } : back);
+  }
+
+  const BUSY = { ok: false as const, code: "busy", message: "" };
+
+  /** Sign-out from the page: asks first when work runs, as Restart does. */
+  async function signOutFromPage(): Promise<SignOutOutcome> {
+    if (quitState !== "none" || signIn || signingOut) return BUSY;
+    if (!evosci)
+      return {
+        ok: false,
+        code: "internal_error",
+        message: "EvoSci was not found.",
+      };
+    signingOut = true;
+    try {
+      if (!(await confirmStop("sign_out")))
+        return { ok: false, code: "cancelled", message: "" };
+      if (quitState !== "none" || signIn) return BUSY;
+      return await deps.signOut(evosci);
+    } finally {
+      signingOut = false;
+    }
   }
 
   // --- Status page actions ---------------------------------------------------
@@ -1696,6 +1845,23 @@ export function createApp(deps: AppDeps): App {
       case "cancel_update":
         if (step?.kind === "update" && step.cancelNow?.())
           log.info("update cancelled from the waiting screen");
+        return;
+      case "sign_in":
+        return exclusive(signInFromScreen);
+      case "use_api_key":
+        return exclusive(async () => {
+          if (await setConfig("openai_auth_mode", "api_key"))
+            await launchLocked();
+        });
+      // Outside `exclusive`, which the sign-in holds while it waits.
+      case "open_sign_in_page":
+        if (signIn?.url) deps.openExternal(signIn.url);
+        return;
+      case "copy_sign_in_link":
+        if (signIn?.url) deps.copyText(signIn.url);
+        return;
+      case "cancel_sign_in":
+        void signIn?.run.cancel();
         return;
     }
   }
@@ -1834,6 +2000,25 @@ export function createApp(deps: AppDeps): App {
       if (fromUi(senderOrigin)) return restartFromPage();
       log.warn(`restart refused for the origin ${senderOrigin}`);
       return { ok: false, code: "not_allowed" };
+    },
+    chatgptSignInFor: async (senderOrigin) => {
+      if (!fromUi(senderOrigin)) {
+        log.warn(`chatgpt sign-in refused for the origin ${senderOrigin}`);
+        return { ok: false, code: "not_allowed", message: "" };
+      }
+      // A sign-out being asked about would remove the new sign-in.
+      if (quitState !== "none" || signingOut) return BUSY;
+      return signInNow(false);
+    },
+    cancelChatgptSignInFor: (senderOrigin) => {
+      if (fromUi(senderOrigin)) void signIn?.run.cancel();
+    },
+    chatgptSignOutFor: async (senderOrigin) => {
+      if (!fromUi(senderOrigin)) {
+        log.warn(`chatgpt sign-out refused for the origin ${senderOrigin}`);
+        return { ok: false, code: "not_allowed", message: "" };
+      }
+      return signOutFromPage();
     },
     get exiting() {
       return exiting;
