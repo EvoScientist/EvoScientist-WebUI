@@ -138,6 +138,13 @@ export function startSignIn(
           if (urlSeen) return;
           urlSeen = true;
           deps.log.info(`chatgpt sign-in: url (${hostOf(ev.url)})`);
+          // The core prints the link before it notices a cancel: a page
+          // whose sign-in is already gone is not opened, and the run ends
+          // as cancelled whatever the link is.
+          if (cancelled) {
+            deps.log.info("chatgpt sign-in: link after a cancel; not opened");
+            return;
+          }
           if (!isHttps(ev.url)) {
             settle({
               ok: false,
@@ -145,12 +152,6 @@ export function startSignIn(
               message: "EvoSci sent a sign-in link that is not https.",
             });
             void cancel();
-            return;
-          }
-          // The core prints the link before it notices a cancel: a page
-          // whose sign-in is already gone is not opened.
-          if (cancelled) {
-            deps.log.info("chatgpt sign-in: link after a cancel; not opened");
             return;
           }
           onUrl(ev.url);

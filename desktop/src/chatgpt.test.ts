@@ -149,25 +149,39 @@ describe("startSignIn", () => {
     expect(await r.done).toMatchObject({ ok: false, code: "cancelled" });
   });
 
+  /** The core still prints `url` after its stdin closed, then cancels. */
+  const URL_AFTER_EOF = (url: string) =>
+    `process.stdin.on("end", () => { ${say({
+      event: "url",
+      url,
+    })} setTimeout(() => { ${say({
+      event: "error",
+      code: "cancelled",
+      message: "ChatGPT sign-in was cancelled.",
+    })} process.exit(1); }, 50); }); process.stdin.resume();`;
+
   it("never opens a link that arrives after a cancel", async () => {
     const onUrl = vi.fn();
-    // The core still prints the link after its stdin closed, then cancels.
+    const lines: string[] = [];
     const r = startSignIn("EvoSci", onUrl, {
       ...base,
-      spawn: fake(
-        `process.stdin.on("end", () => { ${say({
-          event: "url",
-          url: URL,
-        })} ${say({
-          event: "error",
-          code: "cancelled",
-          message: "ChatGPT sign-in was cancelled.",
-        })} process.exit(1); }); process.stdin.resume();`
-      ),
+      log: { info: (m) => lines.push(m), warn: (m) => lines.push(m) },
+      spawn: fake(URL_AFTER_EOF(URL)),
     });
     void r.cancel();
     expect(await r.done).toMatchObject({ ok: false, code: "cancelled" });
+    // The link did arrive, and was skipped.
+    expect(lines).toContain("chatgpt sign-in: link after a cancel; not opened");
     expect(onUrl).not.toHaveBeenCalled();
+  });
+
+  it("a cancelled run stays cancelled whatever link comes after", async () => {
+    const r = startSignIn("EvoSci", () => {}, {
+      ...base,
+      spawn: fake(URL_AFTER_EOF("http://auth.openai.com/x")),
+    });
+    void r.cancel();
+    expect(await r.done).toMatchObject({ ok: false, code: "cancelled" });
   });
 
   it("opens only the first url", async () => {
