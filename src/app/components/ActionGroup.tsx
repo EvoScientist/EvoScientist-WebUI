@@ -163,7 +163,14 @@ export const ActionGroup = React.memo<ActionGroupProps>(function ActionGroup({
     0
   );
   const failedText = failed > 0 ? `${failed} failed` : null;
-  const label = failedText ? `${headerText}, ${failedText}` : headerText;
+  // The latest reply that has a time: it matches "last: <tool>" and moves
+  // forward while the group runs. A reply still streaming has none yet.
+  const stamps = items
+    .map((item) => getMessageTimestamp(item.message))
+    .filter((ts): ts is Date => ts !== null);
+  const timeText =
+    stamps.length > 0 ? formatTimestamp(stamps[stamps.length - 1]) : null;
+  const label = [headerText, failedText, timeText].filter(Boolean).join(", ");
 
   return (
     <div className="my-2">
@@ -200,14 +207,11 @@ export const ActionGroup = React.memo<ActionGroupProps>(function ActionGroup({
             {failedText}
           </span>
         )}
-        {(() => {
-          const ts = getMessageTimestamp(items[0]?.message);
-          return ts !== null ? (
-            <span className="shrink-0 text-[10px] text-muted-foreground">
-              {formatTimestamp(ts)}
-            </span>
-          ) : null;
-        })()}
+        {timeText && (
+          <span className="shrink-0 text-[10px] text-muted-foreground">
+            {timeText}
+          </span>
+        )}
       </button>
       {/* Collapsed approval preview — renders the single approval-bearing
           message so the user can act without expanding the full timeline.
