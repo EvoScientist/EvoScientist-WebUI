@@ -74,6 +74,27 @@ const FINISH_REASON_SUCCESS = new Set([
   "function_call",
   "end_turn",
   "tool_use",
+  // The Responses API's status, which langchain-openai 1.8.5 writes as the
+  // finish reason.
+  "completed",
+]);
+
+// langchain's provider-neutral reading, written next to `finish_reason` by
+// newer integrations (langchain-openai 1.8.5, langchain-anthropic). When it is
+// there it decides: a refusal ends with a plain "stop" (Chat Completions) or
+// "completed" (Responses), and only this field says so. "other" is the mapping
+// tables' fallback for any raw reason they don't list ("function_call", an
+// Anthropic-compatible endpoint's "stop"), so it says nothing and the raw
+// reason decides.
+const NORMALIZED_SUCCESS = new Set(["stop", "tool_call"]);
+const NORMALIZED_REASONS = new Set([
+  ...NORMALIZED_SUCCESS,
+  "length",
+  "content_filter",
+  "refusal",
+  "error",
+  "context_exceeded",
+  "other",
 ]);
 
 // Two ways a successful turn can read as an abnormal one. Providers disagree on
@@ -81,9 +102,12 @@ const FINISH_REASON_SUCCESS = new Set([
 // SSE chunk makes langchain's `merge_dicts` concatenate `finish_reason` with
 // itself ("stopstop"), which the live backend still emits more often than the
 // plain form. Fold both away before consulting the success set.
-function normalizeFinishReason(raw: string): string {
+function normalizeFinishReason(
+  raw: string,
+  success: ReadonlySet<string> = FINISH_REASON_SUCCESS
+): string {
   const lowered = raw.toLowerCase();
-  for (const value of FINISH_REASON_SUCCESS) {
+  for (const value of success) {
     if (lowered !== value && lowered.length % value.length === 0) {
       const repeatCount = lowered.length / value.length;
       if (repeatCount > 1 && value.repeat(repeatCount) === lowered)
@@ -177,17 +201,34 @@ export const ChatMessage = React.memo<ChatMessageProps>(
     // server-side, the thread goes idle, and no interrupt is raised.
     const terminalError = useMemo(() => {
       if (isUser) return null;
-      const raw = (
-        message.response_metadata as Record<string, unknown> | undefined
-      )?.finish_reason;
+      const metadata = message.response_metadata as
+        | Record<string, unknown>
+        | undefined;
+      const raw = metadata?.finish_reason;
       if (typeof raw !== "string" || !raw) return null;
-      if (FINISH_REASON_SUCCESS.has(normalizeFinishReason(raw))) return null;
+      const rawSucceeded = FINISH_REASON_SUCCESS.has(
+        normalizeFinishReason(raw)
+      );
+      const stored = metadata?.normalized_finish_reason;
+      // Chunk merging doubles this field too ("stopstop").
+      const normalized =
+        typeof stored === "string" && stored
+          ? normalizeFinishReason(stored, NORMALIZED_REASONS)
+          : null;
+      const decides = normalized !== null && normalized !== "other";
+      const succeeded = decides
+        ? NORMALIZED_SUCCESS.has(normalized)
+        : rawSucceeded;
+      if (succeeded) return null;
       const variant =
         !hasContent && !hasToolCalls
           ? ("missing" as const)
           : ("partial" as const);
-      // Show what the provider actually sent, not the folded form.
-      return { finishReason: raw, variant };
+      // Show what the provider actually sent, not the folded form; when that
+      // reads as a normal end (a refusal), langchain's reason says what
+      // happened.
+      const finishReason = rawSucceeded && decides ? normalized : raw;
+      return { finishReason, variant };
     }, [isUser, hasContent, hasToolCalls, message.response_metadata]);
     const subAgents = useMemo(() => {
       return toolCalls.filter(showsAsSubAgent).map((toolCall: ToolCall) => {
@@ -385,7 +426,14 @@ export const ChatMessage = React.memo<ChatMessageProps>(
             </div>
           )}
           {hasContent && (
-            <div className={cn("relative flex items-end gap-0")}>
+            // The user's column is as wide as the time and buttons under a
+            // short message, so its bubble keeps to the column's right.
+            <div
+              className={cn(
+                "relative flex items-end gap-0",
+                isUser && "justify-end"
+              )}
+            >
               <div
                 className={cn(
                   "mt-4 overflow-hidden break-words text-sm font-normal leading-[150%]",
