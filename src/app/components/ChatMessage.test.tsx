@@ -196,6 +196,158 @@ describe("ChatMessage model", () => {
   });
 });
 
+describe("ChatMessage turn end", () => {
+  const reply = (
+    response_metadata: Record<string, unknown>,
+    content = "Done."
+  ): Message =>
+    ({
+      id: "a1",
+      type: "ai",
+      content,
+      response_metadata,
+    } as unknown as Message);
+  const partial = () => screen.queryByText(/ended its turn unexpectedly/);
+  const missing = () => screen.queryByText(/ended without a response/);
+
+  // langchain-openai 1.8.5 writes the Responses API's `status` as the
+  // finish reason, next to its own normalized one.
+  it("says nothing for a Responses reply that completed", () => {
+    renderMessage(
+      reply({ finish_reason: "completed", normalized_finish_reason: "stop" })
+    );
+    expect(partial()).toBeNull();
+  });
+
+  it("says nothing for a completed Responses reply without the normalized field", () => {
+    renderMessage(reply({ finish_reason: "completed" }));
+    expect(partial()).toBeNull();
+  });
+
+  // A refusal ends with a plain "completed" / "stop"; only langchain's
+  // normalized reason says what happened.
+  it("flags a Responses refusal that left no text", () => {
+    renderMessage(
+      reply(
+        { finish_reason: "completed", normalized_finish_reason: "refusal" },
+        ""
+      )
+    );
+    expect(missing()?.textContent).toContain("refusal");
+  });
+
+  it("flags a Chat Completions refusal", () => {
+    renderMessage(
+      reply({ finish_reason: "stop", normalized_finish_reason: "refusal" })
+    );
+    expect(partial()?.textContent).toContain("refusal");
+  });
+
+  it("says nothing for an Anthropic stop sequence, doubled or not", () => {
+    for (const [finish_reason, normalized_finish_reason] of [
+      ["stop_sequence", "stop"],
+      ["stop_sequencestop_sequence", "stopstop"],
+    ]) {
+      const { unmount } = renderMessage(
+        reply({ finish_reason, normalized_finish_reason })
+      );
+      expect(partial()).toBeNull();
+      unmount();
+    }
+  });
+
+  it("still flags an Anthropic reply cut at max tokens", () => {
+    renderMessage(
+      reply({ finish_reason: "max_tokens", normalized_finish_reason: "length" })
+    );
+    expect(partial()?.textContent).toContain("max_tokens");
+  });
+
+  it("says nothing for a tool call, doubled or not", () => {
+    for (const [finish_reason, normalized_finish_reason] of [
+      ["tool_calls", "tool_call"],
+      ["tool_callstool_calls", "tool_calltool_call"],
+    ]) {
+      const { unmount } = renderMessage(
+        reply({ finish_reason, normalized_finish_reason })
+      );
+      expect(partial()).toBeNull();
+      unmount();
+    }
+  });
+
+  // "other" is the mapping tables' fallback for raw reasons they don't list.
+  it("lets the raw reason decide when the normalized one is other", () => {
+    for (const finish_reason of ["function_call", "stop", "STOP"]) {
+      const { unmount } = renderMessage(
+        reply({ finish_reason, normalized_finish_reason: "other" })
+      );
+      expect(partial()).toBeNull();
+      unmount();
+    }
+    renderMessage(
+      reply({ finish_reason: "pause_turn", normalized_finish_reason: "other" })
+    );
+    expect(partial()?.textContent).toContain("pause_turn");
+  });
+
+  it("lets the raw reason decide when the normalized one is blank", () => {
+    renderMessage(
+      reply({ finish_reason: "length", normalized_finish_reason: "" })
+    );
+    expect(partial()?.textContent).toContain("length");
+  });
+
+  it("names a doubled refusal once", () => {
+    renderMessage(
+      reply({
+        finish_reason: "stopstop",
+        normalized_finish_reason: "refusalrefusal",
+      })
+    );
+    const text = partial()?.textContent ?? "";
+    expect(text).toContain("refusal");
+    expect(text).not.toContain("refusalrefusal");
+  });
+
+  it("still flags a Responses reply cut at the output limit", () => {
+    renderMessage(
+      reply({ finish_reason: "incomplete", normalized_finish_reason: "length" })
+    );
+    expect(partial()?.textContent).toContain("incomplete");
+  });
+
+  it("still flags a Responses reply stopped by the content filter", () => {
+    renderMessage(
+      reply({
+        finish_reason: "incomplete",
+        normalized_finish_reason: "content_filter",
+      })
+    );
+    expect(partial()?.textContent).toContain("incomplete");
+  });
+
+  it("still flags an empty reply that failed", () => {
+    renderMessage(
+      reply({ finish_reason: "failed", normalized_finish_reason: "error" }, "")
+    );
+    expect(missing()?.textContent).toContain("failed");
+  });
+
+  it("keeps the Chat Completions, Anthropic and Gemini readings", () => {
+    for (const finish_reason of ["stop", "stopstop", "end_turn", "STOP"]) {
+      const { unmount } = renderMessage(reply({ finish_reason }));
+      expect(partial()).toBeNull();
+      unmount();
+    }
+    for (const finish_reason of ["length", "MAX_TOKENS"]) {
+      const { unmount } = renderMessage(reply({ finish_reason }));
+      expect(partial()?.textContent).toContain(finish_reason);
+      unmount();
+    }
+  });
+});
+
 // Models put their reasoning in one of two places: OpenAI-compatible routes
 // (DeepSeek, OpenRouter) in `additional_kwargs.reasoning_content`, Anthropic's
 // extended thinking in `thinking` content blocks ahead of the text (the shape
@@ -739,6 +891,26 @@ describe("ChatMessage pinned skill chips", () => {
     );
     expect(document.querySelector('[data-slot="composer-chip"]')).toBeNull();
     expect(screen.getByText("/paper-review hi")).toBeTruthy();
+  });
+});
+
+// The user's column is as wide as its widest row; the time and buttons under
+// a short message are wider than the bubble, which must still sit at the
+// right edge, over the buttons.
+describe("ChatMessage bubble alignment", () => {
+  const bubbleRow = (text: string) =>
+    screen.getByText(text).parentElement!.parentElement!;
+
+  it("keeps a short user message at the right edge of its column", () => {
+    renderMessage({ id: "u1", type: "human", content: "ok" } as Message);
+    expect(bubbleRow("ok").className).toContain("justify-end");
+  });
+
+  it("leaves a reply where it was", () => {
+    renderMessage({ id: "a1", type: "ai", content: "ok" } as Message);
+    expect(
+      screen.getByText("ok").closest(".relative")!.className
+    ).not.toContain("justify-end");
   });
 });
 
