@@ -27,6 +27,7 @@ import {
   decidable,
   stillListed,
   stillPending,
+  type Pick,
 } from "@/app/components/autoskills/selection";
 import {
   markAutoSeen,
@@ -75,9 +76,9 @@ const NO_PROJECTS: readonly Project[] = [];
  *  holds it. */
 const NO_HOLDS: ReadonlyMap<string, number> = new Map();
 const NO_TOKENS: readonly number[] = [];
-/** No picks: a selection maps each picked id to the draft's updated_at as
- *  listed when it was picked. */
-const NO_SELECTION: ReadonlyMap<string, string> = new Map();
+/** No picks: a selection maps each picked id to the draft's updated_at and
+ *  content_digest as listed when it was picked. */
+const NO_SELECTION: ReadonlyMap<string, Pick> = new Map();
 /** A bulk approval as clicked: its drafts, each at the version it was
  *  picked at, and the files their check found the page can't show. */
 interface BulkDecision {
@@ -104,9 +105,9 @@ function statusOf(param: string | null): DraftStatus {
 /** `selection` without the picks of `ids`; the same one when none is in
  *  it. */
 function unpick(
-  selection: ReadonlyMap<string, string>,
+  selection: ReadonlyMap<string, Pick>,
   ids: readonly string[]
-): ReadonlyMap<string, string> {
+): ReadonlyMap<string, Pick> {
   if (!ids.some((id) => selection.has(id))) return selection;
   const next = new Map(selection);
   for (const id of ids) next.delete(id);
@@ -318,7 +319,7 @@ export function DraftsPage() {
   const settingsButtonRef = useRef<HTMLButtonElement>(null);
   const [confirming, setConfirming] = useState(false);
   const [selected, setSelected] =
-    useState<ReadonlyMap<string, string>>(NO_SELECTION);
+    useState<ReadonlyMap<string, Pick>>(NO_SELECTION);
   // An approval checks the files of its drafts first. While a check reads,
   // its Approve (the bar's, or the pane's for the draft checked) says so
   // and no decision starts.
@@ -664,18 +665,25 @@ export function DraftsPage() {
     ]
   );
 
-  // A pick records the draft's updated_at as listed now: a bulk approve or
-  // reject sends that version, so a draft rewritten since draws
-  // draft_changed instead of being decided unread. One picked already keeps
+  // A pick records the draft's updated_at and content_digest as listed now:
+  // a bulk approve or reject sends that version, so a draft rewritten since
+  // draws draft_changed instead of being decided unread, and the approve
+  // vouches for the content the pick was made on (an agent's plain file
+  // write changes the digest and not the stamp). One picked already keeps
   // its own.
   const toggle = (ids: string[], on: boolean) => {
-    const listed = new Map(shown.map((d) => [d.proposal_id, d.updated_at]));
+    const listed = new Map<string, Pick>(
+      shown.map((d) => [
+        d.proposal_id,
+        { updated_at: d.updated_at, content_digest: d.content_digest },
+      ])
+    );
     setSelected((prev) => {
       const next = new Map(prev);
       for (const id of ids) {
-        const stamp = listed.get(id);
+        const pick = listed.get(id);
         if (!on) next.delete(id);
-        else if (!next.has(id) && stamp !== undefined) next.set(id, stamp);
+        else if (!next.has(id) && pick !== undefined) next.set(id, pick);
       }
       return next;
     });

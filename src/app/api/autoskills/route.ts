@@ -14,7 +14,11 @@ export const dynamic = "force-dynamic";
 
 /** The longest folder path taken. */
 const MAX_PATH = 4096;
-/** The longest `expected_updated_at` taken (a draft's ISO timestamp). */
+/** The longest `expected_updated_at` taken (a draft's ISO timestamp) and
+ *  the longest `expected_content_digest` (the core's digest of the text it
+ *  handed out). The digest's shape is the core's business, not this
+ *  relay's: it checks only that the value is a short plain string, with
+ *  no control characters in it. */
 const MAX_STAMP = 64;
 
 function hasControl(text: string): boolean {
@@ -64,15 +68,40 @@ function planOf(raw: unknown): Plan | null {
   ) {
     return null;
   }
-  // A reject and a revert install nothing, so they never carry a scope.
-  if (action === "reject" || action === "revert") {
+  // A revert installs nothing, so it keeps the version alone.
+  if (action === "revert") {
     return { path, body: { expected_updated_at: expected } };
+  }
+  // A reject installs nothing either: the version it read is all it checks,
+  // and the core takes no digest for one.
+  if (action === "reject") {
+    return { path, body: { expected_updated_at: expected } };
+  }
+  // The digest of the draft's files as the page read the list: the core
+  // refuses an approve that vouches for other files. Null is not nothing —
+  // with no digest the core checks the approve against the digest recorded
+  // at submission.
+  const digest = body.expected_content_digest ?? null;
+  if (
+    digest !== null &&
+    (typeof digest !== "string" ||
+      digest.length > MAX_STAMP ||
+      hasControl(digest))
+  ) {
+    return null;
   }
   const scope = body.scope ?? null;
   if (scope !== null && scope !== "workspace" && scope !== "global") {
     return null;
   }
-  return { path, body: { scope, expected_updated_at: expected } };
+  return {
+    path,
+    body: {
+      scope,
+      expected_updated_at: expected,
+      expected_content_digest: digest,
+    },
+  };
 }
 
 /**

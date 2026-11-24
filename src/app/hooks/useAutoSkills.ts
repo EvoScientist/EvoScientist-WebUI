@@ -269,14 +269,18 @@ export function refreshAutoSkills(): Promise<unknown> {
   return globalMutate((key) => Array.isArray(key) && key[0] === "autoskills");
 }
 
-// The draft's updated_at is part of the key: a run that rewrites a pending
-// draft in place keeps its id, and its files must be read again.
+// The draft's updated_at and content_digest are part of the key: a run that
+// rewrites a pending draft in place keeps its id, and an agent's plain file
+// write keeps even its updated_at while the digest changes. Either way the
+// files must be read again, and until that read answers the tab shows no
+// text of the older version beside the newer digest.
 type FileKey = readonly [
   "autoskills-file",
   string,
   string,
   string,
   string,
+  string | null,
   string,
   boolean
 ];
@@ -316,6 +320,7 @@ function fileKey(
     apiKey,
     draft.proposal_id,
     draft.updated_at,
+    draft.content_digest ?? null,
     path,
     installed,
   ];
@@ -324,7 +329,7 @@ function fileKey(
 /** SWR calls it with the key alone; the check before an approval also
  *  passes its own signal, which stops the read with the check. */
 async function fetchDraftFile(
-  [, base, apiKey, id, , path, installed]: FileKey,
+  [, base, apiKey, id, , , path, installed]: FileKey,
   outer?: AbortSignal
 ): Promise<string> {
   const url =
@@ -440,7 +445,8 @@ async function inTurns(
  *  that it couldn't be checked. The whole check ends after
  *  CHECK_DEADLINE_MS, or when `stop` aborts: the reads out are stopped, no
  *  other starts, and every file without an answer couldn't be checked. The
- *  files are the drafts' current ones (their updated_at is in the key).
+ *  files are the drafts' current ones (their updated_at and content_digest
+ *  are in the key).
  *  Answers at once, without a promise, when nothing has to be read; never
  *  rejects. */
 export function useDraftFilesCheck(): (

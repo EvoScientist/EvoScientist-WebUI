@@ -131,6 +131,7 @@ function draft(over: Partial<Draft> & { proposal_id: string }): Draft {
     skill_md_truncated: false,
     rationale_md: "",
     rationale_md_truncated: false,
+    content_digest: null,
     files: [],
     install_target: null,
     install_base: null,
@@ -1526,6 +1527,7 @@ describe("DraftDetail", () => {
       tab("Why this skill").id
     );
   });
+
   it("files compare with the installed copy only for the recorded place", () => {
     const note =
       "Changes against the installed copy are shown for the recorded place only.";
@@ -1611,6 +1613,61 @@ describe("DraftDetail", () => {
     };
     view.rerender(detail(moved));
     expect(scopeTrigger().textContent).toBe("All projects (global)");
+  });
+
+  it("a digest change of the same version takes the question away and keeps the place picked", () => {
+    const a = draft({
+      proposal_id: "a",
+      scope: "workspace",
+      operation: "update",
+      target_skill_name: "a",
+      content_digest: "d-1",
+    });
+    const view = render(detail(a));
+    pickScope("All projects (global)");
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    expect(screen.getByRole("dialog")).toBeTruthy();
+
+    // An agent wrote a file in place: the same updated_at, another digest,
+    // so the question asks about text the draft no longer has.
+    const rewritten = { ...a, content_digest: "d-2" };
+    view.rerender(detail(rewritten));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    // The place picked stays: the version did not change, only its text.
+    expect(scopeTrigger().textContent).toBe("All projects (global)");
+    // The next click is the new version's, and it sends that digest.
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    fireEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: "Install",
+      })
+    );
+    expect(onApprove).toHaveBeenCalledWith(rewritten, "global");
+  });
+
+  it("a click whose digest changed while its files were checked installs nothing", async () => {
+    const errors = vi.spyOn(toast, "error");
+    try {
+      const answers: Array<(files: UnshowableFile[] | null) => void> = [];
+      checkFiles.mockImplementation(
+        () => new Promise<UnshowableFile[] | null>((r) => answers.push(r))
+      );
+      const d = draft({ proposal_id: "x", content_digest: "d-1" });
+      const view = render(detail(d));
+      fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+      // Rewritten in place while the check read its files: the text the
+      // click was made on is not the draft's any more.
+      view.rerender(detail({ ...d, content_digest: "d-2" }));
+      await act(async () => answers[0]([]));
+      expect(onApprove).not.toHaveBeenCalled();
+      expect(errors.mock.calls).toEqual([
+        [
+          "Nothing was installed: the drafts changed while their files were checked. Approve again.",
+        ],
+      ]);
+    } finally {
+      errors.mockRestore();
+    }
   });
 
   it("the question's Replace and install waits while it can't decide", () => {

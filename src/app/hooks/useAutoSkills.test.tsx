@@ -43,6 +43,7 @@ const draft = (id: string) => ({
   skill_md_truncated: false,
   rationale_md: "y",
   rationale_md_truncated: false,
+  content_digest: null,
   files: [],
   install_target: null,
   install_base: null,
@@ -1151,6 +1152,27 @@ describe("useDraftFile", () => {
     expect(h.result.current.text).toBe("v1");
     // A run rewrote it in place (same id, new updated_at).
     h.rerender({ dr: { ...d, updated_at: "2026-11-02T00:00:00Z" } });
+    await waitFor(() => expect(h.result.current.text).toBe("v2"));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("reads again when the digest changes under the same stamp", async () => {
+    // An agent's plain file write changes a pending draft's files, and its
+    // content_digest, without its updated_at: the text read before is not
+    // the draft's any more, so the file is read again (and until it answers
+    // the new key has no text to show beside the new digest).
+    let n = 0;
+    const fetchMock = stubFetch(() => new Response(`v${++n}`, { status: 200 }));
+    const h = renderHook(
+      ({ dr }: { dr: Draft }) => useDraftFile(dr, "SKILL.md", false),
+      { wrapper, initialProps: { dr: { ...d, content_digest: "d-1" } } }
+    );
+    await waitFor(() => expect(h.result.current.text).toBe("v1"));
+    // The same version and digest: the text is kept.
+    h.rerender({ dr: { ...d, content_digest: "d-1" } });
+    expect(h.result.current.text).toBe("v1");
+    // The same updated_at, another digest: read again.
+    h.rerender({ dr: { ...d, content_digest: "d-2" } });
     await waitFor(() => expect(h.result.current.text).toBe("v2"));
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });

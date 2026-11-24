@@ -56,6 +56,7 @@ function draft(over: Partial<Draft> = {}): Draft {
     skill_md_truncated: false,
     rationale_md: "",
     rationale_md_truncated: false,
+    content_digest: null,
     files: [],
     install_target: null,
     install_base: null,
@@ -200,6 +201,60 @@ describe("parseDraftList", () => {
       missing: ["", false, "", false],
       odd: ["", false, "", false],
     });
+  });
+
+  // The list hands out the digest of exactly the text it showed: a decision
+  // vouches for what the page read.
+  it("keeps the digest and drops one that is not text", () => {
+    const parsed = parseDraftList({
+      proposals: [
+        {
+          proposal_id: "listed",
+          skill_name: "s",
+          workspace_dir: "/w",
+          status: "pending",
+          operation: "create",
+          scope: "workspace",
+          content_digest: "a".repeat(64),
+        },
+        {
+          proposal_id: "decided",
+          skill_name: "s",
+          workspace_dir: "/w",
+          status: "approved",
+          operation: "create",
+          scope: "workspace",
+          content_digest: null,
+        },
+        // An older core hands out none.
+        {
+          proposal_id: "older-core",
+          skill_name: "s",
+          workspace_dir: "/w",
+          status: "pending",
+          operation: "create",
+          scope: "workspace",
+        },
+        {
+          proposal_id: "odd",
+          skill_name: "s",
+          workspace_dir: "/w",
+          status: "pending",
+          operation: "create",
+          scope: "workspace",
+          content_digest: 5,
+        },
+      ],
+      counts: { pending: 3, approved: 1, rejected: 0 },
+    });
+    expect(
+      parsed!.drafts.map((d) => [d.proposal_id, d.content_digest])
+    ).toEqual([
+      ["listed", "a".repeat(64)],
+      ["decided", null],
+      ["older-core", null],
+      ["odd", null],
+    ]);
   });
 
   it("returns null without a proposals array", () => {

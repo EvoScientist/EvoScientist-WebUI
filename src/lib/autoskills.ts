@@ -41,6 +41,13 @@ export interface Draft {
   skill_md_truncated: boolean;
   rationale_md: string | null;
   rationale_md_truncated: boolean;
+  /** The digest of the draft's files as the list read them (SKILL.md and
+   *  every file an approval copies): an approve that vouches for other
+   *  files is refused. Null for a decided draft, and for a pending one the
+   *  core could not read whole (it marks those `review_incomplete`): with
+   *  no digest to send, the core checks the approve against the digest
+   *  recorded when the draft was submitted. */
+  content_digest: string | null;
   files: DraftFile[];
   install_target: string | null;
   install_base: string | null;
@@ -167,6 +174,7 @@ function parseDraft(row: unknown): Draft | null {
     skill_md_truncated: r.skill_md_truncated === true,
     rationale_md: textUnlessNull(r.rationale_md),
     rationale_md_truncated: r.rationale_md_truncated === true,
+    content_digest: textOrNull(r.content_digest),
     files,
     install_target: textOrNull(r.install_target),
     install_base: textOrNull(r.install_base),
