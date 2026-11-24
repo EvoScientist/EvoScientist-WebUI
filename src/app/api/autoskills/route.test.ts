@@ -75,6 +75,7 @@ describe("/api/autoskills", () => {
     expect(JSON.parse(init.body)).toEqual({
       scope: "global",
       expected_updated_at: null,
+      expected_content_digest: null,
     });
     expect(init.headers["X-EvoScientist-Local-Secret"]).toBe(SECRET);
   });
@@ -91,6 +92,7 @@ describe("/api/autoskills", () => {
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
       scope,
       expected_updated_at: null,
+      expected_content_digest: null,
     });
   });
 
@@ -119,6 +121,36 @@ describe("/api/autoskills", () => {
       expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
         scope: "global",
         expected_updated_at: expected,
+        expected_content_digest: null,
+      });
+    }
+  );
+
+  // The digest of the text the page showed: the core refuses a decision
+  // that vouches for content it did not hand out. Null checks nothing.
+  it.each([
+    [{}, null],
+    [{ expected_content_digest: null }, null],
+    [{ expected_content_digest: "a".repeat(64) }, "a".repeat(64)],
+    [{ expected_content_digest: "0123456789abcdef" }, "0123456789abcdef"],
+  ])(
+    "approves with expected_content_digest %j forwarded as %j",
+    async (extra, digest) => {
+      fetchMock.mockResolvedValue(answer(200, {}));
+
+      await POST(
+        request({
+          action: "approve",
+          proposal_id: "a-b",
+          scope: "workspace",
+          ...extra,
+        })
+      );
+
+      expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+        scope: "workspace",
+        expected_updated_at: null,
+        expected_content_digest: digest,
       });
     }
   );
@@ -146,6 +178,33 @@ describe("/api/autoskills", () => {
 
       expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
         expected_updated_at: expected,
+        expected_content_digest: null,
+      });
+    }
+  );
+
+  it.each([
+    [{}, null, null],
+    [{ expected_content_digest: null }, null, null],
+    [{ expected_content_digest: "a".repeat(64) }, null, "a".repeat(64)],
+    [
+      {
+        expected_content_digest: "f".repeat(64),
+        expected_updated_at: "2026-11-06T09:00:00Z",
+      },
+      "2026-11-06T09:00:00Z",
+      "f".repeat(64),
+    ],
+  ])(
+    "rejects with expected_content_digest %j forwarded as %j",
+    async (extra, expectedAt, digest) => {
+      fetchMock.mockResolvedValue(answer(200, {}));
+
+      await POST(request({ action: "reject", proposal_id: "a-b", ...extra }));
+
+      expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+        expected_updated_at: expectedAt,
+        expected_content_digest: digest,
       });
     }
   );
@@ -166,6 +225,7 @@ describe("/api/autoskills", () => {
         expected_updated_at: "2026-11-06T09:00:00Z",
         scope: "global",
         status: "pending",
+        expected_content_digest: "a".repeat(64),
       },
       "2026-11-06T09:00:00Z",
     ],
@@ -196,7 +256,7 @@ describe("/api/autoskills", () => {
       "http://127.0.0.1:6606/api/autoskills/run",
     ]);
     expect(calls.map(([, init]) => JSON.parse(init.body))).toEqual([
-      { expected_updated_at: null },
+      { expected_updated_at: null, expected_content_digest: null },
       { expected_updated_at: null },
       { workspace_dir: "/home/you/my proj" },
     ]);
@@ -290,6 +350,50 @@ describe("/api/autoskills", () => {
         action: "revert",
         proposal_id: "a-b",
         expected_updated_at: "2026-11-06\n",
+      },
+    ],
+    [
+      "a numeric expected_content_digest",
+      { action: "approve", proposal_id: "a-b", expected_content_digest: 1 },
+    ],
+    [
+      "an expected_content_digest that is an object",
+      { action: "approve", proposal_id: "a-b", expected_content_digest: {} },
+    ],
+    [
+      "an expected_content_digest over 64 characters",
+      {
+        action: "approve",
+        proposal_id: "a-b",
+        expected_content_digest: "x".repeat(65),
+      },
+    ],
+    [
+      "an expected_content_digest with a control character",
+      {
+        action: "approve",
+        proposal_id: "a-b",
+        expected_content_digest: "abc\u0007",
+      },
+    ],
+    [
+      "a reject with a numeric expected_content_digest",
+      { action: "reject", proposal_id: "a-b", expected_content_digest: 1 },
+    ],
+    [
+      "a reject with an expected_content_digest over 64 characters",
+      {
+        action: "reject",
+        proposal_id: "a-b",
+        expected_content_digest: "x".repeat(65),
+      },
+    ],
+    [
+      "a reject with a control character in expected_content_digest",
+      {
+        action: "reject",
+        proposal_id: "a-b",
+        expected_content_digest: "abc\u0007",
       },
     ],
     ["a run without a folder", { action: "run" }],

@@ -41,6 +41,15 @@ export interface Draft {
   skill_md_truncated: boolean;
   rationale_md: string | null;
   rationale_md_truncated: boolean;
+  /** The texts of the draft's other files, as the list handed them out:
+   *  every file but SKILL.md (whose text comes in `skill_md`), a file
+   *  that is missing or unreadable left out. Null for a decided draft;
+   *  a core that hands out no texts gives an empty map. */
+  contents: Record<string, string> | null;
+  /** The digest of exactly the text the list handed out: the core
+   *  refuses a decision that vouches for other text. Null for a
+   *  decided draft. */
+  content_digest: string | null;
   files: DraftFile[];
   install_target: string | null;
   install_base: string | null;
@@ -86,6 +95,19 @@ function textOrNull(value: unknown): string | null {
 /** A text the list may leave out: null only where the payload says null. */
 function textUnlessNull(value: unknown): string | null {
   return value === null ? null : text(value);
+}
+
+/** The files' texts the list hands out: the entries whose value is a
+ *  string are kept, the rest left out. Null only where the payload says
+ *  null. */
+function contentsUnlessNull(value: unknown): Record<string, string> | null {
+  if (value === null) return null;
+  if (!isPlainObject(value)) return {};
+  const contents: Record<string, string> = {};
+  for (const [name, body] of Object.entries(value)) {
+    if (typeof body === "string") contents[name] = body;
+  }
+  return contents;
 }
 
 function count(value: unknown): number {
@@ -167,6 +189,8 @@ function parseDraft(row: unknown): Draft | null {
     skill_md_truncated: r.skill_md_truncated === true,
     rationale_md: textUnlessNull(r.rationale_md),
     rationale_md_truncated: r.rationale_md_truncated === true,
+    contents: contentsUnlessNull(r.contents),
+    content_digest: textOrNull(r.content_digest),
     files,
     install_target: textOrNull(r.install_target),
     install_base: textOrNull(r.install_base),

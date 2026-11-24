@@ -14,7 +14,8 @@ export const dynamic = "force-dynamic";
 
 /** The longest folder path taken. */
 const MAX_PATH = 4096;
-/** The longest `expected_updated_at` taken (a draft's ISO timestamp). */
+/** The longest `expected_updated_at` taken (a draft's ISO timestamp) and
+ *  the longest `expected_content_digest` (a SHA-256 hex digest). */
 const MAX_STAMP = 64;
 
 function hasControl(text: string): boolean {
@@ -64,15 +65,43 @@ function planOf(raw: unknown): Plan | null {
   ) {
     return null;
   }
-  // A reject and a revert install nothing, so they never carry a scope.
-  if (action === "reject" || action === "revert") {
+  // A revert installs nothing, so it keeps the version alone.
+  if (action === "revert") {
     return { path, body: { expected_updated_at: expected } };
+  }
+  // The digest of the content the page showed: the core refuses a
+  // decision that vouches for other text. Null checks nothing.
+  const digest = body.expected_content_digest ?? null;
+  if (
+    digest !== null &&
+    (typeof digest !== "string" ||
+      digest.length > MAX_STAMP ||
+      hasControl(digest))
+  ) {
+    return null;
+  }
+  // A reject installs nothing, so it never carries a scope.
+  if (action === "reject") {
+    return {
+      path,
+      body: {
+        expected_updated_at: expected,
+        expected_content_digest: digest,
+      },
+    };
   }
   const scope = body.scope ?? null;
   if (scope !== null && scope !== "workspace" && scope !== "global") {
     return null;
   }
-  return { path, body: { scope, expected_updated_at: expected } };
+  return {
+    path,
+    body: {
+      scope,
+      expected_updated_at: expected,
+      expected_content_digest: digest,
+    },
+  };
 }
 
 /**

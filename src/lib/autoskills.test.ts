@@ -56,6 +56,8 @@ function draft(over: Partial<Draft> = {}): Draft {
     skill_md_truncated: false,
     rationale_md: "",
     rationale_md_truncated: false,
+    contents: null,
+    content_digest: null,
     files: [],
     install_target: null,
     install_base: null,
@@ -200,6 +202,74 @@ describe("parseDraftList", () => {
       missing: ["", false, "", false],
       odd: ["", false, "", false],
     });
+  });
+
+  // The list hands out the draft's other files' texts (SKILL.md comes in
+  // `skill_md`) and the digest of exactly that text: a decision vouches
+  // for what it showed.
+  it("keeps the files' texts and the digest, and drops malformed entries", () => {
+    const parsed = parseDraftList({
+      proposals: [
+        {
+          proposal_id: "listed",
+          skill_name: "s",
+          workspace_dir: "/w",
+          status: "pending",
+          operation: "create",
+          scope: "workspace",
+          contents: {
+            "references/a.md": "# A\n",
+            "scripts/run.sh": "",
+            "notes.md": 7,
+            "steps.md": ["x"],
+            "table.md": { body: "y" },
+          },
+          content_digest: "a".repeat(64),
+        },
+        {
+          proposal_id: "decided",
+          skill_name: "s",
+          workspace_dir: "/w",
+          status: "approved",
+          operation: "create",
+          scope: "workspace",
+          contents: null,
+          content_digest: null,
+        },
+        // An older core hands out neither.
+        {
+          proposal_id: "older-core",
+          skill_name: "s",
+          workspace_dir: "/w",
+          status: "pending",
+          operation: "create",
+          scope: "workspace",
+        },
+        {
+          proposal_id: "odd",
+          skill_name: "s",
+          workspace_dir: "/w",
+          status: "pending",
+          operation: "create",
+          scope: "workspace",
+          contents: "x",
+          content_digest: 5,
+        },
+      ],
+      counts: { pending: 3, approved: 1, rejected: 0 },
+    });
+    expect(
+      parsed!.drafts.map((d) => [d.proposal_id, d.contents, d.content_digest])
+    ).toEqual([
+      [
+        "listed",
+        { "references/a.md": "# A\n", "scripts/run.sh": "" },
+        "a".repeat(64),
+      ],
+      ["decided", null, null],
+      ["older-core", {}, null],
+      ["odd", {}, null],
+    ]);
   });
 
   it("returns null without a proposals array", () => {

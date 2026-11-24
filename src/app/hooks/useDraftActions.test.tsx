@@ -51,6 +51,8 @@ function draft(over: Partial<Draft> & { proposal_id: string }): Draft {
     skill_md_truncated: false,
     rationale_md: "",
     rationale_md_truncated: false,
+    contents: null,
+    content_digest: null,
     files: [],
     install_target: null,
     install_base: null,
@@ -130,27 +132,37 @@ describe("useDraftActions", () => {
         proposal_id: "a",
         scope: "global",
         expected_updated_at: null,
+        expected_content_digest: null,
       },
       {
         action: "approve",
         proposal_id: "b",
         scope: null,
         expected_updated_at: null,
+        expected_content_digest: null,
       },
     ]);
   });
 
-  it("every approve sends the draft's updated_at as the page read it", async () => {
+  it("every approve sends the draft's updated_at and content_digest as the page read them", async () => {
     stubFetch([
       [200, okGlobal],
       [200, okApprove],
       [200, okApprove],
     ]);
     const { result } = setup();
-    const a = draft({ proposal_id: "a", updated_at: "2026-11-06T09:00:00Z" });
-    const b = draft({ proposal_id: "b", updated_at: "2026-11-06T10:00:00Z" });
-    // Read without one: nothing to check against.
-    const c = draft({ proposal_id: "c", updated_at: "" });
+    const a = draft({
+      proposal_id: "a",
+      updated_at: "2026-11-06T09:00:00Z",
+      content_digest: "a".repeat(64),
+    });
+    const b = draft({
+      proposal_id: "b",
+      updated_at: "2026-11-06T10:00:00Z",
+      content_digest: "b".repeat(64),
+    });
+    // Read without either: nothing to check against.
+    const c = draft({ proposal_id: "c", updated_at: "", content_digest: null });
     // The pane's approve, with the scope it shows.
     await act(async () => {
       await result.current.approve([a], { a: "global" });
@@ -165,18 +177,21 @@ describe("useDraftActions", () => {
         proposal_id: "a",
         scope: "global",
         expected_updated_at: "2026-11-06T09:00:00Z",
+        expected_content_digest: "a".repeat(64),
       },
       {
         action: "approve",
         proposal_id: "b",
         scope: null,
         expected_updated_at: "2026-11-06T10:00:00Z",
+        expected_content_digest: "b".repeat(64),
       },
       {
         action: "approve",
         proposal_id: "c",
         scope: null,
         expected_updated_at: null,
+        expected_content_digest: null,
       },
     ]);
   });
@@ -202,6 +217,7 @@ describe("useDraftActions", () => {
         proposal_id: id,
         scope: null,
         expected_updated_at: null,
+        expected_content_digest: null,
       }))
     );
   });
@@ -471,21 +487,26 @@ describe("useDraftActions", () => {
     expect(refresh).toHaveBeenCalledTimes(1);
   });
 
-  it("every reject sends the draft's updated_at as the page read it, and no scope", async () => {
+  it("every reject sends the draft's updated_at and content_digest as the page read them, and no scope", async () => {
     stubFetch([
       [200, { rejected: true }],
       [200, { rejected: true }],
       [200, { rejected: true }],
     ]);
     const { result } = setup();
-    const a = draft({ proposal_id: "a", updated_at: "2026-11-06T09:00:00Z" });
+    const a = draft({
+      proposal_id: "a",
+      updated_at: "2026-11-06T09:00:00Z",
+      content_digest: "a".repeat(64),
+    });
     const b = draft({
       proposal_id: "b",
       scope: "global",
       updated_at: "2026-11-06T10:00:00.123Z",
+      content_digest: "b".repeat(64),
     });
-    // Read without one: nothing to check against.
-    const c = draft({ proposal_id: "c", updated_at: "" });
+    // Read without either: nothing to check against.
+    const c = draft({ proposal_id: "c", updated_at: "", content_digest: null });
     // The pane's reject: the draft it shows.
     await act(async () => {
       await result.current.reject([a]);
@@ -499,13 +520,20 @@ describe("useDraftActions", () => {
         action: "reject",
         proposal_id: "a",
         expected_updated_at: "2026-11-06T09:00:00Z",
+        expected_content_digest: "a".repeat(64),
       },
       {
         action: "reject",
         proposal_id: "b",
         expected_updated_at: "2026-11-06T10:00:00.123Z",
+        expected_content_digest: "b".repeat(64),
       },
-      { action: "reject", proposal_id: "c", expected_updated_at: null },
+      {
+        action: "reject",
+        proposal_id: "c",
+        expected_updated_at: null,
+        expected_content_digest: null,
+      },
     ]);
   });
 
@@ -689,7 +717,12 @@ describe("useDraftActions", () => {
     expect(refresh).toHaveBeenCalledTimes(1);
     expect(notify).toHaveBeenCalledTimes(1);
     expect(calls).toEqual([
-      { action: "reject", proposal_id: "r", expected_updated_at: null },
+      {
+        action: "reject",
+        proposal_id: "r",
+        expected_updated_at: null,
+        expected_content_digest: null,
+      },
     ]);
     expect(toast.success).toHaveBeenCalledWith(
       "Rejected r.",

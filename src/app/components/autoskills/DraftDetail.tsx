@@ -252,6 +252,31 @@ function RationaleFile({ draft }: { draft: Draft }) {
   return <Reading />;
 }
 
+/** The draft's files other than SKILL.md, as the list handed them out:
+ *  each file's name and its text, in name order. Plain text, never
+ *  markup. */
+function DraftContents({ contents }: { contents: Record<string, string> }) {
+  const names = Object.keys(contents).sort((a, b) => a.localeCompare(b));
+  if (names.length === 0) return null;
+  return (
+    <div>
+      <p className="mb-2 text-sm text-muted-foreground">
+        The draft&apos;s other files, as written:
+      </p>
+      <div className="space-y-3">
+        {names.map((name) => (
+          <div key={name}>
+            <h4 className="mb-2 break-all font-mono text-xs font-medium text-muted-foreground">
+              {name}
+            </h4>
+            <FileText text={contents[name]} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /** The question before an update is installed where `scope` says. The core
  *  tells the recorded place apart (a project's own copy of a global skill,
  *  or a replace). A global update put into this project instead is the
@@ -719,10 +744,14 @@ export function DraftDetail({
           />
         )}
         {tab === "files" && (
-          <DraftFiles
-            draft={draft}
-            compareInstalled={scope === draft.scope}
-          />
+          <div className="space-y-4">
+            {/* The texts the list handed out: what the digest vouches for. */}
+            {draft.contents && <DraftContents contents={draft.contents} />}
+            <DraftFiles
+              draft={draft}
+              compareInstalled={scope === draft.scope}
+            />
+          </div>
         )}
       </div>
 

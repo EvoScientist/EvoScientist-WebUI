@@ -208,6 +208,8 @@ function draft(over: Partial<Draft> & { proposal_id: string }): Draft {
     skill_md_truncated: false,
     rationale_md: "",
     rationale_md_truncated: false,
+    contents: null,
+    content_digest: null,
     files: [],
     install_target: null,
     install_base: null,
@@ -1977,6 +1979,7 @@ describe("DraftsPage", () => {
         proposal_id: "x",
         scope: null,
         expected_updated_at: "2026-11-06T08:00:00Z",
+        expected_content_digest: null,
       },
       // Rewritten since the pick: the version picked, which the core
       // refuses rather than install the new one unread.
@@ -1985,6 +1988,7 @@ describe("DraftsPage", () => {
         proposal_id: "y",
         scope: null,
         expected_updated_at: "2026-11-06T09:00:00Z",
+        expected_content_digest: null,
       },
     ]);
     const node = errors.mock.calls.at(-1)?.[0] as {
@@ -2053,6 +2057,7 @@ describe("DraftsPage", () => {
         action: "reject",
         proposal_id: "x",
         expected_updated_at: "2026-11-06T08:00:00Z",
+        expected_content_digest: null,
       },
       // Rewritten since the pick: the version picked, which the core
       // refuses rather than reject the new one unread.
@@ -2060,6 +2065,7 @@ describe("DraftsPage", () => {
         action: "reject",
         proposal_id: "y",
         expected_updated_at: "2026-11-06T09:00:00Z",
+        expected_content_digest: null,
       },
     ]);
     const node = errors.mock.calls.at(-1)?.[0] as {
@@ -2164,6 +2170,7 @@ describe("DraftsPage", () => {
         action: "reject",
         proposal_id: "x",
         expected_updated_at: "2026-11-06T08:00:00Z",
+        expected_content_digest: null,
       },
     ]);
   });
@@ -2221,6 +2228,7 @@ describe("DraftsPage", () => {
         proposal_id: "x",
         scope: "workspace",
         expected_updated_at: "2026-11-06T08:00:00Z",
+        expected_content_digest: null,
       },
     ]);
   });
