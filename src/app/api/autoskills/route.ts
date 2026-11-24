@@ -17,7 +17,7 @@ const MAX_PATH = 4096;
 /** The longest `expected_updated_at` taken (a draft's ISO timestamp) and
  *  the longest `expected_content_digest` (the core's digest of the text it
  *  handed out). The digest's shape is the core's business, not this
- *  relay's: it checks only that the value is a plain string. */
+ *  relay's: it checks only that the value is a short plain string. */
 const MAX_STAMP = 64;
 
 function hasControl(text: string): boolean {
@@ -77,7 +77,8 @@ function planOf(raw: unknown): Plan | null {
     return { path, body: { expected_updated_at: expected } };
   }
   // The digest of the content the page showed: the core refuses an approve
-  // that vouches for other text. Null checks nothing.
+  // that vouches for other text. Null is not nothing — with no digest the
+  // core checks the approve against the digest recorded at submission.
   const digest = body.expected_content_digest ?? null;
   if (
     digest !== null &&

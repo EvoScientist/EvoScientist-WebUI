@@ -120,7 +120,6 @@ function draft(id: string, dir: string): Draft {
     skill_md_truncated: false,
     rationale_md: "",
     rationale_md_truncated: false,
-    contents: null,
     content_digest: null,
     files: [],
     install_target: null,

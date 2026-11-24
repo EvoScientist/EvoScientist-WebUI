@@ -56,7 +56,6 @@ function draft(over: Partial<Draft> = {}): Draft {
     skill_md_truncated: false,
     rationale_md: "",
     rationale_md_truncated: false,
-    contents: null,
     content_digest: null,
     files: [],
     install_target: null,
@@ -204,10 +203,9 @@ describe("parseDraftList", () => {
     });
   });
 
-  // The list hands out the draft's other files' texts (SKILL.md comes in
-  // `skill_md`) and the digest of exactly that text: a decision vouches
-  // for what it showed.
-  it("keeps the files' texts and the digest, and drops malformed entries", () => {
+  // The list hands out the digest of exactly the text it showed: a decision
+  // vouches for what the page read.
+  it("keeps the digest and drops one that is not text", () => {
     const parsed = parseDraftList({
       proposals: [
         {
@@ -217,13 +215,6 @@ describe("parseDraftList", () => {
           status: "pending",
           operation: "create",
           scope: "workspace",
-          contents: {
-            "references/a.md": "# A\n",
-            "scripts/run.sh": "",
-            "notes.md": 7,
-            "steps.md": ["x"],
-            "table.md": { body: "y" },
-          },
           content_digest: "a".repeat(64),
         },
         {
@@ -233,10 +224,9 @@ describe("parseDraftList", () => {
           status: "approved",
           operation: "create",
           scope: "workspace",
-          contents: null,
           content_digest: null,
         },
-        // An older core hands out neither.
+        // An older core hands out none.
         {
           proposal_id: "older-core",
           skill_name: "s",
@@ -252,49 +242,19 @@ describe("parseDraftList", () => {
           status: "pending",
           operation: "create",
           scope: "workspace",
-          contents: "x",
           content_digest: 5,
         },
       ],
       counts: { pending: 3, approved: 1, rejected: 0 },
     });
     expect(
-      parsed!.drafts.map((d) => [d.proposal_id, d.contents, d.content_digest])
+      parsed!.drafts.map((d) => [d.proposal_id, d.content_digest])
     ).toEqual([
-      [
-        "listed",
-        { "references/a.md": "# A\n", "scripts/run.sh": "" },
-        "a".repeat(64),
-      ],
-      ["decided", null, null],
-      ["older-core", {}, null],
-      ["odd", {}, null],
+      ["listed", "a".repeat(64)],
+      ["decided", null],
+      ["older-core", null],
+      ["odd", null],
     ]);
-  });
-
-  // A file may be named `__proto__`: it is a name like any other, and it
-  // must not reach the setter on Object.prototype and vanish.
-  it("keeps a file called __proto__", () => {
-    const parsed = parseDraftList({
-      proposals: [
-        {
-          proposal_id: "p",
-          skill_name: "s",
-          workspace_dir: "/w",
-          status: "pending",
-          operation: "create",
-          scope: "workspace",
-          contents: JSON.parse('{"__proto__": "proto text"}'),
-        },
-      ],
-      counts: { pending: 1, approved: 0, rejected: 0 },
-    });
-    const contents = parsed!.drafts[0].contents!;
-    expect(Object.keys(contents)).toEqual(["__proto__"]);
-    expect(Object.getOwnPropertyDescriptor(contents, "__proto__")?.value).toBe(
-      "proto text"
-    );
-    expect(Object.getPrototypeOf(contents)).toBe(Object.prototype);
   });
 
   it("returns null without a proposals array", () => {
