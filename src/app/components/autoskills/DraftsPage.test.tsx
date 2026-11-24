@@ -2057,7 +2057,6 @@ describe("DraftsPage", () => {
         action: "reject",
         proposal_id: "x",
         expected_updated_at: "2026-11-06T08:00:00Z",
-        expected_content_digest: null,
       },
       // Rewritten since the pick: the version picked, which the core
       // refuses rather than reject the new one unread.
@@ -2065,7 +2064,6 @@ describe("DraftsPage", () => {
         action: "reject",
         proposal_id: "y",
         expected_updated_at: "2026-11-06T09:00:00Z",
-        expected_content_digest: null,
       },
     ]);
     const node = errors.mock.calls.at(-1)?.[0] as {
@@ -2170,7 +2168,6 @@ describe("DraftsPage", () => {
         action: "reject",
         proposal_id: "x",
         expected_updated_at: "2026-11-06T08:00:00Z",
-        expected_content_digest: null,
       },
     ]);
   });

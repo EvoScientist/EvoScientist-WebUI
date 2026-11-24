@@ -46,9 +46,11 @@ export interface Draft {
    *  that is missing or unreadable left out. Null for a decided draft;
    *  a core that hands out no texts gives an empty map. */
   contents: Record<string, string> | null;
-  /** The digest of exactly the text the list handed out: the core
-   *  refuses a decision that vouches for other text. Null for a
-   *  decided draft. */
+  /** The digest of exactly the text the list handed out: an approve that
+   *  vouches for other text is refused. Null for a decided draft, and for
+   *  a pending one the core could not hand out whole (it marks those
+   *  `review_incomplete`): with no digest to send, the core checks the
+   *  approve against the digest recorded when the draft was submitted. */
   content_digest: string | null;
   files: DraftFile[];
   install_target: string | null;
@@ -105,7 +107,16 @@ function contentsUnlessNull(value: unknown): Record<string, string> | null {
   if (!isPlainObject(value)) return {};
   const contents: Record<string, string> = {};
   for (const [name, body] of Object.entries(value)) {
-    if (typeof body === "string") contents[name] = body;
+    if (typeof body !== "string") continue;
+    // A file may be called `__proto__`: assigning it would reach the setter
+    // on Object.prototype and leave no property behind, so it goes in as an
+    // own one.
+    Object.defineProperty(contents, name, {
+      value: body,
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
   }
   return contents;
 }

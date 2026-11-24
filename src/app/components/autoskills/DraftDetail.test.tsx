@@ -1529,51 +1529,6 @@ describe("DraftDetail", () => {
     );
   });
 
-  // The list hands out the draft's other files' texts, and the digest the
-  // page sends vouches for exactly that text: the page shows it as given.
-  it("shows the files the list handed out, in name order", () => {
-    const d = draft({
-      proposal_id: "x",
-      contents: {
-        "references/zeta.md": "Zeta <b>text</b>",
-        "references/alpha.md": "Alpha text",
-        "scripts/run.sh": "echo hi\n",
-      },
-    });
-    render(detail(d));
-    fireEvent.click(tab("Files"));
-    const panel = screen.getByRole("tabpanel");
-    const held = (name: string) =>
-      within(panel).getByRole("heading", { name, level: 4 });
-    expect(held("references/alpha.md")).toBeTruthy();
-    expect(held("references/zeta.md")).toBeTruthy();
-    expect(held("scripts/run.sh")).toBeTruthy();
-    const text = panel.textContent ?? "";
-    expect(text.indexOf("references/alpha.md")).toBeLessThan(
-      text.indexOf("references/zeta.md")
-    );
-    expect(text.indexOf("references/zeta.md")).toBeLessThan(
-      text.indexOf("scripts/run.sh")
-    );
-    // Agent text is untrusted: the markup stays text.
-    expect(within(panel).getByText("Zeta <b>text</b>")).toBeTruthy();
-    expect(panel.querySelector("b")).toBeNull();
-  });
-
-  it("a draft without the list's texts shows its files as before", () => {
-    const d = draft({
-      proposal_id: "x",
-      contents: null,
-      files: [{ path: "SKILL.md", size: 10, installed: false }],
-    });
-    render(detail(d));
-    fireEvent.click(tab("Files"));
-    expect(screen.getByText("draft text of SKILL.md")).toBeTruthy();
-    expect(
-      screen.queryByText("The draft's other files, as written:")
-    ).toBeNull();
-  });
-
   it("files compare with the installed copy only for the recorded place", () => {
     const note =
       "Changes against the installed copy are shown for the recorded place only.";

@@ -272,6 +272,31 @@ describe("parseDraftList", () => {
     ]);
   });
 
+  // A file may be named `__proto__`: it is a name like any other, and it
+  // must not reach the setter on Object.prototype and vanish.
+  it("keeps a file called __proto__", () => {
+    const parsed = parseDraftList({
+      proposals: [
+        {
+          proposal_id: "p",
+          skill_name: "s",
+          workspace_dir: "/w",
+          status: "pending",
+          operation: "create",
+          scope: "workspace",
+          contents: JSON.parse('{"__proto__": "proto text"}'),
+        },
+      ],
+      counts: { pending: 1, approved: 0, rejected: 0 },
+    });
+    const contents = parsed!.drafts[0].contents!;
+    expect(Object.keys(contents)).toEqual(["__proto__"]);
+    expect(Object.getOwnPropertyDescriptor(contents, "__proto__")?.value).toBe(
+      "proto text"
+    );
+    expect(Object.getPrototypeOf(contents)).toBe(Object.prototype);
+  });
+
   it("returns null without a proposals array", () => {
     expect(parseDraftList(null)).toBeNull();
     expect(parseDraftList({ counts: {} })).toBeNull();

@@ -487,7 +487,7 @@ describe("useDraftActions", () => {
     expect(refresh).toHaveBeenCalledTimes(1);
   });
 
-  it("every reject sends the draft's updated_at and content_digest as the page read them, and no scope", async () => {
+  it("every reject sends the draft's updated_at as the page read it, and nothing else", async () => {
     stubFetch([
       [200, { rejected: true }],
       [200, { rejected: true }],
@@ -505,7 +505,7 @@ describe("useDraftActions", () => {
       updated_at: "2026-11-06T10:00:00.123Z",
       content_digest: "b".repeat(64),
     });
-    // Read without either: nothing to check against.
+    // Read without one: nothing to check against.
     const c = draft({ proposal_id: "c", updated_at: "", content_digest: null });
     // The pane's reject: the draft it shows.
     await act(async () => {
@@ -515,24 +515,23 @@ describe("useDraftActions", () => {
     await act(async () => {
       await result.current.reject([b, c]);
     });
+    // A reject installs nothing, so the digest the page read is not sent:
+    // the core checks a digest only where it installs.
     expect(calls).toEqual([
       {
         action: "reject",
         proposal_id: "a",
         expected_updated_at: "2026-11-06T09:00:00Z",
-        expected_content_digest: "a".repeat(64),
       },
       {
         action: "reject",
         proposal_id: "b",
         expected_updated_at: "2026-11-06T10:00:00.123Z",
-        expected_content_digest: "b".repeat(64),
       },
       {
         action: "reject",
         proposal_id: "c",
         expected_updated_at: null,
-        expected_content_digest: null,
       },
     ]);
   });
@@ -721,7 +720,6 @@ describe("useDraftActions", () => {
         action: "reject",
         proposal_id: "r",
         expected_updated_at: null,
-        expected_content_digest: null,
       },
     ]);
     expect(toast.success).toHaveBeenCalledWith(

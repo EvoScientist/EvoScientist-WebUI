@@ -156,7 +156,8 @@ describe("/api/autoskills", () => {
   );
 
   // Reject carries the version too (the core answers 409 draft_changed for
-  // a draft rewritten since), never a scope.
+  // a draft rewritten since), never a scope or a digest: it installs
+  // nothing, and the core checks a digest only where it installs.
   it.each([
     [{}, null],
     [{ expected_updated_at: null }, null],
@@ -169,8 +170,20 @@ describe("/api/autoskills", () => {
       { expected_updated_at: "2026-11-06T09:00:00Z", scope: "global" },
       "2026-11-06T09:00:00Z",
     ],
+    [
+      {
+        expected_updated_at: "2026-11-06T09:00:00Z",
+        expected_content_digest: "f".repeat(64),
+      },
+      "2026-11-06T09:00:00Z",
+    ],
+    // A reject reads no digest, so a malformed one is dropped rather than
+    // refused.
+    [{ expected_content_digest: 1 }, null],
+    [{ expected_content_digest: "x".repeat(65) }, null],
+    [{ expected_content_digest: "abc\u0007" }, null],
   ])(
-    "rejects with expected_updated_at %j forwarded as %j, and no scope",
+    "rejects with expected_updated_at %j forwarded as %j, and nothing else",
     async (extra, expected) => {
       fetchMock.mockResolvedValue(answer(200, {}));
 
@@ -178,33 +191,6 @@ describe("/api/autoskills", () => {
 
       expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
         expected_updated_at: expected,
-        expected_content_digest: null,
-      });
-    }
-  );
-
-  it.each([
-    [{}, null, null],
-    [{ expected_content_digest: null }, null, null],
-    [{ expected_content_digest: "a".repeat(64) }, null, "a".repeat(64)],
-    [
-      {
-        expected_content_digest: "f".repeat(64),
-        expected_updated_at: "2026-11-06T09:00:00Z",
-      },
-      "2026-11-06T09:00:00Z",
-      "f".repeat(64),
-    ],
-  ])(
-    "rejects with expected_content_digest %j forwarded as %j",
-    async (extra, expectedAt, digest) => {
-      fetchMock.mockResolvedValue(answer(200, {}));
-
-      await POST(request({ action: "reject", proposal_id: "a-b", ...extra }));
-
-      expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
-        expected_updated_at: expectedAt,
-        expected_content_digest: digest,
       });
     }
   );
@@ -256,7 +242,7 @@ describe("/api/autoskills", () => {
       "http://127.0.0.1:6606/api/autoskills/run",
     ]);
     expect(calls.map(([, init]) => JSON.parse(init.body))).toEqual([
-      { expected_updated_at: null, expected_content_digest: null },
+      { expected_updated_at: null },
       { expected_updated_at: null },
       { workspace_dir: "/home/you/my proj" },
     ]);
@@ -372,26 +358,6 @@ describe("/api/autoskills", () => {
       "an expected_content_digest with a control character",
       {
         action: "approve",
-        proposal_id: "a-b",
-        expected_content_digest: "abc\u0007",
-      },
-    ],
-    [
-      "a reject with a numeric expected_content_digest",
-      { action: "reject", proposal_id: "a-b", expected_content_digest: 1 },
-    ],
-    [
-      "a reject with an expected_content_digest over 64 characters",
-      {
-        action: "reject",
-        proposal_id: "a-b",
-        expected_content_digest: "x".repeat(65),
-      },
-    ],
-    [
-      "a reject with a control character in expected_content_digest",
-      {
-        action: "reject",
         proposal_id: "a-b",
         expected_content_digest: "abc\u0007",
       },

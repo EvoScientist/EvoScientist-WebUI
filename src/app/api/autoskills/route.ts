@@ -69,8 +69,13 @@ function planOf(raw: unknown): Plan | null {
   if (action === "revert") {
     return { path, body: { expected_updated_at: expected } };
   }
-  // The digest of the content the page showed: the core refuses a
-  // decision that vouches for other text. Null checks nothing.
+  // A reject installs nothing either: the version it read is all it checks,
+  // and the core takes no digest for one.
+  if (action === "reject") {
+    return { path, body: { expected_updated_at: expected } };
+  }
+  // The digest of the content the page showed: the core refuses an approve
+  // that vouches for other text. Null checks nothing.
   const digest = body.expected_content_digest ?? null;
   if (
     digest !== null &&
@@ -79,16 +84,6 @@ function planOf(raw: unknown): Plan | null {
       hasControl(digest))
   ) {
     return null;
-  }
-  // A reject installs nothing, so it never carries a scope.
-  if (action === "reject") {
-    return {
-      path,
-      body: {
-        expected_updated_at: expected,
-        expected_content_digest: digest,
-      },
-    };
   }
   const scope = body.scope ?? null;
   if (scope !== null && scope !== "workspace" && scope !== "global") {
