@@ -1,8 +1,18 @@
 // The drafts page's multi-select rules: which picks survive a re-read, and
 // which drafts a bulk decision may send, at which version. A selection maps
-// each picked draft's id to its updated_at as listed when it was picked.
+// each picked draft's id to its updated_at and its content_digest as listed
+// when it was picked.
 
 import type { Draft, DraftList } from "@/lib/autoskills";
+
+/** A draft as it was picked: the updated_at and the content_digest the list
+ *  gave then, so a bulk decision sends the version, and vouches for the
+ *  content, the pick was made on. An agent's plain file write changes the
+ *  digest without the stamp, so both are needed. */
+export interface Pick {
+  updated_at: string;
+  content_digest: string | null;
+}
 
 function pendingIds(
   list: DraftList,
@@ -20,31 +30,38 @@ function pendingIds(
 }
 
 /** The picks of `selected` still pending in `list`, and, once the projects
- *  are known, still in a registered project, each with its recorded stamp.
- *  The same selection when none drop. */
+ *  are known, still in a registered project, each with what was recorded at
+ *  the pick. The same selection when none drop. */
 export function stillPending(
-  selected: ReadonlyMap<string, string>,
+  selected: ReadonlyMap<string, Pick>,
   list: DraftList,
   registered: ReadonlySet<string> | null
-): ReadonlyMap<string, string> {
+): ReadonlyMap<string, Pick> {
   const pending = pendingIds(list, registered);
   const kept = [...selected].filter(([id]) => pending.has(id));
   return kept.length === selected.size ? selected : new Map(kept);
 }
 
-/** The drafts as they were picked: each with the updated_at recorded then,
- *  so an approval installs, and a rejection rejects, that version only (the
- *  core answers draft_changed for one rewritten since). A draft with no
- *  stamp recorded, or not rewritten, goes as listed. */
+/** The drafts as they were picked: each with the updated_at and the
+ *  content_digest recorded then, so an approval installs, and a rejection
+ *  rejects, that version only (the core answers draft_changed for one
+ *  rewritten since, and refuses a digest of other content). A draft with no
+ *  pick recorded, or one still as it was picked, goes as listed. */
 export function asSelected(
   drafts: readonly Draft[],
-  selected: ReadonlyMap<string, string>
+  selected: ReadonlyMap<string, Pick>
 ): Draft[] {
   return drafts.map((d) => {
-    const stamp = selected.get(d.proposal_id);
-    return stamp === undefined || stamp === d.updated_at
+    const pick = selected.get(d.proposal_id);
+    return pick === undefined ||
+      (pick.updated_at === d.updated_at &&
+        pick.content_digest === d.content_digest)
       ? d
-      : { ...d, updated_at: stamp };
+      : {
+          ...d,
+          updated_at: pick.updated_at,
+          content_digest: pick.content_digest,
+        };
   });
 }
 

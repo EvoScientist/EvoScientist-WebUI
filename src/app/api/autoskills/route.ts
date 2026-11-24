@@ -77,9 +77,10 @@ function planOf(raw: unknown): Plan | null {
   if (action === "reject") {
     return { path, body: { expected_updated_at: expected } };
   }
-  // The digest of the content the page showed: the core refuses an approve
-  // that vouches for other text. Null is not nothing — with no digest the
-  // core checks the approve against the digest recorded at submission.
+  // The digest of the draft's files as the page read the list: the core
+  // refuses an approve that vouches for other files. Null is not nothing —
+  // with no digest the core checks the approve against the digest recorded
+  // at submission.
   const digest = body.expected_content_digest ?? null;
   if (
     digest !== null &&

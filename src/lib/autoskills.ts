@@ -41,11 +41,12 @@ export interface Draft {
   skill_md_truncated: boolean;
   rationale_md: string | null;
   rationale_md_truncated: boolean;
-  /** The digest of exactly the text the list handed out: an approve that
-   *  vouches for other text is refused. Null for a decided draft, and for
-   *  a pending one the core could not hand out whole (it marks those
-   *  `review_incomplete`): with no digest to send, the core checks the
-   *  approve against the digest recorded when the draft was submitted. */
+  /** The digest of the draft's files as the list read them (SKILL.md and
+   *  every file an approval copies): an approve that vouches for other
+   *  files is refused. Null for a decided draft, and for a pending one the
+   *  core could not read whole (it marks those `review_incomplete`): with
+   *  no digest to send, the core checks the approve against the digest
+   *  recorded when the draft was submitted. */
   content_digest: string | null;
   files: DraftFile[];
   install_target: string | null;

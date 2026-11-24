@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Draft, DraftList } from "@/lib/autoskills";
 import { asSelected, decidable, stillListed, stillPending } from "./selection";
+import type { Pick } from "./selection";
 
 const A = "/work/EvoSci_test";
 const B = "/work/project_B";
@@ -44,29 +45,48 @@ function listOf(drafts: Draft[]): DraftList {
   };
 }
 
-const x = draft({ proposal_id: "x" });
-const y = draft({ proposal_id: "y" });
-const z = draft({ proposal_id: "z", workspace_dir: B });
+const x = draft({ proposal_id: "x", updated_at: "T-x" });
+const y = draft({ proposal_id: "y", updated_at: "T-y" });
+const z = draft({ proposal_id: "z", updated_at: "T-z", workspace_dir: B });
+
+/** A pick: the updated_at recorded, and the digest when the test cares. */
+const pick = (
+  updated_at: string,
+  content_digest: string | null = null
+): Pick => ({
+  updated_at,
+  content_digest,
+});
 
 describe("stillPending", () => {
   it("keeps the picks still pending, in a registered project once known, with their stamps", () => {
     const list = listOf([x, { ...y, status: "approved" }, z]);
     const picked = new Map([
-      ["x", "T-x"],
-      ["y", "T-y"],
-      ["z", "T-z"],
+      ["x", pick("T-x")],
+      ["y", pick("T-y")],
+      ["z", pick("T-z")],
     ]);
     expect([...stillPending(picked, list, null)]).toEqual([
-      ["x", "T-x"],
-      ["z", "T-z"],
+      ["x", pick("T-x")],
+      ["z", pick("T-z")],
     ]);
     expect([...stillPending(picked, list, new Set([B]))]).toEqual([
-      ["z", "T-z"],
+      ["z", pick("T-z")],
+    ]);
+  });
+
+  it("keeps the digest each draft was picked at, though the list has another", () => {
+    // An agent's plain file write changes a pending draft's files, and its
+    // content_digest, without its updated_at: the pick's digest stays.
+    const picked = new Map([["x", pick("T-x", "d-1")]]);
+    const relisted = { ...x, content_digest: "d-2" };
+    expect([...stillPending(picked, listOf([relisted]), null)]).toEqual([
+      ["x", pick("T-x", "d-1")],
     ]);
   });
 
   it("returns the same selection when nothing drops", () => {
-    const picked = new Map([["x", "T-x"]]);
+    const picked = new Map([["x", pick("T-x")]]);
     expect(stillPending(picked, listOf([x]), new Set([A]))).toBe(picked);
   });
 });
@@ -79,8 +99,8 @@ describe("asSelected", () => {
     const out = asSelected(
       [listed, kept],
       new Map([
-        ["x", "T1"],
-        ["z", "T1z"],
+        ["x", pick("T1")],
+        ["z", pick("T1z")],
       ])
     );
     expect(out).toEqual([{ ...listed, updated_at: "T1" }, kept]);
@@ -88,7 +108,20 @@ describe("asSelected", () => {
     expect(out[1]).toBe(kept);
   });
 
-  it("sends a draft with no stamp recorded as listed", () => {
+  it("sends each draft the digest it was picked at", () => {
+    // The same stamp: an agent wrote a file in place, so the list has a new
+    // digest for the same version. The pick vouches for what was read then.
+    const listed = { ...x, content_digest: "d-2" };
+    const out = asSelected([listed], new Map([["x", pick("T-x", "d-1")]]));
+    expect(out).toEqual([{ ...listed, content_digest: "d-1" }]);
+    // Still as it was picked: the listed draft itself.
+    const same = { ...x, content_digest: "d-1" };
+    expect(asSelected([same], new Map([["x", pick("T-x", "d-1")]]))[0]).toBe(
+      same
+    );
+  });
+
+  it("sends a draft with no pick recorded as listed", () => {
     expect(asSelected([x], new Map())[0]).toBe(x);
   });
 });

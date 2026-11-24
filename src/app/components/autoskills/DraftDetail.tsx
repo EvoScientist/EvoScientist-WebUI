@@ -303,8 +303,8 @@ function approveQuestion(
 
 const NO_FILES: readonly UnshowableFile[] = [];
 
-/** An approval as clicked: the version of the draft shown, and the place,
- *  in the pane's visit of that draft. */
+/** An approval as clicked: the version of the draft shown (its updated_at
+ *  and content_digest), and the place, in the pane's visit of that draft. */
 interface Decision {
   version: string;
   visit: number;
@@ -328,27 +328,37 @@ export function DraftDetail({
   // Whether the page and the backend share this machine.
   const here = useProjects().files === "here";
 
-  // This version of the draft: a run that rewrites a pending draft in place
-  // keeps its id and gives it a new updated_at (and maybe another scope).
-  const version = JSON.stringify([draft.proposal_id, draft.updated_at]);
+  // The version under the pane: a run that rewrites a pending draft in place
+  // keeps its id and gives it a new updated_at (and maybe another scope),
+  // and an agent's plain file write keeps even its updated_at while its
+  // content_digest changes. The place picked follows the updated_at; the
+  // question and the decision follow the digest too, since that is the
+  // content the pane reads and shows.
+  const stamp = JSON.stringify([draft.proposal_id, draft.updated_at]);
+  const version = JSON.stringify([
+    draft.proposal_id,
+    draft.updated_at,
+    draft.content_digest,
+  ]);
   // Where to install: each draft opened, and each rewrite, starts at the
-  // scope it records.
+  // scope it records. A new digest of the same stamp keeps the place picked:
+  // only the draft's text changed.
   const [pick, setPick] = useState<{ version: string; scope: DraftScope }>({
-    version,
+    version: stamp,
     scope: draft.scope,
   });
   // The question before an approval (an update, or files the page can't
   // show), for this version only, with the decision fixed at the click (the
   // draft and the place shown then) and the files its check found: it
-  // doesn't come back when the draft is opened again, and a rewrite takes it
-  // away.
+  // doesn't come back when the draft is opened again, and a rewrite of any
+  // kind takes it away.
   const [asked, setAsked] = useState<
     (Decision & { files: readonly UnshowableFile[] }) | null
   >(null);
-  if (pick.version !== version) {
-    setPick({ version, scope: draft.scope });
-    setAsked(null);
+  if (pick.version !== stamp) {
+    setPick({ version: stamp, scope: draft.scope });
   }
+  if (asked && asked.version !== version) setAsked(null);
   // Each draft shown here in turn: another one shown gives up a click made
   // for the one before for good, even when that draft comes back (at its
   // own place, not the one clicked).
@@ -361,7 +371,7 @@ export function DraftDetail({
   const ownCopy = updatesOwnCopy(draft);
   const scope: DraftScope = ownCopy
     ? "workspace"
-    : pick.version === version
+    : pick.version === stamp
     ? pick.scope
     : draft.scope;
 
@@ -571,7 +581,7 @@ export function DraftDetail({
                 disabled={checking}
                 onValueChange={(next) => {
                   if (next === "workspace" || next === "global") {
-                    setPick({ version, scope: next });
+                    setPick({ version: stamp, scope: next });
                   }
                 }}
               >

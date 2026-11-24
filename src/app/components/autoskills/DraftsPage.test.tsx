@@ -122,6 +122,8 @@ vi.mock("@/app/hooks/useAutoSkills", async (importOriginal) => {
         : { ...hooks.auto, refresh: hooks.refresh },
     markAutoSeen: hooks.mark,
     refreshAutoSkills: hooks.refresh,
+    // The real reader, for the pane's Files tab.
+    useDraftFile: actual.useDraftFile,
     // The real check of a draft's files, reading through a stubbed fetch,
     // unless the test brings its own.
     useDraftFilesCheck: () => {
@@ -2008,6 +2010,68 @@ describe("DraftsPage", () => {
     expect(box("y").disabled).toBe(false);
   });
 
+  it("a bulk approve sends the digest each draft was picked at, though the list has another", async () => {
+    // The real decision hook, down to the relay's POST.
+    hooks.realActions = true;
+    const x = draft({
+      proposal_id: "x",
+      updated_at: "2026-11-06T08:00:00Z",
+      content_digest: "d-1",
+    });
+    const y = draft({
+      proposal_id: "y",
+      created_at: "2026-10-01T09:00:00Z",
+      updated_at: "2026-11-06T09:00:00Z",
+      content_digest: "d-2",
+    });
+    ready([x, y]);
+    const view = render(page());
+    pick("x");
+    pick("y");
+    // An agent wrote a file of x in place: the same updated_at, another
+    // digest, and x stays picked.
+    const x2 = { ...x, content_digest: "d-3" };
+    ready([x2, y]);
+    view.rerender(page());
+    expect(selection()?.textContent).toContain("2 selected");
+
+    const bodies: Array<Record<string, unknown>> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        bodies.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+        return new Response(
+          JSON.stringify({
+            approved: true,
+            scope: "workspace",
+            operation: "create",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      })
+    );
+    approveSelected();
+    await waitFor(() => expect(bodies).toHaveLength(2));
+    expect(bodies).toEqual([
+      // x's files were written after the pick: the core refuses the digest
+      // of the new files rather than install text nobody read.
+      {
+        action: "approve",
+        proposal_id: "x",
+        scope: null,
+        expected_updated_at: "2026-11-06T08:00:00Z",
+        expected_content_digest: "d-1",
+      },
+      {
+        action: "approve",
+        proposal_id: "y",
+        scope: null,
+        expected_updated_at: "2026-11-06T09:00:00Z",
+        expected_content_digest: "d-2",
+      },
+    ]);
+  });
+
   it("a bulk reject sends each draft as it was picked, so a rewrite since draws draft_changed", async () => {
     // The real decision hook, down to the relay's POST.
     hooks.realActions = true;
@@ -2167,6 +2231,68 @@ describe("DraftsPage", () => {
         action: "reject",
         proposal_id: "x",
         expected_updated_at: "2026-11-06T08:00:00Z",
+      },
+    ]);
+  });
+
+  it("the pane's approve sends the digest of the version it shows", async () => {
+    // The real decision hook, down to the relay's POST.
+    hooks.realActions = true;
+    const x = draft({
+      proposal_id: "x",
+      updated_at: "2026-11-06T08:00:00Z",
+      content_digest: "d-1",
+      files: [{ path: "scripts/helper.py", size: 20, installed: false }],
+    });
+    ready([x]);
+    q.values.set("draftId", "x");
+    const view = render(page());
+    const pane = () =>
+      within(screen.getByRole("heading", { level: 3 }).parentElement!);
+    let reads = 0;
+    const bodies: Array<Record<string, unknown>> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        // The relay's own POST, against this server.
+        if (String(input).startsWith("/api/autoskills")) {
+          bodies.push(
+            JSON.parse(String(init?.body)) as Record<string, unknown>
+          );
+          return new Response(
+            JSON.stringify({
+              approved: true,
+              scope: "workspace",
+              operation: "create",
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          );
+        }
+        // The core's file route: each version's own text.
+        return new Response(`text of v${++reads}`, { status: 200 });
+      })
+    );
+    // The Files tab reads the file of the version the list carries.
+    fireEvent.click(pane().getByRole("tab", { name: "Files" }));
+    expect(await screen.findByText("text of v1")).toBeTruthy();
+
+    // An agent wrote a file in place: the same updated_at, another digest.
+    // The pane reads the new text before it decides anything, so the text
+    // on it and the digest the click sends are the same version's.
+    const x2 = { ...x, content_digest: "d-2" };
+    ready([x2]);
+    view.rerender(page());
+    expect(await screen.findByText("text of v2")).toBeTruthy();
+
+    fireEvent.click(pane().getByRole("button", { name: "Approve" }));
+    await waitFor(() => expect(bodies).toHaveLength(1));
+    expect(bodies).toEqual([
+      {
+        action: "approve",
+        proposal_id: "x",
+        scope: "workspace",
+        expected_updated_at: "2026-11-06T08:00:00Z",
+        expected_content_digest: "d-2",
       },
     ]);
   });

@@ -609,10 +609,12 @@ export function useDraftActions(
                   // is refused (draft_changed), never installed unread. A
                   // draft read without one checks nothing.
                   expected_updated_at: d.updated_at || null,
-                  // The text the page showed: the core refuses an approve
-                  // that vouches for other content. A draft read without a
-                  // digest sends null, and the core falls back to the digest
-                  // recorded when the draft was submitted.
+                  // The content the person saw for this version: the digest
+                  // recorded with the pick, or the one the pane's click
+                  // showed (its files are read per digest). The core refuses
+                  // an approve that vouches for other content. A draft read
+                  // without a digest sends null, and the core falls back to
+                  // the digest recorded when the draft was submitted.
                   expected_content_digest: d.content_digest ?? null,
                 }
               : {
