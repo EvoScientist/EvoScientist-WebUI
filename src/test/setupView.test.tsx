@@ -184,7 +184,7 @@ const wrapper = ({ children }: { children: ReactNode }) => (
 function renderView(onClose = vi.fn(), entry: "setup" | "settings" = "setup") {
   const onSaveUrl = vi.fn();
   const onFormShown = vi.fn();
-  render(
+  const { unmount } = render(
     <SetupView
       entry={entry}
       onClose={onClose}
@@ -193,7 +193,7 @@ function renderView(onClose = vi.fn(), entry: "setup" | "settings" = "setup") {
     />,
     { wrapper }
   );
-  return { onClose, onSaveUrl, onFormShown };
+  return { onClose, onSaveUrl, onFormShown, unmount };
 }
 
 const renderSettingsPage = () => renderView(vi.fn(), "settings");
@@ -2356,6 +2356,315 @@ describe("ChatGPT sign-in (desktop)", () => {
     expect(
       screen.getByRole("button", { name: "Sign in with ChatGPT" })
     ).toBeTruthy();
+  });
+
+  /** An app that holds one sign-in at a time, as the desktop app does: a
+   *  sign-in started from one page is seen and awaited by the next. */
+  function holdingBridge() {
+    const b = bridge();
+    let running: Promise<unknown> | null = null;
+    let answer: ((r: unknown) => void) | null = null;
+    b.signIn.mockImplementation(
+      () => (running ??= new Promise((res) => (answer = res)))
+    );
+    const app = {
+      ...b,
+      isSigningIn: vi.fn(async () => running !== null),
+      waitForSignIn: vi.fn(async () => running),
+    };
+    b.cancelSignIn.mockImplementation(async () => {
+      finish({ ok: false, code: "cancelled", message: "" });
+      return undefined;
+    });
+    function finish(r: unknown) {
+      const settle = answer;
+      running = null;
+      answer = null;
+      settle?.(r);
+    }
+    return { app, finish };
+  }
+
+  function desktopHolding(status: Status = SIGNED_OUT) {
+    const held = holdingBridge();
+    desktop(status, { openai_auth_mode: "oauth" });
+    window.evoscientistDesktop = { chatgpt: held.app };
+    return held;
+  }
+
+  const waitingButton = () =>
+    screen.findByRole("button", { name: "Finish signing in in your browser…" });
+
+  it("a sign-in still running when Settings opens again shows it, then its answer", async () => {
+    const held = desktopHolding();
+    const first = renderSettingsPage();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Sign in with ChatGPT" })
+    );
+    await waitingButton();
+    first.unmount();
+    renderSettingsPage();
+    expect(((await waitingButton()) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Sign in with ChatGPT" })).toBe(
+      null
+    );
+    expect(held.app.signIn).toHaveBeenCalledOnce();
+    server.settings = { ...server.settings, chatgpt: SIGNED_IN };
+    await act(async () => held.finish({ ok: true, plan: "plus" }));
+    expect(await screen.findByText("Signed in · Plus")).toBeTruthy();
+    expect(
+      await screen.findByRole("button", { name: "Sign out" })
+    ).toBeTruthy();
+    expect(held.app.signIn).toHaveBeenCalledOnce();
+  });
+
+  it("says why a sign-in that ran before Settings opened failed", async () => {
+    const held = desktopHolding();
+    void held.app.signIn();
+    renderSettingsPage();
+    await waitingButton();
+    await act(async () =>
+      held.finish({ ok: false, code: "port_in_use", message: "" })
+    );
+    expect(await screen.findByText(PORT_TEXT)).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Sign in with ChatGPT" })
+    ).toBeTruthy();
+  });
+
+  it("Cancel on a sign-in that ran before Settings opened cancels it in the app", async () => {
+    const held = desktopHolding();
+    void held.app.signIn();
+    renderSettingsPage();
+    await waitingButton();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(held.app.cancelSignIn).toHaveBeenCalledOnce();
+    expect(
+      await screen.findByRole("button", { name: "Sign in with ChatGPT" })
+    ).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("shows the answer of a sign-in that ends while the page asks", async () => {
+    // The app answers the wait first: a sign-in that ends before the
+    // running question is answered still gives its reason.
+    const held = desktopHolding();
+    void held.app.signIn();
+    held.app.isSigningIn.mockImplementationOnce(async () => {
+      held.finish({ ok: false, code: "timed_out", message: "" });
+      return false;
+    });
+    renderSettingsPage();
+    expect(
+      await screen.findByText(
+        "The sign-in was not finished within 5 minutes. Sign in again."
+      )
+    ).toBeTruthy();
+  });
+
+  it("a sign-in that starts while the page asks is shown to its end", async () => {
+    // None runs when the page asks to wait; one has started by the time it
+    // asks whether one runs.
+    const held = desktopHolding();
+    held.app.isSigningIn.mockImplementationOnce(async () => {
+      void held.app.signIn();
+      return true;
+    });
+    renderSettingsPage();
+    await waitingButton();
+    await act(async () => {
+      await new Promise((res) => setTimeout(res, 50));
+    });
+    expect(
+      screen.getByRole("button", { name: "Finish signing in in your browser…" })
+    ).toBeTruthy();
+    await act(async () =>
+      held.finish({ ok: false, code: "port_in_use", message: "" })
+    );
+    expect(await screen.findByText(PORT_TEXT)).toBeTruthy();
+  });
+
+  it("a sign-in that runs but leaves nothing to wait for does not keep the row waiting", async () => {
+    // The app says one runs, then has none to wait for (it ended in
+    // between, or the wait could not be answered).
+    const held = desktopHolding();
+    held.app.isSigningIn.mockImplementationOnce(async () => true);
+    renderSettingsPage();
+    await screen.findByRole("button", { name: "Sign in with ChatGPT" });
+    await act(async () => {
+      await new Promise((res) => setTimeout(res, 50));
+    });
+    expect(
+      screen.getByRole("button", { name: "Sign in with ChatGPT" })
+    ).toBeTruthy();
+    expect(held.app.waitForSignIn).toHaveBeenCalledTimes(2);
+  });
+
+  it("an earlier sign-in's answer does not undo a click made while the page asks", async () => {
+    const held = desktopHolding();
+    void held.app.signIn();
+    let running!: (v: boolean) => void;
+    held.app.isSigningIn.mockImplementationOnce(
+      () => new Promise<boolean>((res) => (running = res))
+    );
+    renderSettingsPage();
+    const signIn = await screen.findByRole("button", {
+      name: "Sign in with ChatGPT",
+    });
+    await waitFor(() => expect(held.app.waitForSignIn).toHaveBeenCalled());
+    // The earlier sign-in ends with a failure before the page learns that
+    // it ran; then the user starts another one.
+    await act(async () =>
+      held.finish({ ok: false, code: "port_in_use", message: "" })
+    );
+    fireEvent.click(signIn);
+    await waitingButton();
+    await act(async () => {
+      running(false);
+      await new Promise((res) => setTimeout(res, 50));
+    });
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Finish signing in in your browser…" })
+    ).toBeTruthy();
+  });
+
+  it("an earlier sign-in's answer does not undo a click made while the settings are read again", async () => {
+    const held = desktopHolding();
+    void held.app.signIn();
+    // It ends with a failure before the page learns that it ran.
+    held.app.isSigningIn.mockImplementationOnce(async () => {
+      held.finish({ ok: false, code: "port_in_use", message: "" });
+      return false;
+    });
+    // The read that follows its answer waits until released.
+    let release!: () => void;
+    const hold = new Promise<void>((res) => (release = res));
+    let holding = 0;
+    const answerNow = globalThis.fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (
+          String(input) === `${DEPLOYMENT}/api/settings` &&
+          server.gets >= 1
+        ) {
+          holding += 1;
+          await hold;
+        }
+        return answerNow(input, init);
+      })
+    );
+    renderSettingsPage();
+    const signIn = (await screen.findByRole("button", {
+      name: "Sign in with ChatGPT",
+    })) as HTMLButtonElement;
+    await waitFor(() => expect(signIn.disabled).toBe(false));
+    await waitFor(() => expect(holding).toBeGreaterThan(0));
+    fireEvent.click(signIn);
+    await waitingButton();
+    await act(async () => {
+      release();
+      await new Promise((res) => setTimeout(res, 50));
+    });
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Finish signing in in your browser…" })
+    ).toBeTruthy();
+  });
+
+  it("an earlier sign-in's answer does not undo a sign-out clicked while the page asks", async () => {
+    const held = desktopHolding(SIGNED_IN);
+    void held.app.signIn();
+    let running!: (v: boolean) => void;
+    held.app.isSigningIn.mockImplementationOnce(
+      () => new Promise<boolean>((res) => (running = res))
+    );
+    let out!: (r: unknown) => void;
+    held.app.signOut.mockImplementationOnce(
+      () => new Promise((res) => (out = res))
+    );
+    renderSettingsPage();
+    const signOut = await screen.findByRole("button", { name: "Sign out" });
+    await waitFor(() => expect(held.app.waitForSignIn).toHaveBeenCalled());
+    await act(async () => held.finish({ ok: true, plan: "plus" }));
+    fireEvent.click(signOut);
+    await act(async () => {
+      running(false);
+      await new Promise((res) => setTimeout(res, 50));
+    });
+    expect(
+      (screen.getByRole("button", { name: "Sign out" }) as HTMLButtonElement)
+        .disabled
+    ).toBe(true);
+    await act(async () => out({ ok: true }));
+  });
+
+  it("with no sign-in running, the row is as before and stays quiet", async () => {
+    const held = desktopHolding();
+    renderSettingsPage();
+    expect(
+      await screen.findByRole("button", { name: "Sign in with ChatGPT" })
+    ).toBeTruthy();
+    await waitFor(() => expect(held.app.waitForSignIn).toHaveBeenCalled());
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(
+      screen.queryByRole("button", {
+        name: "Finish signing in in your browser…",
+      })
+    ).toBeNull();
+  });
+
+  it("an app with only one of the new members keeps today's row", async () => {
+    desktop(SIGNED_OUT, { openai_auth_mode: "oauth" });
+    const isSigningIn = vi.fn(async () => true);
+    window.evoscientistDesktop = { chatgpt: { ...bridge(), isSigningIn } };
+    const first = renderSettingsPage();
+    expect(
+      await screen.findByRole("button", { name: "Sign in with ChatGPT" })
+    ).toBeTruthy();
+    expect(isSigningIn).not.toHaveBeenCalled();
+    first.unmount();
+    const waitForSignIn = vi.fn(
+      async () => ({ ok: false, code: "port_in_use", message: "" } as unknown)
+    );
+    window.evoscientistDesktop = { chatgpt: { ...bridge(), waitForSignIn } };
+    renderSettingsPage();
+    expect(
+      await screen.findByRole("button", { name: "Sign in with ChatGPT" })
+    ).toBeTruthy();
+    await act(async () => {
+      await new Promise((res) => setTimeout(res, 50));
+    });
+    expect(waitForSignIn).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("a click on Sign in while the page still asks is not undone by the answer", async () => {
+    const held = desktopHolding();
+    let running!: (v: boolean) => void;
+    held.app.isSigningIn.mockImplementationOnce(
+      () => new Promise<boolean>((res) => (running = res))
+    );
+    renderSettingsPage();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Sign in with ChatGPT" })
+    );
+    await waitingButton();
+    server.settings = { ...server.settings, chatgpt: SIGNED_IN };
+    await act(async () => held.finish({ ok: true, plan: "plus" }));
+    expect(
+      await screen.findByRole("button", { name: "Sign out" })
+    ).toBeTruthy();
+    // The stale answer from before the click changes nothing.
+    await act(async () => running(true));
+    expect(screen.getByRole("button", { name: "Sign out" })).toBeTruthy();
+    expect(
+      screen.queryByRole("button", {
+        name: "Finish signing in in your browser…",
+      })
+    ).toBeNull();
   });
 
   it("a sign-out the user cancelled in the app keeps the status, without a note", async () => {

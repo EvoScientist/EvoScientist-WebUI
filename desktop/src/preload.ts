@@ -102,6 +102,10 @@ function exposeBridge(): void {
         ipcRenderer.invoke("desktop:chatgpt-sign-in"),
       cancelSignIn: (): Promise<void> =>
         ipcRenderer.invoke("desktop:chatgpt-cancel-sign-in"),
+      isSigningIn: (): Promise<boolean> =>
+        ipcRenderer.invoke("desktop:chatgpt-running"),
+      waitForSignIn: (): Promise<SignInOutcome | null> =>
+        ipcRenderer.invoke("desktop:chatgpt-wait"),
       signOut: (): Promise<SignOutOutcome> =>
         ipcRenderer.invoke("desktop:chatgpt-sign-out"),
     },
