@@ -16,7 +16,7 @@
     "dist": "npm run fetch-core-scripts && node scripts/builder.mjs --publish never"
   },
   "evoscientist": {
-    "coreRange": ">=0.4.4,<0.5",
+    "coreRange": ">=0.4.5,<0.5",
     "protocols": [
       1
     ],
