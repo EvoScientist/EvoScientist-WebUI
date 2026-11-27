@@ -367,6 +367,16 @@ export interface App {
    *  its end. `not_allowed` for another origin, `busy` during a quit. */
   chatgptSignInFor(senderOrigin: string | null): Promise<SignInOutcome>;
   cancelChatgptSignInFor(senderOrigin: string | null): void;
+  /** Whether a ChatGPT sign-in runs, for a page from `senderOrigin`
+   *  (false for another origin): a page that comes back during one shows
+   *  it. */
+  chatgptRunningFor(senderOrigin: string | null): boolean;
+  /** The end of the sign-in that runs, or null at once when none does (and
+   *  for another origin). Opens nothing, unlike a joining
+   *  `chatgptSignInFor`. */
+  waitChatgptSignInFor(
+    senderOrigin: string | null
+  ): Promise<SignInOutcome | null>;
   /** The bridge's sign-out: the work check first (Cancel answers
    *  `cancelled` and keeps the token), then `EvoSci logout chatgpt`.
    *  `not_allowed` for another origin; `busy` during a quit, a sign-in or
@@ -2013,6 +2023,9 @@ export function createApp(deps: AppDeps): App {
     cancelChatgptSignInFor: (senderOrigin) => {
       if (fromUi(senderOrigin)) void signIn?.run.cancel();
     },
+    chatgptRunningFor: (senderOrigin) => fromUi(senderOrigin) && !!signIn,
+    waitChatgptSignInFor: async (senderOrigin) =>
+      fromUi(senderOrigin) && signIn ? signIn.done : null,
     chatgptSignOutFor: async (senderOrigin) => {
       if (!fromUi(senderOrigin)) {
         log.warn(`chatgpt sign-out refused for the origin ${senderOrigin}`);

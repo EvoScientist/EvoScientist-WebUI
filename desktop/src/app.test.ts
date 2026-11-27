@@ -3460,6 +3460,47 @@ describe("ChatGPT from the page", () => {
     expect(fake.startSignIn).toHaveBeenCalledTimes(2);
   });
 
+  it("tells the page whether a sign-in runs, for the UI's origin only", async () => {
+    const fake = fakeSignIn();
+    const h = await launched({ startSignIn: fake.startSignIn });
+    expect(h.app.chatgptRunningFor(UI)).toBe(false);
+    const result = h.app.chatgptSignInFor(UI);
+    expect(h.app.chatgptRunningFor(UI)).toBe(true);
+    expect(h.app.chatgptRunningFor("http://evil.example")).toBe(false);
+    expect(h.app.chatgptRunningFor(null)).toBe(false);
+    fake.finish({ ok: true, plan: "plus" });
+    await result;
+    expect(h.app.chatgptRunningFor(UI)).toBe(false);
+  });
+
+  it("a page that waits gets the running sign-in's answer and opens nothing", async () => {
+    const fake = fakeSignIn();
+    const h = await launched({ startSignIn: fake.startSignIn });
+    expect(await h.app.waitChatgptSignInFor(UI)).toBeNull();
+    const first = h.app.chatgptSignInFor(UI);
+    fake.url(SIGN_IN_URL);
+    const waited = h.app.waitChatgptSignInFor(UI);
+    expect(await h.app.waitChatgptSignInFor("http://evil.example")).toBeNull();
+    expect(await h.app.waitChatgptSignInFor(null)).toBeNull();
+    expect(fake.startSignIn).toHaveBeenCalledTimes(1);
+    expect(h.deps.openExternal).toHaveBeenCalledTimes(1);
+    const failed = { ok: false as const, code: "port_in_use", message: "" };
+    fake.finish(failed);
+    expect(await waited).toEqual(failed);
+    expect(await first).toEqual(failed);
+    expect(await h.app.waitChatgptSignInFor(UI)).toBeNull();
+  });
+
+  it("a waiting page hears a cancel from another page", async () => {
+    const fake = fakeSignIn();
+    const h = await launched({ startSignIn: fake.startSignIn });
+    void h.app.chatgptSignInFor(UI);
+    const waited = h.app.waitChatgptSignInFor(UI);
+    h.app.cancelChatgptSignInFor(UI);
+    expect(await waited).toMatchObject({ ok: false, code: "cancelled" });
+    expect(h.app.chatgptRunningFor(UI)).toBe(false);
+  });
+
   /** Deploys that answer in this order: ready, or sign_in_required. */
   function deploysOf(kinds: ("ready" | "sign_in")[]) {
     let i = 0;

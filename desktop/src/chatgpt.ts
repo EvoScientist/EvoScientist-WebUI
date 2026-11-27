@@ -4,7 +4,7 @@
 // `error` line. Closing its stdin cancels it. `EvoSci logout chatgpt --json`
 // removes the stored token and ends with `signed_out` or `error`.
 import { parseChatgptEvent } from "./lines";
-import { killTree, run, withTimeout, type Logger } from "./proc";
+import { killTree, run, withTimeout, type ExitInfo, type Logger } from "./proc";
 
 export const SIGN_IN_ARGS = ["login", "chatgpt", "--json"];
 export const SIGN_OUT_ARGS = ["logout", "chatgpt", "--json"];
@@ -25,7 +25,8 @@ export type SignOutOutcome =
 export interface SignInRun {
   /** The terminal line (`internal_error` when EvoSci exits without one),
    *  given once the process has gone, or after the bounded attempts to end
-   *  it (a failed kill is logged). */
+   *  it (a failed kill is logged). Output a child of the login keeps open
+   *  is read for at most SIGN_IN_STOP_MS after the exit. */
   done: Promise<SignInOutcome>;
   /** Closes stdin (the core answers `cancelled`), then ends the tree when it
    *  has not exited after SIGN_IN_STOP_MS. Resolves once the process has
@@ -78,6 +79,8 @@ export function startSignIn(
   let settled = false;
   let cancelled = false;
   let timedOut = false;
+  /** The login exited and its output stayed open for `stopMs`. */
+  let outputHeld = false;
   let stopping: Promise<void> | null = null;
   let urlSeen = false;
   let resolveDone!: (o: SignInOutcome) => void;
@@ -102,7 +105,14 @@ export function startSignIn(
     // the port, and a quit must still be able to wait for it.
     void (async () => {
       try {
-        if ((await withTimeout(proc.closed, stopMs)) !== "timeout") return;
+        // Its output was waited for already.
+        if (outputHeld) return;
+        // After the exit the output gets one `stopMs`, counted from the exit,
+        // not again from an answer that came late in it.
+        const end = exitedYet
+          ? await drained
+          : await withTimeout(proc.closed, stopMs);
+        if (end !== "timeout") return;
         if (exitedYet) {
           deps.log.warn(
             "EvoSci login exited, but its output stayed open after its answer"
@@ -172,6 +182,8 @@ export function startSignIn(
 
   let exitedYet = false;
   void proc.exited.then(() => (exitedYet = true));
+  /** The output read after the exit, for at most `stopMs`. */
+  const drained = proc.exited.then(() => withTimeout(proc.closed, stopMs));
 
   function cancel(): Promise<void> {
     proc.closeStdin();
@@ -204,19 +216,30 @@ export function startSignIn(
     void cancel().then(() => settle(TIMED_OUT));
   }, deps.ceilingMs ?? SIGN_IN_CEILING_MS);
 
+  /** The answer of a login that ended without a terminal line. A cancel the
+   *  core did not answer (it was ended) is still a cancel. */
+  const unanswered = (exit: ExitInfo): SignInOutcome =>
+    cancelled
+      ? { ok: false, code: "cancelled", message: "" }
+      : {
+          ok: false,
+          code: "internal_error",
+          message: `EvoSci login exited (code ${exit.code}).`,
+        };
+
   // Read to the end of the output: `exit` can come before the last line.
-  void proc.closed.then((exit) =>
-    // A cancel the core did not answer (it was ended) is still a cancel.
-    settle(
-      cancelled
-        ? { ok: false, code: "cancelled", message: "" }
-        : {
-            ok: false,
-            code: "internal_error",
-            message: `EvoSci login exited (code ${exit.code}).`,
-          }
-    )
-  );
+  void proc.closed.then((exit) => settle(unanswered(exit)));
+  // A child of the login can keep its output open after it has gone: past
+  // `stopMs` the run answers without the rest, so a new sign-in is not held
+  // up until the ceiling.
+  void proc.exited.then(async (exit) => {
+    if ((await drained) !== "timeout" || settled) return;
+    deps.log.warn(
+      "EvoSci login exited, but its output stayed open; answering without the rest"
+    );
+    outputHeld = true;
+    settle(unanswered(exit));
+  });
 
   return {
     done,

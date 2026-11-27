@@ -593,6 +593,12 @@ function registerIpc(): void {
   ipcMain.handle("desktop:chatgpt-cancel-sign-in", (e) =>
     desktop.cancelChatgptSignInFor(senderOrigin(e))
   );
+  ipcMain.handle("desktop:chatgpt-running", (e) =>
+    desktop.chatgptRunningFor(senderOrigin(e))
+  );
+  ipcMain.handle("desktop:chatgpt-wait", (e) =>
+    desktop.waitChatgptSignInFor(senderOrigin(e))
+  );
   ipcMain.handle("desktop:chatgpt-sign-out", (e) =>
     desktop.chatgptSignOutFor(senderOrigin(e))
   );

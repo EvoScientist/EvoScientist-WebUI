@@ -5,6 +5,7 @@ import {
   signOut,
   startSignIn,
   type ChatgptDeps,
+  type SignInOutcome,
   type SignInRun,
 } from "./chatgpt";
 import { run, type RunOptions } from "./proc";
@@ -351,6 +352,132 @@ describe("startSignIn", () => {
     expect(lines).toContain(
       "EvoSci login exited, but its output stayed open after its answer"
     );
+  });
+
+  /** A login that has exited while something else holds its output open. */
+  function exitedHoldingOutput(code: number, stopMs = 50) {
+    const lines: string[] = [];
+    let lineOut: ((l: string) => void) | undefined;
+    let exit!: () => void;
+    const exited = new Promise<{ code: number; signal: null }>(
+      (res) => (exit = () => res({ code, signal: null }))
+    );
+    const deps: ChatgptDeps = {
+      ...base,
+      stopMs,
+      ceilingMs: 60_000,
+      log: { info: (m) => lines.push(m), warn: (m) => lines.push(m) },
+      spawn: (_f, _a, opts) => {
+        lineOut = opts.onStdoutLine;
+        return {
+          child: { pid: undefined } as never,
+          exited,
+          closed: new Promise(() => {}),
+          closeStdin: () => exit(),
+        };
+      },
+    };
+    return { deps, lines, exit, say: (l: string) => lineOut?.(l) };
+  }
+
+  it("answers an exit without a terminal line while its output stays open", async () => {
+    const h = exitedHoldingOutput(3);
+    const r = startSignIn("EvoSci", () => {}, h.deps);
+    h.exit();
+    expect(await r.done).toEqual({
+      ok: false,
+      code: "internal_error",
+      message: "EvoSci login exited (code 3).",
+    });
+    expect(h.lines).toContain(
+      "EvoSci login exited, but its output stayed open; answering without the rest"
+    );
+    // The output was waited for once, not again after the answer.
+    expect(h.lines).not.toContain(
+      "EvoSci login exited, but its output stayed open after its answer"
+    );
+  });
+
+  it("answers a cancel whose login exited while its output stays open", async () => {
+    const h = exitedHoldingOutput(1);
+    const r = startSignIn("EvoSci", () => {}, h.deps);
+    const started = Date.now();
+    await r.cancel();
+    expect(await r.done).toEqual({
+      ok: false,
+      code: "cancelled",
+      message: "",
+    });
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+
+  it("keeps a terminal line that comes while the output is read after the exit", async () => {
+    const h = exitedHoldingOutput(1);
+    const r = startSignIn("EvoSci", () => {}, h.deps);
+    await r.cancel();
+    h.say(
+      JSON.stringify({
+        protocol: 1,
+        event: "error",
+        code: "cancelled",
+        message: "ChatGPT sign-in was cancelled.",
+      })
+    );
+    expect(await r.done).toEqual({
+      ok: false,
+      code: "cancelled",
+      message: "ChatGPT sign-in was cancelled.",
+    });
+    expect(h.lines).not.toContain(
+      "EvoSci login exited, but its output stayed open; answering without the rest"
+    );
+  });
+
+  it("answers within stopMs of the exit, also when the line comes late in it", async () => {
+    vi.useFakeTimers();
+    try {
+      const h = exitedHoldingOutput(0, 1000);
+      const r = startSignIn("EvoSci", () => {}, h.deps);
+      let answer: SignInOutcome | null = null;
+      void r.done.then((o) => (answer = o));
+      h.exit();
+      await vi.advanceTimersByTimeAsync(900);
+      h.say(JSON.stringify({ protocol: 1, event: "signed_in", plan: "plus" }));
+      await vi.advanceTimersByTimeAsync(150);
+      expect(answer).toEqual({ ok: true, plan: "plus" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("answers a cancelled login whose child keeps the output open", async () => {
+    // The login starts a child that inherits its output and outlives it,
+    // then exits on the cancel without a terminal line.
+    const lines: string[] = [];
+    const r = startSignIn("EvoSci", () => {}, {
+      ...base,
+      stopMs: 100,
+      log: { info: (m) => lines.push(m), warn: (m) => lines.push(m) },
+      spawn: fake(
+        `const c = require("child_process").spawn(process.execPath, ["-e", "setTimeout(() => {}, 4000)"], { stdio: ["ignore", "inherit", "inherit"] }); console.error("child " + c.pid); process.stdin.on("end", () => process.exit(1)); process.stdin.resume();`
+      ),
+    });
+    await new Promise((res) => setTimeout(res, 300));
+    const started = Date.now();
+    try {
+      await r.cancel();
+      expect(await r.done).toEqual({
+        ok: false,
+        code: "cancelled",
+        message: "",
+      });
+      expect(Date.now() - started).toBeLessThan(2000);
+    } finally {
+      const child = lines
+        .map((l) => /^login stderr: child (\d+)$/.exec(l)?.[1])
+        .find(Boolean);
+      if (child) await killPid(Number(child));
+    }
   });
 
   it("cancel waits for the exit after ending the tree", async () => {

@@ -22,6 +22,9 @@ export interface ChatgptSignIn {
  * The app runs it (the browser page, the token on disk); the page reads the
  * settings again after every answer, as the state shown comes from
  * GET /api/settings. Answers that arrive after the field is gone are dropped.
+ * A sign-in outlives the field (Settings left and opened again, the
+ * wizard's steps, a reload): a new field shows one that runs and takes its
+ * answer, when the app can tell (`isSigningIn` and `waitForSignIn`).
  */
 export function useChatgptSignIn(
   chatgpt: DesktopChatgpt | null
@@ -30,6 +33,9 @@ export function useChatgptSignIn(
   const [phase, setPhase] = useState<ChatgptSignIn["phase"]>("idle");
   const [message, setMessage] = useState<string | null>(null);
   const mounted = useRef(true);
+  /** Bumped by every click: an answer about a sign-in from before it is
+   *  dropped. */
+  const clicks = useRef(0);
   useEffect(() => {
     mounted.current = true;
     return () => {
@@ -37,8 +43,39 @@ export function useChatgptSignIn(
     };
   }, []);
 
+  useEffect(() => {
+    if (!chatgpt?.isSigningIn || !chatgpt.waitForSignIn) return;
+    const { isSigningIn, waitForSignIn } = chatgpt;
+    const click = clicks.current;
+    let live = true;
+    const current = () => live && clicks.current === click;
+    void (async () => {
+      // Asked first, so a sign-in that ends before the second question is
+      // answered still gives its reason.
+      const answer = waitForSignIn();
+      const running = await isSigningIn();
+      if (!current()) return;
+      if (running) {
+        setPhase("signing_in");
+        setMessage(null);
+      }
+      let r = await answer;
+      // None ran when the page asked to wait, and one runs now.
+      if (!r && running) r = await waitForSignIn();
+      if (!r && !running) return;
+      await refresh().catch(() => {});
+      if (!current()) return;
+      setPhase("idle");
+      setMessage(r && !r.ok ? chatgptFailureText(r.code, r.message) : null);
+    })();
+    return () => {
+      live = false;
+    };
+  }, [chatgpt, refresh]);
+
   const signIn = useCallback(async () => {
     if (!chatgpt) return;
+    clicks.current += 1;
     setPhase("signing_in");
     setMessage(null);
     const r = await chatgpt.signIn();
@@ -54,6 +91,7 @@ export function useChatgptSignIn(
 
   const signOut = useCallback(async () => {
     if (!chatgpt) return;
+    clicks.current += 1;
     setPhase("signing_out");
     setMessage(null);
     const r = await chatgpt.signOut();

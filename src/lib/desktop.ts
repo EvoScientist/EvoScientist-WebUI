@@ -56,6 +56,12 @@ export interface DesktopChatgpt {
    *  call while one runs joins it and opens its page again. */
   signIn(): Promise<ChatgptSignInResult>;
   cancelSignIn(): Promise<void>;
+  /** Whether a sign-in runs now; false when the app could not answer.
+   *  Missing in an older app. */
+  isSigningIn?(): Promise<boolean>;
+  /** The end of the sign-in that runs, or null at once when none does (or
+   *  the app could not answer). Opens nothing. Missing in an older app. */
+  waitForSignIn?(): Promise<ChatgptSignInResult | null>;
   /** Removes the stored sign-in; the app asks first while work runs. */
   signOut(): Promise<ChatgptSignOutResult>;
 }
@@ -184,7 +190,7 @@ function failureOf(r: Record<string, unknown> | null) {
 function chatgptOf(raw: unknown): DesktopChatgpt | undefined {
   if (typeof raw !== "object" || raw === null) return undefined;
   const c = raw as Record<string, unknown>;
-  const { signIn, cancelSignIn, signOut } = c;
+  const { signIn, cancelSignIn, signOut, isSigningIn, waitForSignIn } = c;
   if (
     typeof signIn !== "function" ||
     typeof cancelSignIn !== "function" ||
@@ -193,16 +199,16 @@ function chatgptOf(raw: unknown): DesktopChatgpt | undefined {
     return undefined;
   const record = (v: unknown) =>
     typeof v === "object" && v !== null ? (v as Record<string, unknown>) : null;
-  return {
+  const signInResult = (v: unknown): ChatgptSignInResult => {
+    const r = record(v);
+    if (r?.ok === true)
+      return { ok: true, plan: typeof r.plan === "string" ? r.plan : null };
+    return failureOf(r);
+  };
+  const chatgpt: DesktopChatgpt = {
     signIn: async () => {
       try {
-        const r = record(await signIn.call(raw));
-        if (r?.ok === true)
-          return {
-            ok: true,
-            plan: typeof r.plan === "string" ? r.plan : null,
-          };
-        return failureOf(r);
+        return signInResult(await signIn.call(raw));
       } catch {
         return FAILED;
       }
@@ -223,6 +229,25 @@ function chatgptOf(raw: unknown): DesktopChatgpt | undefined {
       }
     },
   };
+  // Newer than the three above: an older app has neither.
+  if (typeof isSigningIn === "function")
+    chatgpt.isSigningIn = async () => {
+      try {
+        return (await isSigningIn.call(raw)) === true;
+      } catch {
+        return false;
+      }
+    };
+  if (typeof waitForSignIn === "function")
+    chatgpt.waitForSignIn = async () => {
+      try {
+        const r: unknown = await waitForSignIn.call(raw);
+        return r === null || r === undefined ? null : signInResult(r);
+      } catch {
+        return null;
+      }
+    };
+  return chatgpt;
 }
 
 declare global {

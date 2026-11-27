@@ -124,6 +124,91 @@ describe("desktopBridge().chatgpt", () => {
     expect(desktopBridge()?.chatgpt).toBeUndefined();
   });
 
+  it("offers isSigningIn and waitForSignIn one by one, only as functions", () => {
+    window.evoscientistDesktop = { chatgpt: members() };
+    let chatgpt = desktopBridge()?.chatgpt;
+    expect(chatgpt?.isSigningIn).toBeUndefined();
+    expect(chatgpt?.waitForSignIn).toBeUndefined();
+    window.evoscientistDesktop = {
+      chatgpt: { ...members(), isSigningIn: async () => true },
+    };
+    chatgpt = desktopBridge()?.chatgpt;
+    expect(chatgpt?.isSigningIn).toBeTypeOf("function");
+    expect(chatgpt?.waitForSignIn).toBeUndefined();
+    window.evoscientistDesktop = {
+      chatgpt: { ...members(), waitForSignIn: async () => null },
+    };
+    chatgpt = desktopBridge()?.chatgpt;
+    expect(chatgpt?.isSigningIn).toBeUndefined();
+    expect(chatgpt?.waitForSignIn).toBeTypeOf("function");
+    window.evoscientistDesktop = {
+      chatgpt: { ...members(), isSigningIn: true, waitForSignIn: "no" },
+    };
+    chatgpt = desktopBridge()?.chatgpt;
+    expect(chatgpt).toBeTruthy();
+    expect(chatgpt?.isSigningIn).toBeUndefined();
+    expect(chatgpt?.waitForSignIn).toBeUndefined();
+  });
+
+  it("reads isSigningIn as true only for true, and a throw as false", async () => {
+    for (const [answer, expected] of [
+      [true, true],
+      [false, false],
+      ["true", false],
+      [1, false],
+      [undefined, false],
+    ] as const) {
+      window.evoscientistDesktop = {
+        chatgpt: { ...members(), isSigningIn: async () => answer },
+      };
+      await expect(desktopBridge()?.chatgpt?.isSigningIn?.()).resolves.toBe(
+        expected
+      );
+    }
+    window.evoscientistDesktop = {
+      chatgpt: {
+        ...members(),
+        isSigningIn: () => {
+          throw new Error("ipc");
+        },
+      },
+    };
+    await expect(desktopBridge()?.chatgpt?.isSigningIn?.()).resolves.toBe(
+      false
+    );
+  });
+
+  it("reads waitForSignIn as a sign-in's end, nothing as null, a throw as null", async () => {
+    const wait = async (answer: () => unknown) => {
+      window.evoscientistDesktop = {
+        chatgpt: { ...members(), waitForSignIn: answer },
+      };
+      return desktopBridge()?.chatgpt?.waitForSignIn?.();
+    };
+    await expect(wait(async () => null)).resolves.toBeNull();
+    await expect(wait(async () => undefined)).resolves.toBeNull();
+    await expect(
+      wait(() => {
+        throw new Error("ipc");
+      })
+    ).resolves.toBeNull();
+    await expect(
+      wait(async () => ({ ok: true, plan: "pro" }))
+    ).resolves.toEqual({ ok: true, plan: "pro" });
+    await expect(wait(async () => ({ ok: true, plan: 3 }))).resolves.toEqual({
+      ok: true,
+      plan: null,
+    });
+    await expect(
+      wait(async () => ({ ok: false, code: "timed_out", message: "late" }))
+    ).resolves.toEqual({ ok: false, code: "timed_out", message: "late" });
+    await expect(wait(async () => "yes")).resolves.toEqual({
+      ok: false,
+      code: "failed",
+      message: "",
+    });
+  });
+
   it("reads a throw or another shape as failed", async () => {
     window.evoscientistDesktop = {
       chatgpt: {
