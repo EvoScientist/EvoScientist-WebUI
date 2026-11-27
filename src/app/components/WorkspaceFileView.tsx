@@ -76,7 +76,30 @@ async function readText(project: string, path: string): Promise<string> {
     controller.abort();
     throw new TooLarge();
   }
-  return res.text();
+  // Next 16.4.5+ drops Content-Length from route handler responses, so the
+  // header above is only a shortcut: count the bytes while reading.
+  if (!res.body) return res.text();
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_INLINE_TEXT_BYTES) {
+      controller.abort();
+      throw new TooLarge();
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(total);
+  let at = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, at);
+    at += chunk.byteLength;
+  }
+  // As res.text(): UTF-8, a leading BOM dropped, bad bytes replaced.
+  return new TextDecoder().decode(bytes);
 }
 
 const TOOLBAR =

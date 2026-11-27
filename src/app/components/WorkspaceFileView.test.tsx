@@ -15,6 +15,8 @@ import type { Draft, DraftStore } from "@/providers/filePaneContext";
 let disk: Record<string, string>;
 let failNextRead: string | null;
 let putGate: Promise<void> | null;
+let hugePulls = 0;
+let hugeSignal: AbortSignal | null = null;
 
 const respond = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status });
@@ -54,6 +56,36 @@ function stubFetch() {
         return new Response("x", {
           headers: { "content-length": String(MAX_INLINE_TEXT_BYTES + 1) },
         });
+      }
+      // Next 16.4.5+ drops Content-Length from route handler responses.
+      // 512 KiB chunks served on demand; the seventh pull fails, so a reader
+      // that doesn't stop at the cap fails fast instead of rendering it all.
+      if (path === "huge.md") {
+        hugePulls = 0;
+        hugeSignal = init?.signal ?? null;
+        const chunk = new Uint8Array(512 * 1024).fill(0x79);
+        return new Response(
+          new ReadableStream({
+            pull(controller) {
+              hugePulls += 1;
+              if (hugePulls > 6) controller.error(new Error("Read too far."));
+              else controller.enqueue(chunk);
+            },
+          })
+        );
+      }
+      if (path === "split.txt") {
+        // A leading BOM, and "é" (two bytes in UTF-8) split between chunks.
+        const bytes = new TextEncoder().encode("﻿café ok");
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(bytes.slice(0, 7));
+              controller.enqueue(bytes.slice(7));
+              controller.close();
+            },
+          })
+        );
       }
       if (!(path in disk)) {
         return respond({ error: "Path is not accessible." }, 400);
@@ -243,6 +275,30 @@ describe("WorkspaceFileView", () => {
     update({ refreshTick: 1 });
     update({ refreshTick: 2 });
     expect(reads("big.md")).toBe(1);
+  });
+
+  it("stops reading at the size cap when the response carries no length", async () => {
+    const { update } = setup({
+      tabId: "workspace:huge.md",
+      path: "huge.md",
+      size: undefined,
+    });
+    expect(
+      await screen.findByText("This file is too large to preview inline.")
+    ).toBeTruthy();
+    // Four chunks are exactly the cap, the fifth goes over; the stream
+    // pulls one chunk ahead of the reads.
+    expect(hugePulls).toBeLessThanOrEqual(6);
+    expect(hugeSignal?.aborted).toBe(true);
+    update({ refreshTick: 1 });
+    expect(reads("huge.md")).toBe(1);
+  });
+
+  it("decodes a body without a length as Response.text() does", async () => {
+    setup({ tabId: "workspace:split.txt", path: "split.txt", size: undefined });
+    const shown = await screen.findByText("café ok");
+    // The BOM is dropped, not kept as an invisible first character.
+    expect(shown.textContent).toBe("café ok");
   });
 
   it("doesn't let a refresh during a save undo or flag it", async () => {

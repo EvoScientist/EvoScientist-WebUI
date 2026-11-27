@@ -15,10 +15,10 @@ export const dynamic = "force-dynamic";
 /** The longest folder path taken. */
 const MAX_PATH = 4096;
 /** The longest `expected_updated_at` taken (a draft's ISO timestamp) and
- *  the longest `expected_content_digest` (the core's digest of the text it
- *  handed out). The digest's shape is the core's business, not this
- *  relay's: it checks only that the value is a short plain string, with
- *  no control characters in it. */
+ *  the longest `expected_content_digest` (the core's digest of the draft's
+ *  files). The digest's shape is the core's business, not this relay's: it
+ *  checks only that the value is a short plain string, with no control
+ *  characters in it. */
 const MAX_STAMP = 64;
 
 function hasControl(text: string): boolean {
